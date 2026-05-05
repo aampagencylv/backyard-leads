@@ -1,0 +1,1210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prospector | Backyard Marketing Pros</title>
+    <link rel="icon" href="https://backyardmarketingpros.com/wp-content/uploads/2024/08/cropped-BMP_Favicon-32x32.png" sizes="32x32">
+    <style>
+        :root {
+            --bmp-green: #1B5E20;
+            --bmp-green-light: #2E7D32;
+            --bmp-green-dark: #0D3B13;
+            --bmp-orange: #E65100;
+            --bmp-orange-light: #EF6C00;
+            --bmp-orange-hover: #BF360C;
+            --bmp-cream: #FFF8F0;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #f5f7f5;
+            color: #1a1a1a;
+        }
+        .hidden { display: none !important; }
+
+        /* Auth Screen */
+        .auth-container {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, var(--bmp-green-dark) 0%, var(--bmp-green) 50%, var(--bmp-green-light) 100%);
+        }
+        .auth-card {
+            background: white;
+            border-radius: 16px;
+            padding: 40px;
+            width: 420px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        .auth-logo { text-align: center; margin-bottom: 24px; }
+        .auth-logo img { width: 280px; }
+        .auth-card h1 {
+            font-size: 20px;
+            margin-bottom: 4px;
+            color: var(--bmp-green);
+            text-align: center;
+        }
+        .auth-card p { color: #666; margin-bottom: 24px; text-align: center; font-size: 13px; }
+        .form-group { margin-bottom: 16px; }
+        .form-group label { display: block; font-size: 14px; font-weight: 500; margin-bottom: 4px; color: #333; }
+        .form-group input {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+        .form-group input:focus { outline: none; border-color: var(--bmp-green); box-shadow: 0 0 0 2px rgba(27,94,32,0.1); }
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: var(--bmp-orange);
+            color: white;
+            padding: 12px 24px;
+        }
+        .auth-card .btn-primary { width: 100%; }
+        .btn-primary:hover { background: var(--bmp-orange-hover); }
+        .btn-secondary { background: #e8ece8; color: #333; }
+        .btn-secondary:hover { background: #d0d5d0; }
+        .btn-success { background: var(--bmp-green); color: white; }
+        .btn-success:hover { background: var(--bmp-green-dark); }
+        .btn-sm { padding: 6px 12px; font-size: 12px; }
+        .auth-toggle { text-align: center; margin-top: 16px; font-size: 14px; color: #666; }
+        .auth-toggle a { color: var(--bmp-orange); cursor: pointer; text-decoration: none; font-weight: 500; }
+        .auth-error { background: #fde8e8; color: #c0392b; padding: 8px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 12px; display: none; }
+
+        /* App Layout */
+        .app-container { display: flex; min-height: 100vh; }
+        .sidebar {
+            width: 240px;
+            background: var(--bmp-green-dark);
+            color: white;
+            padding: 0;
+            position: fixed;
+            height: 100vh;
+            overflow-y: auto;
+        }
+        .sidebar-brand {
+            padding: 16px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            text-align: center;
+        }
+        .sidebar-brand img { width: 180px; margin-bottom: 4px; }
+        .sidebar-brand small { color: rgba(255,255,255,0.5); font-size: 11px; display: block; }
+        .sidebar-nav { padding: 12px 0; }
+        .sidebar-nav a {
+            display: block;
+            padding: 10px 20px;
+            color: rgba(255,255,255,0.7);
+            text-decoration: none;
+            font-size: 14px;
+            transition: all 0.2s;
+            border-left: 3px solid transparent;
+        }
+        .sidebar-nav a:hover { background: rgba(255,255,255,0.05); color: white; }
+        .sidebar-nav a.active { background: rgba(255,255,255,0.1); color: white; border-left-color: var(--bmp-orange); }
+        .sidebar-user {
+            position: absolute;
+            bottom: 0;
+            width: 100%;
+            padding: 16px 20px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            font-size: 13px;
+            color: rgba(255,255,255,0.5);
+        }
+        .sidebar-user .logout { color: var(--bmp-orange-light); cursor: pointer; }
+
+        .main-content {
+            margin-left: 240px;
+            flex: 1;
+            padding: 30px;
+        }
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+        .page-header h1 { font-size: 24px; }
+
+        /* Search Box */
+        .search-box {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            margin-bottom: 24px;
+        }
+        .search-box h3 { margin-bottom: 16px; font-size: 16px; }
+        .search-form {
+            display: grid;
+            grid-template-columns: 1fr 1fr auto;
+            gap: 16px;
+            align-items: end;
+        }
+        .search-form .form-group { margin-bottom: 0; }
+        .search-form .btn { height: 42px; white-space: nowrap; }
+        .search-form select,
+        .search-form input[type="text"],
+        .search-form input[type="number"] {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+        .search-form-advanced {
+            display: grid;
+            grid-template-columns: 2fr 1fr 100px 120px auto;
+            gap: 16px;
+            align-items: end;
+        }
+
+        /* Lead Cards */
+        .leads-grid { display: grid; gap: 16px; }
+        .lead-card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            border-left: 4px solid #ddd;
+            transition: all 0.2s;
+        }
+        .lead-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.1); }
+        .lead-card.enriched { border-left-color: #27ae60; }
+        .lead-card.has-problems { border-left-color: #e67e22; }
+        .lead-card-header { display: flex; justify-content: space-between; align-items: flex-start; }
+        .lead-card-header h3 { font-size: 16px; margin-bottom: 4px; }
+        .lead-card-meta { font-size: 13px; color: #666; margin-bottom: 12px; }
+        .lead-card-meta span { margin-right: 16px; }
+        .lead-problems { margin: 12px 0; }
+        .problem-tag {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 500;
+            margin: 2px 4px 2px 0;
+        }
+        .problem-tag.critical { background: #fde8e8; color: #c0392b; }
+        .problem-tag.high { background: #fef3e2; color: #d35400; }
+        .problem-tag.medium { background: #fef9e7; color: #f39c12; }
+        .problem-tag.low { background: #eafaf1; color: #27ae60; }
+        .lead-actions { display: flex; gap: 8px; margin-top: 12px; }
+
+        /* Email Preview */
+        .email-preview {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 16px;
+            margin-top: 12px;
+            font-size: 13px;
+        }
+        .email-preview .subject { font-weight: 600; margin-bottom: 8px; }
+        .email-preview .body { white-space: pre-wrap; color: #444; line-height: 1.5; }
+
+        /* Stats */
+        .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
+        .stat-card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            text-align: center;
+        }
+        .stat-card .number { font-size: 32px; font-weight: 700; color: var(--bmp-green); }
+        .stat-card .label { font-size: 13px; color: #666; margin-top: 4px; }
+
+        /* Loading */
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #ddd;
+            border-top-color: var(--bmp-orange);
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .status-badge {
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .status-new { background: #e8f4fd; color: #2980b9; }
+        .status-pursuing { background: #f3e8fd; color: #8e44ad; }
+        .status-sequencing { background: #fef9e7; color: #f39c12; }
+        .status-contacted { background: #fdebd0; color: #e67e22; }
+        .status-replied { background: #eafaf1; color: #27ae60; }
+        .status-qualified { background: #d5f5e3; color: #1e8449; }
+        .status-converted { background: #abebc6; color: #196f3d; }
+        .status-not_interested { background: #f2f3f4; color: #7f8c8d; }
+
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: var(--bmp-green);
+            color: white;
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            z-index: 1000;
+            animation: slideUp 0.3s;
+        }
+        @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } }
+    </style>
+</head>
+<body>
+    <!-- Auth Screen -->
+    <div id="auth-screen" class="auth-container">
+        <div class="auth-card">
+            <div class="auth-logo">
+                <img src="https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz-1024x269.png" alt="Backyard Marketing Pros">
+            </div>
+            <h1>Prospector</h1>
+            <p>Lead Intelligence Platform</p>
+
+            <div id="auth-error" class="auth-error"></div>
+
+            <div id="login-form">
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" id="login-email" placeholder="you@backyardmarketingpros.com">
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="login-password" placeholder="Your password" onkeydown="if(event.key==='Enter')login()">
+                </div>
+                <button class="btn btn-primary" onclick="login()">Sign In</button>
+                <div class="auth-toggle">
+                    No account? <a onclick="showRegister()">Request access</a>
+                </div>
+            </div>
+
+            <div id="register-form" class="hidden">
+                <div class="form-group">
+                    <label>Full Name</label>
+                    <input type="text" id="reg-name" placeholder="Steve Edwards">
+                </div>
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" id="reg-email" placeholder="you@backyardmarketingpros.com">
+                    <small style="color:#888;font-size:11px">Must be a @backyardmarketingpros.com or @aamp.agency email</small>
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="reg-password" placeholder="Choose a password" onkeydown="if(event.key==='Enter')register()">
+                </div>
+                <button class="btn btn-primary" onclick="register()">Create Account</button>
+                <div class="auth-toggle">
+                    Have an account? <a onclick="showLogin()">Sign in</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main App -->
+    <div id="app-screen" class="app-container hidden">
+        <aside class="sidebar">
+            <div class="sidebar-brand">
+                <img src="https://backyardmarketingpros.com/wp-content/uploads/2024/09/BMP_Logo_Color_Horiz-White-1024x269.png" alt="BMP">
+                <small>Prospector</small>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="#" class="active" onclick="showPage('dashboard')">Dashboard</a>
+                <a href="#" onclick="showPage('search')">Find Leads</a>
+                <a href="#" onclick="showPage('leads')">All Leads</a>
+                <a href="#" onclick="showPage('emails')">Generated Emails</a>
+                <a href="#" onclick="showPage('settings')" style="margin-top:12px;border-top:1px solid rgba(255,255,255,0.1);padding-top:12px">Settings</a>
+            </nav>
+            <div class="sidebar-user">
+                <div id="user-name"></div>
+                <a class="logout" onclick="logout()">Sign out</a>
+            </div>
+        </aside>
+
+        <main class="main-content">
+            <!-- Dashboard Page -->
+            <div id="page-dashboard">
+                <div class="page-header"><h1>Dashboard</h1></div>
+                <div class="stats-row">
+                    <div class="stat-card">
+                        <div class="number" id="stat-total">0</div>
+                        <div class="label">Total Leads</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="number" id="stat-enriched">0</div>
+                        <div class="label">Enriched</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="number" id="stat-emailed">0</div>
+                        <div class="label">Emails Generated</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="number" id="stat-problems">0</div>
+                        <div class="label">Problems Found</div>
+                    </div>
+                </div>
+                <div class="search-box">
+                    <h3>Quick Search</h3>
+                    <div class="search-form">
+                        <div class="form-group">
+                            <label>Business Type</label>
+                            <select id="quick-keyword">
+                                <option value="">-- Select a type --</option>
+                                <option value="pool builders">Pool Builders</option>
+                                <option value="pool service and maintenance">Pool Service & Maintenance</option>
+                                <option value="landscaping companies">Landscaping Companies</option>
+                                <option value="lawn care service">Lawn Care Service</option>
+                                <option value="outdoor kitchen builders">Outdoor Kitchen Builders</option>
+                                <option value="deck builders">Deck Builders</option>
+                                <option value="fence companies">Fence Companies</option>
+                                <option value="patio contractors">Patio Contractors</option>
+                                <option value="hardscape contractors">Hardscape Contractors</option>
+                                <option value="irrigation companies">Irrigation Companies</option>
+                                <option value="tree service">Tree Service</option>
+                                <option value="concrete contractors">Concrete Contractors</option>
+                                <option value="landscape lighting">Landscape Lighting</option>
+                                <option value="pergola builders">Pergola Builders</option>
+                                <option value="retaining wall contractors">Retaining Wall Contractors</option>
+                                <option value="custom">Custom (type below)</option>
+                            </select>
+                            <input type="text" id="quick-keyword-custom" class="hidden" placeholder="Type custom business type..." style="margin-top:6px">
+                        </div>
+                        <div class="form-group">
+                            <label>Location</label>
+                            <input type="text" id="quick-location" placeholder="Phoenix, AZ">
+                        </div>
+                        <button class="btn btn-primary" onclick="runSearch()">Search</button>
+                    </div>
+                </div>
+                <!-- Dashboard results actions bar -->
+                <div id="dashboard-actions" class="hidden" style="background:white;border-radius:12px;padding:16px 20px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,0.06);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+                    <div style="display:flex;align-items:center;gap:12px">
+                        <label style="font-size:13px;cursor:pointer;display:flex;align-items:center;gap:4px">
+                            <input type="checkbox" id="select-all-dashboard" onchange="toggleSelectAll('recent-leads')"> Select All
+                        </label>
+                        <span id="dashboard-selected-count" style="color:var(--bmp-orange);font-size:13px;font-weight:600"></span>
+                    </div>
+                    <div style="display:flex;gap:8px">
+                        <button class="btn btn-success btn-sm" onclick="pursueSelected()" id="btn-pursue-dashboard">Pursue Selected</button>
+                    </div>
+                </div>
+                <div id="recent-leads" class="leads-grid"></div>
+            </div>
+
+            <!-- Search Page -->
+            <div id="page-search" class="hidden">
+                <div class="page-header"><h1>Find Leads</h1></div>
+                <div class="search-box">
+                    <h3>Search Google Maps for Businesses</h3>
+                    <div class="search-form-advanced">
+                        <div class="form-group">
+                            <label>Business Type</label>
+                            <select id="search-keyword">
+                                <option value="">-- Select a type --</option>
+                                <option value="pool builders">Pool Builders</option>
+                                <option value="pool service and maintenance">Pool Service & Maintenance</option>
+                                <option value="landscaping companies">Landscaping Companies</option>
+                                <option value="lawn care service">Lawn Care Service</option>
+                                <option value="outdoor kitchen builders">Outdoor Kitchen Builders</option>
+                                <option value="deck builders">Deck Builders</option>
+                                <option value="fence companies">Fence Companies</option>
+                                <option value="patio contractors">Patio Contractors</option>
+                                <option value="hardscape contractors">Hardscape Contractors</option>
+                                <option value="irrigation companies">Irrigation Companies</option>
+                                <option value="tree service">Tree Service</option>
+                                <option value="concrete contractors">Concrete Contractors</option>
+                                <option value="landscape lighting">Landscape Lighting</option>
+                                <option value="pergola builders">Pergola Builders</option>
+                                <option value="retaining wall contractors">Retaining Wall Contractors</option>
+                                <option value="custom">Custom (type below)</option>
+                            </select>
+                            <input type="text" id="search-keyword-custom" class="hidden" placeholder="Type custom business type..." style="margin-top:6px">
+                        </div>
+                        <div class="form-group">
+                            <label>Location</label>
+                            <input type="text" id="search-location" placeholder="Phoenix, AZ">
+                        </div>
+                        <div class="form-group">
+                            <label>Max Results</label>
+                            <input type="number" id="search-max" value="20" min="5" max="60">
+                        </div>
+                        <div class="form-group">
+                            <label>Min Reviews</label>
+                            <input type="number" id="search-min-reviews" value="0" min="0">
+                        </div>
+                        <button class="btn btn-primary" onclick="runSearchFull()">Find Businesses</button>
+                    </div>
+                </div>
+
+                <!-- Search results actions bar -->
+                <div id="search-actions" class="hidden" style="background:white;border-radius:12px;padding:16px 20px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,0.06);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+                    <div style="display:flex;align-items:center;gap:12px">
+                        <label style="font-size:13px;cursor:pointer;display:flex;align-items:center;gap:4px">
+                            <input type="checkbox" id="select-all-search" onchange="toggleSelectAll('search-results')"> Select All
+                        </label>
+                        <span id="search-results-count" style="font-weight:600"></span>
+                        <span id="selected-count-display" style="color:var(--bmp-orange);font-size:13px;font-weight:600"></span>
+                    </div>
+                    <div style="display:flex;gap:8px">
+                        <button class="btn btn-success btn-sm" onclick="pursueSelected()" id="btn-pursue" disabled style="opacity:0.5">Pursue Selected</button>
+                        <button class="btn btn-secondary btn-sm" onclick="autoEnrichAll()">Analyze All Websites</button>
+                    </div>
+                </div>
+
+                <div id="search-results" class="leads-grid"></div>
+            </div>
+
+            <!-- Leads Page -->
+            <div id="page-leads" class="hidden">
+                <div class="page-header">
+                    <h1>All Leads</h1>
+                    <div style="display:flex;gap:8px;align-items:center">
+                        <select id="filter-min-reviews" onchange="loadAllLeads()" style="padding:6px 10px;border-radius:6px;border:1px solid #ddd;font-size:12px">
+                            <option value="0">All sizes</option>
+                            <option value="10">10+ reviews</option>
+                            <option value="25">25+ reviews</option>
+                            <option value="50">50+ reviews</option>
+                            <option value="100">100+ reviews</option>
+                        </select>
+                        <select id="filter-sort" onchange="loadAllLeads()" style="padding:6px 10px;border-radius:6px;border:1px solid #ddd;font-size:12px">
+                            <option value="reviews">Most Reviews</option>
+                            <option value="rating">Highest Rated</option>
+                            <option value="created_at">Newest</option>
+                            <option value="name">Name A-Z</option>
+                        </select>
+                        <button class="btn btn-secondary btn-sm" onclick="filterLeads('all')">All</button>
+                        <button class="btn btn-secondary btn-sm" onclick="filterLeads('enriched')">Enriched</button>
+                        <button class="btn btn-secondary btn-sm" onclick="filterLeads('new')">New</button>
+                    </div>
+                </div>
+                <div style="background:white;border-radius:12px;padding:12px 20px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,0.06);display:flex;justify-content:space-between;align-items:center">
+                    <div style="display:flex;align-items:center;gap:12px">
+                        <label style="font-size:13px;cursor:pointer;display:flex;align-items:center;gap:4px">
+                            <input type="checkbox" id="select-all-leads" onchange="toggleSelectAll('all-leads')"> Select All
+                        </label>
+                        <span id="leads-selected-count" style="color:var(--bmp-orange);font-size:13px;font-weight:600"></span>
+                    </div>
+                    <div style="display:flex;gap:8px">
+                        <button class="btn btn-success btn-sm" onclick="pursueSelected()" id="btn-pursue-leads">Pursue Selected</button>
+                    </div>
+                </div>
+                <div id="all-leads" class="leads-grid"></div>
+            </div>
+
+            <!-- Emails Page -->
+            <div id="page-emails" class="hidden">
+                <div class="page-header"><h1>Generated Emails</h1></div>
+                <div id="emails-list" class="leads-grid"></div>
+            </div>
+
+            <!-- Settings Page -->
+            <div id="page-settings" class="hidden">
+                <div class="page-header"><h1>Settings</h1></div>
+
+                <div class="search-box" style="max-width:600px">
+                    <h3>Your Profile</h3>
+                    <p style="font-size:13px;color:#666;margin-bottom:16px">This information is used when sending emails to prospects.</p>
+
+                    <div class="form-group">
+                        <label>Full Name</label>
+                        <input type="text" id="settings-name" placeholder="Steve Edwards">
+                    </div>
+                    <div class="form-group">
+                        <label>Title</label>
+                        <input type="text" id="settings-title" placeholder="Business Development Representative">
+                    </div>
+                    <div class="form-group">
+                        <label>Phone</label>
+                        <input type="text" id="settings-phone" placeholder="(555) 123-4567">
+                    </div>
+
+                    <div style="background:#f5f7f5;border-radius:8px;padding:12px;margin:16px 0;font-size:13px">
+                        <div><strong>Sends from:</strong> <span id="settings-send-from" style="color:var(--bmp-green)"></span></div>
+                        <div><strong>Replies go to:</strong> <span id="settings-reply-to" style="color:var(--bmp-green)"></span></div>
+                    </div>
+
+                    <button class="btn btn-primary" onclick="saveProfile()">Save Profile</button>
+                </div>
+
+                <div class="search-box" style="max-width:600px;margin-top:16px">
+                    <h3>Email Signature</h3>
+                    <p style="font-size:13px;color:#666;margin-bottom:16px">This signature is appended to every email you send. Use HTML for formatting.</p>
+
+                    <div class="form-group">
+                        <textarea id="settings-signature" rows="6" placeholder="Steve Edwards&#10;Business Development | Backyard Marketing Pros&#10;(555) 123-4567&#10;backyardmarketingpros.com" style="width:100%;padding:10px 14px;border:1px solid #ddd;border-radius:8px;font-size:13px;font-family:monospace;resize:vertical"></textarea>
+                    </div>
+                    <div style="margin-bottom:12px">
+                        <strong style="font-size:13px">Preview:</strong>
+                        <div id="signature-preview" style="background:#f8f9fa;border-radius:6px;padding:12px;margin-top:6px;font-size:13px;border-left:3px solid var(--bmp-green)"></div>
+                    </div>
+                    <button class="btn btn-primary" onclick="saveProfile()">Save Signature</button>
+                </div>
+
+                <div class="search-box" style="max-width:600px;margin-top:16px">
+                    <h3>Email Sending</h3>
+                    <div style="display:flex;align-items:center;gap:12px;padding:8px 0">
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px">
+                            <input type="checkbox" id="settings-sending-enabled" onchange="toggleSending()" style="width:18px;height:18px">
+                            <span>Enable email sending</span>
+                        </label>
+                    </div>
+                    <p style="font-size:12px;color:#888;margin-top:4px">When disabled, you can still generate and review sequences, but the Send buttons will be locked. Enable this once your Resend domain is verified.</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        let token = localStorage.getItem('token');
+        let currentUser = null;
+
+        // Check auth on load
+        if (token) {
+            checkAuth();
+        }
+
+        async function api(path, options = {}) {
+            const res = await fetch(path, {
+                ...options,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`,
+                    ...(options.headers || {}),
+                },
+            });
+            if (res.status === 401) { logout(); return null; }
+            return res.json();
+        }
+
+        async function checkAuth() {
+            try {
+                const user = await api('/api/auth/me');
+                if (user) {
+                    currentUser = user;
+                    document.getElementById('auth-screen').classList.add('hidden');
+                    document.getElementById('app-screen').classList.remove('hidden');
+                    document.getElementById('user-name').textContent = user.name;
+                    loadDashboard();
+                }
+            } catch(e) { logout(); }
+        }
+
+        async function login() {
+            const email = document.getElementById('login-email').value;
+            const password = document.getElementById('login-password').value;
+            const formData = new URLSearchParams();
+            formData.append('username', email);
+            formData.append('password', password);
+
+            const res = await fetch('/api/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: formData,
+            });
+            const data = await res.json();
+            if (data.access_token) {
+                token = data.access_token;
+                localStorage.setItem('token', token);
+                checkAuth();
+            } else {
+                showAuthError(data.detail || 'Invalid email or password');
+            }
+        }
+
+        function showAuthError(msg) {
+            const el = document.getElementById('auth-error');
+            el.textContent = msg;
+            el.style.display = 'block';
+            setTimeout(() => { el.style.display = 'none'; }, 5000);
+        }
+
+        async function register() {
+            const email = document.getElementById('reg-email').value.trim().toLowerCase();
+            const allowedDomains = ['backyardmarketingpros.com', 'aamp.agency'];
+            const emailDomain = email.split('@')[1];
+
+            if (!allowedDomains.includes(emailDomain)) {
+                showAuthError('Registration is restricted to @backyardmarketingpros.com and @aamp.agency emails.');
+                return;
+            }
+
+            const res = await fetch('/api/auth/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: document.getElementById('reg-name').value,
+                    email: email,
+                    password: document.getElementById('reg-password').value,
+                }),
+            });
+            const data = await res.json();
+            if (data.access_token) {
+                token = data.access_token;
+                localStorage.setItem('token', token);
+                checkAuth();
+            } else {
+                showAuthError(data.detail || 'Registration failed');
+            }
+        }
+
+        function logout() {
+            token = null;
+            localStorage.removeItem('token');
+            document.getElementById('auth-screen').classList.remove('hidden');
+            document.getElementById('app-screen').classList.add('hidden');
+        }
+
+        function showRegister() {
+            document.getElementById('login-form').classList.add('hidden');
+            document.getElementById('register-form').classList.remove('hidden');
+        }
+        function showLogin() {
+            document.getElementById('register-form').classList.add('hidden');
+            document.getElementById('login-form').classList.remove('hidden');
+        }
+
+        function showPage(page) {
+            document.querySelectorAll('[id^="page-"]').forEach(el => el.classList.add('hidden'));
+            document.getElementById(`page-${page}`).classList.remove('hidden');
+            document.querySelectorAll('.sidebar-nav a').forEach(a => a.classList.remove('active'));
+            event.target.classList.add('active');
+
+            if (page === 'leads') loadAllLeads();
+            if (page === 'dashboard') loadDashboard();
+            if (page === 'settings') loadSettings();
+        }
+
+        // Show/hide custom keyword input when "Custom" is selected
+        document.querySelectorAll('#quick-keyword, #search-keyword').forEach(sel => {
+            sel.addEventListener('change', function() {
+                const customInput = this.id === 'quick-keyword'
+                    ? document.getElementById('quick-keyword-custom')
+                    : document.getElementById('search-keyword-custom');
+                if (this.value === 'custom') {
+                    customInput.classList.remove('hidden');
+                    customInput.focus();
+                } else {
+                    customInput.classList.add('hidden');
+                }
+            });
+        });
+
+        async function loadDashboard() {
+            const leads = await api('/api/leads/');
+            if (!leads) return;
+
+            document.getElementById('stat-total').textContent = leads.length;
+            document.getElementById('stat-enriched').textContent = leads.filter(l => l.enriched).length;
+            document.getElementById('stat-emailed').textContent = leads.filter(l => l.email_generated).length;
+
+            let totalProblems = 0;
+            leads.forEach(l => { totalProblems += l.problem_count || 0; });
+            document.getElementById('stat-problems').textContent = totalProblems;
+
+            // Show recent leads
+            renderLeads(leads.slice(0, 10), 'recent-leads');
+        }
+
+        let lastSearchId = null;
+
+        function getKeyword(prefix) {
+            const sel = document.getElementById(prefix + '-keyword');
+            if (sel.value === 'custom') {
+                return document.getElementById(prefix + '-keyword-custom').value.trim();
+            }
+            return sel.value;
+        }
+
+        async function runSearch() {
+            const keyword = getKeyword('quick');
+            const location = document.getElementById('quick-location').value.trim();
+            if (!keyword) { toast('Select or type a business type'); return; }
+            if (!location) { toast('Enter a location (e.g. Phoenix, AZ)'); return; }
+            await doSearch(keyword, location, 20);
+        }
+
+        async function runSearchFull() {
+            const keyword = getKeyword('search');
+            const location = document.getElementById('search-location').value.trim();
+            const max = document.getElementById('search-max').value;
+            if (!keyword) { toast('Select or type a business type'); return; }
+            if (!location) { toast('Enter a location (e.g. Phoenix, AZ)'); return; }
+            await doSearch(keyword, location, parseInt(max), 'search-results');
+        }
+
+        async function doSearch(keyword, location, maxResults, targetEl = 'recent-leads') {
+            toast('Searching Google Maps... this may take 10-30 seconds');
+            const data = await api('/api/search/', {
+                method: 'POST',
+                body: JSON.stringify({ keyword, location, max_results: maxResults }),
+            });
+            if (data) {
+                lastSearchId = data.search_id;
+                toast(`Found ${data.results_count} businesses! Select the ones you want to pursue.`);
+                const leads = await api(`/api/leads/?search_id=${data.search_id}&sort_by=reviews`);
+                renderLeads(leads, targetEl);
+
+                // Show the appropriate actions bar
+                if (targetEl === 'search-results') {
+                    const actionsBar = document.getElementById('search-actions');
+                    if (actionsBar) {
+                        actionsBar.classList.remove('hidden');
+                        document.getElementById('search-results-count').textContent = `${data.results_count} businesses found`;
+                    }
+                } else if (targetEl === 'recent-leads') {
+                    const dashActions = document.getElementById('dashboard-actions');
+                    if (dashActions) dashActions.classList.remove('hidden');
+                }
+            }
+        }
+
+        async function loadAllLeads(filter = 'all') {
+            const minReviews = document.getElementById('filter-min-reviews')?.value || 0;
+            const sortBy = document.getElementById('filter-sort')?.value || 'reviews';
+            let params = `?sort_by=${sortBy}`;
+            if (parseInt(minReviews) > 0) params += `&min_reviews=${minReviews}`;
+            if (filter === 'enriched') params += '&enriched_only=true';
+            else if (filter !== 'all') params += `&status=${filter}`;
+
+            const leads = await api(`/api/leads/${params}`);
+            if (leads) renderLeads(leads, 'all-leads');
+        }
+
+        function filterLeads(filter) { loadAllLeads(filter); }
+
+        function renderLeads(leads, containerId) {
+            const container = document.getElementById(containerId);
+            if (!leads || leads.length === 0) {
+                container.innerHTML = '<p style="color:#666;padding:20px;">No leads yet. Run a search to find businesses.</p>';
+                return;
+            }
+
+            container.innerHTML = leads.map(lead => `
+                <div class="lead-card ${lead.enriched ? 'enriched' : ''} ${lead.problem_count > 0 ? 'has-problems' : ''}" data-lead-id="${lead.id}">
+                    <div class="lead-card-header">
+                        <div style="display:flex;align-items:center;gap:8px">
+                            ${lead.status === 'new' ? `<input type="checkbox" class="lead-checkbox" value="${lead.id}" onchange="updateSelectedCount()">` : ''}
+                            <h3 style="margin:0">${lead.business_name}</h3>
+                            <span class="status-badge status-${lead.status}">${lead.status}</span>
+                            ${lead.problem_count > 0 ? `<span style="background:#fde8e8;color:#c0392b;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;margin-left:6px">${lead.problem_count} issues found</span>` : ''}
+                        </div>
+                        <div style="text-align:right">
+                            ${lead.review_count ? `<div style="font-size:20px;font-weight:700;color:${lead.review_count >= 50 ? '#27ae60' : lead.review_count >= 20 ? '#f39c12' : '#999'}">${lead.review_count}</div><div style="font-size:10px;color:#666">reviews</div>` : '<div style="font-size:11px;color:#999">No reviews</div>'}
+                            ${lead.rating ? `<div style="color:#f39c12;font-size:13px;margin-top:2px">★ ${lead.rating}</div>` : ''}
+                        </div>
+                    </div>
+                    <div class="lead-card-meta">
+                        ${lead.phone ? `<span>📞 ${lead.phone}</span>` : ''}
+                        ${lead.website ? `<span>🌐 <a href="${lead.website}" target="_blank">${lead.website.replace('https://','').replace('http://','').slice(0,30)}</a></span>` : ''}
+                        ${lead.city ? `<span>📍 ${lead.city}, ${lead.state}</span>` : ''}
+                        ${lead.review_count >= 50 ? '<span style="background:#eafaf1;color:#27ae60;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600">HIGH VALUE</span>' : ''}
+                    </div>
+                    ${lead.contact_name ? `
+                        <div style="background:#f0f7ff;border-radius:6px;padding:8px 12px;margin:8px 0;font-size:13px">
+                            <strong>${lead.contact_name}</strong>${lead.contact_title ? ` — ${lead.contact_title}` : ''}
+                            ${lead.contact_email ? `<br><span style="color:var(--bmp-orange)">${lead.contact_email}</span>` : ''}
+                        </div>
+                    ` : ''}
+                    ${lead.enriched ? `
+                        <div class="lead-problems">
+                            ${(lead.problems_found || []).map(p => `
+                                <span class="problem-tag ${p.severity}">${p.type.replace(/_/g, ' ')}</span>
+                            `).join('')}
+                        </div>
+                        ${lead.enrichment_summary ? `<p style="font-size:13px;color:#555;margin:8px 0">${lead.enrichment_summary}</p>` : ''}
+                    ` : ''}
+                    <div class="lead-actions">
+                        ${lead.status === 'new' && !lead.enriched && lead.website ? `<button class="btn btn-secondary btn-sm" onclick="enrichLead(${lead.id})">Analyze Website</button>` : ''}
+                        ${lead.status === 'new' && lead.enriched && !lead.email_generated ? `<button class="btn btn-success btn-sm" onclick="generateEmail(${lead.id})">Generate Email</button>` : ''}
+                        ${lead.email_generated ? `<button class="btn btn-secondary btn-sm" onclick="viewEmails(${lead.id})">View Sequence (${lead.status === 'sequencing' ? 'active' : lead.status})</button>` : ''}
+                        ${lead.phone ? `<button class="btn btn-secondary btn-sm" onclick="copyToClipboard('${lead.phone}')">Copy Phone</button>` : ''}
+                        ${lead.status === 'sequencing' || lead.status === 'contacted' ? `<button class="btn btn-success btn-sm" onclick="markReplied(${lead.id})">Mark as Replied</button>` : ''}
+                    </div>
+                    <div id="email-preview-${lead.id}"></div>
+                </div>
+            `).join('');
+        }
+
+        async function enrichLead(leadId) {
+            toast('Analyzing website + local SEO + looking up contacts via Apollo...');
+            const data = await api(`/api/leads/${leadId}/enrich`, { method: 'POST' });
+            if (data) {
+                let msg = `Found ${data.problems_found} issues!`;
+                if (data.contact && data.contact.name) {
+                    msg += ` Contact found: ${data.contact.name}`;
+                    if (data.contact.title) msg += ` (${data.contact.title})`;
+                    if (data.contact.email) msg += ` - ${data.contact.email}`;
+                } else {
+                    msg += ' No contact found in Apollo — you can add one manually.';
+                }
+                if (data.local_seo && data.local_seo.score !== undefined) {
+                    msg += ` | SEO Score: ${data.local_seo.score}/100`;
+                }
+                toast(msg);
+                loadDashboard();
+                loadAllLeads();
+                if (lastSearchId) {
+                    const leads = await api(`/api/leads/?search_id=${lastSearchId}&sort_by=reviews`);
+                    if (leads) renderLeads(leads, 'search-results');
+                }
+            }
+        }
+
+        async function autoEnrichAll() {
+            if (!lastSearchId) { toast('Run a search first'); return; }
+
+            toast('Analyzing all websites... this will take a minute or two');
+            const leads = await api(`/api/leads/?search_id=${lastSearchId}`);
+            if (!leads) return;
+
+            const toEnrich = leads.filter(l => !l.enriched && l.website);
+            let enriched = 0;
+
+            for (const lead of toEnrich) {
+                try {
+                    const data = await api(`/api/leads/${lead.id}/enrich`, { method: 'POST' });
+                    if (data) {
+                        enriched++;
+                        toast(`Analyzed ${enriched}/${toEnrich.length}: ${lead.business_name} (${data.problems_found} issues)`);
+                    }
+                } catch(e) {
+                    // Continue on error
+                }
+            }
+
+            toast(`Done! Analyzed ${enriched} websites.`);
+            // Reload the results sorted by problems
+            const updatedLeads = await api(`/api/leads/?search_id=${lastSearchId}&sort_by=reviews`);
+            if (updatedLeads) renderLeads(updatedLeads, 'search-results');
+            loadDashboard();
+        }
+
+        function toggleSelectAll(containerId) {
+            const container = document.getElementById(containerId);
+            const selectAllMap = {
+                'search-results': 'select-all-search',
+                'recent-leads': 'select-all-dashboard',
+                'all-leads': 'select-all-leads',
+            };
+            const selectAll = document.getElementById(selectAllMap[containerId]);
+            const checkboxes = container.querySelectorAll('.lead-checkbox');
+            checkboxes.forEach(cb => cb.checked = selectAll.checked);
+            updateSelectedCount();
+        }
+
+        function updateSelectedCount() {
+            const checked = document.querySelectorAll('.lead-checkbox:checked');
+            const count = checked.length;
+            const label = count > 0 ? `${count} selected` : '';
+
+            // Update all count displays
+            ['selected-count-display', 'dashboard-selected-count', 'leads-selected-count'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.textContent = label;
+            });
+
+            // Update all pursue buttons
+            ['btn-pursue', 'btn-pursue-dashboard', 'btn-pursue-leads'].forEach(id => {
+                const btn = document.getElementById(id);
+                if (btn) {
+                    btn.disabled = count === 0;
+                    btn.style.opacity = count === 0 ? '0.5' : '1';
+                    btn.textContent = count > 0 ? `Pursue ${count} Selected` : 'Pursue Selected';
+                }
+            });
+        }
+
+        async function markReplied(leadId) {
+            await api(`/api/leads/${leadId}/status?status=qualified`, { method: 'PATCH' });
+            toast('Lead marked as qualified! Ready for HubSpot.');
+            loadDashboard();
+            loadAllLeads();
+        }
+
+        async function pursueSelected() {
+            const checked = document.querySelectorAll('.lead-checkbox:checked');
+            const leadIds = Array.from(checked).map(cb => parseInt(cb.value));
+
+            if (leadIds.length === 0) { toast('Select leads to pursue first'); return; }
+
+            // Disable button and show progress
+            document.querySelectorAll('[id^="btn-pursue"]').forEach(btn => {
+                btn.disabled = true;
+                btn.textContent = 'Processing...';
+                btn.style.opacity = '0.5';
+            });
+
+            toast(`Pursuing ${leadIds.length} leads... Analyzing websites, finding contacts, and generating email sequences. This takes 1-2 min per lead.`);
+
+            // Process one at a time so user sees progress
+            let completed = 0;
+            for (const leadId of leadIds) {
+                try {
+                    const data = await api('/api/leads/pursue', {
+                        method: 'POST',
+                        body: JSON.stringify({ lead_ids: [leadId] }),
+                    });
+                    completed++;
+                    if (data && data.results && data.results[0]) {
+                        const r = data.results[0];
+                        toast(`(${completed}/${leadIds.length}) ${r.business_name}: ${r.steps.join(', ')}`);
+                    }
+                } catch(e) {
+                    completed++;
+                    toast(`(${completed}/${leadIds.length}) Error processing lead`);
+                }
+            }
+
+            toast(`Done! Processed ${completed} leads with email sequences.`);
+
+            // Re-enable buttons
+            document.querySelectorAll('[id^="btn-pursue"]').forEach(btn => {
+                btn.disabled = false;
+                btn.textContent = 'Pursue Selected';
+                btn.style.opacity = '1';
+            });
+
+            // Reload both views
+            if (lastSearchId) {
+                const leads = await api(`/api/leads/?search_id=${lastSearchId}&sort_by=reviews`);
+                if (leads) {
+                    renderLeads(leads, 'search-results');
+                    renderLeads(leads, 'recent-leads');
+                }
+            }
+            loadDashboard();
+        }
+
+        async function generateEmail(leadId) {
+            toast('Generating personalized email...');
+            const data = await api(`/api/leads/${leadId}/generate-email`, { method: 'POST' });
+            if (data) {
+                const preview = document.getElementById(`email-preview-${leadId}`);
+                if (preview) {
+                    preview.innerHTML = `
+                        <div class="email-preview">
+                            <div class="subject">Subject: ${data.subject}</div>
+                            <div class="body">${data.body}</div>
+                            <button class="btn btn-secondary btn-sm" style="margin-top:8px" onclick="copyToClipboard(\`${escapeHtml(data.subject)}\\n\\n${escapeHtml(data.body)}\`)">📋 Copy Email</button>
+                        </div>
+                    `;
+                }
+                toast('Email generated!');
+            }
+        }
+
+        async function viewEmails(leadId) {
+            const data = await api(`/api/leads/${leadId}`);
+            if (data && data.emails) {
+                const preview = document.getElementById(`email-preview-${leadId}`);
+                const hasContactEmail = !!data.contact_email;
+                if (preview) {
+                    let html = '';
+
+                    // Show contact email or prompt to add one
+                    if (!hasContactEmail) {
+                        html += `<div style="background:#fef9e7;border-radius:8px;padding:12px;margin-bottom:8px;font-size:13px">
+                            <strong>No contact email found.</strong> Add one to send:
+                            <div style="display:flex;gap:6px;margin-top:6px">
+                                <input type="email" id="manual-email-${leadId}" placeholder="owner@example.com" style="flex:1;padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px">
+                                <button class="btn btn-primary btn-sm" onclick="saveContactEmail(${leadId})">Save</button>
+                            </div>
+                        </div>`;
+                    } else {
+                        html += `<div style="background:#eafaf1;border-radius:8px;padding:8px 12px;margin-bottom:8px;font-size:13px">
+                            Sending to: <strong>${data.contact_email}</strong>
+                            <button class="btn btn-success btn-sm" style="margin-left:8px" onclick="sendNextInSequence(${leadId})">Send Next Email</button>
+                        </div>`;
+                    }
+
+                    html += data.emails.map((e, i) => `
+                        <div class="email-preview" data-email-id="${e.id}" style="border-left:3px solid ${e.is_sent ? '#1B5E20' : '#ddd'};margin-bottom:8px">
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                                <span style="font-size:11px;font-weight:600;text-transform:uppercase;color:${e.is_sent ? '#1B5E20' : '#999'}">
+                                    Email ${e.sequence_order} — ${e.email_type.replace(/_/g, ' ')} ${e.is_sent ? '(SENT)' : `(Day ${e.send_delay_days || 0})`}
+                                </span>
+                                <div style="display:flex;gap:4px">
+                                    ${!e.is_sent ? `<button class="btn btn-secondary btn-sm" onclick="editEmail(${e.id}, '${escapeHtml(e.subject)}', \`${escapeHtml(e.body)}\`)">Edit</button>` : ''}
+                                    ${!e.is_sent && hasContactEmail ? `<button class="btn btn-primary btn-sm" onclick="sendSingleEmail(${e.id})">Send</button>` : ''}
+                                </div>
+                            </div>
+                            <div class="subject" style="font-weight:600;margin-bottom:4px">Subject: ${e.subject}</div>
+                            <div class="body">${e.body}</div>
+                            <div id="email-edit-${e.id}"></div>
+                        </div>
+                    `).join('');
+
+                    preview.innerHTML = html;
+                }
+            }
+        }
+
+        async function sendSingleEmail(emailId) {
+            toast('Sending email...');
+            const data = await api(`/api/send/email/${emailId}`, { method: 'POST' });
+            if (data && data.success) {
+                toast(`Sent to ${data.sent_to} from ${data.from}`);
+                loadDashboard();
+            }
+        }
+
+        async function sendNextInSequence(leadId) {
+            toast('Sending next email in sequence...');
+            const data = await api(`/api/send/sequence/${leadId}`, { method: 'POST' });
+            if (data) {
+                if (data.complete) {
+                    toast('All emails in this sequence have been sent!');
+                } else {
+                    toast(`Sent ${data.email_type} email. ${data.remaining_in_sequence} remaining.`);
+                }
+                viewEmails(leadId);
+                loadDashboard();
+            }
+        }
+
+        async function saveContactEmail(leadId) {
+            const emailInput = document.getElementById(`manual-email-${leadId}`);
+            const email = emailInput.value.trim();
+            if (!email) { toast('Enter an email address'); return; }
+
+            const data = await api(`/api/send/lead/${leadId}/email`, {
+                method: 'PATCH',
+                body: JSON.stringify({ contact_email: email }),
+            });
+            if (data) {
+                toast(`Contact email saved: ${data.contact_email}`);
+                viewEmails(leadId);
+            }
+        }
+
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text);
+            toast('Copied to clipboard!');
+        }
+
+        function escapeHtml(text) {
+            return text.replace(/`/g, '\\`').replace(/\$/g, '\\$');
+        }
+
+        // ============ Settings ============
+
+        async function loadSettings() {
+            const data = await api('/api/send/profile');
+            if (data) {
+                document.getElementById('settings-name').value = data.name || '';
+                document.getElementById('settings-title').value = data.title || '';
+                document.getElementById('settings-phone').value = data.phone || '';
+                document.getElementById('settings-signature').value = data.signature || '';
+                document.getElementById('settings-sending-enabled').checked = data.sending_enabled;
+                document.getElementById('settings-send-from').textContent = data.send_from;
+                document.getElementById('settings-reply-to').textContent = data.reply_to;
+                updateSignaturePreview();
+            }
+        }
+
+        async function saveProfile() {
+            const data = await api('/api/send/profile', {
+                method: 'PATCH',
+                body: JSON.stringify({
+                    name: document.getElementById('settings-name').value,
+                    title: document.getElementById('settings-title').value,
+                    phone: document.getElementById('settings-phone').value,
+                    signature: document.getElementById('settings-signature').value,
+                }),
+            });
+            if (data) {
+                toast('Profile saved!');
+                document.getElementById('settings-send-from').textContent = data.send_from;
+                document.getElementById('settings-reply-to').textContent = data.reply_to;
+                document.getElementById('user-name').textContent = data.name;
+            }
+        }
+
+        async function toggleSending() {
+            const enabled = document.getElementById('settings-sending-enabled').checked;
+            await api('/api/send/profile', {
+                method: 'PATCH',
+                body: JSON.stringify({ sending_enabled: enabled }),
+            });
+            toast(enabled ? 'Sending enabled' : 'Sending disabled');
+        }
+
+        function updateSignaturePreview() {
+            const sig = document.getElementById('settings-signature').value;
+            document.getElementById('signature-preview').innerHTML = sig.replace(/\n/g, '<br>');
+        }
+
+        // Live signature preview
+        document.addEventListener('input', function(e) {
+            if (e.target.id === 'settings-signature') updateSignaturePreview();
+        });
+
+        // ============ Email Editing ============
+
+        async function editEmail(emailId, currentSubject, currentBody) {
+            const preview = document.getElementById(`email-edit-${emailId}`);
+            if (!preview) return;
+            preview.innerHTML = `
+                <div style="background:white;border:2px solid var(--bmp-orange);border-radius:8px;padding:16px;margin-top:8px">
+                    <div class="form-group">
+                        <label style="font-weight:600;font-size:12px">Subject</label>
+                        <input type="text" id="edit-subject-${emailId}" value="${currentSubject.replace(/"/g, '&quot;')}" style="width:100%;padding:8px 12px;border:1px solid #ddd;border-radius:6px;font-size:13px">
+                    </div>
+                    <div class="form-group">
+                        <label style="font-weight:600;font-size:12px">Body</label>
+                        <textarea id="edit-body-${emailId}" rows="8" style="width:100%;padding:8px 12px;border:1px solid #ddd;border-radius:6px;font-size:13px;font-family:inherit;resize:vertical">${currentBody}</textarea>
+                    </div>
+                    <div style="display:flex;gap:8px">
+                        <button class="btn btn-primary btn-sm" onclick="saveEmailEdit(${emailId})">Save Changes</button>
+                        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('email-edit-${emailId}').innerHTML=''">Cancel</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function saveEmailEdit(emailId) {
+            const subject = document.getElementById(`edit-subject-${emailId}`).value;
+            const body = document.getElementById(`edit-body-${emailId}`).value;
+            const data = await api(`/api/send/email/${emailId}/edit`, {
+                method: 'PATCH',
+                body: JSON.stringify({ subject, body }),
+            });
+            if (data) {
+                toast('Email updated!');
+                // Find the lead ID from the closest card and refresh
+                const card = document.querySelector(`[data-email-id="${emailId}"]`);
+                document.getElementById(`email-edit-${emailId}`).innerHTML = '';
+                // Re-render by finding parent lead
+                const leadCards = document.querySelectorAll('.lead-card');
+                leadCards.forEach(c => {
+                    const leadId = c.getAttribute('data-lead-id');
+                    if (leadId) viewEmails(parseInt(leadId));
+                });
+            }
+        }
+
+        function toast(msg) {
+            const el = document.createElement('div');
+            el.className = 'toast';
+            el.textContent = msg;
+            document.body.appendChild(el);
+            setTimeout(() => el.remove(), 3000);
+        }
+    </script>
+</body>
+</html>
