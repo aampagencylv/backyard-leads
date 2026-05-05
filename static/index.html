@@ -546,6 +546,14 @@
                 <div id="pipeline-leads" class="leads-grid"></div>
             </div>
 
+            <!-- CRM Lead Detail Page -->
+            <div id="page-lead-detail" class="hidden">
+                <div style="margin-bottom:16px">
+                    <a href="#" onclick="showPage('pipeline')" style="color:var(--bmp-green);text-decoration:none;font-size:13px">Back to Pipeline</a>
+                </div>
+                <div id="lead-detail-content"></div>
+            </div>
+
             <!-- Settings Page -->
             <div id="page-settings" class="hidden">
                 <div class="page-header"><h1>Settings</h1></div>
@@ -840,7 +848,7 @@
                     <div class="lead-card-header">
                         <div style="display:flex;align-items:center;gap:8px">
                             ${lead.status === 'new' ? `<input type="checkbox" class="lead-checkbox" value="${lead.id}" onchange="updateSelectedCount()">` : ''}
-                            <h3 style="margin:0">${lead.business_name}</h3>
+                            <h3 style="margin:0"><a href="#" onclick="openLeadDetail(${lead.id});return false" style="color:inherit;text-decoration:none;border-bottom:1px dashed #ccc">${lead.business_name}</a></h3>
                             <span class="status-badge status-${lead.status}">${lead.status}</span>
                             ${lead.problem_count > 0 ? `<span style="background:#fde8e8;color:#c0392b;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;margin-left:6px">${lead.problem_count} issues found</span>` : ''}
                         </div>
@@ -1140,6 +1148,322 @@
 
         function escapeHtml(text) {
             return text.replace(/`/g, '\\`').replace(/\$/g, '\\$');
+        }
+
+        // ============ CRM Lead Detail ============
+
+        async function openLeadDetail(leadId) {
+            document.querySelectorAll('[id^="page-"]').forEach(el => el.classList.add('hidden'));
+            document.getElementById('page-lead-detail').classList.remove('hidden');
+            document.querySelectorAll('.sidebar-nav a').forEach(a => a.classList.remove('active'));
+
+            const data = await api(`/api/crm/leads/${leadId}/full`);
+            if (!data) return;
+
+            const tags = await api('/api/crm/tags') || [];
+            const users = await api('/api/crm/users') || [];
+
+            const container = document.getElementById('lead-detail-content');
+            container.innerHTML = `
+                <!-- Header -->
+                <div style="background:white;border-radius:12px;padding:24px;box-shadow:0 2px 8px rgba(0,0,0,0.06);margin-bottom:16px">
+                    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+                        <div>
+                            <h1 style="font-size:22px;margin-bottom:4px">${data.business_name}</h1>
+                            <div style="font-size:13px;color:#666">
+                                ${data.city ? `${data.city}, ${data.state}` : ''} ${data.business_type ? `| ${data.business_type}` : ''}
+                                ${data.rating ? `| ★ ${data.rating} (${data.review_count || 0} reviews)` : ''}
+                            </div>
+                            ${data.website ? `<a href="${data.website}" target="_blank" style="font-size:13px;color:var(--bmp-green)">${data.website}</a>` : ''}
+                        </div>
+                        <div style="text-align:right">
+                            <span class="status-badge status-${data.status}" style="font-size:13px;padding:4px 12px">${data.status}</span>
+                            <div style="margin-top:8px">
+                                <select onchange="updateDeal(${data.id}, 'deal_stage', this.value)" style="padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px">
+                                    ${['prospect','proposal','negotiation','closed_won','closed_lost'].map(s =>
+                                        `<option value="${s}" ${data.deal_stage === s ? 'selected' : ''}>${s.replace(/_/g,' ')}</option>`
+                                    ).join('')}
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tags -->
+                    <div style="margin-top:12px;display:flex;gap:4px;align-items:center;flex-wrap:wrap">
+                        ${data.tags.map(t => `<span style="background:${t.color}22;color:${t.color};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600">${t.name} <a onclick="removeTag(${data.id},${t.id})" style="cursor:pointer;margin-left:2px">x</a></span>`).join('')}
+                        <select id="add-tag-select" onchange="addTagToLead(${data.id})" style="padding:2px 6px;border:1px solid #ddd;border-radius:4px;font-size:11px">
+                            <option value="">+ Tag</option>
+                            ${tags.map(t => `<option value="${t.id}">${t.name}</option>`).join('')}
+                            <option value="__new__">Create new tag...</option>
+                        </select>
+                    </div>
+
+                    <!-- Deal & Assignment -->
+                    <div style="display:flex;gap:24px;margin-top:16px;padding-top:12px;border-top:1px solid #eee;font-size:13px">
+                        <div>
+                            <label style="font-weight:600;font-size:11px;color:#888;display:block">Deal Value</label>
+                            <div style="display:flex;align-items:center;gap:4px">
+                                $<input type="number" id="deal-value-${data.id}" value="${data.deal_value || ''}" placeholder="0" onchange="updateDeal(${data.id}, 'deal_value', this.value)" style="width:80px;padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:13px">/mo
+                            </div>
+                        </div>
+                        <div>
+                            <label style="font-weight:600;font-size:11px;color:#888;display:block">Assigned To</label>
+                            <select onchange="updateDeal(${data.id}, 'assigned_to', this.value)" style="padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                                <option value="">Unassigned</option>
+                                ${users.map(u => `<option value="${u.id}" ${data.assigned_to === u.id ? 'selected' : ''}>${u.name}</option>`).join('')}
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-weight:600;font-size:11px;color:#888;display:block">Phone</label>
+                            <span>${data.phone || 'N/A'}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Two column layout -->
+                <div style="display:grid;grid-template-columns:1fr 350px;gap:16px">
+                    <!-- Left: Timeline + Emails -->
+                    <div>
+                        <!-- Contact Card -->
+                        <div style="background:white;border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,0.06);margin-bottom:16px">
+                            <h3 style="font-size:15px;margin-bottom:12px">Contact Info</h3>
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px">
+                                <div>
+                                    <label style="font-size:11px;color:#888;display:block">Name</label>
+                                    <input type="text" id="ci-name-${data.id}" value="${data.contact_name || ''}" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                                </div>
+                                <div>
+                                    <label style="font-size:11px;color:#888;display:block">Title</label>
+                                    <input type="text" id="ci-title-${data.id}" value="${data.contact_title || ''}" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                                </div>
+                                <div>
+                                    <label style="font-size:11px;color:#888;display:block">Email</label>
+                                    <input type="email" id="ci-email-${data.id}" value="${data.contact_email || ''}" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                                </div>
+                                <div>
+                                    <label style="font-size:11px;color:#888;display:block">Phone</label>
+                                    <input type="text" id="ci-phone-${data.id}" value="${data.contact_phone || ''}" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                                </div>
+                                <div style="grid-column:1/-1">
+                                    <label style="font-size:11px;color:#888;display:block">LinkedIn</label>
+                                    <input type="text" id="ci-linkedin-${data.id}" value="${data.contact_linkedin || ''}" placeholder="https://linkedin.com/in/..." style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                                </div>
+                            </div>
+                            <button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="saveContact(${data.id})">Save Contact</button>
+                        </div>
+
+                        <!-- Add Note -->
+                        <div style="background:white;border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,0.06);margin-bottom:16px">
+                            <div style="display:flex;gap:8px;margin-bottom:8px">
+                                <select id="note-type-${data.id}" style="padding:6px 8px;border:1px solid #ddd;border-radius:6px;font-size:12px">
+                                    <option value="note">Note</option>
+                                    <option value="call">Call Log</option>
+                                    <option value="meeting">Meeting</option>
+                                    <option value="linkedin_message">LinkedIn Message</option>
+                                </select>
+                            </div>
+                            <textarea id="note-text-${data.id}" rows="3" placeholder="Add a note, log a call, record a meeting..." style="width:100%;padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;resize:vertical"></textarea>
+                            <button class="btn btn-primary btn-sm" style="margin-top:6px" onclick="addNote(${data.id})">Add to Timeline</button>
+                        </div>
+
+                        <!-- Timeline -->
+                        <div style="background:white;border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,0.06);margin-bottom:16px">
+                            <h3 style="font-size:15px;margin-bottom:16px">Timeline</h3>
+                            <div id="timeline-${data.id}">
+                                ${data.timeline.length === 0 ? '<p style="color:#999;font-size:13px">No activity yet</p>' : ''}
+                                ${data.timeline.map(a => `
+                                    <div style="display:flex;gap:12px;padding:10px 0;border-bottom:1px solid #f0f0f0">
+                                        <div style="width:32px;height:32px;border-radius:50%;background:${getActivityColor(a.type)};display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0">${getActivityIcon(a.type)}</div>
+                                        <div style="flex:1;min-width:0">
+                                            <div style="font-size:13px">${a.content}</div>
+                                            <div style="font-size:11px;color:#999;margin-top:2px">${a.user_name || 'System'} · ${formatDate(a.created_at)}</div>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+
+                        <!-- Email Sequence -->
+                        ${data.emails.length > 0 ? `
+                        <div style="background:white;border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,0.06)">
+                            <h3 style="font-size:15px;margin-bottom:16px">Email Sequence</h3>
+                            ${data.emails.map(e => `
+                                <div class="email-preview" style="border-left:3px solid ${e.is_sent ? '#1B5E20' : '#ddd'};margin-bottom:8px">
+                                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                                        <span style="font-size:11px;font-weight:600;text-transform:uppercase;color:${e.is_sent ? '#1B5E20' : '#999'}">Email ${e.sequence_order} — ${e.email_type.replace(/_/g,' ')} ${e.is_sent ? '(SENT)' : ''}</span>
+                                        <div style="display:flex;gap:4px">
+                                            ${!e.is_sent ? `<button class="btn btn-secondary btn-sm" onclick="editEmail(${e.id}, '${escapeHtml(e.subject)}', \`${escapeHtml(e.body)}\`)">Edit</button>` : ''}
+                                            ${!e.is_sent && data.contact_email ? `<button class="btn btn-primary btn-sm" onclick="sendSingleEmail(${e.id})">Send</button>` : ''}
+                                        </div>
+                                    </div>
+                                    <div style="font-weight:600;font-size:13px">Subject: ${e.subject}</div>
+                                    <div style="font-size:13px;color:#444;white-space:pre-wrap;margin-top:4px">${e.body}</div>
+                                    <div id="email-edit-${e.id}"></div>
+                                </div>
+                            `).join('')}
+                        </div>
+                        ` : ''}
+                    </div>
+
+                    <!-- Right sidebar: Tasks + Problems -->
+                    <div>
+                        <!-- Tasks -->
+                        <div style="background:white;border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,0.06);margin-bottom:16px">
+                            <h3 style="font-size:15px;margin-bottom:12px">Tasks</h3>
+                            <div id="tasks-${data.id}">
+                                ${data.tasks.map(t => `
+                                    <div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid #f5f5f5">
+                                        <input type="checkbox" ${t.completed ? 'checked disabled' : ''} onchange="completeTask(${t.id}, ${data.id})" style="margin-top:2px">
+                                        <div style="flex:1">
+                                            <div style="font-size:13px;${t.completed ? 'text-decoration:line-through;color:#999' : ''}">${t.description}</div>
+                                            ${t.due_date ? `<div style="font-size:11px;color:#888">${formatDate(t.due_date)}</div>` : ''}
+                                        </div>
+                                    </div>
+                                `).join('')}
+                                ${data.tasks.length === 0 ? '<p style="color:#999;font-size:13px">No tasks</p>' : ''}
+                            </div>
+                            <div style="margin-top:8px;display:flex;gap:4px">
+                                <input type="text" id="new-task-${data.id}" placeholder="Add a task..." style="flex:1;padding:6px 8px;border:1px solid #ddd;border-radius:6px;font-size:12px" onkeydown="if(event.key==='Enter')addTask(${data.id})">
+                                <input type="date" id="new-task-date-${data.id}" style="padding:6px 8px;border:1px solid #ddd;border-radius:6px;font-size:12px">
+                                <button class="btn btn-primary btn-sm" onclick="addTask(${data.id})">Add</button>
+                            </div>
+                        </div>
+
+                        <!-- Enrichment / Problems -->
+                        ${data.enriched ? `
+                        <div style="background:white;border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,0.06);margin-bottom:16px">
+                            <h3 style="font-size:15px;margin-bottom:8px">Issues Found (${data.problem_count})</h3>
+                            <p style="font-size:12px;color:#666;margin-bottom:8px">${data.enrichment_summary || ''}</p>
+                            ${data.problems_found.slice(0,8).map(p => `
+                                <div style="padding:6px 0;border-bottom:1px solid #f5f5f5;font-size:12px">
+                                    <span class="problem-tag ${p.severity}" style="margin-right:4px">${p.severity}</span>
+                                    ${p.detail || p.type}
+                                </div>
+                            `).join('')}
+                        </div>
+                        ` : ''}
+
+                        <!-- Quick Actions -->
+                        <div style="background:white;border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,0.06)">
+                            <h3 style="font-size:15px;margin-bottom:12px">Quick Actions</h3>
+                            <div style="display:flex;flex-direction:column;gap:6px">
+                                ${data.phone ? `<a href="tel:${data.phone}" class="btn btn-secondary btn-sm" style="text-align:center;text-decoration:none">Call ${data.phone}</a>` : ''}
+                                ${data.contact_email ? `<a href="mailto:${data.contact_email}" class="btn btn-secondary btn-sm" style="text-align:center;text-decoration:none">Email ${data.contact_email}</a>` : ''}
+                                ${data.contact_linkedin ? `<a href="${data.contact_linkedin}" target="_blank" class="btn btn-secondary btn-sm" style="text-align:center;text-decoration:none">LinkedIn Profile</a>` : ''}
+                                ${data.website ? `<a href="${data.website}" target="_blank" class="btn btn-secondary btn-sm" style="text-align:center;text-decoration:none">Visit Website</a>` : ''}
+                                ${!data.enriched && data.website ? `<button class="btn btn-success btn-sm" onclick="enrichLead(${data.id})">Analyze Website</button>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function getActivityIcon(type) {
+            const icons = { note: '📝', call: '📞', meeting: '🤝', email_sent: '📧', email_opened: '👁', email_clicked: '🔗', email_bounced: '⚠', status_change: '🔄', enriched: '🔍', linkedin_message: '💼', task_created: '📋', task_completed: '✅', deal_update: '💰', contact_updated: '👤' };
+            return icons[type] || '•';
+        }
+
+        function getActivityColor(type) {
+            const colors = { note: '#e8f4fd', call: '#eafaf1', meeting: '#f3e8fd', email_sent: '#e8f4fd', email_opened: '#fef9e7', deal_update: '#fef3e2', task_completed: '#d5f5e3' };
+            return colors[type] || '#f5f5f5';
+        }
+
+        function formatDate(iso) {
+            if (!iso) return '';
+            const d = new Date(iso);
+            const now = new Date();
+            const diff = now - d;
+            if (diff < 60000) return 'just now';
+            if (diff < 3600000) return `${Math.floor(diff/60000)}m ago`;
+            if (diff < 86400000) return `${Math.floor(diff/3600000)}h ago`;
+            if (diff < 604800000) return `${Math.floor(diff/86400000)}d ago`;
+            return d.toLocaleDateString();
+        }
+
+        async function addNote(leadId) {
+            const type = document.getElementById(`note-type-${leadId}`).value;
+            const content = document.getElementById(`note-text-${leadId}`).value.trim();
+            if (!content) { toast('Write something first'); return; }
+
+            await api(`/api/crm/leads/${leadId}/note`, {
+                method: 'POST',
+                body: JSON.stringify({ content, activity_type: type }),
+            });
+            toast('Added to timeline');
+            openLeadDetail(leadId);
+        }
+
+        async function addTask(leadId) {
+            const desc = document.getElementById(`new-task-${leadId}`).value.trim();
+            const date = document.getElementById(`new-task-date-${leadId}`).value;
+            if (!desc) return;
+
+            await api(`/api/crm/leads/${leadId}/tasks`, {
+                method: 'POST',
+                body: JSON.stringify({ description: desc, due_date: date || null }),
+            });
+            toast('Task added');
+            openLeadDetail(leadId);
+        }
+
+        async function completeTask(taskId, leadId) {
+            await api(`/api/crm/tasks/${taskId}/complete`, { method: 'PATCH' });
+            toast('Task completed');
+            openLeadDetail(leadId);
+        }
+
+        async function updateDeal(leadId, field, value) {
+            const body = {};
+            if (field === 'deal_value') body.deal_value = parseFloat(value) || 0;
+            if (field === 'deal_stage') body.deal_stage = value;
+            if (field === 'assigned_to') body.assigned_to = parseInt(value) || null;
+
+            await api(`/api/crm/leads/${leadId}/deal`, {
+                method: 'PATCH',
+                body: JSON.stringify(body),
+            });
+            toast('Updated');
+        }
+
+        async function saveContact(leadId) {
+            const data = {
+                contact_name: document.getElementById(`ci-name-${leadId}`).value,
+                contact_email: document.getElementById(`ci-email-${leadId}`).value,
+                contact_title: document.getElementById(`ci-title-${leadId}`).value,
+                contact_phone: document.getElementById(`ci-phone-${leadId}`).value,
+                contact_linkedin: document.getElementById(`ci-linkedin-${leadId}`).value,
+            };
+            await api(`/api/crm/leads/${leadId}/contact`, {
+                method: 'PATCH',
+                body: JSON.stringify(data),
+            });
+            toast('Contact saved');
+        }
+
+        async function addTagToLead(leadId) {
+            const sel = document.getElementById('add-tag-select');
+            if (sel.value === '__new__') {
+                const name = prompt('Tag name:');
+                if (!name) { sel.value = ''; return; }
+                const color = '#1B5E20';
+                const tag = await api('/api/crm/tags', {
+                    method: 'POST',
+                    body: JSON.stringify({ name, color }),
+                });
+                if (tag) {
+                    await api(`/api/crm/leads/${leadId}/tags/${tag.id}`, { method: 'POST' });
+                    openLeadDetail(leadId);
+                }
+            } else if (sel.value) {
+                await api(`/api/crm/leads/${leadId}/tags/${sel.value}`, { method: 'POST' });
+                openLeadDetail(leadId);
+            }
+        }
+
+        async function removeTag(leadId, tagId) {
+            await api(`/api/crm/leads/${leadId}/tags/${tagId}`, { method: 'DELETE' });
+            openLeadDetail(leadId);
         }
 
         // ============ Pipeline ============

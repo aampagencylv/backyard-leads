@@ -1,7 +1,16 @@
-from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, Boolean
+from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, Boolean, Table
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 from app.database import Base
+
+
+# Many-to-many for leads <-> tags
+lead_tags = Table(
+    "lead_tags",
+    Base.metadata,
+    Column("lead_id", Integer, ForeignKey("leads.id"), primary_key=True),
+    Column("tag_id", Integer, ForeignKey("tags.id"), primary_key=True),
+)
 
 
 class User(Base):
@@ -12,13 +21,15 @@ class User(Base):
     name = Column(String(255), nullable=False)
     hashed_password = Column(String(255), nullable=False)
     is_active = Column(Boolean, default=True)
-    title = Column(String(255), default="")  # e.g. "Business Development Rep"
+    title = Column(String(255), default="")
     phone = Column(String(50), default="")
-    signature = Column(Text, default="")  # HTML email signature
-    sending_enabled = Column(Boolean, default=False)  # Must be enabled per-user
+    signature = Column(Text, default="")
+    sending_enabled = Column(Boolean, default=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     searches = relationship("Search", back_populates="user")
+    activities = relationship("Activity", back_populates="user")
+    tasks = relationship("Task", back_populates="user")
 
 
 class Search(Base):
@@ -26,8 +37,8 @@ class Search(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    keyword = Column(String(255), nullable=False)  # e.g. "pool builders"
-    location = Column(String(255), nullable=False)  # e.g. "Austin, TX"
+    keyword = Column(String(255), nullable=False)
+    location = Column(String(255), nullable=False)
     results_count = Column(Integer, default=0)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -50,9 +61,9 @@ class Lead(Base):
     state = Column(String(100))
     rating = Column(Float)
     review_count = Column(Integer)
-    business_type = Column(String(255))  # pool builder, landscaper, etc.
+    business_type = Column(String(255))
 
-    # Enrichment data (from website crawl)
+    # Enrichment data
     enriched = Column(Boolean, default=False)
     site_speed_score = Column(Float)
     has_blog = Column(Boolean)
@@ -60,30 +71,39 @@ class Lead(Base):
     last_review_date = Column(String(100))
     mobile_friendly = Column(Boolean)
     has_ssl = Column(Boolean)
-    tech_stack = Column(Text)  # JSON string
-    problems_found = Column(Text)  # JSON string of identified issues
-    enrichment_summary = Column(Text)  # AI-generated summary of findings
+    tech_stack = Column(Text)
+    problems_found = Column(Text)
+    enrichment_summary = Column(Text)
 
-    # Outreach status
-    # new = just scraped, pursuing = selected for outreach, sequencing = emails being sent,
-    # contacted = all emails sent, replied = prospect responded, qualified = confirmed lead,
-    # converted = became customer, not_interested = opted out
+    # CRM fields
     status = Column(String(50), default="new")
+    assigned_to = Column(Integer, ForeignKey("users.id"), nullable=True)
+    deal_value = Column(Float, nullable=True)  # Monthly retainer value
+    deal_stage = Column(String(50), default="prospect")  # prospect, proposal, negotiation, closed_won, closed_lost
+    linkedin_url = Column(String(500), nullable=True)
+
+    # Outreach
     email_generated = Column(Boolean, default=False)
     email_sent = Column(Boolean, default=False)
     pushed_to_hubspot = Column(Boolean, default=False)
     sequence_started_at = Column(DateTime, nullable=True)
 
-    # Contact info (from enrichment)
+    # Contact info
     contact_name = Column(String(255))
     contact_email = Column(String(255))
     contact_title = Column(String(255))
+    contact_phone = Column(String(50))
+    contact_linkedin = Column(String(500))
 
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     search = relationship("Search", back_populates="leads")
-    emails = relationship("GeneratedEmail", back_populates="lead")
+    emails = relationship("GeneratedEmail", back_populates="lead", order_by="GeneratedEmail.sequence_order")
+    activities = relationship("Activity", back_populates="lead", order_by="Activity.created_at.desc()")
+    tasks = relationship("Task", back_populates="lead", order_by="Task.due_date")
+    tags = relationship("Tag", secondary=lead_tags, back_populates="leads")
+    assigned_user = relationship("User", foreign_keys=[assigned_to])
 
 
 class GeneratedEmail(Base):
@@ -93,13 +113,58 @@ class GeneratedEmail(Base):
     lead_id = Column(Integer, ForeignKey("leads.id"), nullable=False)
     subject = Column(String(500), nullable=False)
     body = Column(Text, nullable=False)
-    email_type = Column(String(50), default="cold")  # cold, follow_up_1, follow_up_2, breakup
-    sequence_order = Column(Integer, default=1)  # 1=first email, 2=follow up 1, etc.
-    send_delay_days = Column(Integer, default=0)  # days after sequence start to send
-    scheduled_send_at = Column(DateTime, nullable=True)  # when this email should be sent
-    sent_at = Column(DateTime, nullable=True)  # when it was actually sent
+    email_type = Column(String(50), default="cold")
+    sequence_order = Column(Integer, default=1)
+    send_delay_days = Column(Integer, default=0)
+    scheduled_send_at = Column(DateTime, nullable=True)
+    sent_at = Column(DateTime, nullable=True)
     is_sent = Column(Boolean, default=False)
-    problems_referenced = Column(Text)  # which problems this email addresses
+    problems_referenced = Column(Text)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     lead = relationship("Lead", back_populates="emails")
+
+
+class Activity(Base):
+    """Timeline of everything that happens with a lead."""
+    __tablename__ = "activities"
+
+    id = Column(Integer, primary_key=True, index=True)
+    lead_id = Column(Integer, ForeignKey("leads.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    # Types: note, call, email_sent, email_opened, email_clicked, email_bounced,
+    #        status_change, enriched, meeting, linkedin_message, task_completed
+    activity_type = Column(String(50), nullable=False)
+    content = Column(Text, default="")  # Note text or auto description
+    metadata_json = Column(Text, nullable=True)  # Extra data as JSON
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    lead = relationship("Lead", back_populates="activities")
+    user = relationship("User", back_populates="activities")
+
+
+class Tag(Base):
+    __tablename__ = "tags"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), unique=True, nullable=False)
+    color = Column(String(20), default="#1B5E20")  # BMP green default
+
+    leads = relationship("Lead", secondary=lead_tags, back_populates="tags")
+
+
+class Task(Base):
+    """Follow-up reminders and to-dos for leads."""
+    __tablename__ = "tasks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    lead_id = Column(Integer, ForeignKey("leads.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    description = Column(String(500), nullable=False)
+    due_date = Column(DateTime, nullable=True)
+    completed = Column(Boolean, default=False)
+    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    lead = relationship("Lead", back_populates="tasks")
+    user = relationship("User", back_populates="tasks")
