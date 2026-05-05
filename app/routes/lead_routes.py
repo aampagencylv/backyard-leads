@@ -10,6 +10,7 @@ from app.auth import get_current_user
 from app.services.website_intel import analyze_website, analysis_to_dict
 from app.services.email_generator import generate_cold_email, generate_follow_up
 from app.services.apollo_enrichment import enrich_from_domain
+from app.services.hunter_enrichment import search_domain as hunter_search
 from app.services.local_seo_intel import analyze_local_seo, local_seo_to_dict
 from app.config import settings
 from datetime import datetime, timezone, timedelta
@@ -126,17 +127,21 @@ async def enrich_lead(
     lead.problems_found = json.dumps(analysis.problems)
     lead.enrichment_summary = _generate_summary(analysis)
 
-    # Apollo enrichment — find decision makers
+    # Contact enrichment — try Apollo first, then Hunter as fallback
     apollo_data = None
+    hunter_data = None
+    enrichment_source = None
+
+    # Try Apollo first
     if settings.apollo_api_key:
         try:
             apollo = await enrich_from_domain(lead.website, settings.apollo_api_key)
             if apollo.contacts:
-                # Use the first (highest-ranked) contact
                 best_contact = apollo.contacts[0]
                 lead.contact_name = best_contact.name
                 lead.contact_email = best_contact.email
                 lead.contact_title = best_contact.title
+                enrichment_source = "apollo"
             apollo_data = {
                 "company_name": apollo.company_name,
                 "industry": apollo.industry,
@@ -153,7 +158,38 @@ async def enrich_lead(
                 ],
             }
         except Exception:
-            pass  # Apollo failure shouldn't block enrichment
+            pass
+
+    # Fallback to Hunter if Apollo found no email
+    if not lead.contact_email and settings.hunter_api_key:
+        try:
+            hunter = await hunter_search(lead.website, settings.hunter_api_key)
+            hunter_data = {
+                "organization": hunter.organization,
+                "emails_found": hunter.emails_found,
+                "pattern": hunter.pattern,
+                "contacts": [
+                    {
+                        "email": c.email,
+                        "name": f"{c.first_name or ''} {c.last_name or ''}".strip(),
+                        "position": c.position,
+                        "confidence": c.confidence,
+                        "type": c.type,
+                    }
+                    for c in hunter.contacts
+                ],
+            }
+            if hunter.contacts:
+                best = hunter.contacts[0]  # Already sorted by personal-first + confidence
+                lead.contact_email = best.email
+                name = f"{best.first_name or ''} {best.last_name or ''}".strip()
+                if name and not lead.contact_name:
+                    lead.contact_name = name
+                if best.position and not lead.contact_title:
+                    lead.contact_title = best.position
+                enrichment_source = "hunter"
+        except Exception:
+            pass
 
     # Local SEO analysis
     seo_data = None
@@ -196,7 +232,9 @@ async def enrich_lead(
             "email": lead.contact_email,
             "title": lead.contact_title,
         },
+        "enrichment_source": enrichment_source,
         "apollo": apollo_data,
+        "hunter": hunter_data,
     }
 
 
@@ -422,6 +460,21 @@ async def pursue_leads(
                             lead.contact_name = best_contact.name
                             lead.contact_email = best_contact.email
                             lead.contact_title = best_contact.title
+                    except Exception:
+                        pass
+
+                # Hunter fallback if Apollo found no email
+                if not lead.contact_email and settings.hunter_api_key:
+                    try:
+                        hunter = await hunter_search(lead.website, settings.hunter_api_key)
+                        if hunter.contacts:
+                            best = hunter.contacts[0]
+                            lead.contact_email = best.email
+                            name = f"{best.first_name or ''} {best.last_name or ''}".strip()
+                            if name and not lead.contact_name:
+                                lead.contact_name = name
+                            if best.position and not lead.contact_title:
+                                lead.contact_title = best.position
                     except Exception:
                         pass
 

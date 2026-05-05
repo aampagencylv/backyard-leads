@@ -327,7 +327,7 @@
                 <a href="#" class="active" onclick="showPage('dashboard')">Dashboard</a>
                 <a href="#" onclick="showPage('search')">Find Leads</a>
                 <a href="#" onclick="showPage('leads')">All Leads</a>
-                <a href="#" onclick="showPage('emails')">Generated Emails</a>
+                <a href="#" onclick="showPage('pipeline')">Pipeline <span id="pipeline-count" style="background:var(--bmp-orange);color:white;padding:1px 6px;border-radius:10px;font-size:10px;margin-left:4px"></span></a>
                 <a href="#" onclick="showPage('settings')" style="margin-top:12px;border-top:1px solid rgba(255,255,255,0.1);padding-top:12px">Settings</a>
             </nav>
             <div class="sidebar-user">
@@ -507,9 +507,43 @@
             </div>
 
             <!-- Emails Page -->
-            <div id="page-emails" class="hidden">
-                <div class="page-header"><h1>Generated Emails</h1></div>
-                <div id="emails-list" class="leads-grid"></div>
+            <!-- Pipeline Page -->
+            <div id="page-pipeline" class="hidden">
+                <div class="page-header">
+                    <h1>Pipeline</h1>
+                    <div style="display:flex;gap:8px">
+                        <button class="btn btn-secondary btn-sm" onclick="loadPipeline('all')">All</button>
+                        <button class="btn btn-secondary btn-sm" onclick="loadPipeline('pursuing')">Enriching</button>
+                        <button class="btn btn-secondary btn-sm" onclick="loadPipeline('sequencing')">Sequencing</button>
+                        <button class="btn btn-secondary btn-sm" onclick="loadPipeline('contacted')">Contacted</button>
+                        <button class="btn btn-secondary btn-sm" onclick="loadPipeline('qualified')">Qualified</button>
+                    </div>
+                </div>
+
+                <div class="stats-row" style="grid-template-columns:repeat(5,1fr)">
+                    <div class="stat-card">
+                        <div class="number" id="pipe-pursuing">0</div>
+                        <div class="label">Enriching</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="number" id="pipe-sequencing">0</div>
+                        <div class="label">Sequencing</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="number" id="pipe-contacted">0</div>
+                        <div class="label">Contacted</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="number" id="pipe-qualified">0</div>
+                        <div class="label">Qualified</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="number" style="color:var(--bmp-orange)" id="pipe-no-email">0</div>
+                        <div class="label">Missing Email</div>
+                    </div>
+                </div>
+
+                <div id="pipeline-leads" class="leads-grid"></div>
             </div>
 
             <!-- Settings Page -->
@@ -686,6 +720,7 @@
 
             if (page === 'leads') loadAllLeads();
             if (page === 'dashboard') loadDashboard();
+            if (page === 'pipeline') loadPipeline();
             if (page === 'settings') loadSettings();
         }
 
@@ -715,6 +750,12 @@
             let totalProblems = 0;
             leads.forEach(l => { totalProblems += l.problem_count || 0; });
             document.getElementById('stat-problems').textContent = totalProblems;
+
+            // Update pipeline badge
+            const activeStatuses = ['pursuing', 'sequencing', 'contacted', 'qualified'];
+            const pipelineActive = leads.filter(l => activeStatuses.includes(l.status)).length;
+            const pipeCount = document.getElementById('pipeline-count');
+            if (pipeCount) pipeCount.textContent = pipelineActive || '';
 
             // Show recent leads
             renderLeads(leads.slice(0, 10), 'recent-leads');
@@ -1099,6 +1140,36 @@
 
         function escapeHtml(text) {
             return text.replace(/`/g, '\\`').replace(/\$/g, '\\$');
+        }
+
+        // ============ Pipeline ============
+
+        async function loadPipeline(filter = 'all') {
+            const activeStatuses = ['pursuing', 'sequencing', 'contacted', 'qualified'];
+            let leads;
+
+            if (filter === 'all') {
+                // Get all active leads (not new, not converted, not not_interested)
+                const allLeads = await api('/api/leads/?sort_by=reviews');
+                leads = allLeads ? allLeads.filter(l => activeStatuses.includes(l.status)) : [];
+            } else {
+                leads = await api(`/api/leads/?status=${filter}&sort_by=reviews`) || [];
+            }
+
+            // Update pipeline stats
+            const allForStats = await api('/api/leads/?sort_by=reviews') || [];
+            const active = allForStats.filter(l => activeStatuses.includes(l.status));
+            document.getElementById('pipe-pursuing').textContent = active.filter(l => l.status === 'pursuing').length;
+            document.getElementById('pipe-sequencing').textContent = active.filter(l => l.status === 'sequencing').length;
+            document.getElementById('pipe-contacted').textContent = active.filter(l => l.status === 'contacted').length;
+            document.getElementById('pipe-qualified').textContent = active.filter(l => l.status === 'qualified').length;
+            document.getElementById('pipe-no-email').textContent = active.filter(l => !l.contact_email).length;
+
+            // Update sidebar badge
+            const pipeCount = document.getElementById('pipeline-count');
+            if (pipeCount) pipeCount.textContent = active.length || '';
+
+            renderLeads(leads, 'pipeline-leads');
         }
 
         // ============ Settings ============

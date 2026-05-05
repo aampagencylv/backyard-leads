@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     google_maps_api_key: str = ""
     apollo_api_key: str = ""
+    hunter_api_key: str = ""
     resend_api_key: str = ""
     resend_webhook_secret: str = ""
     send_domain: str = "go.backyardmarketingpros.com"
