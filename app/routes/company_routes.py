@@ -24,7 +24,11 @@ from app.services.website_intel import analyze_website, analysis_to_dict
 from app.services.email_generator import generate_cold_email, generate_follow_up
 from app.services.apollo_enrichment import enrich_from_domain
 from app.services.hunter_enrichment import search_domain as hunter_search
-from app.services.netrows_enrichment import find_decision_makers as netrows_find_decision_makers
+from app.services.netrows_enrichment import (
+    find_decision_makers as netrows_find_decision_makers,
+    google_maps_reviews as netrows_maps_reviews,
+    reverse_email_lookup as netrows_reverse_lookup,
+)
 from app.services.local_seo_intel import analyze_local_seo, local_seo_to_dict
 from app.config import settings
 
@@ -167,6 +171,7 @@ async def get_company_full(
         assigned_name = u.full_name if u else None
 
     problems = json.loads(company.problems_found) if company.problems_found else []
+    reviews = json.loads(company.reviews_json) if company.reviews_json else []
 
     return {
         "id": company.id,
@@ -174,6 +179,8 @@ async def get_company_full(
         "phone": company.phone,
         "website": company.website,
         "address": company.address,
+        "reviews": reviews,
+        "reviews_fetched_at": company.reviews_fetched_at.isoformat() if company.reviews_fetched_at else None,
         "city": company.city,
         "state": company.state,
         "rating": company.rating,
@@ -339,6 +346,23 @@ async def enrich_company(
             hunter_data = {"error": str(e)[:200]}
 
     contacts_added = netrows_added + apollo_added + hunter_added
+
+    # Google Maps reviews (1 credit) — owner replies are personalization gold
+    if settings.netrows_api_key:
+        try:
+            mr = await netrows_maps_reviews(company.google_place_id or f"{company.name} {company.city or ''}".strip(),
+                                             settings.netrows_api_key)
+            if mr and mr.reviews:
+                if mr.place_id and not company.google_place_id:
+                    company.google_place_id = mr.place_id
+                company.reviews_json = json.dumps([{
+                    "author": r.author, "rating": r.rating, "text": r.text,
+                    "relative_time": r.relative_time,
+                    "owner_reply": r.owner_reply, "owner_reply_time": r.owner_reply_time,
+                } for r in mr.reviews])
+                company.reviews_fetched_at = datetime.now(timezone.utc)
+        except Exception:
+            pass
 
     # Local SEO
     seo_data = None
@@ -693,6 +717,45 @@ def _email_to_dict(e: GeneratedEmail) -> dict:
         "scheduled_send_at": e.scheduled_send_at.isoformat() if e.scheduled_send_at else None,
         "sent_at": e.sent_at.isoformat() if e.sent_at else None,
         "created_at": e.created_at.isoformat() if e.created_at else None,
+    }
+
+
+# ============================================================
+# On-demand reviews refresh (Netrows /google-maps/reviews — 1 credit)
+# ============================================================
+
+@router.post("/{company_id}/refresh-reviews")
+async def refresh_reviews(
+    company_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    company = (await db.execute(select(Company).where(Company.id == company_id))).scalar_one_or_none()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    if not settings.netrows_api_key:
+        raise HTTPException(status_code=400, detail="Netrows API key not configured")
+
+    seed = company.google_place_id or f"{company.name} {company.city or ''}".strip()
+    mr = await netrows_maps_reviews(seed, settings.netrows_api_key)
+    if not mr or not mr.reviews:
+        return {"reviews_count": 0, "owner_replies_count": 0, "message": "No reviews found"}
+
+    if mr.place_id and not company.google_place_id:
+        company.google_place_id = mr.place_id
+    company.reviews_json = json.dumps([{
+        "author": r.author, "rating": r.rating, "text": r.text,
+        "relative_time": r.relative_time,
+        "owner_reply": r.owner_reply, "owner_reply_time": r.owner_reply_time,
+    } for r in mr.reviews])
+    company.reviews_fetched_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    owner_replies = sum(1 for r in mr.reviews if r.owner_reply)
+    return {
+        "reviews_count": len(mr.reviews),
+        "owner_replies_count": owner_replies,
+        "fetched_at": company.reviews_fetched_at.isoformat(),
     }
 
 

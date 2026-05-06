@@ -16,6 +16,13 @@ from app.database import get_db
 from app.models import User, Company, Contact, GeneratedEmail, Activity
 from app.auth import get_current_user
 from app.services.email_generator import generate_cold_email, generate_follow_up
+from app.services.netrows_enrichment import (
+    reverse_email_lookup as netrows_reverse_lookup,
+    linkedin_recent_posts as netrows_linkedin_posts,
+    find_email_by_name as netrows_find_email_by_name,
+    find_email_by_linkedin as netrows_find_email_by_linkedin,
+)
+from app.config import settings
 
 router = APIRouter(prefix="/api", tags=["contacts"])
 
@@ -113,20 +120,35 @@ async def create_contact(
         # Demote existing primary
         has_primary.is_primary = False
 
+    # If we have an email but no name, auto-fire Netrows reverse-lookup (1 credit)
+    first = req.first_name.strip()
+    last = req.last_name.strip()
+    title = req.title
+    linkedin = req.linkedin_url
+    if req.email and not first and not last and settings.netrows_api_key:
+        try:
+            looked_up = await netrows_reverse_lookup(req.email, settings.netrows_api_key)
+            if looked_up:
+                first = looked_up.first_name or first
+                last = looked_up.last_name or last
+                title = title or looked_up.current_title or looked_up.headline
+                linkedin = linkedin or looked_up.linkedin_url
+        except Exception:
+            pass
+
     contact = Contact(
         company_id=company_id,
-        first_name=req.first_name.strip(),
-        last_name=req.last_name.strip(),
-        title=req.title,
+        first_name=first, last_name=last,
+        title=title,
         email=req.email,
         phone=req.phone,
-        linkedin_url=req.linkedin_url,
+        linkedin_url=linkedin,
         is_primary=req.is_primary or (has_primary is None),
         unsubscribe_token=secrets.token_urlsafe(24),
     )
     db.add(contact)
     db.add(Activity(company_id=company_id, user_id=user.id, activity_type="contact_added",
-                    content=f"Contact added: {(req.first_name + ' ' + req.last_name).strip() or req.email or '(no name)'}"))
+                    content=f"Contact added: {(first + ' ' + last).strip() or req.email or '(no name)'}"))
     await db.commit()
     await db.refresh(contact)
     return _contact_summary(contact)
@@ -315,5 +337,91 @@ def _contact_summary(c: Contact) -> dict:
         "is_primary": c.is_primary,
         "email_status": c.email_status,
         "unsubscribed_at": c.unsubscribed_at.isoformat() if c.unsubscribed_at else None,
+        "recent_posts": json.loads(c.recent_posts_json) if c.recent_posts_json else [],
+        "posts_fetched_at": c.posts_fetched_at.isoformat() if c.posts_fetched_at else None,
         "created_at": c.created_at.isoformat() if c.created_at else None,
     }
+
+
+# ============================================================
+# Netrows-powered contact actions: refresh posts, lookup email
+# ============================================================
+
+@router.post("/contacts/{contact_id}/refresh-posts")
+async def refresh_contact_posts(
+    contact_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Pull recent LinkedIn posts for personalization context (1 credit)."""
+    contact = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    if not contact.linkedin_url:
+        raise HTTPException(status_code=400, detail="Contact has no LinkedIn URL on file")
+    if not settings.netrows_api_key:
+        raise HTTPException(status_code=400, detail="Netrows API key not configured")
+
+    posts = await netrows_linkedin_posts(contact.linkedin_url, settings.netrows_api_key, limit=5)
+    contact.recent_posts_json = json.dumps([{
+        "text": p.text, "posted_at": p.posted_at, "url": p.url,
+        "likes": p.likes, "comments": p.comments,
+    } for p in posts])
+    contact.posts_fetched_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"posts_count": len(posts), "fetched_at": contact.posts_fetched_at.isoformat()}
+
+
+class LookupEmailRequest(BaseModel):
+    domain: Optional[str] = None  # if not given, derived from contact's company website
+
+
+@router.post("/contacts/{contact_id}/lookup-email")
+async def lookup_contact_email(
+    contact_id: int,
+    req: LookupEmailRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Use Netrows to find a verified email for this contact.
+    Tries by-linkedin first (5 cr), falls back to by-name (5 cr) if we have first+last.
+    """
+    contact = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    if not settings.netrows_api_key:
+        raise HTTPException(status_code=400, detail="Netrows API key not configured")
+
+    # Resolve domain
+    domain = req.domain
+    if not domain:
+        company = (await db.execute(select(Company).where(Company.id == contact.company_id))).scalar_one_or_none()
+        if company and company.website:
+            domain = company.website
+
+    found = None
+    if contact.linkedin_url:
+        found = await netrows_find_email_by_linkedin(contact.linkedin_url, settings.netrows_api_key)
+    if not found and contact.first_name and contact.last_name and domain:
+        found = await netrows_find_email_by_name(contact.first_name, contact.last_name,
+                                                  domain, settings.netrows_api_key)
+
+    if not found or not found.email:
+        raise HTTPException(status_code=404, detail="Could not find a verified email")
+
+    contact.email = found.email
+    contact.email_status = found.email_status
+    if found.full_name and not contact.full_name:
+        parts = found.full_name.strip().split(maxsplit=1)
+        contact.first_name = contact.first_name or parts[0]
+        if len(parts) > 1:
+            contact.last_name = contact.last_name or parts[1]
+    if found.linkedin_url and not contact.linkedin_url:
+        contact.linkedin_url = found.linkedin_url
+    db.add(Activity(company_id=contact.company_id, contact_id=contact.id, user_id=user.id,
+                    activity_type="email_found",
+                    content=f"Email found via Netrows: {found.email} ({found.email_status})"))
+    await db.commit()
+    await db.refresh(contact)
+    return _contact_summary(contact)

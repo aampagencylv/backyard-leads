@@ -1135,6 +1135,17 @@
 
                         <div class="panel">
                             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                                <h3 style="margin:0">Reviews <span style="color:#888;font-size:12px;font-weight:400">${d.reviews ? `(${d.reviews.length})` : ''}</span></h3>
+                                <div style="display:flex;gap:6px">
+                                    <span style="font-size:11px;color:#888">${d.reviews_fetched_at ? 'fetched ' + fmtRelative(d.reviews_fetched_at) : 'never fetched'}</span>
+                                    <button class="btn btn-secondary btn-sm" onclick="refreshReviews(${d.id})">🔄 Refresh</button>
+                                </div>
+                            </div>
+                            <div id="reviews-list">${renderReviews(d.reviews || [])}</div>
+                        </div>
+
+                        <div class="panel">
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
                                 <h3 style="margin:0">Activity Timeline</h3>
                                 <button class="btn btn-secondary btn-sm" onclick="addNote(${d.id})">+ Add Note</button>
                             </div>
@@ -1185,9 +1196,22 @@
                         <div class="contact-actions">
                             <button class="btn btn-secondary btn-xs" onclick="editContact(${c.id})">Edit</button>
                             ${!c.email ? `<button class="btn btn-secondary btn-xs" onclick="setContactEmail(${c.id})">Set Email</button>` : ''}
+                            ${(!c.email && (c.linkedin_url || (c.first_name && c.last_name))) ? `<button class="btn btn-secondary btn-xs" onclick="lookupContactEmail(${c.id})" title="Find verified email via Netrows">🔍 Lookup Email</button>` : ''}
+                            ${c.linkedin_url ? `<button class="btn btn-secondary btn-xs" onclick="refreshContactPosts(${c.id})" title="Pull recent LinkedIn posts for personalization">🔄 Posts</button>` : ''}
                             ${c.emails.length === 0 ? `<button class="btn btn-success btn-xs" onclick="generateContactSequence(${c.id})">Generate Sequence</button>` : ''}
                         </div>
                     </div>
+                    ${c.recent_posts && c.recent_posts.length ? `
+                        <div style="margin-top:10px;padding-top:10px;border-top:1px dashed #d8e0d8">
+                            <div style="font-size:11px;font-weight:600;color:var(--bmp-green);text-transform:uppercase;margin-bottom:4px">Recent LinkedIn Posts (personalization context)</div>
+                            ${c.recent_posts.slice(0, 3).map(p => `
+                                <div style="font-size:12px;padding:6px 8px;background:#f4faf4;border-radius:6px;margin-bottom:4px;line-height:1.4">
+                                    <div>${escapeHtml((p.text || '').slice(0, 240))}${(p.text || '').length > 240 ? '…' : ''}</div>
+                                    ${p.posted_at ? `<div style="font-size:10px;color:#888;margin-top:2px">${escapeHtml(p.posted_at)}${p.likes ? ' · ' + p.likes + ' likes' : ''}${p.url ? ` · <a href="${escapeHtml(p.url)}" target="_blank" rel="noreferrer">view</a>` : ''}</div>` : ''}
+                                </div>
+                            `).join('')}
+                        </div>
+                    ` : ''}
                     ${c.emails.length > 0 ? `
                     <div style="margin-top:12px;padding-top:10px;border-top:1px dashed #d8e0d8">
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
@@ -1258,6 +1282,71 @@
                     </div>
                 </div>
             `).join('');
+        }
+
+        function renderReviews(reviews) {
+            if (!reviews.length) return '<p style="font-size:12px;color:#888">No reviews loaded yet. Click 🔄 Refresh to pull from Google Maps via Netrows.</p>';
+            // Surface owner replies first — they're the personalization gold
+            const withOwnerReply = reviews.filter(r => r.owner_reply);
+            const others = reviews.filter(r => !r.owner_reply).slice(0, 5);
+            const stars = (n) => '★'.repeat(Math.round(n||0)) + '☆'.repeat(5 - Math.round(n||0));
+            const block = (r, highlightOwner) => `
+                <div style="padding:10px 12px;border-radius:8px;background:${highlightOwner ? '#fff5f0' : '#f9faf9'};border:1px solid ${highlightOwner ? '#ffe5d8' : '#e8ece8'};margin-bottom:8px;font-size:12px">
+                    <div style="display:flex;justify-content:space-between;align-items:center">
+                        <strong>${escapeHtml(r.author || 'Anonymous')}</strong>
+                        <span style="color:#f39c12">${stars(r.rating)}</span>
+                    </div>
+                    ${r.relative_time ? `<div style="font-size:11px;color:#888">${escapeHtml(r.relative_time)}</div>` : ''}
+                    ${r.text ? `<div style="margin-top:4px;line-height:1.4">${escapeHtml(r.text)}</div>` : ''}
+                    ${r.owner_reply ? `
+                        <div style="margin-top:8px;padding:8px 10px;background:white;border-left:3px solid var(--bmp-orange);border-radius:4px">
+                            <div style="font-size:10px;font-weight:600;color:var(--bmp-orange);text-transform:uppercase">Owner Reply${r.owner_reply_time ? ' · ' + escapeHtml(r.owner_reply_time) : ''}</div>
+                            <div style="margin-top:2px;line-height:1.4">${escapeHtml(r.owner_reply)}</div>
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+            let html = '';
+            if (withOwnerReply.length) {
+                html += `<div style="font-size:11px;color:var(--bmp-orange);font-weight:600;text-transform:uppercase;margin-bottom:6px">Owner Replies (${withOwnerReply.length}) — personalization gold</div>`;
+                html += withOwnerReply.map(r => block(r, true)).join('');
+            }
+            if (others.length) {
+                html += `<div style="font-size:11px;color:#888;font-weight:600;text-transform:uppercase;margin:10px 0 6px">Other reviews</div>`;
+                html += others.map(r => block(r, false)).join('');
+            }
+            return html;
+        }
+
+        async function refreshReviews(companyId) {
+            toast('Pulling reviews via Netrows...');
+            const data = await api(`/api/companies/${companyId}/refresh-reviews`, { method: 'POST' });
+            if (data) {
+                toast(`${data.reviews_count} reviews · ${data.owner_replies_count} owner replies`);
+                openCompanyDetail(companyId);
+            }
+        }
+
+        async function refreshContactPosts(contactId) {
+            toast('Pulling LinkedIn posts via Netrows...');
+            const data = await api(`/api/contacts/${contactId}/refresh-posts`, { method: 'POST' });
+            if (data) {
+                toast(`${data.posts_count} posts loaded`);
+                const c = await api(`/api/contacts/${contactId}`);
+                if (c) openCompanyDetail(c.company_id);
+            }
+        }
+
+        async function lookupContactEmail(contactId) {
+            toast('Looking up verified email via Netrows...');
+            const data = await api(`/api/contacts/${contactId}/lookup-email`, {
+                method: 'POST',
+                body: JSON.stringify({}),
+            });
+            if (data && data.email) {
+                toast(`Found: ${data.email} (${data.email_status})`);
+                openCompanyDetail(data.company_id);
+            }
         }
 
         function renderTimeline(items) {

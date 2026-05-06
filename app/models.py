@@ -97,6 +97,11 @@ class Company(Base):
     # Lead source / classification
     linkedin_url = Column(String(500), nullable=True)
 
+    # Google Maps reviews cache (Netrows /google-maps/reviews)
+    google_place_id = Column(String(80), nullable=True)
+    reviews_json = Column(Text, nullable=True)  # JSON array of reviews with owner_reply parsed out
+    reviews_fetched_at = Column(DateTime, nullable=True)
+
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -130,6 +135,10 @@ class Contact(Base):
     email_status = Column(String(20), default="unknown")  # unknown, valid, invalid, bounced
     unsubscribed_at = Column(DateTime, nullable=True)
     unsubscribe_token = Column(String(64), index=True, nullable=True)
+
+    # Personalization context cache (Netrows /people/posts)
+    recent_posts_json = Column(Text, nullable=True)  # JSON array of {text, posted_at, url, likes}
+    posts_fetched_at = Column(DateTime, nullable=True)
 
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
