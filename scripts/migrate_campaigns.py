@@ -92,6 +92,20 @@ async def migrate():
             await conn.execute(text("ALTER TABLE deals ADD COLUMN contract_months INTEGER DEFAULT 6"))
             print("migrate_campaigns: added deals.contract_months")
 
+        # Company intel fields
+        comp_cols = await conn.execute(text("PRAGMA table_info(companies)"))
+        comp_col_names = [r[1] for r in comp_cols.fetchall()]
+        for col, coltype in [
+            ("company_size", "VARCHAR(50)"),
+            ("founded", "VARCHAR(20)"),
+            ("company_description", "TEXT"),
+            ("specialties", "VARCHAR(500)"),
+            ("follower_count", "INTEGER"),
+        ]:
+            if col not in comp_col_names:
+                await conn.execute(text(f"ALTER TABLE companies ADD COLUMN {col} {coltype}"))
+                print(f"migrate_campaigns: added companies.{col}")
+
 
 if __name__ == "__main__":
     asyncio.run(migrate())

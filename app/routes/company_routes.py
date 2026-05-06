@@ -473,6 +473,13 @@ async def get_company_full(
         "problem_count": len(problems),
         "tech_stack": json.loads(company.tech_stack) if company.tech_stack else [],
         "linkedin_url": company.linkedin_url,
+        "employee_count": company.employee_count,
+        "company_size": company.company_size,
+        "industry": company.industry,
+        "founded": company.founded,
+        "company_description": company.company_description,
+        "specialties": company.specialties,
+        "follower_count": company.follower_count,
         "assigned_to": company.assigned_to,
         "assigned_name": assigned_name,
         "tags": tag_list,
@@ -622,17 +629,27 @@ async def enrich_company(
         except Exception:
             pass
 
-    # Company enrichment — employee count, industry
+    # Company enrichment — LinkedIn company profile
     if await get_netrows_api_key(db):
         try:
             ce = await netrows_company_enrich(company.website, await get_netrows_api_key(db))
             if ce:
                 if ce.employee_count:
                     company.employee_count = ce.employee_count
-                if ce.industry and not company.business_type:
+                if ce.company_size:
+                    company.company_size = ce.company_size
+                if ce.industry:
                     company.industry = ce.industry
-                if ce.linkedin_username and not company.linkedin_url:
-                    company.linkedin_url = f"https://linkedin.com/company/{ce.linkedin_username}"
+                if ce.linkedin_url and not company.linkedin_url:
+                    company.linkedin_url = ce.linkedin_url
+                if ce.founded:
+                    company.founded = ce.founded
+                if ce.description:
+                    company.company_description = ce.description
+                if ce.specialties:
+                    company.specialties = ce.specialties
+                if ce.follower_count:
+                    company.follower_count = ce.follower_count
         except Exception:
             pass
 
@@ -990,8 +1007,13 @@ def _company_summary(c: Company) -> dict:
         "status": c.status,
         "email_generated": c.email_generated,
         "employee_count": c.employee_count,
+        "company_size": c.company_size,
         "industry": c.industry,
         "linkedin_url": c.linkedin_url,
+        "founded": c.founded,
+        "company_description": c.company_description,
+        "specialties": c.specialties,
+        "follower_count": c.follower_count,
         "created_at": c.created_at.isoformat() if c.created_at else None,
     }
 

@@ -95,10 +95,15 @@ class Company(Base):
     pushed_to_hubspot = Column(Boolean, default=False)
     sequence_started_at = Column(DateTime, nullable=True)
 
-    # Company intel
+    # Company intel (from Netrows LinkedIn enrichment)
     employee_count = Column(Integer, nullable=True)
+    company_size = Column(String(50), nullable=True)  # e.g. "11-50"
     industry = Column(String(255), nullable=True)
     linkedin_url = Column(String(500), nullable=True)
+    founded = Column(String(20), nullable=True)
+    company_description = Column(Text, nullable=True)
+    specialties = Column(String(500), nullable=True)
+    follower_count = Column(Integer, nullable=True)
 
     # Google Maps reviews cache (Netrows /google-maps/reviews)
     google_place_id = Column(String(80), nullable=True)

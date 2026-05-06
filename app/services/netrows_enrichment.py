@@ -413,45 +413,79 @@ async def linkedin_recent_posts(
 class CompanyEnrichment:
     name: Optional[str] = None
     employee_count: Optional[int] = None
+    company_size: Optional[str] = None  # e.g. "11-50"
     industry: Optional[str] = None
     headquarters: Optional[str] = None
     linkedin_id: Optional[str] = None
     linkedin_username: Optional[str] = None
+    linkedin_url: Optional[str] = None
     founded: Optional[str] = None
+    description: Optional[str] = None
+    specialties: Optional[str] = None
+    follower_count: Optional[int] = None
+    website: Optional[str] = None
 
 
 async def enrich_company_by_domain(domain: str, api_key: str) -> Optional[CompanyEnrichment]:
     """
-    Look up company info by domain via Netrows /companies/by-domain.
-    Returns employee count, industry, HQ location. 1 credit per call.
+    Look up company info by domain via Netrows.
+    Step 1: /companies/by-domain (1 credit) — gets basic info + LinkedIn username
+    Step 2: /companies/details (1 credit) — gets full profile if we got a username
     """
     domain = _clean_domain(domain)
     if not domain or not api_key:
         return None
 
+    result = CompanyEnrichment()
+    headers = {"Authorization": f"Bearer {api_key}"}
+
     async with httpx.AsyncClient(timeout=15) as client:
+        # Step 1: by-domain
         try:
             r = await client.get(
                 f"{BASE_URL}/companies/by-domain",
                 params={"domain": domain},
-                headers={"Authorization": f"Bearer {api_key}"},
+                headers=headers,
             )
+            if r.status_code == 200:
+                data = r.json() or {}
+                company = data.get("data") or data
+                result.name = company.get("name")
+                result.employee_count = company.get("employeeCount")
+                result.industry = company.get("industry")
+                result.headquarters = company.get("headquarters")
+                result.linkedin_id = str(company.get("id", ""))
+                result.linkedin_username = company.get("username")
+                if result.linkedin_username:
+                    result.linkedin_url = f"https://linkedin.com/company/{result.linkedin_username}"
         except httpx.HTTPError:
-            return None
+            pass
 
-    if r.status_code != 200:
+        # Step 2: get full details if we have a username
+        if result.linkedin_username:
+            try:
+                r2 = await client.get(
+                    f"{BASE_URL}/companies/details",
+                    params={"username": result.linkedin_username},
+                    headers=headers,
+                )
+                if r2.status_code == 200:
+                    detail = r2.json() or {}
+                    detail = detail.get("data") or detail
+                    result.company_size = detail.get("companySize") or detail.get("company_size")
+                    result.description = detail.get("description") or detail.get("tagline")
+                    result.founded = detail.get("founded") or result.founded
+                    result.follower_count = detail.get("followerCount") or detail.get("follower_count")
+                    if not result.employee_count:
+                        result.employee_count = detail.get("employeeCount")
+                    specialties = detail.get("specialties") or []
+                    if isinstance(specialties, list):
+                        result.specialties = ", ".join(specialties)
+                    elif isinstance(specialties, str):
+                        result.specialties = specialties
+            except httpx.HTTPError:
+                pass
+
+    if not result.name and not result.employee_count:
         return None
-
-    data = r.json() or {}
-    # Handle nested data envelope
-    company = data.get("data") or data
-
-    return CompanyEnrichment(
-        name=company.get("name"),
-        employee_count=company.get("employeeCount"),
-        industry=company.get("industry"),
-        headquarters=company.get("headquarters"),
-        linkedin_id=str(company.get("id", "")),
-        linkedin_username=company.get("username"),
-        founded=company.get("founded"),
-    )
+    return result

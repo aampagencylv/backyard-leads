@@ -1389,8 +1389,24 @@
                         </div>
                     </div>
 
-                    <!-- RIGHT: Tags, Tasks, Problems -->
+                    <!-- RIGHT: Company Intel, Tags, Tasks, Problems -->
                     <div>
+                        <!-- Company Intel -->
+                        <div class="panel">
+                            <h3 style="font-size:14px">Company Intel</h3>
+                            <div style="font-size:12px;line-height:1.8">
+                                ${d.employee_count ? `<div><strong>Employees:</strong> ${d.employee_count}${d.company_size ? ` (${escapeHtml(d.company_size)})` : ''}</div>` : ''}
+                                ${d.industry ? `<div><strong>Industry:</strong> ${escapeHtml(d.industry)}</div>` : ''}
+                                ${d.founded ? `<div><strong>Founded:</strong> ${escapeHtml(d.founded)}</div>` : ''}
+                                ${d.follower_count ? `<div><strong>LinkedIn Followers:</strong> ${d.follower_count.toLocaleString()}</div>` : ''}
+                                ${d.specialties ? `<div><strong>Specialties:</strong> ${escapeHtml(d.specialties)}</div>` : ''}
+                                ${d.rating ? `<div><strong>Google Rating:</strong> ★ ${d.rating} (${d.review_count || 0} reviews)</div>` : ''}
+                                ${d.company_description ? `<div style="margin-top:4px;color:#555;font-style:italic">"${escapeHtml(d.company_description.slice(0, 200))}${d.company_description.length > 200 ? '...' : ''}"</div>` : ''}
+                                ${!d.employee_count && !d.industry && !d.founded ? '<div style="color:#888">No LinkedIn data found. This business may not have a LinkedIn page.</div>' : ''}
+                                ${d.linkedin_url ? `<div style="margin-top:4px"><a href="${escapeHtml(d.linkedin_url)}" target="_blank" style="color:#0077B5;text-decoration:none">View on LinkedIn →</a></div>` : ''}
+                            </div>
+                        </div>
+
                         <div class="panel">
                             <h3 style="font-size:14px">Tags</h3>
                             <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">
