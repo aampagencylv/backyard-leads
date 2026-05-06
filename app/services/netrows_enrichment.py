@@ -451,7 +451,14 @@ async def enrich_company_by_domain(domain: str, api_key: str) -> Optional[Compan
                 data = r.json() or {}
                 company = data.get("data") or data
                 result.name = company.get("name")
-                result.employee_count = company.get("employeeCount") or company.get("employee_count")
+                raw_ec = company.get("employeeCount") or company.get("employee_count")
+                if isinstance(raw_ec, int):
+                    result.employee_count = raw_ec
+                elif raw_ec:
+                    try:
+                        result.employee_count = int(raw_ec)
+                    except (ValueError, TypeError):
+                        pass
                 result.industry = company.get("industry")
                 result.headquarters = company.get("headquarters") or company.get("hq")
                 result.linkedin_id = str(company.get("id", ""))
@@ -475,15 +482,32 @@ async def enrich_company_by_domain(domain: str, api_key: str) -> Optional[Compan
                 if r2.status_code == 200:
                     detail = r2.json() or {}
                     detail = detail.get("data") or detail
-                    result.company_size = detail.get("companySize") or detail.get("company_size") or detail.get("staffCount") or detail.get("staffCountRange")
+                    raw_size = detail.get("companySize") or detail.get("company_size") or detail.get("staffCount") or detail.get("staffCountRange")
+                    if raw_size:
+                        result.company_size = str(raw_size) if not isinstance(raw_size, str) else raw_size
                     if not result.description:
                         result.description = detail.get("description") or detail.get("tagline")
-                    result.founded = detail.get("founded") or detail.get("foundedOn") or result.founded
+                    raw_founded = detail.get("founded") or detail.get("foundedOn") or result.founded
+                    if isinstance(raw_founded, dict):
+                        result.founded = str(raw_founded.get("year", ""))
+                    elif raw_founded:
+                        result.founded = str(raw_founded)
                     result.follower_count = detail.get("followerCount") or detail.get("follower_count")
                     if not result.employee_count:
-                        result.employee_count = detail.get("employeeCount") or detail.get("staffCount")
+                        raw_ec = detail.get("employeeCount") or detail.get("staffCount")
+                        if isinstance(raw_ec, int):
+                            result.employee_count = raw_ec
+                        elif raw_ec:
+                            try:
+                                result.employee_count = int(raw_ec)
+                            except (ValueError, TypeError):
+                                pass
                     if not result.industry:
-                        result.industry = detail.get("industry") or detail.get("companyIndustries")
+                        raw_industry = detail.get("industry") or detail.get("companyIndustries")
+                        if isinstance(raw_industry, list):
+                            result.industry = ", ".join(str(i) for i in raw_industry)
+                        elif raw_industry:
+                            result.industry = str(raw_industry)
                     specialties = detail.get("specialties") or detail.get("specialities") or []
                     if isinstance(specialties, list):
                         result.specialties = ", ".join(str(s) for s in specialties)
