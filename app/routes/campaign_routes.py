@@ -228,6 +228,11 @@ async def run_campaign_batch(
     Searches one business_type + location combo, enriches, qualifies, creates sequences.
     Call this repeatedly (from UI or cron) until campaign completes.
     """
+    return await _execute_batch(campaign_id, db, user)
+
+
+async def _execute_batch(campaign_id: int, db: AsyncSession, user: User):
+    """Core batch execution logic shared by UI and cron endpoints."""
     campaign = (await db.execute(select(Campaign).where(Campaign.id == campaign_id))).scalar_one_or_none()
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
@@ -549,6 +554,42 @@ async def run_campaign_batch(
     batch_results["status"] = campaign.status
     batch_results["prospects_today"] = campaign.prospects_today
     return batch_results
+
+
+# ============================================================
+# ============================================================
+# Internal cron endpoint — no auth, localhost only
+# ============================================================
+
+from fastapi import Request
+
+@router.post("/{campaign_id}/run-batch-internal")
+async def run_campaign_batch_internal(
+    campaign_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Same as run-batch but without auth. Only accessible from localhost (cron).
+    """
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(status_code=403, detail="Internal endpoint — localhost only")
+
+    # Get the campaign creator to use as the acting user
+    campaign = (await db.execute(select(Campaign).where(Campaign.id == campaign_id))).scalar_one_or_none()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if campaign.status != "running":
+        return {"status": campaign.status, "message": f"Campaign is {campaign.status}"}
+
+    creator = (await db.execute(select(User).where(User.id == campaign.created_by))).scalar_one_or_none()
+    if not creator:
+        raise HTTPException(status_code=500, detail="Campaign creator not found")
+
+    # Fake the request as the creator and delegate to the main function
+    # We import and call run_campaign_batch's logic directly
+    return await _execute_batch(campaign_id, db, creator)
 
 
 # ============================================================
