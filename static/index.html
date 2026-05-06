@@ -1433,7 +1433,7 @@
         }
 
         async function completeStep(emailId) {
-            const data = await api(\`/api/send/email/\${emailId}/complete\`, { method: 'POST' });
+            const data = await api(`/api/send/email/${emailId}/complete`, { method: 'POST' });
             if (data) { toast('Step marked as done'); _refreshCurrentCompany(); }
         }
 
