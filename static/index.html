@@ -488,6 +488,23 @@
                     <div id="signature-preview" style="background:#fff;border:1px solid #e5e7eb;border-radius:6px;padding:16px"></div>
                 </div>
                 <div class="search-box" style="max-width:600px;margin-top:16px">
+                    <h3>API Keys</h3>
+                    <p style="font-size:13px;color:#666;margin-bottom:16px">Org-level keys used by the prospector. Stored in the database (not the .env file), so you can rotate without SSH access. Empty value falls back to the server's environment variable.</p>
+
+                    <div class="form-group">
+                        <label>Netrows API Key
+                            <span id="netrows-key-status" style="font-size:11px;font-weight:400;color:#888;margin-left:6px"></span>
+                        </label>
+                        <div style="display:flex;gap:6px">
+                            <input type="password" id="settings-netrows-key" placeholder="pk_live_..." autocomplete="off" style="flex:1">
+                            <button class="btn btn-primary" onclick="saveNetrowsKey()">Save</button>
+                            <button class="btn btn-secondary" onclick="clearNetrowsKey()" title="Revert to env-var default">Clear</button>
+                        </div>
+                        <div id="netrows-key-current" style="font-size:11px;color:#888;margin-top:4px"></div>
+                    </div>
+                </div>
+
+                <div class="search-box" style="max-width:600px;margin-top:16px">
                     <h3>Email Sending</h3>
                     <div style="display:flex;align-items:center;gap:12px;padding:8px 0">
                         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px">
@@ -1615,6 +1632,45 @@
             document.getElementById('settings-send-from').textContent = data.send_from;
             document.getElementById('settings-reply-to').textContent = data.reply_to;
             document.getElementById('signature-preview').innerHTML = data.signature_html || '';
+            loadRuntimeConfig();
+        }
+
+        async function loadRuntimeConfig() {
+            const cfg = await api('/api/runtime-config');
+            if (!cfg) return;
+            const n = cfg.netrows || {};
+            const status = document.getElementById('netrows-key-status');
+            const current = document.getElementById('netrows-key-current');
+            const input = document.getElementById('settings-netrows-key');
+            input.value = '';
+            if (n.set) {
+                status.textContent = `(active · source: ${n.source})`;
+                status.style.color = 'var(--bmp-green)';
+                current.textContent = `Current: ${n.masked}${n.updated_at ? ' · updated ' + fmtRelative(n.updated_at) : ''}`;
+            } else {
+                status.textContent = '(not set)';
+                status.style.color = '#c0392b';
+                current.textContent = 'No key configured. Netrows enrichment will be skipped until you add a key.';
+            }
+        }
+
+        async function saveNetrowsKey() {
+            const value = document.getElementById('settings-netrows-key').value.trim();
+            if (!value) { toast('Paste a key first, or click Clear to revert to env default'); return; }
+            const data = await api('/api/runtime-config', {
+                method: 'PATCH',
+                body: JSON.stringify({ netrows_api_key: value }),
+            });
+            if (data) { toast('Netrows key saved'); loadRuntimeConfig(); }
+        }
+
+        async function clearNetrowsKey() {
+            if (!confirm('Clear the Netrows key from the database? (Will fall back to the server\'s environment variable.)')) return;
+            const data = await api('/api/runtime-config', {
+                method: 'PATCH',
+                body: JSON.stringify({ netrows_api_key: '' }),
+            });
+            if (data) { toast('Netrows key cleared'); loadRuntimeConfig(); }
         }
         async function saveProfile() {
             const data = await api('/api/send/profile', {

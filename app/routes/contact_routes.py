@@ -125,9 +125,9 @@ async def create_contact(
     last = req.last_name.strip()
     title = req.title
     linkedin = req.linkedin_url
-    if req.email and not first and not last and settings.netrows_api_key:
+    if req.email and not first and not last and await get_netrows_api_key(db):
         try:
-            looked_up = await netrows_reverse_lookup(req.email, settings.netrows_api_key)
+            looked_up = await netrows_reverse_lookup(req.email, await get_netrows_api_key(db))
             if looked_up:
                 first = looked_up.first_name or first
                 last = looked_up.last_name or last
@@ -359,10 +359,10 @@ async def refresh_contact_posts(
         raise HTTPException(status_code=404, detail="Contact not found")
     if not contact.linkedin_url:
         raise HTTPException(status_code=400, detail="Contact has no LinkedIn URL on file")
-    if not settings.netrows_api_key:
+    if not await get_netrows_api_key(db):
         raise HTTPException(status_code=400, detail="Netrows API key not configured")
 
-    posts = await netrows_linkedin_posts(contact.linkedin_url, settings.netrows_api_key, limit=5)
+    posts = await netrows_linkedin_posts(contact.linkedin_url, await get_netrows_api_key(db), limit=5)
     contact.recent_posts_json = json.dumps([{
         "text": p.text, "posted_at": p.posted_at, "url": p.url,
         "likes": p.likes, "comments": p.comments,
@@ -390,7 +390,7 @@ async def lookup_contact_email(
     contact = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
-    if not settings.netrows_api_key:
+    if not await get_netrows_api_key(db):
         raise HTTPException(status_code=400, detail="Netrows API key not configured")
 
     # Resolve domain
@@ -402,10 +402,10 @@ async def lookup_contact_email(
 
     found = None
     if contact.linkedin_url:
-        found = await netrows_find_email_by_linkedin(contact.linkedin_url, settings.netrows_api_key)
+        found = await netrows_find_email_by_linkedin(contact.linkedin_url, await get_netrows_api_key(db))
     if not found and contact.first_name and contact.last_name and domain:
         found = await netrows_find_email_by_name(contact.first_name, contact.last_name,
-                                                  domain, settings.netrows_api_key)
+                                                  domain, await get_netrows_api_key(db))
 
     if not found or not found.email:
         raise HTTPException(status_code=404, detail="Could not find a verified email")

@@ -220,6 +220,20 @@ class Activity(Base):
     user = relationship("User", back_populates="activities")
 
 
+class RuntimeConfig(Base):
+    """Single-row org-level config that can be updated from the Settings UI.
+    Keys here override env-var defaults (so users can rotate API keys without
+    SSHing into the server).
+    Always row id=1.
+    """
+    __tablename__ = "runtime_config"
+
+    id = Column(Integer, primary_key=True, default=1)
+    netrows_api_key = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+
 class Tag(Base):
     __tablename__ = "tags"
 

@@ -9,16 +9,18 @@ from datetime import datetime, timezone
 from app.config import settings
 
 
-def _compliance_footer(unsubscribe_token: str | None) -> str:
-    """CAN-SPAM-compliant footer: physical postal address + unsubscribe link."""
-    address = settings.bmp_postal_address
-    unsub_link = ""
-    if unsubscribe_token:
-        url = f"{settings.public_url.rstrip('/')}/unsubscribe?t={unsubscribe_token}"
-        unsub_link = f'<br><a href="{url}" style="color:#888;text-decoration:underline">Unsubscribe</a>'
+def _compliance_footer() -> str:
+    """
+    Minimal compliance footer. Postal address only (CAN-SPAM requirement).
+    No visible unsubscribe link — Gmail/Outlook handle that via the
+    List-Unsubscribe HTTP header (set in the Resend payload), which surfaces
+    as a native button at the top of the email instead of footer copy.
+    Visible footer "click to unsubscribe" links trigger Gmail Promotions
+    classification and hurt inbox placement.
+    """
     return f"""
-    <div style="margin-top:20px;padding-top:12px;border-top:1px solid #e5e7eb;font-size:11px;color:#888;font-family:Arial,sans-serif;">
-        {address}{unsub_link}
+    <div style="margin-top:20px;font-size:11px;color:#999;font-family:Arial,sans-serif;">
+        {settings.bmp_postal_address}
     </div>
     """
 
@@ -40,7 +42,7 @@ async def send_email(
 
     body_html = body.replace("\n", "<br>")
     sig_block = f'<div style="margin-top:24px">{signature_html}</div>' if signature_html else ""
-    footer = _compliance_footer(unsubscribe_token)
+    footer = _compliance_footer()
     html_body = f"""
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; color: #333; line-height: 1.6;">
         {body_html}
@@ -49,17 +51,26 @@ async def send_email(
     </div>
     """
 
+    headers = {
+        "X-Company-ID": str(company_id),
+        "X-Contact-ID": str(contact_id),
+        "X-Email-ID": str(email_id),
+    }
+    # List-Unsubscribe headers — invisible to recipient, but Gmail/Outlook
+    # use them to render a native unsubscribe button at the top of the email
+    # AND treat the sender as more legitimate (better inbox placement).
+    if unsubscribe_token:
+        unsub_url = f"{settings.public_url.rstrip('/')}/unsubscribe?t={unsubscribe_token}"
+        headers["List-Unsubscribe"] = f"<{unsub_url}>"
+        headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+
     payload = {
         "from": from_address,
         "to": [to_email],
         "subject": subject,
         "html": html_body,
         "reply_to": reply_to_email,
-        "headers": {
-            "X-Company-ID": str(company_id),
-            "X-Contact-ID": str(contact_id),
-            "X-Email-ID": str(email_id),
-        },
+        "headers": headers,
         "tags": [
             {"name": "company_id", "value": str(company_id)},
             {"name": "contact_id", "value": str(contact_id)},

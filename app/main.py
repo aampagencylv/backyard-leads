@@ -13,6 +13,7 @@ from app.routes import (
     send_routes,
     crm_routes,
     dashboard_routes,
+    runtime_routes,
     unsubscribe_routes,
 )
 
@@ -46,6 +47,7 @@ app.include_router(deal_routes.router)
 app.include_router(send_routes.router)
 app.include_router(crm_routes.router)
 app.include_router(dashboard_routes.router)
+app.include_router(runtime_routes.router)
 app.include_router(unsubscribe_routes.router)
 
 # Serve static frontend

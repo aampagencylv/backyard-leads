@@ -31,6 +31,7 @@ from app.services.netrows_enrichment import (
 )
 from app.services.local_seo_intel import analyze_local_seo, local_seo_to_dict
 from app.config import settings
+from app.runtime_config import get_netrows_api_key
 
 router = APIRouter(prefix="/api/companies", tags=["companies"])
 
@@ -281,9 +282,9 @@ async def enrich_company(
     hunter_added, hunter_found = 0, 0
 
     # Netrows decision-maker first — verified owner emails for SMB (10 credits/call)
-    if settings.netrows_api_key:
+    if await get_netrows_api_key(db):
         try:
-            nr = await netrows_find_decision_makers(company.website, settings.netrows_api_key)
+            nr = await netrows_find_decision_makers(company.website, await get_netrows_api_key(db))
             netrows_data = {
                 "decision_makers": [{
                     "email": dm.email, "full_name": dm.full_name,
@@ -348,10 +349,10 @@ async def enrich_company(
     contacts_added = netrows_added + apollo_added + hunter_added
 
     # Google Maps reviews (1 credit) — owner replies are personalization gold
-    if settings.netrows_api_key:
+    if await get_netrows_api_key(db):
         try:
             mr = await netrows_maps_reviews(company.google_place_id or f"{company.name} {company.city or ''}".strip(),
-                                             settings.netrows_api_key)
+                                             await get_netrows_api_key(db))
             if mr and mr.reviews:
                 if mr.place_id and not company.google_place_id:
                     company.google_place_id = mr.place_id
@@ -482,9 +483,9 @@ async def pursue_companies(
                 company.enrichment_summary = _summarize(analysis)
 
                 # Netrows decision-maker first (verified owner emails for SMB)
-                if settings.netrows_api_key:
+                if await get_netrows_api_key(db):
                     try:
-                        nr = await netrows_find_decision_makers(company.website, settings.netrows_api_key)
+                        nr = await netrows_find_decision_makers(company.website, await get_netrows_api_key(db))
                         for dm in nr.decision_makers:
                             await _ensure_contact(db, company.id, dm.full_name, dm.email,
                                                   dm.job_title, None, dm.linkedin_url)
@@ -733,11 +734,11 @@ async def refresh_reviews(
     company = (await db.execute(select(Company).where(Company.id == company_id))).scalar_one_or_none()
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
-    if not settings.netrows_api_key:
+    if not await get_netrows_api_key(db):
         raise HTTPException(status_code=400, detail="Netrows API key not configured")
 
     seed = company.google_place_id or f"{company.name} {company.city or ''}".strip()
-    mr = await netrows_maps_reviews(seed, settings.netrows_api_key)
+    mr = await netrows_maps_reviews(seed, await get_netrows_api_key(db))
     if not mr or not mr.reviews:
         return {"reviews_count": 0, "owner_replies_count": 0, "message": "No reviews found"}
 
