@@ -945,17 +945,24 @@
                             ${c.emails.length === 0 ? `<button class="btn btn-success btn-xs" onclick="generateContactSequence(${c.id})">Generate Sequence</button>` : ''}
                         </div>
                     </div>
-                    <div class="sequence-toggle" onclick="toggleSequence('${cardId}')">${c.emails.length > 0 ? `▼ Show sequence (${c.emails.length} emails)` : ''}</div>
-                    <div class="sequence-body" id="${cardId}-seq" style="display:none;margin-top:8px">
-                        ${c.emails.map(e => renderEmailCard(e, c.id)).join('')}
-                        ${c.emails.length > 0 && c.email && !c.unsubscribed_at ? `
-                            <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
-                                <button class="btn btn-success btn-sm" onclick="sendNextInSequence(${c.id})">Send Next Email</button>
-                                ${c.emails.some(e => !e.is_sent && !e.paused_at) ? `<button class="btn btn-secondary btn-sm" onclick="pauseSequence(${c.id})">Pause Sequence</button>` : ''}
-                                ${c.emails.some(e => e.paused_at) ? `<button class="btn btn-secondary btn-sm" onclick="resumeSequence(${c.id})">Resume</button>` : ''}
-                            </div>
-                        ` : ''}
+                    ${c.emails.length > 0 ? `
+                    <div style="margin-top:12px;padding-top:10px;border-top:1px dashed #d8e0d8">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                            <strong style="font-size:12px;color:var(--bmp-green);text-transform:uppercase;letter-spacing:0.5px">Email Sequence (${c.emails.length})</strong>
+                            <span class="sequence-toggle" onclick="toggleSequence('${cardId}')" style="margin-top:0">Collapse ▲</span>
+                        </div>
+                        <div class="sequence-body" id="${cardId}-seq" style="display:block">
+                            ${c.emails.map(e => renderEmailCard(e, c.id)).join('')}
+                            ${c.email && !c.unsubscribed_at ? `
+                                <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+                                    <button class="btn btn-success btn-sm" onclick="sendNextInSequence(${c.id})">Send Next Email</button>
+                                    ${c.emails.some(e => !e.is_sent && !e.paused_at) ? `<button class="btn btn-secondary btn-sm" onclick="pauseSequence(${c.id})">Pause Sequence</button>` : ''}
+                                    ${c.emails.some(e => e.paused_at) ? `<button class="btn btn-secondary btn-sm" onclick="resumeSequence(${c.id})">Resume</button>` : ''}
+                                </div>
+                            ` : ''}
+                        </div>
                     </div>
+                    ` : `<p style="font-size:12px;color:#888;margin-top:8px">No sequence yet. ${c.email ? 'Click "Generate Sequence" above to create one.' : 'Set this contact\\'s email first, then generate a sequence.'}</p>`}
                 </div>
                 `;
             }).join('');
@@ -984,10 +991,10 @@
             const toggle = document.querySelector(`#${cardId} .sequence-toggle`);
             if (body.style.display === 'none') {
                 body.style.display = 'block';
-                if (toggle) toggle.textContent = toggle.textContent.replace('▼', '▲');
+                if (toggle) toggle.textContent = 'Collapse ▲';
             } else {
                 body.style.display = 'none';
-                if (toggle) toggle.textContent = toggle.textContent.replace('▲', '▼');
+                if (toggle) toggle.textContent = 'Expand ▼';
             }
         }
 
