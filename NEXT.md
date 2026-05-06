@@ -1,7 +1,14 @@
 # Next Steps & Punch List
 
 > Living doc. Pick up here at the start of each session. Pull `git pull --ff-only origin main` first.
-> Last updated by the agent on 2026-05-05 (~11pm PDT after the big CRM-rebuild + Netrows session).
+> Last updated by the agent on 2026-05-05 — overnight defensive pass while the user slept.
+
+## Overnight pass (added after the user said goodnight)
+- ✅ Fresh tarball backup at `/root/backups/backyard-leads-20260506-*.tar.gz`
+- ✅ Daily backup cron installed (`/usr/local/bin/backup-backyard-leads.sh`, 03:00 UTC, 14-day retention, uses sqlite online .backup)
+- ✅ README.md committed — repo overview, architecture, ops notes, "where the bodies are buried"
+- ✅ Tasks page filter chips — Today / This Week / Overdue / Team Open beyond just My Open
+- ⏸️ Held off on email-validation pre-send and Apollo cleanup — touch the send pipeline; want user awake to test
 
 ---
 

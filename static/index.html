@@ -451,11 +451,15 @@
             <div id="page-tasks" class="hidden">
                 <div class="page-header">
                     <h1>Tasks</h1>
-                    <div style="display:flex;gap:8px">
-                        <button class="btn btn-secondary btn-sm" onclick="loadTasks('mine')">My Open</button>
-                        <button class="btn btn-secondary btn-sm" onclick="loadTasks('all')">Team Open</button>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap">
+                        <button class="btn btn-secondary btn-sm" onclick="setTaskFilter('mine','all')">My Open</button>
+                        <button class="btn btn-secondary btn-sm" onclick="setTaskFilter('mine','overdue')">Overdue</button>
+                        <button class="btn btn-secondary btn-sm" onclick="setTaskFilter('mine','today')">Today</button>
+                        <button class="btn btn-secondary btn-sm" onclick="setTaskFilter('mine','this_week')">This Week</button>
+                        <button class="btn btn-secondary btn-sm" onclick="setTaskFilter('all','all')" style="margin-left:8px">Team Open</button>
                     </div>
                 </div>
+                <div id="tasks-summary" style="font-size:13px;color:#666;margin-bottom:12px"></div>
                 <div class="panel" id="tasks-panel"></div>
             </div>
 
@@ -1061,26 +1065,61 @@
         }
 
         // ============ Tasks ============
+        let _taskFilter = { scope: 'mine', range: 'all' };
+        function setTaskFilter(scope, range) {
+            _taskFilter = { scope, range };
+            loadTasks();
+        }
         async function loadTasks(mode) {
-            const path = mode === 'mine' ? '/api/crm/tasks/upcoming' : '/api/crm/tasks/all';
+            // backwards-compat: showPage calls loadTasks('mine')
+            if (typeof mode === 'string') { _taskFilter = { scope: mode, range: 'all' }; }
+            const { scope, range } = _taskFilter;
+            const path = scope === 'mine' ? '/api/crm/tasks/upcoming' : '/api/crm/tasks/all';
             const data = await api(path);
             if (!data) return;
+
+            const now = new Date();
+            const startOfDay = new Date(now); startOfDay.setHours(0,0,0,0);
+            const endOfDay = new Date(startOfDay); endOfDay.setDate(endOfDay.getDate()+1);
+            const endOfWeek = new Date(startOfDay); endOfWeek.setDate(endOfWeek.getDate() + (7 - startOfDay.getDay()));
+
+            let filtered = data;
+            if (range === 'overdue') {
+                filtered = data.filter(t => t.due_date && new Date(t.due_date) < startOfDay);
+            } else if (range === 'today') {
+                filtered = data.filter(t => t.due_date && new Date(t.due_date) >= startOfDay && new Date(t.due_date) < endOfDay);
+            } else if (range === 'this_week') {
+                filtered = data.filter(t => t.due_date && new Date(t.due_date) < endOfWeek);
+            }
+
+            const summary = document.getElementById('tasks-summary');
+            const labelMap = { all: 'open', overdue: 'overdue', today: 'due today', this_week: 'due this week' };
+            const scopeLabel = scope === 'mine' ? 'my' : 'team';
+            summary.textContent = `Showing ${filtered.length} ${labelMap[range]} task${filtered.length === 1 ? '' : 's'} (${scopeLabel}).`;
+
             const panel = document.getElementById('tasks-panel');
-            if (data.length === 0) {
-                panel.innerHTML = `<p style="color:#666">No open tasks.</p>`;
+            if (filtered.length === 0) {
+                panel.innerHTML = `<p style="color:#888;padding:8px 0">Nothing here. ${range === 'overdue' ? 'No overdue tasks 👍' : ''}</p>`;
                 return;
             }
-            const now = new Date();
-            panel.innerHTML = data.map(t => {
+            panel.innerHTML = filtered.map(t => {
                 const due = t.due_date ? new Date(t.due_date) : null;
-                const overdue = due && due < now;
+                const overdue = due && due < startOfDay;
+                const dueToday = due && due >= startOfDay && due < endOfDay;
+                let dueLabel = '';
+                let dueClass = '';
+                if (due) {
+                    if (overdue) { dueLabel = 'OVERDUE: ' + fmtDate(t.due_date); dueClass = 'overdue'; }
+                    else if (dueToday) { dueLabel = 'Due today'; dueClass = 'overdue'; }
+                    else { dueLabel = 'Due ' + fmtDate(t.due_date); }
+                } else { dueLabel = 'No due date'; }
                 return `
                     <div class="task-row">
                         <input type="checkbox" onchange="completeTask(${t.id})">
                         <div style="flex:1">
                             <div>${escapeHtml(t.description)}</div>
-                            <div class="due ${overdue ? 'overdue' : ''}">
-                                ${due ? (overdue ? 'OVERDUE: ' : 'Due ') + fmtDate(t.due_date) : 'No due date'}
+                            <div class="due ${dueClass}">
+                                ${dueLabel}
                                 · <a href="#" onclick="openCompanyDetail(${t.company_id});return false">${escapeHtml(t.company_name)}</a>
                                 ${t.owner_name ? ` · ${escapeHtml(t.owner_name)}` : ''}
                             </div>
