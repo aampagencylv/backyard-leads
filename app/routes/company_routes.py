@@ -38,6 +38,7 @@ router = APIRouter(prefix="/api/companies", tags=["companies"])
 async def list_companies(
     search_id: Optional[int] = None,
     status: Optional[str] = None,
+    lifecycle: Optional[str] = None,  # "active" = anything we've engaged with (excludes 'new'); "new" = raw scrape; None = all
     enriched_only: bool = False,
     min_reviews: Optional[int] = None,
     min_rating: Optional[float] = None,
@@ -50,6 +51,10 @@ async def list_companies(
         query = query.where(Company.search_id == search_id)
     if status:
         query = query.where(Company.status == status)
+    if lifecycle == "active":
+        query = query.where(Company.status != "new")
+    elif lifecycle == "new":
+        query = query.where(Company.status == "new")
     if enriched_only:
         query = query.where(Company.enriched == True)
     if min_reviews:

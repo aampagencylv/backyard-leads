@@ -61,6 +61,17 @@
         .sidebar-user .logout { color: var(--bmp-orange-light); cursor: pointer; }
 
         .main-content { margin-left: 240px; flex: 1; padding: 30px; }
+
+        /* Top search bar */
+        .top-bar { background: white; border-radius: 10px; padding: 8px 12px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); display: flex; align-items: center; gap: 8px; position: relative; }
+        .top-bar input { flex: 1; padding: 8px 12px; border: 1px solid #e0e0e0; border-radius: 8px; font-size: 14px; }
+        .top-bar input:focus { outline: none; border-color: var(--bmp-green); box-shadow: 0 0 0 2px rgba(27,94,32,0.1); }
+        .search-results-dropdown { position: absolute; top: 100%; left: 12px; right: 12px; background: white; border: 1px solid #ddd; border-radius: 10px; margin-top: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.1); z-index: 100; max-height: 400px; overflow-y: auto; }
+        .search-result-item { padding: 10px 14px; border-bottom: 1px solid #f0f0f0; cursor: pointer; font-size: 13px; }
+        .search-result-item:hover { background: #f8faf8; }
+        .search-result-item:last-child { border-bottom: none; }
+        .search-result-item .meta { font-size: 11px; color: #888; margin-top: 2px; }
+        .search-result-section { padding: 6px 14px; font-size: 11px; font-weight: 600; color: #888; text-transform: uppercase; background: #f8f9fa; }
         .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
         .page-header h1 { font-size: 24px; }
 
@@ -224,6 +235,7 @@
                 <a class="active" data-page="dashboard" onclick="showPage('dashboard')">Dashboard</a>
                 <a data-page="search" onclick="showPage('search')">Find Leads</a>
                 <a data-page="companies" onclick="showPage('companies')">Companies <span id="nav-companies-count" class="nav-badge"></span></a>
+                <a data-page="contacts" onclick="showPage('contacts')">Contacts <span id="nav-contacts-count" class="nav-badge"></span></a>
                 <a data-page="pipeline" onclick="showPage('pipeline')">Pipeline <span id="nav-pipeline-count" class="nav-badge"></span></a>
                 <a data-page="tasks" onclick="showPage('tasks')">Tasks <span id="nav-tasks-count" class="nav-badge"></span></a>
                 <a data-page="settings" onclick="showPage('settings')" style="margin-top:12px;border-top:1px solid rgba(255,255,255,0.1);padding-top:12px">Settings</a>
@@ -235,6 +247,14 @@
         </aside>
 
         <main class="main-content">
+
+            <!-- Top global search -->
+            <div class="top-bar">
+                <span style="color:#888;font-size:13px">🔍</span>
+                <input type="text" id="global-search" placeholder="Search companies, contacts, emails, phones..." autocomplete="off"
+                       oninput="onGlobalSearchInput(this.value)" onblur="setTimeout(()=>document.getElementById('search-results-dropdown').classList.add('hidden'),200)">
+                <div id="search-results-dropdown" class="search-results-dropdown hidden"></div>
+            </div>
 
             <!-- Dashboard -->
             <div id="page-dashboard">
@@ -255,9 +275,31 @@
             <div id="page-search" class="hidden">
                 <div class="page-header"><h1>Find Leads</h1></div>
                 <div class="search-box">
-                    <h3>Search businesses by keyword + location</h3>
+                    <h3>Search businesses by type + location</h3>
                     <div class="search-form">
-                        <div class="form-group"><label>Keyword</label><input type="text" id="search-keyword" placeholder="pool builders"></div>
+                        <div class="form-group">
+                            <label>Business Type</label>
+                            <select id="search-keyword-select" onchange="onBusinessTypeChange()">
+                                <option value="">-- Select a type --</option>
+                                <option value="pool builders">Pool Builders</option>
+                                <option value="pool service and maintenance">Pool Service &amp; Maintenance</option>
+                                <option value="landscaping companies">Landscaping Companies</option>
+                                <option value="lawn care service">Lawn Care Service</option>
+                                <option value="outdoor kitchen builders">Outdoor Kitchen Builders</option>
+                                <option value="deck builders">Deck Builders</option>
+                                <option value="fence companies">Fence Companies</option>
+                                <option value="patio contractors">Patio Contractors</option>
+                                <option value="hardscape contractors">Hardscape Contractors</option>
+                                <option value="irrigation companies">Irrigation Companies</option>
+                                <option value="tree service">Tree Service</option>
+                                <option value="concrete contractors">Concrete Contractors</option>
+                                <option value="landscape lighting">Landscape Lighting</option>
+                                <option value="pergola builders">Pergola Builders</option>
+                                <option value="retaining wall contractors">Retaining Wall Contractors</option>
+                                <option value="custom">Custom (type below)</option>
+                            </select>
+                            <input type="text" id="search-keyword-custom" class="hidden" placeholder="Type custom business type..." style="margin-top:6px">
+                        </div>
                         <div class="form-group"><label>Location</label><input type="text" id="search-location" placeholder="Las Vegas, NV"></div>
                         <button class="btn btn-primary" onclick="runSearch()">Search</button>
                     </div>
@@ -265,20 +307,34 @@
                 <div id="search-results"></div>
             </div>
 
-            <!-- Companies (was "All Leads") -->
+            <!-- Companies (only those we've engaged with) -->
             <div id="page-companies" class="hidden">
                 <div class="page-header">
                     <h1>Companies</h1>
                     <div style="display:flex;gap:8px;flex-wrap:wrap">
-                        <button class="btn btn-secondary btn-sm" onclick="loadCompanies('all')">All</button>
-                        <button class="btn btn-secondary btn-sm" onclick="loadCompanies('new')">New</button>
+                        <button class="btn btn-secondary btn-sm" onclick="loadCompanies('active')">Active</button>
                         <button class="btn btn-secondary btn-sm" onclick="loadCompanies('sequencing')">Sequencing</button>
                         <button class="btn btn-secondary btn-sm" onclick="loadCompanies('contacted')">Contacted</button>
                         <button class="btn btn-secondary btn-sm" onclick="loadCompanies('replied')">Replied</button>
                         <button class="btn btn-secondary btn-sm" onclick="loadCompanies('qualified')">Qualified</button>
+                        <button class="btn btn-secondary btn-sm" onclick="loadCompanies('all')" title="Includes companies still in 'new' from prospecting">All (incl. raw)</button>
                     </div>
                 </div>
+                <p style="font-size:12px;color:#888;margin-top:-12px;margin-bottom:16px">Active = anything we've pursued. Raw search results live under Find Leads.</p>
                 <div id="all-companies"></div>
+            </div>
+
+            <!-- Contacts -->
+            <div id="page-contacts" class="hidden">
+                <div class="page-header">
+                    <h1>Contacts</h1>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap">
+                        <button class="btn btn-secondary btn-sm" onclick="loadContacts('all')">All</button>
+                        <button class="btn btn-secondary btn-sm" onclick="loadContacts('with_email')">With Email</button>
+                        <button class="btn btn-secondary btn-sm" onclick="loadContacts('no_email')">Missing Email</button>
+                    </div>
+                </div>
+                <div class="panel" id="contacts-panel"></div>
             </div>
 
             <!-- Pipeline (kanban) -->
@@ -372,16 +428,30 @@
         }
 
         async function api(path, options = {}) {
-            const res = await fetch(path, {
-                ...options,
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`,
-                    ...(options.headers || {}),
-                },
-            });
-            if (res.status === 401) { logout(); return null; }
-            try { return await res.json(); } catch(e) { return null; }
+            try {
+                const res = await fetch(path, {
+                    ...options,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`,
+                        ...(options.headers || {}),
+                    },
+                });
+                if (res.status === 401) { logout(); return null; }
+                let body = null;
+                try { body = await res.json(); } catch (e) { body = null; }
+                if (!res.ok) {
+                    const detail = (body && body.detail) || `HTTP ${res.status}`;
+                    console.error(`API ${options.method || 'GET'} ${path} failed:`, detail, body);
+                    toast(`Error: ${detail}`);
+                    return null;
+                }
+                return body;
+            } catch (err) {
+                console.error(`Network error calling ${path}:`, err);
+                toast(`Network error: ${err.message}`);
+                return null;
+            }
         }
 
         function toast(msg) {
@@ -463,23 +533,33 @@
 
         // ============ Page nav ============
         function showPage(page) {
+            const target = document.getElementById(`page-${page}`);
+            if (!target) {
+                console.error(`page-${page} not found`);
+                toast(`Internal error: page-${page} missing`);
+                return;
+            }
             document.querySelectorAll('[id^="page-"]').forEach(el => el.classList.add('hidden'));
-            document.getElementById(`page-${page}`).classList.remove('hidden');
+            target.classList.remove('hidden');
             document.querySelectorAll('.sidebar-nav a').forEach(a => a.classList.toggle('active', a.dataset.page === page));
+            window.scrollTo(0, 0);
             if (page === 'dashboard') loadDashboard();
-            if (page === 'companies') loadCompanies('all');
+            if (page === 'companies') loadCompanies('active');
+            if (page === 'contacts') loadContacts('all');
             if (page === 'pipeline') loadPipeline();
             if (page === 'tasks') loadTasks('mine');
             if (page === 'settings') loadSettings();
         }
 
         async function refreshNavBadges() {
-            const [companies, pipeline, myTasks] = await Promise.all([
-                api('/api/companies/?status=sequencing'),
+            const [active, contacts, pipeline, myTasks] = await Promise.all([
+                api('/api/companies/?lifecycle=active'),
+                api('/api/contacts'),
                 api('/api/pipeline'),
                 api('/api/crm/tasks/upcoming'),
             ]);
-            if (companies) document.getElementById('nav-companies-count').textContent = companies.length || '';
+            if (active) document.getElementById('nav-companies-count').textContent = active.length || '';
+            if (contacts) document.getElementById('nav-contacts-count').textContent = contacts.length || '';
             if (pipeline) {
                 const open = ['prospecting','qualified','proposal','negotiation'].reduce((s, st) => s + (pipeline.totals[st]?.count || 0), 0);
                 document.getElementById('nav-pipeline-count').textContent = open || '';
@@ -507,9 +587,100 @@
 
         // ============ Companies ============
         async function loadCompanies(filter) {
-            const path = filter === 'all' ? '/api/companies/' : `/api/companies/?status=${filter}`;
+            let path = '/api/companies/';
+            if (filter === 'active') path += '?lifecycle=active';
+            else if (filter && filter !== 'all') path += `?status=${filter}`;
             const data = await api(path);
             if (data) renderCompanies(data, 'all-companies');
+        }
+
+        // ============ Contacts ============
+        async function loadContacts(mode) {
+            let path = '/api/contacts';
+            if (mode === 'with_email') path += '?has_email=true';
+            else if (mode === 'no_email') path += '?has_email=false';
+            const data = await api(path);
+            const panel = document.getElementById('contacts-panel');
+            if (!data || data.length === 0) {
+                panel.innerHTML = '<p style="color:#666">No contacts yet. Pursue companies to auto-create contacts via Apollo/Hunter.</p>';
+                return;
+            }
+            panel.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
+                <thead>
+                    <tr style="text-align:left;border-bottom:1px solid #e0e0e0">
+                        <th style="padding:8px">Name</th>
+                        <th style="padding:8px">Email</th>
+                        <th style="padding:8px">Phone</th>
+                        <th style="padding:8px">Company</th>
+                        <th style="padding:8px">Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${data.map(c => `
+                        <tr style="border-bottom:1px solid #f5f5f5;cursor:pointer" onclick="openCompanyDetail(${c.company_id})">
+                            <td style="padding:8px">${escapeHtml(c.name) || '—'}${c.title ? `<div style="font-size:11px;color:#888">${escapeHtml(c.title)}</div>` : ''}${c.is_primary ? ' <span style="font-size:9px;background:var(--bmp-green);color:white;padding:1px 4px;border-radius:2px">PRIMARY</span>' : ''}</td>
+                            <td style="padding:8px">${c.email ? `<a href="mailto:${escapeHtml(c.email)}" onclick="event.stopPropagation()" style="color:var(--bmp-orange);text-decoration:none">${escapeHtml(c.email)}</a>` : '<em style="color:#bbb">—</em>'}${c.email_status === 'bounced' ? ' <span style="font-size:9px;color:#c0392b">BOUNCED</span>' : ''}${c.unsubscribed_at ? ' <span style="font-size:9px;color:#c0392b">UNSUB</span>' : ''}</td>
+                            <td style="padding:8px">${c.phone ? escapeHtml(c.phone) : '<em style="color:#bbb">—</em>'}</td>
+                            <td style="padding:8px">${escapeHtml(c.company_name)}</td>
+                            <td style="padding:8px"><span class="status-badge status-${c.company_status}">${c.company_status}</span></td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>`;
+        }
+
+        // ============ Global search (top bar) ============
+        let _searchDebounce = null;
+        function onGlobalSearchInput(q) {
+            clearTimeout(_searchDebounce);
+            const dropdown = document.getElementById('search-results-dropdown');
+            if (!q || q.length < 2) {
+                dropdown.classList.add('hidden');
+                return;
+            }
+            _searchDebounce = setTimeout(async () => {
+                const data = await api(`/api/crm/search?q=${encodeURIComponent(q)}`);
+                if (!data) return;
+                const sections = [];
+                if (data.companies && data.companies.length) {
+                    sections.push(`<div class="search-result-section">Companies</div>`);
+                    sections.push(...data.companies.map(c => `
+                        <div class="search-result-item" onclick="document.getElementById('global-search').value='';document.getElementById('search-results-dropdown').classList.add('hidden');openCompanyDetail(${c.id})">
+                            <div><strong>${escapeHtml(c.name)}</strong> <span class="status-badge status-${c.status}">${c.status}</span></div>
+                            <div class="meta">${escapeHtml(c.city || '')}${c.state ? ', ' + escapeHtml(c.state) : ''}</div>
+                        </div>
+                    `));
+                }
+                if (data.contacts && data.contacts.length) {
+                    sections.push(`<div class="search-result-section">Contacts</div>`);
+                    sections.push(...data.contacts.map(c => `
+                        <div class="search-result-item" onclick="document.getElementById('global-search').value='';document.getElementById('search-results-dropdown').classList.add('hidden');openCompanyDetail(${c.company_id})">
+                            <div><strong>${escapeHtml(c.name) || '(no name)'}</strong> ${c.email ? `· <span style="color:var(--bmp-orange)">${escapeHtml(c.email)}</span>` : ''}</div>
+                            <div class="meta">at ${escapeHtml(c.company_name)}</div>
+                        </div>
+                    `));
+                }
+                if (sections.length === 0) sections.push(`<div class="search-result-item" style="color:#888">No matches</div>`);
+                dropdown.innerHTML = sections.join('');
+                dropdown.classList.remove('hidden');
+            }, 200);
+        }
+
+        // ============ Find Leads helpers ============
+        function onBusinessTypeChange() {
+            const sel = document.getElementById('search-keyword-select');
+            const custom = document.getElementById('search-keyword-custom');
+            if (sel.value === 'custom') {
+                custom.classList.remove('hidden');
+                custom.focus();
+            } else {
+                custom.classList.add('hidden');
+            }
+        }
+        function getSearchKeyword() {
+            const sel = document.getElementById('search-keyword-select');
+            if (sel.value === 'custom') return document.getElementById('search-keyword-custom').value.trim();
+            return sel.value;
         }
 
         function renderCompanies(companies, containerId) {
@@ -571,9 +742,10 @@
 
         // ============ Find Leads / Search ============
         async function runSearch() {
-            const keyword = document.getElementById('search-keyword').value;
-            const location = document.getElementById('search-location').value;
-            if (!keyword || !location) { toast('Enter both keyword and location'); return; }
+            const keyword = getSearchKeyword();
+            const location = document.getElementById('search-location').value.trim();
+            if (!keyword) { toast('Pick or type a business type'); return; }
+            if (!location) { toast('Enter a location'); return; }
             toast(`Searching for "${keyword}" in ${location}...`);
             const data = await api('/api/search/', {
                 method: 'POST',
@@ -669,10 +841,16 @@
 
         // ============ Company Detail ============
         async function openCompanyDetail(id) {
+            console.log('openCompanyDetail', id);
             const data = await api(`/api/companies/${id}/full`);
             if (!data) return;
-            showPage('company-detail');
-            renderCompanyDetail(data);
+            try {
+                showPage('company-detail');
+                renderCompanyDetail(data);
+            } catch (err) {
+                console.error('renderCompanyDetail failed', err, data);
+                toast(`Render error: ${err.message}`);
+            }
         }
 
         function renderCompanyDetail(d) {

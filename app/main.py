@@ -53,7 +53,8 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 @app.get("/", response_class=HTMLResponse)
 async def serve_app():
     with open("static/index.html") as f:
-        return f.read()
+        html = f.read()
+    return HTMLResponse(html, headers={"Cache-Control": "no-store, max-age=0"})
 
 
 @app.get("/health")

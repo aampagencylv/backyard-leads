@@ -21,6 +21,52 @@ router = APIRouter(prefix="/api", tags=["contacts"])
 
 
 # ============================================================
+# Global list of all contacts (for the Contacts page)
+# ============================================================
+
+@router.get("/contacts")
+async def list_all_contacts(
+    company_status: Optional[str] = None,
+    has_email: Optional[bool] = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """List every contact across all companies, with company name attached."""
+    query = (
+        select(Contact, Company.name, Company.status)
+        .join(Company, Contact.company_id == Company.id)
+        .order_by(Contact.updated_at.desc())
+    )
+    if company_status:
+        query = query.where(Company.status == company_status)
+    if has_email is True:
+        query = query.where(Contact.email.isnot(None), Contact.email != "")
+    elif has_email is False:
+        query = query.where((Contact.email.is_(None)) | (Contact.email == ""))
+
+    rows = (await db.execute(query)).all()
+    return [
+        {
+            "id": c.id,
+            "company_id": c.company_id,
+            "company_name": cname,
+            "company_status": cstatus,
+            "first_name": c.first_name,
+            "last_name": c.last_name,
+            "name": c.full_name,
+            "title": c.title,
+            "email": c.email,
+            "phone": c.phone,
+            "linkedin_url": c.linkedin_url,
+            "is_primary": c.is_primary,
+            "email_status": c.email_status,
+            "unsubscribed_at": c.unsubscribed_at.isoformat() if c.unsubscribed_at else None,
+        }
+        for c, cname, cstatus in rows
+    ]
+
+
+# ============================================================
 # CRUD
 # ============================================================
 
