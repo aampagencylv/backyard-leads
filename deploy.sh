@@ -29,6 +29,7 @@ User=root
 WorkingDirectory=/opt/backyard-leads
 Environment=PATH=/opt/backyard-leads/venv/bin:/usr/bin
 EnvironmentFile=/opt/backyard-leads/.env
+ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_signature_fields
 ExecStart=/opt/backyard-leads/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=5

@@ -18,7 +18,7 @@ async def send_email(
     reply_to_email: str,
     lead_id: int,
     email_id: int,
-    signature: str = "",
+    signature_html: str = "",
 ) -> dict:
     """
     Send an email via Resend API.
@@ -27,12 +27,12 @@ async def send_email(
     from_address = f"{from_name} <{from_firstname}@{settings.send_domain}>"
 
     # Convert plain text body to simple HTML
-    html_body = body.replace("\n", "<br>")
-    sig_html = f'<div style="margin-top:24px;padding-top:16px;border-top:1px solid #eee;font-size:13px;color:#555">{signature}</div>' if signature else ""
+    body_html = body.replace("\n", "<br>")
+    sig_block = f'<div style="margin-top:24px">{signature_html}</div>' if signature_html else ""
     html_body = f"""
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; color: #333; line-height: 1.6;">
-        {html_body}
-        {sig_html}
+        {body_html}
+        {sig_block}
     </div>
     """
 
@@ -77,15 +77,17 @@ async def send_email(
             }
 
 
-def get_sender_info(user_name: str) -> dict:
+def get_sender_info(first_name: str, full_name: str) -> dict:
     """
-    Derive sender email addresses from user's name.
-    e.g. "Steve Edwards" -> steve@go.backyardmarketingpros.com
+    Derive sender email addresses from user's first name (preferred) or full name.
+    e.g. first_name="Steve" -> steve@go.backyardmarketingpros.com
     """
-    firstname = user_name.strip().split()[0].lower()
+    fn = (first_name or "").strip().lower()
+    if not fn and full_name:
+        fn = full_name.strip().split()[0].lower()
     return {
-        "from_name": user_name,
-        "from_firstname": firstname,
-        "from_email": f"{firstname}@{settings.send_domain}",
-        "reply_to": f"{firstname}@{settings.reply_domain}",
+        "from_name": full_name,
+        "from_firstname": fn,
+        "from_email": f"{fn}@{settings.send_domain}",
+        "reply_to": f"{fn}@{settings.reply_domain}",
     }

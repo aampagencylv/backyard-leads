@@ -296,8 +296,12 @@
 
             <div id="register-form" class="hidden">
                 <div class="form-group">
-                    <label>Full Name</label>
-                    <input type="text" id="reg-name" placeholder="Steve Edwards">
+                    <label>First Name</label>
+                    <input type="text" id="reg-first-name" placeholder="Steve">
+                </div>
+                <div class="form-group">
+                    <label>Last Name</label>
+                    <input type="text" id="reg-last-name" placeholder="Edwards">
                 </div>
                 <div class="form-group">
                     <label>Email</label>
@@ -560,19 +564,27 @@
 
                 <div class="search-box" style="max-width:600px">
                     <h3>Your Profile</h3>
-                    <p style="font-size:13px;color:#666;margin-bottom:16px">This information is used when sending emails to prospects.</p>
+                    <p style="font-size:13px;color:#666;margin-bottom:16px">These fields populate the standardized BMP email signature. The signature itself is fixed — only your details vary.</p>
 
                     <div class="form-group">
-                        <label>Full Name</label>
-                        <input type="text" id="settings-name" placeholder="Steve Edwards">
+                        <label>First Name</label>
+                        <input type="text" id="settings-first-name" placeholder="Steve">
                     </div>
                     <div class="form-group">
-                        <label>Title</label>
-                        <input type="text" id="settings-title" placeholder="Business Development Representative">
+                        <label>Last Name</label>
+                        <input type="text" id="settings-last-name" placeholder="Edwards">
                     </div>
                     <div class="form-group">
-                        <label>Phone</label>
-                        <input type="text" id="settings-phone" placeholder="(555) 123-4567">
+                        <label>Nickname / Title Line</label>
+                        <input type="text" id="settings-nickname" placeholder="Founder &amp; Chief Marketing Pro">
+                    </div>
+                    <div class="form-group">
+                        <label>Mobile Phone</label>
+                        <input type="text" id="settings-phone-number" placeholder="702-555-1234">
+                    </div>
+                    <div class="form-group">
+                        <label>Scheduling Link</label>
+                        <input type="text" id="settings-scheduling-url" placeholder="https://calendly.com/your-link">
                     </div>
 
                     <div style="background:#f5f7f5;border-radius:8px;padding:12px;margin:16px 0;font-size:13px">
@@ -584,17 +596,9 @@
                 </div>
 
                 <div class="search-box" style="max-width:600px;margin-top:16px">
-                    <h3>Email Signature</h3>
-                    <p style="font-size:13px;color:#666;margin-bottom:16px">This signature is appended to every email you send. Use HTML for formatting.</p>
-
-                    <div class="form-group">
-                        <textarea id="settings-signature" rows="6" placeholder="Steve Edwards&#10;Business Development | Backyard Marketing Pros&#10;(555) 123-4567&#10;backyardmarketingpros.com" style="width:100%;padding:10px 14px;border:1px solid #ddd;border-radius:8px;font-size:13px;font-family:monospace;resize:vertical"></textarea>
-                    </div>
-                    <div style="margin-bottom:12px">
-                        <strong style="font-size:13px">Preview:</strong>
-                        <div id="signature-preview" style="background:#f8f9fa;border-radius:6px;padding:12px;margin-top:6px;font-size:13px;border-left:3px solid var(--bmp-green)"></div>
-                    </div>
-                    <button class="btn btn-primary" onclick="saveProfile()">Save Signature</button>
+                    <h3>Email Signature Preview</h3>
+                    <p style="font-size:13px;color:#666;margin-bottom:16px">This is what your signature looks like. Update your profile fields above to change what shows here.</p>
+                    <div id="signature-preview" style="background:#fff;border:1px solid #e5e7eb;border-radius:6px;padding:16px"></div>
                 </div>
 
                 <div class="search-box" style="max-width:600px;margin-top:16px">
@@ -689,7 +693,8 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    name: document.getElementById('reg-name').value,
+                    first_name: document.getElementById('reg-first-name').value,
+                    last_name: document.getElementById('reg-last-name').value,
                     email: email,
                     password: document.getElementById('reg-password').value,
                 }),
@@ -1500,34 +1505,35 @@
 
         async function loadSettings() {
             const data = await api('/api/send/profile');
-            if (data) {
-                document.getElementById('settings-name').value = data.name || '';
-                document.getElementById('settings-title').value = data.title || '';
-                document.getElementById('settings-phone').value = data.phone || '';
-                document.getElementById('settings-signature').value = data.signature || '';
-                document.getElementById('settings-sending-enabled').checked = data.sending_enabled;
-                document.getElementById('settings-send-from').textContent = data.send_from;
-                document.getElementById('settings-reply-to').textContent = data.reply_to;
-                updateSignaturePreview();
-            }
+            if (!data) return;
+            document.getElementById('settings-first-name').value = data.first_name || '';
+            document.getElementById('settings-last-name').value = data.last_name || '';
+            document.getElementById('settings-nickname').value = data.nickname || '';
+            document.getElementById('settings-phone-number').value = data.phone_number || '';
+            document.getElementById('settings-scheduling-url').value = data.scheduling_url || '';
+            document.getElementById('settings-sending-enabled').checked = data.sending_enabled;
+            document.getElementById('settings-send-from').textContent = data.send_from;
+            document.getElementById('settings-reply-to').textContent = data.reply_to;
+            document.getElementById('signature-preview').innerHTML = data.signature_html || '';
         }
 
         async function saveProfile() {
             const data = await api('/api/send/profile', {
                 method: 'PATCH',
                 body: JSON.stringify({
-                    name: document.getElementById('settings-name').value,
-                    title: document.getElementById('settings-title').value,
-                    phone: document.getElementById('settings-phone').value,
-                    signature: document.getElementById('settings-signature').value,
+                    first_name: document.getElementById('settings-first-name').value,
+                    last_name: document.getElementById('settings-last-name').value,
+                    nickname: document.getElementById('settings-nickname').value,
+                    phone_number: document.getElementById('settings-phone-number').value,
+                    scheduling_url: document.getElementById('settings-scheduling-url').value,
                 }),
             });
-            if (data) {
-                toast('Profile saved!');
-                document.getElementById('settings-send-from').textContent = data.send_from;
-                document.getElementById('settings-reply-to').textContent = data.reply_to;
-                document.getElementById('user-name').textContent = data.name;
-            }
+            if (!data) return;
+            toast('Profile saved!');
+            document.getElementById('settings-send-from').textContent = data.send_from;
+            document.getElementById('settings-reply-to').textContent = data.reply_to;
+            document.getElementById('signature-preview').innerHTML = data.signature_html || '';
+            document.getElementById('user-name').textContent = data.name;
         }
 
         async function toggleSending() {
@@ -1538,16 +1544,6 @@
             });
             toast(enabled ? 'Sending enabled' : 'Sending disabled');
         }
-
-        function updateSignaturePreview() {
-            const sig = document.getElementById('settings-signature').value;
-            document.getElementById('signature-preview').innerHTML = sig.replace(/\n/g, '<br>');
-        }
-
-        // Live signature preview
-        document.addEventListener('input', function(e) {
-            if (e.target.id === 'settings-signature') updateSignaturePreview();
-        });
 
         // ============ Email Editing ============
 

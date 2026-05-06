@@ -1,0 +1,118 @@
+<!-- Backyard Marketing Pros Email Signature -->
+<div>
+<span style="color: #363636"><span style="font-family: Arial, sans-serif">
+<table id="signature" cellpadding="0" cellspacing="0" border="0" style="font-family: sans-serif; line-height: 1.4; box-sizing: initial; max-width: 580px; color: #363636; border-collapse: collapse;">
+  <tbody>
+    <tr>
+      <td valign="top">
+        <table id="basic-table" width="320" cellpadding="0" cellspacing="0" border="0" style="font-family: sans-serif; border-collapse: collapse; color: #333; width: 320px; line-height: 16px;">
+          <tbody>
+            <tr>
+              <td valign="top" width="320">
+                <table width="320" cellpadding="0" cellspacing="0" border="0" style="font-family: sans-serif; border-collapse: collapse; color: #333; width: 320px; line-height: 16px;">
+                  <tbody>
+
+                    <!-- Name -->
+                    <tr>
+                      <td valign="top">
+                        <p style="margin: 0.75pt; color: #000000; font-weight: 700; font-size: 16px; font-family: Arial, sans-serif;">
+                          {{ user.first_name }} {{ user.last_name }}
+                        </p>
+                      </td>
+                    </tr>
+
+                    <!-- Title / Nickname -->
+                    <tr>
+                      <td valign="top">
+                        <p style="margin: 0.75pt; font-size: 14px; font-family: Arial, sans-serif;">
+                          <span>{{ user.nickname }}</span>
+                        </p>
+                      </td>
+                    </tr>
+
+                    <!-- Logo Row -->
+                    <tr>
+                      <td valign="top" style="padding: 10px 0 4px 0;">
+                        <table width="320" border="0" cellspacing="0" cellpadding="0" style="font-family: sans-serif; border-collapse: collapse; color: #333; width: 320px; line-height: 16px;">
+                          <tbody>
+                            <tr>
+                              <td width="220" valign="bottom" style="padding-right: 20px;">
+                                <p style="margin: 0.75pt;">
+                                  <a href="https://backyardmarketingpros.com/">
+                                    <img src="https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz.png" width="207" style="max-width: 100%;" alt="Backyard Marketing Pros">
+                                  </a>
+                                </p>
+                              </td>
+                              <td width="95" valign="bottom" align="right">
+                                <table cellpadding="0" cellspacing="0" border="0" style="font-family: sans-serif; border-collapse: collapse; color: #333; width: auto; line-height: 13px;"></table>
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </td>
+                    </tr>
+
+                    <!-- Divider Line (BMP brand green) -->
+                    <tr>
+                      <td valign="top" style="padding-bottom: 6px;">
+                        <table cellpadding="0" cellspacing="0" border="0" width="320" style="border-collapse: collapse;">
+                          <tr>
+                            <td style="height: 3px; background-color: #1e4634; font-size: 0; line-height: 0;">&nbsp;</td>
+                          </tr>
+                        </table>
+                      </td>
+                    </tr>
+
+                    <!-- Phone Numbers -->
+                    <tr>
+                      <td valign="top">
+                        <p style="margin: 0.75pt; font-size: 12px; font-family: Arial, sans-serif;">
+                          <span style="font-weight: 700; color: #1e4634;">O:</span>
+                          <a href="tel:702-707-4622" style="text-decoration: none; color: #333;">702-707-4622</a>
+                          <span>&nbsp;|&nbsp;</span>
+                          <span style="font-weight: 700; color: #FF723F;">M:</span>
+                          <a href="tel:{{ user.phone_number }}" style="text-decoration: none; color: #333;">{{ user.phone_number }}</a>
+                        </p>
+                      </td>
+                    </tr>
+
+                    <!-- Email & Website -->
+                    <tr>
+                      <td valign="top">
+                        <p style="margin: 0.75pt; font-size: 12px; font-family: Arial, sans-serif;">
+                          <span style="font-weight: 700; color: #1e4634;">E:</span>
+                          <a href="mailto:{{ user.email }}" style="text-decoration: none; color: #333;">{{ user.email }}</a>
+                          <span>&nbsp;|&nbsp;</span>
+                          <span style="font-weight: 700; color: #FF723F;">W:</span>
+                          <a href="https://backyardmarketingpros.com/" style="text-decoration: none; color: #333;">www.backyardmarketingpros.com</a>
+                        </p>
+                      </td>
+                    </tr>
+
+                  </tbody>
+                </table>
+
+                {% if user.scheduling_url %}
+                <!-- Schedule Meeting CTA -->
+                <br>
+                <a href="{{ user.scheduling_url }}" style="margin: 0.75pt; font-size: 12px; font-family: Arial, sans-serif; color: #FF723F; font-weight: bold;">
+                  Click Here To Schedule A Meeting With Me
+                </a>
+                {% endif %}
+
+                <!-- Confidentiality Disclaimer -->
+                <br>
+                <p style="margin: 0.75pt; font-size: 10px; font-family: Arial, sans-serif; color: #575757;">
+                  IMPORTANT: The contents of this email and any attachments are confidential. They are intended for the named recipient(s) only. If you have received this email by mistake, please notify the sender immediately and do not disclose the contents to anyone or make copies thereof.
+                </p>
+
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </td>
+    </tr>
+  </tbody>
+</table>
+</span></span>
+</div>

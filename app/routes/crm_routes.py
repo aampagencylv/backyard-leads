@@ -44,7 +44,7 @@ async def get_timeline(
         if a.user_id:
             u_result = await db.execute(select(User).where(User.id == a.user_id))
             u = u_result.scalar_one_or_none()
-            user_name = u.name if u else None
+            user_name = u.full_name if u else None
 
         timeline.append({
             "id": a.id,
@@ -86,7 +86,7 @@ async def add_note(
         "id": activity.id,
         "type": activity.activity_type,
         "content": activity.content,
-        "user_name": user.name,
+        "user_name": user.full_name,
         "created_at": activity.created_at.isoformat(),
     }
 
@@ -409,7 +409,7 @@ async def get_lead_full(
     if lead.assigned_to:
         u_result = await db.execute(select(User).where(User.id == lead.assigned_to))
         u = u_result.scalar_one_or_none()
-        assigned_name = u.name if u else None
+        assigned_name = u.full_name if u else None
 
     # Build user name lookup for activities
     user_ids = set(a.user_id for a in activities if a.user_id)
@@ -417,7 +417,7 @@ async def get_lead_full(
     if user_ids:
         u_result = await db.execute(select(User).where(User.id.in_(user_ids)))
         for u in u_result.scalars().all():
-            user_names[u.id] = u.name
+            user_names[u.id] = u.full_name
 
     problems = json.loads(lead.problems_found) if lead.problems_found else []
 
@@ -535,4 +535,4 @@ async def list_users(
 ):
     result = await db.execute(select(User).where(User.is_active == True))
     users = result.scalars().all()
-    return [{"id": u.id, "name": u.name, "email": u.email} for u in users]
+    return [{"id": u.id, "name": u.full_name, "email": u.email} for u in users]

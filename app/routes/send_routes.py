@@ -13,6 +13,7 @@ from app.database import get_db
 from app.models import User, Lead, GeneratedEmail
 from app.auth import get_current_user
 from app.services.email_sender import send_email, get_sender_info
+from app.services.signature import render_signature
 from app.config import settings
 
 router = APIRouter(prefix="/api/send", tags=["send"])
@@ -56,7 +57,7 @@ async def send_single_email(
         raise HTTPException(status_code=403, detail="Sending is disabled for your account. Enable it in Settings.")
 
     # Get sender info from current user
-    sender = get_sender_info(user.name)
+    sender = get_sender_info(user.first_name, user.full_name)
 
     send_result = await send_email(
         to_email=recipient,
@@ -67,7 +68,7 @@ async def send_single_email(
         reply_to_email=sender["reply_to"],
         lead_id=lead.id,
         email_id=email.id,
-        signature=user.signature or "",
+        signature_html=render_signature(user),
     )
 
     if send_result["success"]:
@@ -132,7 +133,7 @@ async def send_first_in_sequence(
     if not user.sending_enabled:
         raise HTTPException(status_code=403, detail="Sending is disabled for your account. Enable it in Settings.")
 
-    sender = get_sender_info(user.name)
+    sender = get_sender_info(user.first_name, user.full_name)
 
     send_result = await send_email(
         to_email=recipient,
@@ -143,7 +144,7 @@ async def send_first_in_sequence(
         reply_to_email=sender["reply_to"],
         lead_id=lead.id,
         email_id=email.id,
-        signature=user.signature or "",
+        signature_html=render_signature(user),
     )
 
     if send_result["success"]:
@@ -216,28 +217,36 @@ async def edit_email(
 
 
 class UpdateProfileRequest(BaseModel):
-    name: Optional[str] = None
-    title: Optional[str] = None
-    phone: Optional[str] = None
-    signature: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    nickname: Optional[str] = None
+    phone_number: Optional[str] = None
+    scheduling_url: Optional[str] = None
     sending_enabled: Optional[bool] = None
+
+
+def _profile_payload(user: User) -> dict:
+    sender = get_sender_info(user.first_name, user.full_name)
+    return {
+        "id": user.id,
+        "email": user.email,
+        "first_name": user.first_name or "",
+        "last_name": user.last_name or "",
+        "name": user.full_name,
+        "nickname": user.nickname or "",
+        "phone_number": user.phone_number or "",
+        "scheduling_url": user.scheduling_url or "",
+        "sending_enabled": user.sending_enabled,
+        "send_from": sender["from_email"],
+        "reply_to": sender["reply_to"],
+        "signature_html": render_signature(user),
+    }
 
 
 @router.get("/profile")
 async def get_profile(user: User = Depends(get_current_user)):
-    """Get current user's profile and settings."""
-    sender = get_sender_info(user.name)
-    return {
-        "id": user.id,
-        "name": user.name,
-        "email": user.email,
-        "title": user.title or "",
-        "phone": user.phone or "",
-        "signature": user.signature or "",
-        "sending_enabled": user.sending_enabled,
-        "send_from": sender["from_email"],
-        "reply_to": sender["reply_to"],
-    }
+    """Get current user's profile and rendered signature."""
+    return _profile_payload(user)
 
 
 @router.patch("/profile")
@@ -246,29 +255,16 @@ async def update_profile(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Update user profile — name, title, signature, sending toggle."""
-    if req.name is not None:
-        user.name = req.name
-    if req.title is not None:
-        user.title = req.title
-    if req.phone is not None:
-        user.phone = req.phone
-    if req.signature is not None:
-        user.signature = req.signature
+    """Update user profile — signature is rendered from these fields."""
+    for field in ("first_name", "last_name", "nickname", "phone_number", "scheduling_url"):
+        val = getattr(req, field)
+        if val is not None:
+            setattr(user, field, val.strip())
     if req.sending_enabled is not None:
         user.sending_enabled = req.sending_enabled
     await db.commit()
-
-    sender = get_sender_info(user.name)
-    return {
-        "name": user.name,
-        "title": user.title,
-        "phone": user.phone,
-        "signature": user.signature,
-        "sending_enabled": user.sending_enabled,
-        "send_from": sender["from_email"],
-        "reply_to": sender["reply_to"],
-    }
+    await db.refresh(user)
+    return _profile_payload(user)
 
 
 @router.patch("/lead/{lead_id}/email")

@@ -12,7 +12,8 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 class RegisterRequest(BaseModel):
     email: str
-    name: str
+    first_name: str
+    last_name: str
     password: str
 
 
@@ -37,8 +38,9 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Email already registered")
 
     user = User(
-        email=req.email,
-        name=req.name,
+        email=req.email.lower(),
+        first_name=req.first_name.strip(),
+        last_name=req.last_name.strip(),
         hashed_password=hash_password(req.password),
     )
     db.add(user)
@@ -48,7 +50,7 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
     token = create_access_token({"sub": str(user.id)})
     return TokenResponse(
         access_token=token,
-        user_name=user.name,
+        user_name=user.full_name,
         user_email=user.email,
     )
 
@@ -58,7 +60,7 @@ async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(User).where(User.email == form_data.username))
+    result = await db.execute(select(User).where(User.email == form_data.username.lower()))
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(form_data.password, user.hashed_password):
@@ -67,11 +69,20 @@ async def login(
     token = create_access_token({"sub": str(user.id)})
     return TokenResponse(
         access_token=token,
-        user_name=user.name,
+        user_name=user.full_name,
         user_email=user.email,
     )
 
 
 @router.get("/me")
 async def get_me(user: User = Depends(get_current_user)):
-    return {"id": user.id, "email": user.email, "name": user.name}
+    return {
+        "id": user.id,
+        "email": user.email,
+        "name": user.full_name,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        "nickname": user.nickname,
+        "phone_number": user.phone_number,
+        "scheduling_url": user.scheduling_url,
+    }
