@@ -30,7 +30,7 @@ class HunterResult:
     best_guess_email: Optional[str] = None
 
 
-async def search_domain(domain: str, api_key: str, limit: int = 25) -> HunterResult:
+async def search_domain(domain: str, api_key: str, limit: int = 10) -> HunterResult:
     """
     Search Hunter.io for all emails associated with a domain.
     Returns contacts found + the email pattern for the domain.
@@ -42,15 +42,18 @@ async def search_domain(domain: str, api_key: str, limit: int = 25) -> HunterRes
     result.domain = domain
 
     async with httpx.AsyncClient(timeout=15) as client:
-        # Domain search — find all emails at this domain
+        # Domain search — find all emails at this domain.
+        # Hunter Free plan caps results at 10; Starter at 50; higher plans up to 100.
+        # We retry with a lower limit if the API rejects the request.
         response = await client.get(
             "https://api.hunter.io/v2/domain-search",
-            params={
-                "domain": domain,
-                "api_key": api_key,
-                "limit": limit,
-            },
+            params={"domain": domain, "api_key": api_key, "limit": limit},
         )
+        if response.status_code == 400 and "pagination_error" in response.text and limit > 10:
+            response = await client.get(
+                "https://api.hunter.io/v2/domain-search",
+                params={"domain": domain, "api_key": api_key, "limit": 10},
+            )
 
         if response.status_code == 200:
             data = response.json().get("data", {})
