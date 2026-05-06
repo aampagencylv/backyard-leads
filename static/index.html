@@ -788,14 +788,8 @@
             `).join('');
         }
 
-        async function enrichCompany(id) {
-            toast('Analyzing website...');
-            const data = await api(`/api/companies/${id}/enrich`, { method: 'POST' });
-            if (data) {
-                toast(`${data.contacts_added} contact(s) added; ${data.problems_found} problems found`);
-                loadCompanies('all');
-            }
-        }
+        // enrichCompany is defined later as a thin wrapper around enrichContactsFromCompany;
+        // both call the same /enrich endpoint and surface Apollo/Hunter found+added counts.
 
         async function pursueCompanies(ids) {
             toast(`Pursuing ${ids.length} company...`);
@@ -1176,9 +1170,16 @@
             toast('Looking up contacts via Apollo + Hunter...');
             const data = await api(`/api/companies/${companyId}/enrich`, { method: 'POST' });
             if (data) {
-                toast(`${data.contacts_added || 0} contact(s) added; ${data.problems_found || 0} problems found`);
+                const a = `Apollo ${data.apollo_found ?? 0}→${data.apollo_added ?? 0}`;
+                const h = `Hunter ${data.hunter_found ?? 0}→${data.hunter_added ?? 0}`;
+                toast(`${data.contacts_added || 0} new contact(s) added · ${a} · ${h}`);
                 openCompanyDetail(companyId);
             }
+        }
+        // also called from the Companies list cards
+        async function enrichCompany(id) {
+            // unified with enrichContactsFromCompany
+            return enrichContactsFromCompany(id);
         }
         async function generateContactSequence(contactId) {
             toast('Generating sequence...');

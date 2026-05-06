@@ -30,7 +30,7 @@ class HunterResult:
     best_guess_email: Optional[str] = None
 
 
-async def search_domain(domain: str, api_key: str) -> HunterResult:
+async def search_domain(domain: str, api_key: str, limit: int = 25) -> HunterResult:
     """
     Search Hunter.io for all emails associated with a domain.
     Returns contacts found + the email pattern for the domain.
@@ -48,7 +48,7 @@ async def search_domain(domain: str, api_key: str) -> HunterResult:
             params={
                 "domain": domain,
                 "api_key": api_key,
-                "limit": 10,
+                "limit": limit,
             },
         )
 

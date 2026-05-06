@@ -266,9 +266,10 @@ async def enrich_company(
     company.problems_found = json.dumps(analysis.problems)
     company.enrichment_summary = _summarize(analysis)
 
-    # Apollo + Hunter — create Contact records
-    apollo_data, hunter_data, source = None, None, None
-    contacts_added = 0
+    # Apollo + Hunter — both always run; import everything they find
+    apollo_data, hunter_data = None, None
+    apollo_added, apollo_found = 0, 0
+    hunter_added, hunter_found = 0, 0
 
     if settings.apollo_api_key:
         try:
@@ -281,17 +282,17 @@ async def enrich_company(
                               "phone": c.phone, "linkedin": c.linkedin_url}
                              for c in apollo.contacts],
             }
-            for ac in apollo.contacts[:3]:
-                if not ac.email:
+            apollo_found = len(apollo.contacts)
+            # Import every contact returned, even without email (name + title is still useful)
+            for ac in apollo.contacts:
+                if not ac.name and not ac.email:
                     continue
                 if await _ensure_contact(db, company_id, ac.name, ac.email, ac.title, ac.phone, ac.linkedin_url):
-                    contacts_added += 1
-                    if not source:
-                        source = "apollo"
-        except Exception:
-            pass
+                    apollo_added += 1
+        except Exception as e:
+            apollo_data = {"error": str(e)[:200]}
 
-    if contacts_added == 0 and settings.hunter_api_key:
+    if settings.hunter_api_key:
         try:
             hunter = await hunter_search(company.website, settings.hunter_api_key)
             hunter_data = {
@@ -303,16 +304,18 @@ async def enrich_company(
                               "position": c.position, "confidence": c.confidence, "type": c.type}
                              for c in hunter.contacts],
             }
-            for hc in hunter.contacts[:3]:
+            hunter_found = len(hunter.contacts)
+            # Import every contact Hunter returns (deduped by email via _ensure_contact)
+            for hc in hunter.contacts:
                 if not hc.email:
                     continue
                 full = f"{hc.first_name or ''} {hc.last_name or ''}".strip()
                 if await _ensure_contact(db, company_id, full, hc.email, hc.position, None, None):
-                    contacts_added += 1
-                    if not source:
-                        source = "hunter"
-        except Exception:
-            pass
+                    hunter_added += 1
+        except Exception as e:
+            hunter_data = {"error": str(e)[:200]}
+
+    contacts_added = apollo_added + hunter_added
 
     # Local SEO
     seo_data = None
@@ -336,8 +339,18 @@ async def enrich_company(
     except Exception:
         pass
 
-    db.add(Activity(company_id=company.id, user_id=user.id, activity_type="enriched",
-                    content=f"Enriched: {len(json.loads(company.problems_found) if company.problems_found else [])} problems found, {contacts_added} contact(s) added"))
+    db.add(Activity(
+        company_id=company.id, user_id=user.id, activity_type="enriched",
+        content=(
+            f"Enriched: {len(json.loads(company.problems_found) if company.problems_found else [])} problems · "
+            f"Apollo found {apollo_found}/added {apollo_added} · "
+            f"Hunter found {hunter_found}/added {hunter_added}"
+        ),
+        metadata_json=json.dumps({
+            "apollo_found": apollo_found, "apollo_added": apollo_added,
+            "hunter_found": hunter_found, "hunter_added": hunter_added,
+        }),
+    ))
     await db.commit()
     await db.refresh(company)
 
@@ -346,7 +359,10 @@ async def enrich_company(
         "name": company.name,
         "problems_found": len(json.loads(company.problems_found) if company.problems_found else []),
         "contacts_added": contacts_added,
-        "enrichment_source": source,
+        "apollo_found": apollo_found,
+        "apollo_added": apollo_added,
+        "hunter_found": hunter_found,
+        "hunter_added": hunter_added,
         "analysis": analysis_dict,
         "local_seo": seo_data,
         "summary": company.enrichment_summary,
@@ -413,20 +429,20 @@ async def pursue_companies(
                 company.problems_found = json.dumps(analysis.problems)
                 company.enrichment_summary = _summarize(analysis)
 
+                # Apollo + Hunter — both always run, import everything
                 if settings.apollo_api_key:
                     try:
                         apollo = await enrich_from_domain(company.website, settings.apollo_api_key)
-                        for ac in apollo.contacts[:3]:
-                            if ac.email:
+                        for ac in apollo.contacts:
+                            if ac.name or ac.email:
                                 await _ensure_contact(db, company.id, ac.name, ac.email, ac.title, ac.phone, ac.linkedin_url)
                     except Exception:
                         pass
 
-                primary = await _get_primary_contact(db, company.id)
-                if (not primary or not primary.email) and settings.hunter_api_key:
+                if settings.hunter_api_key:
                     try:
                         hunter = await hunter_search(company.website, settings.hunter_api_key)
-                        for hc in hunter.contacts[:2]:
+                        for hc in hunter.contacts:
                             if hc.email:
                                 full = f"{hc.first_name or ''} {hc.last_name or ''}".strip()
                                 await _ensure_contact(db, company.id, full, hc.email, hc.position, None, None)
