@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from datetime import datetime, timezone
 
 from app.database import get_db
-from app.models import User, Company, Contact, Activity, Tag, Task, GeneratedEmail
+from app.models import User, Company, Contact, Activity, Tag, Task, GeneratedEmail, company_tags
 from app.auth import get_current_user
 import json
 
@@ -155,8 +155,15 @@ async def add_tag_to_company(
     tag = (await db.execute(select(Tag).where(Tag.id == tag_id))).scalar_one_or_none()
     if not tag:
         raise HTTPException(status_code=404, detail="Tag not found")
-    if tag not in company.tags:
-        company.tags.append(tag)
+    # Manual association (async SQLAlchemy can't lazy-load company.tags)
+    existing = (await db.execute(
+        select(company_tags).where(
+            company_tags.c.company_id == company_id,
+            company_tags.c.tag_id == tag_id,
+        )
+    )).first()
+    if not existing:
+        await db.execute(company_tags.insert().values(company_id=company_id, tag_id=tag_id))
         await db.commit()
     return {"company_id": company_id, "tag": tag.name}
 
@@ -168,13 +175,13 @@ async def remove_tag_from_company(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    company = (await db.execute(select(Company).where(Company.id == company_id))).scalar_one_or_none()
-    if not company:
-        raise HTTPException(status_code=404, detail="Company not found")
-    tag = (await db.execute(select(Tag).where(Tag.id == tag_id))).scalar_one_or_none()
-    if tag and tag in company.tags:
-        company.tags.remove(tag)
-        await db.commit()
+    await db.execute(
+        company_tags.delete().where(
+            company_tags.c.company_id == company_id,
+            company_tags.c.tag_id == tag_id,
+        )
+    )
+    await db.commit()
     return {"removed": True}
 
 

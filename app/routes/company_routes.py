@@ -18,7 +18,7 @@ from sqlalchemy import select
 from pydantic import BaseModel
 
 from app.database import get_db
-from app.models import User, Company, Contact, Deal, GeneratedEmail, Activity
+from app.models import User, Company, Contact, Deal, GeneratedEmail, Activity, Tag, company_tags
 from app.auth import get_current_user
 from app.services.website_intel import analyze_website, analysis_to_dict
 from app.services.email_generator import generate_cold_email, generate_follow_up
@@ -150,8 +150,13 @@ async def get_company_full(
         for u in u_result.scalars().all():
             user_names[u.id] = u.full_name
 
-    # Tags
-    tag_list = [{"id": t.id, "name": t.name, "color": t.color} for t in company.tags]
+    # Tags (explicit query — async SQLAlchemy can't lazy-load relationships)
+    tag_result = await db.execute(
+        select(Tag)
+        .join(company_tags, company_tags.c.tag_id == Tag.id)
+        .where(company_tags.c.company_id == company_id)
+    )
+    tag_list = [{"id": t.id, "name": t.name, "color": t.color} for t in tag_result.scalars().all()]
 
     # Assigned user
     assigned_name = None
