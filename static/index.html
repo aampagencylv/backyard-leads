@@ -1395,15 +1395,24 @@
                         <div class="panel">
                             <h3 style="font-size:14px">Company Intel</h3>
                             <div style="font-size:12px;line-height:1.8">
+                                ${d.rating ? `<div><strong>Google:</strong> ★ ${d.rating} (${d.review_count || 0} reviews)</div>` : ''}
+                                ${d.business_type ? `<div><strong>Type:</strong> ${escapeHtml(d.business_type)}</div>` : ''}
                                 ${d.employee_count ? `<div><strong>Employees:</strong> ${d.employee_count}${d.company_size ? ` (${escapeHtml(d.company_size)})` : ''}</div>` : ''}
                                 ${d.industry ? `<div><strong>Industry:</strong> ${escapeHtml(d.industry)}</div>` : ''}
                                 ${d.founded ? `<div><strong>Founded:</strong> ${escapeHtml(d.founded)}</div>` : ''}
                                 ${d.follower_count ? `<div><strong>LinkedIn Followers:</strong> ${d.follower_count.toLocaleString()}</div>` : ''}
                                 ${d.specialties ? `<div><strong>Specialties:</strong> ${escapeHtml(d.specialties)}</div>` : ''}
-                                ${d.rating ? `<div><strong>Google Rating:</strong> ★ ${d.rating} (${d.review_count || 0} reviews)</div>` : ''}
-                                ${d.company_description ? `<div style="margin-top:4px;color:#555;font-style:italic">"${escapeHtml(d.company_description.slice(0, 200))}${d.company_description.length > 200 ? '...' : ''}"</div>` : ''}
-                                ${!d.employee_count && !d.industry && !d.founded ? '<div style="color:#888">No LinkedIn data found. This business may not have a LinkedIn page.</div>' : ''}
-                                ${d.linkedin_url ? `<div style="margin-top:4px"><a href="${escapeHtml(d.linkedin_url)}" target="_blank" style="color:#0077B5;text-decoration:none">View on LinkedIn →</a></div>` : ''}
+                                ${d.enrichment_summary ? `<div style="margin-top:4px;padding:6px 8px;background:#f8f9fa;border-radius:4px;font-size:11px;color:#555">${escapeHtml(d.enrichment_summary)}</div>` : ''}
+                                ${d.company_description ? `<div style="margin-top:4px;color:#555;font-style:italic;font-size:11px">"${escapeHtml(d.company_description.slice(0, 200))}${d.company_description.length > 200 ? '...' : ''}"</div>` : ''}
+                                ${d.linkedin_url ? `<div style="margin-top:4px"><a href="${escapeHtml(d.linkedin_url)}" target="_blank" style="color:#0077B5;text-decoration:none">View on LinkedIn →</a></div>` : `
+                                    <div style="margin-top:6px;padding-top:6px;border-top:1px solid #eee">
+                                        <div style="font-size:11px;color:#888;margin-bottom:4px">No LinkedIn company page found</div>
+                                        <div style="display:flex;gap:4px">
+                                            <input type="text" id="manual-linkedin-${d.id}" placeholder="Paste LinkedIn URL..." style="flex:1;padding:3px 6px;border:1px solid #ddd;border-radius:4px;font-size:11px">
+                                            <button class="btn btn-secondary btn-xs" onclick="saveCompanyLinkedIn(${d.id})">Save</button>
+                                        </div>
+                                    </div>
+                                `}
                             </div>
                         </div>
 
@@ -2065,6 +2074,17 @@
                 document.getElementById('modal-root').innerHTML = '';
                 loadCompanies(_lastCompaniesFilter);
             }
+        }
+
+        async function saveCompanyLinkedIn(companyId) {
+            const url = document.getElementById(`manual-linkedin-${companyId}`).value.trim();
+            if (!url) return;
+            await api(`/api/companies/${companyId}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ linkedin_url: url }),
+            });
+            toast('LinkedIn URL saved');
+            openCompanyDetail(companyId);
         }
 
         async function addTagToCompany(companyId) {
