@@ -451,13 +451,16 @@ async def enrich_company_by_domain(domain: str, api_key: str) -> Optional[Compan
                 data = r.json() or {}
                 company = data.get("data") or data
                 result.name = company.get("name")
-                result.employee_count = company.get("employeeCount")
+                result.employee_count = company.get("employeeCount") or company.get("employee_count")
                 result.industry = company.get("industry")
-                result.headquarters = company.get("headquarters")
+                result.headquarters = company.get("headquarters") or company.get("hq")
                 result.linkedin_id = str(company.get("id", ""))
-                result.linkedin_username = company.get("username")
-                if result.linkedin_username:
+                result.linkedin_username = company.get("universalName") or company.get("username") or company.get("universal_name")
+                result.linkedin_url = company.get("linkedinUrl") or company.get("linkedin_url")
+                if not result.linkedin_url and result.linkedin_username:
                     result.linkedin_url = f"https://linkedin.com/company/{result.linkedin_username}"
+                result.description = company.get("description") or company.get("tagline")
+                result.website = company.get("website")
         except httpx.HTTPError:
             pass
 
@@ -472,15 +475,18 @@ async def enrich_company_by_domain(domain: str, api_key: str) -> Optional[Compan
                 if r2.status_code == 200:
                     detail = r2.json() or {}
                     detail = detail.get("data") or detail
-                    result.company_size = detail.get("companySize") or detail.get("company_size")
-                    result.description = detail.get("description") or detail.get("tagline")
-                    result.founded = detail.get("founded") or result.founded
+                    result.company_size = detail.get("companySize") or detail.get("company_size") or detail.get("staffCount") or detail.get("staffCountRange")
+                    if not result.description:
+                        result.description = detail.get("description") or detail.get("tagline")
+                    result.founded = detail.get("founded") or detail.get("foundedOn") or result.founded
                     result.follower_count = detail.get("followerCount") or detail.get("follower_count")
                     if not result.employee_count:
-                        result.employee_count = detail.get("employeeCount")
-                    specialties = detail.get("specialties") or []
+                        result.employee_count = detail.get("employeeCount") or detail.get("staffCount")
+                    if not result.industry:
+                        result.industry = detail.get("industry") or detail.get("companyIndustries")
+                    specialties = detail.get("specialties") or detail.get("specialities") or []
                     if isinstance(specialties, list):
-                        result.specialties = ", ".join(specialties)
+                        result.specialties = ", ".join(str(s) for s in specialties)
                     elif isinstance(specialties, str):
                         result.specialties = specialties
             except httpx.HTTPError:
