@@ -145,3 +145,105 @@ async def update_user_role(
     target.role = req.role
     await db.commit()
     return {"id": target.id, "name": target.full_name, "role": target.role}
+
+
+class InviteUserRequest(BaseModel):
+    email: str
+    first_name: str
+    last_name: str
+    role: str = "sales_rep"
+    title: Optional[str] = None
+
+
+@router.post("/users/invite")
+async def invite_user(
+    req: InviteUserRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    """
+    Admin creates a new user account with a temporary password.
+    The user can change their password after first login.
+    """
+    allowed_domains = ["backyardmarketingpros.com", "aamp.agency"]
+    email_domain = req.email.strip().lower().split("@")[-1]
+    if email_domain not in allowed_domains:
+        raise HTTPException(status_code=400, detail="Email must be @backyardmarketingpros.com or @aamp.agency")
+
+    existing = await db.execute(select(User).where(User.email == req.email.lower()))
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    if req.role not in ("admin", "sales_rep", "read_only"):
+        raise HTTPException(status_code=400, detail="Invalid role")
+
+    # Generate a temporary password
+    import secrets
+    temp_password = secrets.token_urlsafe(12)
+
+    new_user = User(
+        email=req.email.lower(),
+        first_name=req.first_name.strip(),
+        last_name=req.last_name.strip(),
+        nickname=req.title or "",
+        hashed_password=hash_password(temp_password),
+        role=req.role,
+    )
+    db.add(new_user)
+    await db.commit()
+    await db.refresh(new_user)
+
+    return {
+        "id": new_user.id,
+        "email": new_user.email,
+        "name": new_user.full_name,
+        "role": new_user.role,
+        "temp_password": temp_password,
+        "message": f"User created. Temporary password: {temp_password} — share this securely with the user.",
+    }
+
+
+class UpdateUserRequest(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    nickname: Optional[str] = None  # title/nickname
+    role: Optional[str] = None
+    sending_enabled: Optional[bool] = None
+    is_active: Optional[bool] = None
+
+
+@router.patch("/users/{user_id}")
+async def update_user(
+    user_id: int,
+    req: UpdateUserRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    """Update any user's profile (admin only)."""
+    target = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if req.first_name is not None:
+        target.first_name = req.first_name
+    if req.last_name is not None:
+        target.last_name = req.last_name
+    if req.nickname is not None:
+        target.nickname = req.nickname
+    if req.role is not None and req.role in ("admin", "sales_rep", "read_only"):
+        target.role = req.role
+    if req.sending_enabled is not None:
+        target.sending_enabled = req.sending_enabled
+    if req.is_active is not None:
+        target.is_active = req.is_active
+
+    await db.commit()
+    return {
+        "id": target.id,
+        "email": target.email,
+        "name": target.full_name,
+        "role": target.role,
+        "nickname": target.nickname,
+        "sending_enabled": target.sending_enabled,
+        "is_active": target.is_active,
+    }

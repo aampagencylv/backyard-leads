@@ -88,6 +88,279 @@ async def list_companies(
     return [_company_summary(c) for c in companies]
 
 
+# ============================================================
+# Manual company creation + CSV upload
+# ============================================================
+
+class CreateCompanyRequest(BaseModel):
+    name: str
+    website: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    business_type: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    # Optional first contact
+    contact_first_name: Optional[str] = None
+    contact_last_name: Optional[str] = None
+    contact_email: Optional[str] = None
+    contact_phone: Optional[str] = None
+    contact_title: Optional[str] = None
+    contact_linkedin: Optional[str] = None
+    # Assignment
+    assigned_to: Optional[int] = None
+    auto_enrich: bool = True
+
+
+@router.post("/")
+async def create_company(
+    req: CreateCompanyRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Manually add a company with optional first contact. Auto-enriches if website provided."""
+    company = Company(
+        name=req.name,
+        website=req.website,
+        phone=req.phone,
+        address=req.address,
+        city=req.city,
+        state=req.state,
+        business_type=req.business_type,
+        linkedin_url=req.linkedin_url,
+        assigned_to=req.assigned_to,
+        status="new",
+    )
+    db.add(company)
+    await db.flush()
+
+    # Create contact if any contact info provided
+    contact = None
+    if req.contact_first_name or req.contact_email:
+        import secrets as _secrets
+        contact = Contact(
+            company_id=company.id,
+            first_name=req.contact_first_name or "",
+            last_name=req.contact_last_name or "",
+            email=req.contact_email,
+            phone=req.contact_phone,
+            title=req.contact_title,
+            linkedin_url=req.contact_linkedin,
+            is_primary=True,
+            unsubscribe_token=_secrets.token_urlsafe(32),
+        )
+        db.add(contact)
+
+    db.add(Activity(
+        company_id=company.id, user_id=user.id,
+        activity_type="company_created",
+        content=f"Manually added company: {company.name}",
+    ))
+
+    await db.commit()
+    await db.refresh(company)
+
+    # Auto-enrich in background if website provided
+    result = {"id": company.id, "name": company.name, "status": company.status}
+    if req.auto_enrich and company.website:
+        try:
+            # Trigger enrichment (same as the enrich endpoint)
+            enrich_result = await enrich_company(company.id, db=db, user=user)
+            result["enriched"] = True
+            result["problems_found"] = enrich_result.get("problems_found", 0)
+        except Exception:
+            result["enriched"] = False
+
+    return result
+
+
+class CSVUploadRow(BaseModel):
+    first_name: str = ""
+    last_name: str = ""
+    company_name: str = ""
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    website: Optional[str] = None
+    title: Optional[str] = None
+    linkedin_url: Optional[str] = None
+
+
+class CSVUploadRequest(BaseModel):
+    rows: list
+    assigned_to: Optional[int] = None
+    auto_enrich: bool = True
+    auto_sequence: bool = True
+
+
+@router.post("/upload")
+async def upload_contacts(
+    req: CSVUploadRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Bulk upload contacts with companies. Each row creates a company + contact.
+    Optionally auto-enriches and auto-generates sequences.
+    """
+    import secrets as _secrets
+
+    results = {"created": 0, "skipped": 0, "enriched": 0, "sequences": 0, "errors": []}
+
+    for i, row in enumerate(req.rows):
+        try:
+            company_name = row.get("company_name", "").strip()
+            if not company_name:
+                results["errors"].append(f"Row {i+1}: missing company name")
+                results["skipped"] += 1
+                continue
+
+            # Dedup by company name + website
+            website = row.get("website", "").strip() or None
+            existing = None
+            if website:
+                domain = website.replace("https://", "").replace("http://", "").split("/")[0].replace("www.", "")
+                existing = (await db.execute(
+                    select(Company).where(Company.website.ilike(f"%{domain}%"))
+                )).scalars().first()
+            if not existing:
+                existing = (await db.execute(
+                    select(Company).where(Company.name == company_name)
+                )).scalars().first()
+
+            if existing:
+                company = existing
+            else:
+                company = Company(
+                    name=company_name,
+                    website=website,
+                    phone=row.get("phone", "").strip() or None,
+                    assigned_to=req.assigned_to,
+                    status="new",
+                )
+                db.add(company)
+                await db.flush()
+
+            # Create contact
+            email = row.get("email", "").strip() or None
+            first_name = row.get("first_name", "").strip()
+            last_name = row.get("last_name", "").strip()
+
+            if email:
+                # Check if contact already exists at this company
+                existing_contact = (await db.execute(
+                    select(Contact).where(Contact.company_id == company.id, Contact.email == email)
+                )).scalars().first()
+
+                if not existing_contact:
+                    contact = Contact(
+                        company_id=company.id,
+                        first_name=first_name,
+                        last_name=last_name,
+                        email=email,
+                        phone=row.get("phone", "").strip() or None,
+                        title=row.get("title", "").strip() or None,
+                        linkedin_url=row.get("linkedin_url", "").strip() or None,
+                        is_primary=True,
+                        unsubscribe_token=_secrets.token_urlsafe(32),
+                    )
+                    db.add(contact)
+                    await db.flush()
+
+            results["created"] += 1
+            await db.commit()
+
+            # Auto-enrich
+            if req.auto_enrich and company.website and not company.enriched:
+                try:
+                    await enrich_company(company.id, db=db, user=user)
+                    results["enriched"] += 1
+                except Exception:
+                    pass
+
+            # Auto-sequence for the primary contact
+            if req.auto_sequence and email:
+                primary = (await db.execute(
+                    select(Contact).where(
+                        Contact.company_id == company.id,
+                        Contact.email.isnot(None),
+                    ).order_by(Contact.is_primary.desc())
+                )).scalars().first()
+
+                if primary:
+                    existing_emails = (await db.execute(
+                        select(GeneratedEmail).where(GeneratedEmail.contact_id == primary.id)
+                    )).scalars().first()
+
+                    if not existing_emails:
+                        problems = json.loads(company.problems_found) if company.problems_found else []
+                        if problems:
+                            try:
+                                now = datetime.now(timezone.utc)
+                                company.sequence_started_at = now
+                                first_subject = None
+
+                                for step in SEQUENCE_SCHEDULE:
+                                    stype = step.get("step_type", "email")
+                                    if stype == "linkedin":
+                                        msg_type = "connect" if "connect" in step["type"] else "message"
+                                        edata = await generate_linkedin_message(
+                                            business_name=company.name,
+                                            business_type=company.business_type or "home services",
+                                            problems=problems,
+                                            contact_name=primary.full_name,
+                                            message_type=msg_type,
+                                        )
+                                    elif step["type"] == "cold":
+                                        edata = await generate_cold_email(
+                                            business_name=company.name,
+                                            business_type=company.business_type or "home services",
+                                            website=company.website or "",
+                                            problems=problems,
+                                            contact_name=primary.full_name,
+                                            location=f"{company.city}, {company.state}" if company.city else None,
+                                        )
+                                        first_subject = edata["subject"]
+                                    else:
+                                        edata = await generate_follow_up(
+                                            business_name=company.name,
+                                            business_type=company.business_type or "home services",
+                                            problems=problems,
+                                            previous_email_subject=first_subject or company.name,
+                                            follow_up_number=step["order"] - 1,
+                                            contact_name=primary.full_name,
+                                        )
+
+                                    db.add(GeneratedEmail(
+                                        contact_id=primary.id, company_id=company.id,
+                                        step_type=stype, subject=edata["subject"], body=edata["body"],
+                                        email_type=step["type"], sequence_order=step["order"],
+                                        send_delay_days=step["delay_days"],
+                                        scheduled_send_at=now + timedelta(days=step["delay_days"]),
+                                    ))
+
+                                    if stype != "email":
+                                        db.add(Task(
+                                            company_id=company.id, contact_id=primary.id,
+                                            user_id=req.assigned_to or user.id,
+                                            description=f"{stype.title()}: {edata['subject']}",
+                                            due_date=now + timedelta(days=step["delay_days"]),
+                                        ))
+
+                                company.email_generated = True
+                                company.status = "sequencing"
+                                await db.commit()
+                                results["sequences"] += 1
+                            except Exception:
+                                pass
+
+        except Exception as e:
+            results["errors"].append(f"Row {i+1}: {str(e)[:80]}")
+            results["skipped"] += 1
+
+    return results
+
+
 @router.get("/{company_id}/full")
 async def get_company_full(
     company_id: int,
