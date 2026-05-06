@@ -1309,7 +1309,7 @@
                     </div>
                     <div style="display:flex;gap:8px;align-items:center">
                         <span class="status-badge status-${d.status}" style="font-size:13px;padding:4px 12px">${d.status}</span>
-                        ${d.website && !d.enriched ? `<button class="btn btn-secondary btn-sm" onclick="enrichContactsFromCompany(${d.id})">Enrich</button>` : ''}
+                        ${d.website ? `<button class="btn btn-secondary btn-sm" onclick="enrichContactsFromCompany(${d.id})">${d.enriched ? 'Re-Enrich' : 'Enrich'}</button>` : ''}
                     </div>
                 </div>
 
@@ -1828,13 +1828,18 @@
         }
 
         async function enrichContactsFromCompany(companyId) {
-            toast('Looking up decision makers via Netrows + Hunter...');
+            toast('Enriching — analyzing website, looking up contacts, pulling LinkedIn company data...');
             const data = await api(`/api/companies/${companyId}/enrich`, { method: 'POST' });
             if (data) {
-                const n = `Netrows ${data.netrows_found ?? 0}→${data.netrows_added ?? 0}`;
-                const a = `Apollo ${data.apollo_found ?? 0}→${data.apollo_added ?? 0}`;
-                const h = `Hunter ${data.hunter_found ?? 0}→${data.hunter_added ?? 0}`;
-                toast(`${data.contacts_added || 0} new contact(s) · ${n} · ${a} · ${h}`);
+                const parts = [];
+                if (data.problems_found) parts.push(`${data.problems_found} problems found`);
+                if (data.contacts_added) parts.push(`${data.contacts_added} new contact(s)`);
+                const n = data.netrows_found ?? 0;
+                const h = data.hunter_found ?? 0;
+                if (n) parts.push(`Netrows: ${n} found`);
+                if (h) parts.push(`Hunter: ${h} found`);
+                if (!parts.length) parts.push('Enrichment complete — data updated');
+                toast(parts.join(' · '));
                 openCompanyDetail(companyId);
             }
         }
