@@ -220,6 +220,163 @@ async def delete_email(
 
 
 # ============================================================
+# Reschedule a step
+# ============================================================
+
+class RescheduleRequest(BaseModel):
+    delay_days: Optional[int] = None
+    scheduled_date: Optional[str] = None  # ISO format
+
+
+@router.patch("/email/{email_id}/reschedule")
+async def reschedule_step(
+    email_id: int,
+    req: RescheduleRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Reschedule a sequence step to a different day."""
+    step = (await db.execute(select(GeneratedEmail).where(GeneratedEmail.id == email_id))).scalar_one_or_none()
+    if not step:
+        raise HTTPException(status_code=404, detail="Step not found")
+    if step.is_sent:
+        raise HTTPException(status_code=400, detail="Cannot reschedule a completed step")
+
+    if req.scheduled_date:
+        step.scheduled_send_at = datetime.fromisoformat(req.scheduled_date)
+    elif req.delay_days is not None:
+        step.send_delay_days = req.delay_days
+        # Recalculate from sequence start
+        company = (await db.execute(select(Company).where(Company.id == step.company_id))).scalar_one_or_none()
+        if company and company.sequence_started_at:
+            from datetime import timedelta
+            step.scheduled_send_at = company.sequence_started_at + timedelta(days=req.delay_days)
+
+    await db.commit()
+    return {
+        "id": step.id,
+        "send_delay_days": step.send_delay_days,
+        "scheduled_send_at": step.scheduled_send_at.isoformat() if step.scheduled_send_at else None,
+    }
+
+
+# ============================================================
+# Insert a new step into a sequence
+# ============================================================
+
+class InsertStepRequest(BaseModel):
+    step_type: str  # email, linkedin, call, text, custom
+    subject: str
+    body: str
+    delay_days: int = 0
+    after_order: Optional[int] = None  # Insert after this sequence_order; None = append at end
+
+
+@router.post("/contact/{contact_id}/add-step")
+async def add_sequence_step(
+    contact_id: int,
+    req: InsertStepRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Add a custom step to a contact's sequence (email, LinkedIn, call, text, or custom task)."""
+    contact = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    company = (await db.execute(select(Company).where(Company.id == contact.company_id))).scalar_one_or_none()
+
+    # Get existing steps to determine order
+    existing = (await db.execute(
+        select(GeneratedEmail).where(GeneratedEmail.contact_id == contact_id).order_by(GeneratedEmail.sequence_order)
+    )).scalars().all()
+
+    if req.after_order is not None:
+        new_order = req.after_order + 1
+        # Shift all steps after this point
+        for s in existing:
+            if s.sequence_order >= new_order:
+                s.sequence_order += 1
+    else:
+        new_order = (max(s.sequence_order for s in existing) + 1) if existing else 1
+
+    scheduled_at = None
+    if company and company.sequence_started_at:
+        from datetime import timedelta
+        scheduled_at = company.sequence_started_at + timedelta(days=req.delay_days)
+
+    step = GeneratedEmail(
+        contact_id=contact_id,
+        company_id=contact.company_id,
+        step_type=req.step_type,
+        subject=req.subject,
+        body=req.body,
+        email_type=req.step_type,
+        sequence_order=new_order,
+        send_delay_days=req.delay_days,
+        scheduled_send_at=scheduled_at,
+    )
+    db.add(step)
+
+    # For non-email steps, auto-create a BDR task
+    if req.step_type != "email":
+        assigned_user = company.assigned_to if company else user.id
+        task = Task(
+            company_id=contact.company_id,
+            contact_id=contact_id,
+            user_id=assigned_user or user.id,
+            description=f"{req.step_type.title()}: {req.subject}",
+            due_date=scheduled_at,
+        )
+        db.add(task)
+
+        db.add(Activity(
+            company_id=contact.company_id, contact_id=contact_id, user_id=user.id,
+            activity_type="step_added",
+            content=f"Added {req.step_type} step to sequence: {req.subject}",
+        ))
+
+    await db.commit()
+    await db.refresh(step)
+
+    return {
+        "id": step.id,
+        "step_type": step.step_type,
+        "subject": step.subject,
+        "sequence_order": step.sequence_order,
+        "send_delay_days": step.send_delay_days,
+    }
+
+
+# ============================================================
+# Mark a non-email step as completed
+# ============================================================
+
+@router.post("/email/{email_id}/complete")
+async def complete_step(
+    email_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Mark a LinkedIn/call/text/custom step as done (BDR completed the task)."""
+    step = (await db.execute(select(GeneratedEmail).where(GeneratedEmail.id == email_id))).scalar_one_or_none()
+    if not step:
+        raise HTTPException(status_code=404, detail="Step not found")
+
+    step.is_sent = True
+    step.sent_at = datetime.now(timezone.utc)
+
+    db.add(Activity(
+        company_id=step.company_id, contact_id=step.contact_id, user_id=user.id,
+        activity_type=f"{step.step_type}_completed",
+        content=f"Completed: {step.subject}",
+    ))
+
+    await db.commit()
+    return {"id": step.id, "completed": True}
+
+
+# ============================================================
 # Pause / resume sequence (manual, in addition to auto-pause-on-reply)
 # ============================================================
 

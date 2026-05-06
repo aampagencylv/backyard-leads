@@ -180,3 +180,76 @@ Return as JSON: {{"subject": "...", "body": "..."}}
         return {"subject": result["subject"], "body": body}
     except (json.JSONDecodeError, KeyError):
         return {"subject": f"re: {previous_email_subject}", "body": text}
+
+
+async def generate_linkedin_message(
+    business_name: str,
+    business_type: str,
+    problems: list,
+    contact_name: Optional[str] = None,
+    message_type: str = "connect",  # connect or message
+) -> dict:
+    """
+    Generate a LinkedIn connection request note or direct message.
+    Returns dict with 'subject' (task title) and 'body' (the message).
+    """
+    first_name = _extract_first_name(contact_name)
+    problems_context = json.dumps(problems[:2], indent=2)
+
+    if message_type == "connect":
+        user_prompt = f"""Write a LinkedIn connection request note for a prospect.
+
+Business: {business_name}
+Type: {business_type}
+Contact first name: {first_name or "there"}
+
+One problem we found:
+{problems_context}
+
+RULES:
+- LinkedIn connection notes have a 300 character HARD LIMIT. Stay under 280 characters.
+- Don't pitch. Just be curious/relevant. Reference something specific about their business.
+- Make them want to accept. "Hey John, saw your pool work in Phoenix — impressive portfolio. Love to connect with fellow backyard pros."
+- NO sign-off. NO "I'd love to". Just natural.
+
+Return as JSON: {{"subject": "LinkedIn connect: {first_name or business_name}", "body": "..."}}
+"""
+    else:
+        user_prompt = f"""Write a LinkedIn direct message to a prospect we're already connected with.
+
+Business: {business_name}
+Type: {business_type}
+Contact first name: {first_name or "there"}
+
+Problems we found on their website:
+{problems_context}
+
+RULES:
+- Under 150 words. LinkedIn messages should be shorter than email.
+- Reference a specific insight about their business (from the problems).
+- CTA: offer something specific — "happy to send you a quick breakdown" or "want me to show you what [competitor] is doing differently?"
+- Casual LinkedIn tone. Like you're messaging a connection, not writing an email.
+- Start with "Hey {first_name}" — NO sign-off at the end.
+
+Return as JSON: {{"subject": "LinkedIn message: {first_name or business_name}", "body": "..."}}
+"""
+
+    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+
+    response = await client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=300,
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_prompt}],
+    )
+
+    text = response.content[0].text
+    try:
+        if "```json" in text:
+            text = text.split("```json")[1].split("```")[0]
+        elif "```" in text:
+            text = text.split("```")[1].split("```")[0]
+        result = json.loads(text)
+        return {"subject": result["subject"], "body": result["body"]}
+    except (json.JSONDecodeError, KeyError):
+        return {"subject": f"LinkedIn: {first_name or business_name}", "body": text}

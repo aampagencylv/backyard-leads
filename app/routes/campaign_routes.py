@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from app.database import get_db
 from app.models import (
     User, Company, Contact, Deal, Campaign, CampaignLog,
-    GeneratedEmail, Activity, campaign_members,
+    GeneratedEmail, Activity, Task, campaign_members,
 )
 from app.auth import get_current_user, require_admin
 from app.config import settings
@@ -28,17 +28,19 @@ from app.services.netrows_enrichment import (
     enrich_company_by_domain as netrows_company_enrich,
 )
 from app.services.hunter_enrichment import search_domain as hunter_search
-from app.services.email_generator import generate_cold_email, generate_follow_up
+from app.services.email_generator import generate_cold_email, generate_follow_up, generate_linkedin_message
 import secrets
 
 router = APIRouter(prefix="/api/campaigns", tags=["campaigns"])
 
 
 SEQUENCE_SCHEDULE = [
-    {"order": 1, "type": "cold", "delay_days": 0},
-    {"order": 2, "type": "follow_up_1", "delay_days": 3},
-    {"order": 3, "type": "follow_up_2", "delay_days": 7},
-    {"order": 4, "type": "breakup", "delay_days": 14},
+    {"order": 1, "type": "cold", "step_type": "email", "delay_days": 0},
+    {"order": 2, "type": "linkedin_connect", "step_type": "linkedin", "delay_days": 1},
+    {"order": 3, "type": "follow_up_1", "step_type": "email", "delay_days": 3},
+    {"order": 4, "type": "linkedin_message", "step_type": "linkedin", "delay_days": 5},
+    {"order": 5, "type": "follow_up_2", "step_type": "email", "delay_days": 7},
+    {"order": 6, "type": "breakup", "step_type": "email", "delay_days": 14},
 ]
 
 
@@ -480,7 +482,18 @@ async def _execute_batch(campaign_id: int, db: AsyncSession, user: User):
                     seq_now = datetime.now(timezone.utc)
 
                     for step in SEQUENCE_SCHEDULE:
-                        if step["order"] == 1:
+                        stype = step.get("step_type", "email")
+
+                        if stype == "linkedin":
+                            msg_type = "connect" if "connect" in step["type"] else "message"
+                            email_data = await generate_linkedin_message(
+                                business_name=company.name,
+                                business_type=business_type,
+                                problems=problems,
+                                contact_name=primary_contact.full_name,
+                                message_type=msg_type,
+                            )
+                        elif step["type"] == "cold":
                             email_data = await generate_cold_email(
                                 business_name=company.name,
                                 business_type=business_type,
@@ -500,9 +513,10 @@ async def _execute_batch(campaign_id: int, db: AsyncSession, user: User):
                                 contact_name=primary_contact.full_name,
                             )
 
-                        gen_email = GeneratedEmail(
+                        gen_step = GeneratedEmail(
                             company_id=company.id,
                             contact_id=primary_contact.id,
+                            step_type=stype,
                             subject=email_data["subject"],
                             body=email_data["body"],
                             email_type=step["type"],
@@ -511,8 +525,19 @@ async def _execute_batch(campaign_id: int, db: AsyncSession, user: User):
                             scheduled_send_at=seq_now + timedelta(days=step["delay_days"]),
                             problems_referenced=json.dumps(problems[:2]),
                         )
-                        db.add(gen_email)
+                        db.add(gen_step)
                         await db.flush()
+
+                        # Auto-create BDR task for non-email steps
+                        if stype != "email":
+                            db.add(Task(
+                                company_id=company.id,
+                                contact_id=primary_contact.id,
+                                user_id=assigned_user.id,
+                                description=f"{stype.title()}: {email_data['subject']}",
+                                due_date=seq_now + timedelta(days=step["delay_days"]),
+                            ))
+
                         emails_created += 1
 
                     company.email_generated = True

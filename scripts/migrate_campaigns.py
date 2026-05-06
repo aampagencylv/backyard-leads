@@ -73,6 +73,13 @@ async def migrate():
             """))
             print("migrate_campaigns: created campaign_logs table")
 
+        # Add step_type to generated_emails
+        ge_cols = await conn.execute(text("PRAGMA table_info(generated_emails)"))
+        ge_col_names = [r[1] for r in ge_cols.fetchall()]
+        if "step_type" not in ge_col_names:
+            await conn.execute(text("ALTER TABLE generated_emails ADD COLUMN step_type VARCHAR(20) DEFAULT 'email'"))
+            print("migrate_campaigns: added generated_emails.step_type")
+
 
 if __name__ == "__main__":
     asyncio.run(migrate())

@@ -180,21 +180,27 @@ class Deal(Base):
 
 
 class GeneratedEmail(Base):
+    """
+    A step in a multi-channel outreach sequence.
+    Despite the table name, this now handles emails, LinkedIn messages, calls, texts, and custom tasks.
+    """
     __tablename__ = "generated_emails"
 
     id = Column(Integer, primary_key=True, index=True)
     contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=False)
-    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)  # denormalized for fast company timeline queries
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
 
-    subject = Column(String(500), nullable=False)
-    body = Column(Text, nullable=False)
-    email_type = Column(String(50), default="cold")
+    # Step type: email = auto-sendable, others = BDR task
+    step_type = Column(String(20), default="email")  # email, linkedin, call, text, custom
+    subject = Column(String(500), nullable=False)  # email subject, or task title for non-email
+    body = Column(Text, nullable=False)  # email body, or LinkedIn message / call script / task notes
+    email_type = Column(String(50), default="cold")  # cold, follow_up_1, follow_up_2, breakup, linkedin_connect, linkedin_message, call, text
     sequence_order = Column(Integer, default=1)
     send_delay_days = Column(Integer, default=0)
     scheduled_send_at = Column(DateTime, nullable=True)
-    sent_at = Column(DateTime, nullable=True)
-    is_sent = Column(Boolean, default=False)
-    paused_at = Column(DateTime, nullable=True)  # set when sequence is paused (e.g. on reply)
+    sent_at = Column(DateTime, nullable=True)  # when email was sent or task was completed
+    is_sent = Column(Boolean, default=False)  # for emails: actually sent. For tasks: completed by BDR.
+    paused_at = Column(DateTime, nullable=True)
     problems_referenced = Column(Text)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 

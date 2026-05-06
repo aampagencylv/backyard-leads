@@ -18,10 +18,10 @@ from sqlalchemy import select
 from pydantic import BaseModel
 
 from app.database import get_db
-from app.models import User, Company, Contact, Deal, GeneratedEmail, Activity, Tag, company_tags
+from app.models import User, Company, Contact, Deal, GeneratedEmail, Activity, Task, Tag, company_tags
 from app.auth import get_current_user
 from app.services.website_intel import analyze_website, analysis_to_dict
-from app.services.email_generator import generate_cold_email, generate_follow_up
+from app.services.email_generator import generate_cold_email, generate_follow_up, generate_linkedin_message
 from app.services.hunter_enrichment import search_domain as hunter_search
 from app.services.netrows_enrichment import (
     find_decision_makers as netrows_find_decision_makers,
@@ -426,10 +426,12 @@ class PursueRequest(BaseModel):
 
 
 SEQUENCE_SCHEDULE = [
-    {"order": 1, "type": "cold",         "delay_days": 0,  "label": "Initial outreach"},
-    {"order": 2, "type": "follow_up_1",  "delay_days": 3,  "label": "Follow-up #1"},
-    {"order": 3, "type": "follow_up_2",  "delay_days": 7,  "label": "Follow-up #2"},
-    {"order": 4, "type": "breakup",      "delay_days": 14, "label": "Breakup email"},
+    {"order": 1, "type": "cold",             "step_type": "email",    "delay_days": 0,  "label": "Initial outreach"},
+    {"order": 2, "type": "linkedin_connect", "step_type": "linkedin", "delay_days": 1,  "label": "LinkedIn connect"},
+    {"order": 3, "type": "follow_up_1",      "step_type": "email",    "delay_days": 3,  "label": "Follow-up #1"},
+    {"order": 4, "type": "linkedin_message", "step_type": "linkedin", "delay_days": 5,  "label": "LinkedIn message"},
+    {"order": 5, "type": "follow_up_2",      "step_type": "email",    "delay_days": 7,  "label": "Follow-up #2"},
+    {"order": 6, "type": "breakup",          "step_type": "email",    "delay_days": 14, "label": "Breakup email"},
 ]
 
 
@@ -539,7 +541,18 @@ async def pursue_companies(
 
             for step in SEQUENCE_SCHEDULE:
                 try:
-                    if step["order"] == 1:
+                    stype = step.get("step_type", "email")
+
+                    if stype == "linkedin":
+                        msg_type = "connect" if "connect" in step["type"] else "message"
+                        email_data = await generate_linkedin_message(
+                            business_name=company.name,
+                            business_type=company.business_type or "home services",
+                            problems=problems,
+                            contact_name=primary.full_name or None,
+                            message_type=msg_type,
+                        )
+                    elif step["type"] == "cold":
                         email_data = await generate_cold_email(
                             business_name=company.name,
                             business_type=company.business_type or "home services",
@@ -559,9 +572,10 @@ async def pursue_companies(
                             contact_name=primary.full_name or None,
                         )
 
-                    email = GeneratedEmail(
+                    gen_step = GeneratedEmail(
                         contact_id=primary.id,
                         company_id=company.id,
+                        step_type=stype,
                         subject=email_data["subject"],
                         body=email_data["body"],
                         email_type=step["type"],
@@ -570,8 +584,19 @@ async def pursue_companies(
                         scheduled_send_at=now + timedelta(days=step["delay_days"]),
                         problems_referenced=json.dumps(problems[:2]),
                     )
-                    db.add(email)
+                    db.add(gen_step)
                     await db.flush()
+
+                    # Auto-create BDR task for non-email steps
+                    if stype != "email":
+                        db.add(Task(
+                            company_id=company.id,
+                            contact_id=primary.id,
+                            user_id=company.assigned_to or user.id,
+                            description=f"{stype.title()}: {email_data['subject']}",
+                            due_date=now + timedelta(days=step["delay_days"]),
+                        ))
+
                     emails_created += 1
                 except Exception:
                     continue
@@ -695,6 +720,7 @@ def _company_summary(c: Company) -> dict:
 def _email_to_dict(e: GeneratedEmail) -> dict:
     return {
         "id": e.id,
+        "step_type": e.step_type or "email",
         "subject": e.subject,
         "body": e.body,
         "email_type": e.email_type,
