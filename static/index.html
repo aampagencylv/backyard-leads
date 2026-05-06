@@ -162,6 +162,41 @@
         .stat-card .number.orange { color: var(--bmp-orange); }
         .stat-card .label { font-size: 13px; color: #666; margin-top: 4px; }
 
+        /* Dashboard KPI tiles */
+        .kpi-strip { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 20px; }
+        .kpi-tile { background: white; border-radius: 10px; padding: 16px 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); text-align: center; cursor: pointer; transition: transform .15s, box-shadow .15s; border: 1px solid transparent; }
+        .kpi-tile:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0,0,0,0.1); border-color: rgba(27,94,32,0.2); }
+        .kpi-tile .kpi-value { font-size: 22px; font-weight: 700; color: var(--bmp-green); }
+        .kpi-tile .kpi-value.orange { color: var(--bmp-orange); }
+        .kpi-tile .kpi-label { font-size: 11px; color: #777; margin-top: 4px; text-transform: uppercase; letter-spacing: 0.4px; }
+
+        /* Dashboard 2-col */
+        .dashboard-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+        @media (max-width: 1100px) { .dashboard-2col, .kpi-strip { grid-template-columns: repeat(3, 1fr); } }
+        @media (max-width: 720px) { .dashboard-2col, .kpi-strip { grid-template-columns: 1fr; } }
+
+        /* Pipeline bars */
+        .pipeline-bar-row { display: grid; grid-template-columns: 110px 1fr 200px; gap: 12px; align-items: center; padding: 6px 0; font-size: 13px; }
+        .pipeline-bar-row .stage-label { font-weight: 500; text-transform: capitalize; color: #555; }
+        .pipeline-bar-row .bar-track { background: #ecf0ec; border-radius: 4px; height: 18px; overflow: hidden; }
+        .pipeline-bar-row .bar-fill { height: 100%; background: linear-gradient(90deg, var(--bmp-green) 0%, var(--bmp-green-light) 100%); }
+        .pipeline-bar-row .bar-fill.closed_won { background: linear-gradient(90deg, #27ae60 0%, #2ecc71 100%); }
+        .pipeline-bar-row .bar-fill.closed_lost { background: #95a5a6; }
+        .pipeline-bar-row .bar-stats { font-size: 12px; color: #666; text-align: right; }
+
+        /* Hot lead row */
+        .hot-row { padding: 10px 12px; border-radius: 8px; background: #fff5f0; border: 1px solid #ffe5d8; margin-bottom: 8px; cursor: pointer; transition: background .15s; }
+        .hot-row:hover { background: #ffeadf; }
+        .hot-row .hot-name { font-weight: 600; font-size: 13px; }
+        .hot-row .hot-signals { font-size: 11px; color: #888; margin-top: 2px; }
+        .hot-row .hot-score { float: right; background: var(--bmp-orange); color: white; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+
+        /* Queued / stuck list rows */
+        .dash-row { padding: 8px 0; border-bottom: 1px solid #f0f0f0; font-size: 13px; cursor: pointer; }
+        .dash-row:last-child { border-bottom: none; }
+        .dash-row:hover { background: #fafafa; }
+        .dash-row .dash-meta { font-size: 11px; color: #888; margin-top: 2px; }
+
         /* Misc */
         .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid #ddd; border-top-color: var(--bmp-orange); border-radius: 50%; animation: spin 0.6s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
@@ -268,15 +303,72 @@
             <!-- Dashboard -->
             <div id="page-dashboard">
                 <div class="page-header"><h1>Dashboard</h1></div>
-                <div class="stats-row">
-                    <div class="stat-card"><div class="number" id="stat-companies">0</div><div class="label">Total Companies</div></div>
-                    <div class="stat-card"><div class="number orange" id="stat-pipeline-value">$0</div><div class="label">Pipeline Value</div></div>
-                    <div class="stat-card"><div class="number" id="stat-forecast">$0</div><div class="label">Weighted Forecast</div></div>
-                    <div class="stat-card"><div class="number" id="stat-tasks-open">0</div><div class="label">My Open Tasks</div></div>
+
+                <!-- Zone 1: KPI strip -->
+                <div class="kpi-strip" id="kpi-strip">
+                    <div class="kpi-tile" onclick="showPage('pipeline')">
+                        <div class="kpi-value orange" id="kpi-pipeline-value">—</div>
+                        <div class="kpi-label">Pipeline Value</div>
+                    </div>
+                    <div class="kpi-tile" onclick="showPage('pipeline')">
+                        <div class="kpi-value" id="kpi-forecast">—</div>
+                        <div class="kpi-label">Weighted Forecast</div>
+                    </div>
+                    <div class="kpi-tile">
+                        <div class="kpi-value" id="kpi-won-mtd">—</div>
+                        <div class="kpi-label">Won This Month</div>
+                    </div>
+                    <div class="kpi-tile">
+                        <div class="kpi-value" id="kpi-hot-leads" style="color:#c0392b">—</div>
+                        <div class="kpi-label">Hot Leads</div>
+                    </div>
+                    <div class="kpi-tile" onclick="showPage('tasks')">
+                        <div class="kpi-value" id="kpi-tasks">—</div>
+                        <div class="kpi-label">My Open Tasks</div>
+                    </div>
+                    <div class="kpi-tile">
+                        <div class="kpi-value" id="kpi-sent-week">—</div>
+                        <div class="kpi-label">Emails Sent This Week</div>
+                    </div>
                 </div>
+
+                <!-- Zone 2 + 3 side-by-side -->
+                <div class="dashboard-2col">
+                    <!-- Today's focus -->
+                    <div>
+                        <div class="panel">
+                            <h3>Due Today <span id="todays-tasks-count" style="color:#888;font-size:12px;font-weight:400"></span></h3>
+                            <div id="todays-tasks-list"></div>
+                        </div>
+                        <div class="panel">
+                            <h3>Sequences Ready to Send <span id="queued-emails-count" style="color:#888;font-size:12px;font-weight:400"></span></h3>
+                            <div id="queued-emails-list"></div>
+                        </div>
+                        <div class="panel">
+                            <h3>Stuck Deals <span id="stuck-deals-count" style="color:#888;font-size:12px;font-weight:400"></span></h3>
+                            <div id="stuck-deals-list"></div>
+                        </div>
+                    </div>
+                    <!-- Hot leads -->
+                    <div>
+                        <div class="panel">
+                            <h3 style="display:flex;align-items:center;gap:6px"><span style="color:#c0392b">🔥</span> Hot Leads <span id="hot-leads-count" style="color:#888;font-size:12px;font-weight:400"></span></h3>
+                            <p style="font-size:12px;color:#888;margin-bottom:8px">Companies engaging with your sequences in the last 30 days. Click to act.</p>
+                            <div id="hot-leads-list"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Zone 4: Pipeline by stage -->
                 <div class="panel">
-                    <h3>Recent Companies</h3>
-                    <div id="recent-companies"></div>
+                    <h3>Pipeline by Stage</h3>
+                    <div id="pipeline-bars"></div>
+                </div>
+
+                <!-- Zone 5: Activity feed -->
+                <div class="panel">
+                    <h3>Activity Feed</h3>
+                    <div id="dashboard-activity-feed"></div>
                 </div>
             </div>
 
@@ -638,21 +730,105 @@
         }
 
         // ============ Dashboard ============
+        const SIGNAL_LABELS = {
+            email_opened:  'opened',
+            email_clicked: 'clicked',
+            email_replied: 'replied',
+        };
+
+        function fmtRelative(iso) {
+            if (!iso) return '';
+            const d = new Date(iso);
+            const sec = (Date.now() - d.getTime()) / 1000;
+            if (sec < 60) return 'just now';
+            if (sec < 3600) return `${Math.round(sec/60)}m ago`;
+            if (sec < 86400) return `${Math.round(sec/3600)}h ago`;
+            const days = Math.round(sec/86400);
+            return days === 1 ? 'yesterday' : `${days}d ago`;
+        }
+
         async function loadDashboard() {
-            const [companies, pipeline, forecast, tasks] = await Promise.all([
-                api('/api/companies/'),
-                api('/api/pipeline'),
-                api('/api/forecast'),
-                api('/api/crm/tasks/upcoming'),
-            ]);
-            if (companies) document.getElementById('stat-companies').textContent = companies.length;
-            if (pipeline) {
-                const total = ['prospecting','qualified','proposal','negotiation'].reduce((s, st) => s + (pipeline.totals[st]?.value || 0), 0);
-                document.getElementById('stat-pipeline-value').textContent = fmtMoney(total);
-            }
-            if (forecast) document.getElementById('stat-forecast').textContent = fmtMoney(forecast.weighted_forecast);
-            if (tasks) document.getElementById('stat-tasks-open').textContent = tasks.length;
-            if (companies) renderCompanies(companies.slice(0, 10), 'recent-companies');
+            const data = await api('/api/dashboard');
+            if (!data) return;
+
+            // KPIs
+            const k = data.kpis;
+            document.getElementById('kpi-pipeline-value').textContent = fmtMoney(k.pipeline_value);
+            document.getElementById('kpi-forecast').textContent = fmtMoney(k.weighted_forecast);
+            document.getElementById('kpi-won-mtd').innerHTML = `${fmtMoney(k.won_mtd_value)} <span style="font-size:12px;color:#888;font-weight:400">(${k.won_mtd_count})</span>`;
+            document.getElementById('kpi-hot-leads').textContent = k.hot_leads_count;
+            document.getElementById('kpi-tasks').textContent = k.open_tasks_count;
+            document.getElementById('kpi-sent-week').textContent = k.sent_this_week;
+
+            // Today's tasks
+            const tt = document.getElementById('todays-tasks-list');
+            document.getElementById('todays-tasks-count').textContent = data.todays_tasks.length ? `(${data.todays_tasks.length})` : '';
+            tt.innerHTML = data.todays_tasks.length ? data.todays_tasks.map(t => `
+                <div class="task-row">
+                    <input type="checkbox" onchange="completeTask(${t.id});setTimeout(loadDashboard,300)">
+                    <div style="flex:1">
+                        <div>${escapeHtml(t.description)}</div>
+                        <div class="due"><a href="#" onclick="openCompanyDetail(${t.company_id});return false">${escapeHtml(t.company_name)}</a></div>
+                    </div>
+                </div>
+            `).join('') : '<p style="font-size:12px;color:#888">Nothing due today. 🎉</p>';
+
+            // Queued emails
+            const qe = document.getElementById('queued-emails-list');
+            document.getElementById('queued-emails-count').textContent = data.queued_emails.length ? `(${data.queued_emails.length})` : '';
+            qe.innerHTML = data.queued_emails.length ? data.queued_emails.map(e => `
+                <div class="dash-row" onclick="openCompanyDetail(${e.company_id})">
+                    <div><strong>${escapeHtml(e.subject)}</strong></div>
+                    <div class="dash-meta">→ ${escapeHtml(e.contact_name || '(unnamed)')} at ${escapeHtml(e.company_name)} · scheduled ${fmtRelative(e.scheduled_send_at)}</div>
+                </div>
+            `).join('') : '<p style="font-size:12px;color:#888">No sequences ready to send.</p>';
+
+            // Stuck deals
+            const sd = document.getElementById('stuck-deals-list');
+            document.getElementById('stuck-deals-count').textContent = data.stuck_deals.length ? `(${data.stuck_deals.length})` : '';
+            sd.innerHTML = data.stuck_deals.length ? data.stuck_deals.map(d => `
+                <div class="dash-row" onclick="openCompanyDetail(${d.company_id})">
+                    <div><strong>${escapeHtml(d.company_name)}</strong> <span class="deal-stage stage-${d.stage}">${d.stage.replace('_',' ')}</span></div>
+                    <div class="dash-meta">${escapeHtml(d.name)} · ${fmtMoney(d.value)} · stuck ${d.days_stuck}d</div>
+                </div>
+            `).join('') : '<p style="font-size:12px;color:#888">No stuck deals. 👍</p>';
+
+            // Hot leads
+            const hl = document.getElementById('hot-leads-list');
+            document.getElementById('hot-leads-count').textContent = data.hot_leads.length ? `(${data.hot_leads.length})` : '';
+            hl.innerHTML = data.hot_leads.length ? data.hot_leads.map(l => {
+                const signals = (l.signals || []).map(s => `${SIGNAL_LABELS[s.type] || s.type} ${fmtRelative(s.at)}`).join(' · ');
+                return `
+                    <div class="hot-row" onclick="openCompanyDetail(${l.id})">
+                        <span class="hot-score">${l.engagement_score}</span>
+                        <div class="hot-name">${escapeHtml(l.name)} <span class="status-badge status-${l.status}">${l.status}</span></div>
+                        <div class="hot-signals">${escapeHtml(signals) || 'engaged recently'}</div>
+                    </div>
+                `;
+            }).join('') : '<p style="font-size:12px;color:#888">No hot leads in the last 30 days. Keep sending sequences!</p>';
+
+            // Pipeline by stage bars
+            const pb = document.getElementById('pipeline-bars');
+            const maxValue = Math.max(...data.pipeline_by_stage.map(s => s.value), 1);
+            pb.innerHTML = data.pipeline_by_stage.map(s => {
+                const pct = maxValue > 0 ? (s.value / maxValue) * 100 : 0;
+                return `
+                    <div class="pipeline-bar-row" onclick="showPage('pipeline')" style="cursor:pointer">
+                        <div class="stage-label">${s.stage.replace('_',' ')}</div>
+                        <div class="bar-track"><div class="bar-fill ${s.stage}" style="width:${pct}%"></div></div>
+                        <div class="bar-stats">${s.count} deals · ${fmtMoney(s.value)}</div>
+                    </div>
+                `;
+            }).join('');
+
+            // Activity feed
+            const af = document.getElementById('dashboard-activity-feed');
+            af.innerHTML = data.activity_feed.length ? data.activity_feed.map(a => `
+                <div class="timeline-item">
+                    <div>${escapeHtml(a.content || a.type)} — <a href="#" onclick="openCompanyDetail(${a.company_id});return false" style="color:var(--bmp-green)">${escapeHtml(a.company_name)}</a></div>
+                    <div class="timeline-meta">${escapeHtml(a.user_name || 'System')} · ${fmtRelative(a.created_at)}</div>
+                </div>
+            `).join('') : '<p style="font-size:12px;color:#888">No activity yet.</p>';
         }
 
         // ============ Companies ============

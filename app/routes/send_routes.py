@@ -15,7 +15,7 @@ from sqlalchemy import select
 from pydantic import BaseModel
 
 from app.database import get_db
-from app.models import User, Company, Contact, GeneratedEmail, Activity
+from app.models import User, Company, Contact, GeneratedEmail, Activity, Task, Deal
 from app.auth import get_current_user
 from app.services.email_sender import send_email, get_sender_info
 from app.services.signature import render_signature
@@ -329,6 +329,71 @@ async def update_profile(
 # Resend webhook — auto-pause on reply, auto-qualify on click
 # ============================================================
 
+async def _create_engagement_task(
+    db: AsyncSession,
+    company: Company,
+    contact_id: int | None,
+    reason: str,
+) -> None:
+    """Create a follow-up task for the deal owner (or company owner) when a contact engages.
+    Skips if there's already an open engagement task for this company in the last 3 days
+    so we don't spam the owner with duplicates on every open."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=3)
+    existing = (await db.execute(
+        select(Task).where(
+            Task.company_id == company.id,
+            Task.completed == False,
+            Task.created_at >= cutoff,
+            Task.description.like("Follow up%"),
+        )
+    )).first()
+    if existing:
+        return
+
+    # Find an owner: deal assigned_to → company assigned_to → first user
+    owner_id = None
+    open_deal = (await db.execute(
+        select(Deal).where(
+            Deal.company_id == company.id,
+            Deal.stage.in_(("prospecting", "qualified", "proposal", "negotiation")),
+        ).order_by(Deal.created_at.desc())
+    )).scalar_one_or_none()
+    if open_deal and open_deal.assigned_to:
+        owner_id = open_deal.assigned_to
+    if not owner_id:
+        owner_id = company.assigned_to
+    if not owner_id:
+        first_user = (await db.execute(select(User).order_by(User.id).limit(1))).scalar_one_or_none()
+        owner_id = first_user.id if first_user else None
+    if not owner_id:
+        return
+
+    contact_label = "the prospect"
+    if contact_id:
+        c = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()
+        if c and c.full_name:
+            contact_label = c.full_name
+        elif c and c.email:
+            contact_label = c.email
+
+    db.add(Task(
+        company_id=company.id,
+        contact_id=contact_id,
+        deal_id=open_deal.id if open_deal else None,
+        user_id=owner_id,
+        description=f"Follow up with {contact_label} at {company.name} — {reason}",
+        due_date=datetime.now(timezone.utc) + timedelta(days=1),
+    ))
+    db.add(Activity(
+        company_id=company.id,
+        contact_id=contact_id,
+        deal_id=open_deal.id if open_deal else None,
+        user_id=None,
+        activity_type="task_auto_created",
+        content=f"Auto-task: follow up — {reason}",
+    ))
+
+
 def _verify_resend_signature(payload_bytes: bytes, signature: str) -> bool:
     secret = settings.resend_webhook_secret
     if not secret:
@@ -382,12 +447,14 @@ async def resend_webhook(request: Request, db: AsyncSession = Depends(get_db)):
             await db.commit()
 
     elif event_type == "email.opened":
-        # Track opens; auto-qualify after 3+
+        # Track opens; auto-qualify + auto-task after 3+
         summary = company.enrichment_summary or ""
         open_count = summary.count("[opened]") + 1
         if open_count >= 3 and company.status in ("sequencing", "contacted"):
             company.status = "qualified"
             company.enrichment_summary = summary + " [Auto-qualified: opened 3+ times]"
+            await _create_engagement_task(db, company, int(contact_id) if contact_id else None,
+                                          reason=f"opened {open_count}× recently")
         else:
             company.enrichment_summary = summary + " [opened]"
         if contact_id:
@@ -396,13 +463,15 @@ async def resend_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         await db.commit()
 
     elif event_type == "email.clicked":
-        # Strong intent — auto-qualify immediately
+        # Strong intent — auto-qualify immediately + auto-task
         if company.status in ("sequencing", "contacted"):
             company.status = "qualified"
             company.enrichment_summary = (company.enrichment_summary or "") + " [Auto-qualified: clicked link]"
         if contact_id:
             db.add(Activity(company_id=company_id, contact_id=int(contact_id),
                             activity_type="email_clicked", content="Email link clicked"))
+        await _create_engagement_task(db, company, int(contact_id) if contact_id else None,
+                                      reason="clicked a link in your email")
         await db.commit()
 
     elif event_type == "email.bounced":
