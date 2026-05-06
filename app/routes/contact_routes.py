@@ -50,7 +50,7 @@ async def list_all_contacts(
         .subquery()
     )
     query = (
-        select(Contact, Company.name, Company.status,
+        select(Contact, Company.name, Company.status, Company.phone.label("company_phone"),
                func.coalesce(email_count_sq.c.email_count, 0).label("email_count"))
         .join(Company, Contact.company_id == Company.id)
         .outerjoin(email_count_sq, Contact.id == email_count_sq.c.contact_id)
@@ -70,6 +70,7 @@ async def list_all_contacts(
             "company_id": c.company_id,
             "company_name": cname,
             "company_status": cstatus,
+            "company_phone": cphone,
             "first_name": c.first_name,
             "last_name": c.last_name,
             "name": c.full_name,
@@ -82,7 +83,7 @@ async def list_all_contacts(
             "has_sequence": ecount > 0,
             "unsubscribed_at": c.unsubscribed_at.isoformat() if c.unsubscribed_at else None,
         }
-        for c, cname, cstatus, ecount in rows
+        for c, cname, cstatus, cphone, ecount in rows
     ]
 
 

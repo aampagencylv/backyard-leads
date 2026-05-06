@@ -420,7 +420,7 @@
             <div id="page-companies" class="hidden">
                 <div class="page-header">
                     <h1>Companies</h1>
-                    <div style="display:flex;gap:8px;flex-wrap:wrap">
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
                         <button class="btn btn-secondary btn-sm" onclick="loadCompanies('active')">Active</button>
                         <button class="btn btn-secondary btn-sm" onclick="loadCompanies('sequencing')">Sequencing</button>
                         <button class="btn btn-secondary btn-sm" onclick="loadCompanies('contacted')">Contacted</button>
@@ -428,6 +428,9 @@
                         <button class="btn btn-secondary btn-sm" onclick="loadCompanies('qualified')">Qualified</button>
                         <button class="btn btn-secondary btn-sm" onclick="loadCompanies('not_interested')">Unqualified</button>
                         <button class="btn btn-secondary btn-sm" onclick="loadCompanies('all')">All</button>
+                        <span style="border-left:1px solid #ddd;height:20px;margin:0 4px"></span>
+                        <button class="btn btn-primary btn-sm" onclick="showAddCompanyModal()">+ Add Company</button>
+                        <button class="btn btn-secondary btn-sm" onclick="showUploadCSVModal()">Upload CSV</button>
                     </div>
                 </div>
                 <!-- Filters -->
@@ -969,7 +972,7 @@
                                 ${c.email_status === 'invalid' ? ' <span style="font-size:9px;color:#c0392b">INVALID</span>' : ''}
                                 ${c.email_status === 'bounced' ? ' <span style="font-size:9px;color:#c0392b">BOUNCED</span>' : ''}
                                 ${c.unsubscribed_at ? ' <span style="font-size:9px;color:#c0392b">UNSUB</span>' : ''}</td>
-                            <td style="padding:8px">${c.phone ? escapeHtml(c.phone) : '<em style="color:#bbb">—</em>'}</td>
+                            <td style="padding:8px">${c.phone ? escapeHtml(c.phone) : (c.company_phone ? `<span style="color:#888">${escapeHtml(c.company_phone)}</span> <span style="font-size:9px;color:#bbb">office</span>` : '<em style="color:#bbb">—</em>')}</td>
                             <td style="padding:8px">${escapeHtml(c.company_name)}</td>
                             <td style="padding:8px"><span class="status-badge status-${c.company_status}">${c.company_status}</span></td>
                             <td style="padding:8px" onclick="event.stopPropagation()">
@@ -1876,6 +1879,171 @@
             if (!confirm('Delete the current sequence and generate a new one?')) return;
             await deleteSequence(contactId);
             await generateContactSequence(contactId);
+        }
+
+        // ============ Add Company + CSV Upload ============
+
+        async function showAddCompanyModal() {
+            const users = await api('/api/crm/users') || [];
+            const root = document.getElementById('modal-root');
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:560px;max-height:90vh;overflow-y:auto">
+                        <h2>Add Company</h2>
+                        <div class="form-group"><label>Company Name *</label><input type="text" id="ac-name" placeholder="Blue Wave Pools"></div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+                            <div class="form-group"><label>Website</label><input type="text" id="ac-website" placeholder="https://bluewavepools.com"></div>
+                            <div class="form-group"><label>Phone</label><input type="text" id="ac-phone" placeholder="(555) 123-4567"></div>
+                        </div>
+                        <div style="display:grid;grid-template-columns:2fr 1fr;gap:12px">
+                            <div class="form-group"><label>City</label><input type="text" id="ac-city" placeholder="Phoenix"></div>
+                            <div class="form-group"><label>State</label><input type="text" id="ac-state" placeholder="AZ"></div>
+                        </div>
+                        <div class="form-group"><label>Business Type</label><input type="text" id="ac-type" placeholder="pool builders"></div>
+
+                        <h3 style="margin-top:16px;font-size:14px;border-top:1px solid #eee;padding-top:12px">Primary Contact (optional)</h3>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+                            <div class="form-group"><label>First Name</label><input type="text" id="ac-cfirst" placeholder="John"></div>
+                            <div class="form-group"><label>Last Name</label><input type="text" id="ac-clast" placeholder="Martinez"></div>
+                        </div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+                            <div class="form-group"><label>Email</label><input type="email" id="ac-cemail" placeholder="john@bluewavepools.com"></div>
+                            <div class="form-group"><label>Title</label><input type="text" id="ac-ctitle" placeholder="Owner"></div>
+                        </div>
+                        <div class="form-group"><label>LinkedIn</label><input type="text" id="ac-clinkedin" placeholder="https://linkedin.com/in/..."></div>
+
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px">
+                            <div class="form-group">
+                                <label>Assign To</label>
+                                <select id="ac-assign" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px">
+                                    <option value="">Unassigned</option>
+                                    ${users.map(u => `<option value="${u.id}">${escapeHtml(u.name)}</option>`).join('')}
+                                </select>
+                            </div>
+                            <div class="form-group" style="display:flex;align-items:end;padding-bottom:4px">
+                                <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="ac-enrich" checked> Auto-enrich website</label>
+                            </div>
+                        </div>
+
+                        <div class="modal-actions" style="display:flex;gap:8px;margin-top:16px">
+                            <button class="btn btn-secondary" onclick="document.getElementById('modal-root').innerHTML=''">Cancel</button>
+                            <button class="btn btn-primary" onclick="submitAddCompany()">Save Company</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function submitAddCompany() {
+            const name = document.getElementById('ac-name').value.trim();
+            if (!name) { toast('Company name is required'); return; }
+
+            toast('Creating company...');
+            const data = await api('/api/companies/', {
+                method: 'POST',
+                body: JSON.stringify({
+                    name,
+                    website: document.getElementById('ac-website').value.trim() || null,
+                    phone: document.getElementById('ac-phone').value.trim() || null,
+                    city: document.getElementById('ac-city').value.trim() || null,
+                    state: document.getElementById('ac-state').value.trim() || null,
+                    business_type: document.getElementById('ac-type').value.trim() || null,
+                    contact_first_name: document.getElementById('ac-cfirst').value.trim() || null,
+                    contact_last_name: document.getElementById('ac-clast').value.trim() || null,
+                    contact_email: document.getElementById('ac-cemail').value.trim() || null,
+                    contact_title: document.getElementById('ac-ctitle').value.trim() || null,
+                    contact_linkedin: document.getElementById('ac-clinkedin').value.trim() || null,
+                    assigned_to: parseInt(document.getElementById('ac-assign').value) || null,
+                    auto_enrich: document.getElementById('ac-enrich').checked,
+                }),
+            });
+            if (data) {
+                toast(data.enriched ? `Company created and enriched (${data.problems_found} issues found)` : 'Company created');
+                document.getElementById('modal-root').innerHTML = '';
+                loadCompanies(_lastCompaniesFilter);
+                if (data.id) openCompanyDetail(data.id);
+            }
+        }
+
+        async function showUploadCSVModal() {
+            const users = await api('/api/crm/users') || [];
+            const root = document.getElementById('modal-root');
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:600px;max-height:90vh;overflow-y:auto">
+                        <h2>Upload Contact List</h2>
+                        <p style="font-size:13px;color:#666;margin-bottom:12px">
+                            Paste your CSV data below. Each row creates a company + contact.<br>
+                            Required columns: <strong>company_name</strong>. Optional: first_name, last_name, email, phone, website, title, linkedin_url
+                        </p>
+
+                        <div style="background:#f8f9fa;border-radius:6px;padding:8px;margin-bottom:12px;font-size:11px;font-family:monospace;color:#666">
+                            company_name,first_name,last_name,email,phone,website,title<br>
+                            Blue Wave Pools,John,Martinez,john@bwp.com,555-1234,bluewavepools.com,Owner
+                        </div>
+
+                        <div class="form-group">
+                            <label>Paste CSV data</label>
+                            <textarea id="csv-data" rows="8" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:12px;font-family:monospace" placeholder="company_name,first_name,last_name,email,phone,website,title"></textarea>
+                        </div>
+
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+                            <div class="form-group">
+                                <label>Assign All To</label>
+                                <select id="csv-assign" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px">
+                                    <option value="">Unassigned</option>
+                                    ${users.map(u => `<option value="${u.id}">${escapeHtml(u.name)}</option>`).join('')}
+                                </select>
+                            </div>
+                            <div class="form-group" style="display:flex;flex-direction:column;justify-content:end;gap:4px">
+                                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px"><input type="checkbox" id="csv-enrich" checked> Auto-enrich</label>
+                                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px"><input type="checkbox" id="csv-sequence" checked> Auto-sequence</label>
+                            </div>
+                        </div>
+
+                        <div class="modal-actions" style="display:flex;gap:8px;margin-top:16px">
+                            <button class="btn btn-secondary" onclick="document.getElementById('modal-root').innerHTML=''">Cancel</button>
+                            <button class="btn btn-primary" onclick="submitCSVUpload()">Upload & Process</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function parseCSV(text) {
+            const lines = text.trim().split('\n');
+            if (lines.length < 2) return [];
+            const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/[^a-z_]/g, ''));
+            return lines.slice(1).map(line => {
+                const vals = line.split(',').map(v => v.trim());
+                const row = {};
+                headers.forEach((h, i) => { row[h] = vals[i] || ''; });
+                return row;
+            });
+        }
+
+        async function submitCSVUpload() {
+            const csvText = document.getElementById('csv-data').value;
+            const rows = parseCSV(csvText);
+            if (!rows.length) { toast('No data found. Make sure you have a header row and at least one data row.'); return; }
+
+            toast(`Processing ${rows.length} rows... this may take a while.`);
+
+            const data = await api('/api/companies/upload', {
+                method: 'POST',
+                body: JSON.stringify({
+                    rows,
+                    assigned_to: parseInt(document.getElementById('csv-assign').value) || null,
+                    auto_enrich: document.getElementById('csv-enrich').checked,
+                    auto_sequence: document.getElementById('csv-sequence').checked,
+                }),
+            });
+
+            if (data) {
+                toast(`Done! Created: ${data.created}, Enriched: ${data.enriched}, Sequences: ${data.sequences}, Skipped: ${data.skipped}${data.errors.length ? ', Errors: ' + data.errors.length : ''}`);
+                document.getElementById('modal-root').innerHTML = '';
+                loadCompanies(_lastCompaniesFilter);
+            }
         }
 
         async function addTagToCompany(companyId) {
