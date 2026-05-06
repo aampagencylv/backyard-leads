@@ -1961,21 +1961,30 @@
             { value: 'closed_lost',  label: 'Closed Lost' },
         ];
 
+        const BMP_PACKAGES = [
+            { key: 'foundation', name: 'Foundation', monthly: 2000 },
+            { key: 'essential',  name: 'Essential',  monthly: 4000 },
+            { key: 'growth',     name: 'Growth',     monthly: 6000 },
+            { key: 'scale',      name: 'Scale',      monthly: 8000 },
+        ];
+
         async function addDeal(companyId) {
             const c = await api(`/api/companies/${companyId}/full`);
             const defaultName = c ? `${c.name} — ${new Date().toLocaleDateString()}` : 'New Deal';
             const values = await openModal('Add Deal', [
                 { key: 'name',  label: 'Deal Name', value: defaultName, required: true },
-                { key: 'value', label: 'Value (USD)', type: 'number', placeholder: '2400', half: true },
+                { key: 'package', label: 'Package', type: 'select', value: 'foundation', options: BMP_PACKAGES.map(p => ({ value: p.key, label: `${p.name} — $${p.monthly.toLocaleString()}/mo` })), half: true },
+                { key: 'contract_months', label: 'Contract', type: 'select', value: '6', options: [{ value: '6', label: '6 months' }, { value: '12', label: '12 months' }], half: true },
                 { key: 'stage', label: 'Stage', type: 'select', value: 'prospecting', options: STAGE_OPTIONS, half: true },
-                { key: 'expected_close_date', label: 'Expected Close', type: 'date' },
+                { key: 'expected_close_date', label: 'Expected Close', type: 'date', half: true },
             ], { saveLabel: 'Create Deal' });
             if (!values) return;
             await api(`/api/companies/${companyId}/deals`, {
                 method: 'POST',
                 body: JSON.stringify({
                     name: values.name,
-                    value: values.value ? parseFloat(values.value) : null,
+                    package: values.package,
+                    contract_months: parseInt(values.contract_months) || 6,
                     stage: values.stage,
                     expected_close_date: values.expected_close_date || null,
                 }),
@@ -1989,12 +1998,12 @@
             const d = await api(`/api/deals/${dealId}`); if (!d) return;
             const fields = [
                 { key: 'name',  label: 'Deal Name', value: d.name, required: true },
-                { key: 'value', label: 'Value (USD)', type: 'number', value: d.value ?? '', half: true },
+                { key: 'package', label: 'Package', type: 'select', value: d.package || 'foundation', options: BMP_PACKAGES.map(p => ({ value: p.key, label: `${p.name} — $${p.monthly.toLocaleString()}/mo` })), half: true },
+                { key: 'contract_months', label: 'Contract', type: 'select', value: String(d.contract_months || 6), options: [{ value: '6', label: '6 months' }, { value: '12', label: '12 months' }], half: true },
                 { key: 'stage', label: 'Stage', type: 'select', value: d.stage, options: STAGE_OPTIONS, half: true },
-                { key: 'expected_close_date', label: 'Expected Close', type: 'date',
+                { key: 'expected_close_date', label: 'Expected Close', type: 'date', half: true,
                   value: d.expected_close_date ? d.expected_close_date.slice(0,10) : '' },
             ];
-            // Only show Lost Reason field when stage is closed_lost
             if (d.stage === 'closed_lost') {
                 fields.push({ key: 'lost_reason', label: 'Lost Reason', value: d.lost_reason || '', placeholder: 'No budget / went w/ competitor / etc.' });
             }
@@ -2004,7 +2013,8 @@
                 method: 'PATCH',
                 body: JSON.stringify({
                     name: values.name,
-                    value: values.value ? parseFloat(values.value) : null,
+                    package: values.package,
+                    contract_months: parseInt(values.contract_months) || 6,
                     stage: values.stage,
                     expected_close_date: values.expected_close_date || null,
                     lost_reason: values.lost_reason ?? null,
