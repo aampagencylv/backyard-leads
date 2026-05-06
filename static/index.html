@@ -378,7 +378,7 @@
                 <div class="page-header"><h1>Find Leads</h1></div>
                 <div class="search-box">
                     <h3>Search businesses by type + location</h3>
-                    <div class="search-form">
+                    <div style="display:grid;grid-template-columns:2fr 1fr;gap:16px;align-items:end">
                         <div class="form-group">
                             <label>Business Type</label>
                             <select id="search-keyword-select" onchange="onBusinessTypeChange()">
@@ -403,7 +403,13 @@
                             <input type="text" id="search-keyword-custom" class="hidden" placeholder="Type custom business type..." style="margin-top:6px">
                         </div>
                         <div class="form-group"><label>Location</label><input type="text" id="search-location" placeholder="Las Vegas, NV"></div>
-                        <button class="btn btn-primary" onclick="runSearch()">Search</button>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr auto;gap:12px;margin-top:12px;align-items:end">
+                        <div class="form-group" style="margin:0"><label>Min Reviews</label><input type="number" id="search-min-reviews" value="0" min="0"></div>
+                        <div class="form-group" style="margin:0"><label>Max Reviews</label><input type="number" id="search-max-reviews" value="" placeholder="No limit"></div>
+                        <div class="form-group" style="margin:0"><label>Min Rating</label><input type="number" id="search-min-rating" value="" step="0.5" placeholder="Any"></div>
+                        <div class="form-group" style="margin:0"><label>Max Results</label><input type="number" id="search-max-results" value="40" min="5" max="60"></div>
+                        <button class="btn btn-primary" onclick="runSearch()" style="height:42px">Search</button>
                     </div>
                 </div>
                 <div id="search-results"></div>
@@ -1057,14 +1063,27 @@
             const location = document.getElementById('search-location').value.trim();
             if (!keyword) { toast('Pick or type a business type'); return; }
             if (!location) { toast('Enter a location'); return; }
-            toast(`Searching for "${keyword}" in ${location}...`);
+
+            const maxResults = parseInt(document.getElementById('search-max-results').value) || 40;
+            const minReviews = parseInt(document.getElementById('search-min-reviews').value) || 0;
+            const maxReviews = parseInt(document.getElementById('search-max-reviews').value) || 0;
+            const minRating = parseFloat(document.getElementById('search-min-rating').value) || 0;
+
+            toast(`Searching for "${keyword}" in ${location}... this may take 10-30 seconds`);
             const data = await api('/api/search/', {
                 method: 'POST',
-                body: JSON.stringify({ keyword, location, max_results: 20 }),
+                body: JSON.stringify({ keyword, location, max_results: maxResults }),
             });
             if (data && data.search_id) {
-                toast(`Found ${data.results_count} businesses.`);
-                const list = await api(`/api/companies/?search_id=${data.search_id}`);
+                // Build filter params for the company list
+                let params = `search_id=${data.search_id}&sort_by=reviews`;
+                if (minReviews > 0) params += `&min_reviews=${minReviews}`;
+                if (maxReviews > 0) params += `&max_reviews=${maxReviews}`;
+                if (minRating > 0) params += `&min_rating=${minRating}`;
+
+                const list = await api(`/api/companies/?${params}`);
+                const filtered = list ? list.length : 0;
+                toast(`Found ${data.results_count} businesses, ${filtered} match your filters.`);
                 if (list) renderCompanies(list, 'search-results');
             }
         }
