@@ -131,6 +131,59 @@ Missive API docs: missiveapp.com/help/api
 - Call recording + transcription → auto-log to timeline
 - SMS sequence steps auto-send via Twilio
 
+### 🔥 Website Visitor Tracking (email-to-site intelligence)
+
+Track when a prospect clicks through from an email to backyardmarketingpros.com, then track every page they visit. Auto-alert BDRs when a prospect is actively browsing.
+
+**Three components:**
+
+**1. Tracking Links (wrap URLs in outgoing emails):**
+- `TrackingLink` model: token, contact_id, email_id, destination_url, clicked_at
+- `GET /t/{token}` — public redirect endpoint, logs click, sets cookie, redirects
+- Auto-wrap URLs in generated emails during sequence creation
+- Signature links (website, Calendly) also get wrapped
+
+**2. JavaScript Snippet (install on backyardmarketingpros.com):**
+```html
+<script>
+(function(){
+  var API='https://prospector.backyardmarketingpros.com/api/track';
+  var p=new URLSearchParams(location.search);
+  var id=p.get('bmp_id');
+  if(id) document.cookie='bmp_visitor='+id+';path=/;max-age=31536000;SameSite=Lax';
+  var m=document.cookie.match(/bmp_visitor=([^;]+)/);
+  if(m) navigator.sendBeacon(API+'/pageview',JSON.stringify({
+    visitor_id:m[1], url:location.href, title:document.title, referrer:document.referrer
+  }));
+})();
+</script>
+```
+- ~15 lines, no dependencies, non-blocking beacon
+- Drops first-party cookie on first tracked visit
+- Every subsequent page view tracked back to the contact
+
+**3. Hot Lead Detection (server-side):**
+- `PageView` model: visitor_token, contact_id, company_id, url, page_title, session_id
+- Session grouping: page views within 30 min = one session
+- 3+ pages in a session = auto-create "hot lead" task for assigned BDR
+- Pricing page visit = highest priority signal
+- "Hot Leads" section on dashboard: contacts active on site in last 30 min
+- Timeline entries: "Brett Utter visited /pricing at 2:34pm"
+
+**API endpoints:**
+- `GET /t/{token}` — tracking link redirect (public)
+- `POST /api/track/pageview` — JS beacon receiver (public, CORS)
+- `GET /api/track/activity/{company_id}` — site visits for a company
+- `GET /api/track/hot-leads` — contacts on site in last 30 min
+- `POST /api/track/generate-link` — create tracking link
+
+**Build phases:**
+- Phase 1 (half day): Tracking links + click logging + auto-wrap in emails
+- Phase 2 (half day): JS snippet + page view tracking + timeline entries
+- Phase 3 (1 day): Hot lead detection + auto-tasks + dashboard section
+
+---
+
 ### Other high-value items
 - [ ] **Dashboard MRR/ARR cards** — wire forecast API to dashboard KPI strip
 - [ ] **Saved views UI** — dropdown on Companies + Pipeline pages (API ready)
