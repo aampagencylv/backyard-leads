@@ -111,3 +111,19 @@ async def find_email(
                 return email
 
     return None
+
+
+async def verify_email(email: str, api_key: str) -> dict:
+    """
+    Verify an email address via Hunter's /v2/email-verifier.
+    Returns: {"result": "deliverable"|"risky"|"undeliverable"|"unknown",
+              "score": int, "smtp_check": bool, ...}
+    """
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.get(
+            "https://api.hunter.io/v2/email-verifier",
+            params={"email": email, "api_key": api_key},
+        )
+        if response.status_code == 200:
+            return response.json().get("data", {})
+    return {}

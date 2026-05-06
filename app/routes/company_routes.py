@@ -22,7 +22,6 @@ from app.models import User, Company, Contact, Deal, GeneratedEmail, Activity, T
 from app.auth import get_current_user
 from app.services.website_intel import analyze_website, analysis_to_dict
 from app.services.email_generator import generate_cold_email, generate_follow_up
-from app.services.apollo_enrichment import enrich_from_domain
 from app.services.hunter_enrichment import search_domain as hunter_search
 from app.services.netrows_enrichment import (
     find_decision_makers as netrows_find_decision_makers,
@@ -275,10 +274,9 @@ async def enrich_company(
     company.problems_found = json.dumps(analysis.problems)
     company.enrichment_summary = _summarize(analysis)
 
-    # Netrows + Apollo + Hunter — all always run; import everything they find
-    netrows_data, apollo_data, hunter_data = None, None, None
+    # Netrows + Hunter — import everything they find
+    netrows_data, hunter_data = None, None
     netrows_added, netrows_found = 0, 0
-    apollo_added, apollo_found = 0, 0
     hunter_added, hunter_found = 0, 0
 
     # Netrows decision-maker first — verified owner emails for SMB (10 credits/call)
@@ -301,27 +299,6 @@ async def enrich_company(
                     netrows_added += 1
         except Exception as e:
             netrows_data = {"error": str(e)[:200]}
-
-    if settings.apollo_api_key:
-        try:
-            apollo = await enrich_from_domain(company.website, settings.apollo_api_key)
-            apollo_data = {
-                "company_name": apollo.company_name,
-                "industry": apollo.industry,
-                "employee_count": apollo.employee_count,
-                "contacts": [{"name": c.name, "title": c.title, "email": c.email,
-                              "phone": c.phone, "linkedin": c.linkedin_url}
-                             for c in apollo.contacts],
-            }
-            apollo_found = len(apollo.contacts)
-            # Import every contact returned, even without email (name + title is still useful)
-            for ac in apollo.contacts:
-                if not ac.name and not ac.email:
-                    continue
-                if await _ensure_contact(db, company_id, ac.name, ac.email, ac.title, ac.phone, ac.linkedin_url):
-                    apollo_added += 1
-        except Exception as e:
-            apollo_data = {"error": str(e)[:200]}
 
     if settings.hunter_api_key:
         try:
@@ -346,7 +323,7 @@ async def enrich_company(
         except Exception as e:
             hunter_data = {"error": str(e)[:200]}
 
-    contacts_added = netrows_added + apollo_added + hunter_added
+    contacts_added = netrows_added + hunter_added
 
     # Google Maps reviews (1 credit) — owner replies are personalization gold
     if await get_netrows_api_key(db):
@@ -392,12 +369,10 @@ async def enrich_company(
         content=(
             f"Enriched: {len(json.loads(company.problems_found) if company.problems_found else [])} problems · "
             f"Netrows found {netrows_found}/added {netrows_added} · "
-            f"Apollo found {apollo_found}/added {apollo_added} · "
             f"Hunter found {hunter_found}/added {hunter_added}"
         ),
         metadata_json=json.dumps({
             "netrows_found": netrows_found, "netrows_added": netrows_added,
-            "apollo_found":  apollo_found,  "apollo_added":  apollo_added,
             "hunter_found":  hunter_found,  "hunter_added":  hunter_added,
         }),
     ))
@@ -411,15 +386,12 @@ async def enrich_company(
         "contacts_added": contacts_added,
         "netrows_found": netrows_found,
         "netrows_added": netrows_added,
-        "apollo_found": apollo_found,
-        "apollo_added": apollo_added,
         "hunter_found": hunter_found,
         "hunter_added": hunter_added,
         "analysis": analysis_dict,
         "local_seo": seo_data,
         "summary": company.enrichment_summary,
         "netrows": netrows_data,
-        "apollo": apollo_data,
         "hunter": hunter_data,
     }
 
@@ -492,16 +464,7 @@ async def pursue_companies(
                     except Exception:
                         pass
 
-                # Apollo + Hunter as additional sources
-                if settings.apollo_api_key:
-                    try:
-                        apollo = await enrich_from_domain(company.website, settings.apollo_api_key)
-                        for ac in apollo.contacts:
-                            if ac.name or ac.email:
-                                await _ensure_contact(db, company.id, ac.name, ac.email, ac.title, ac.phone, ac.linkedin_url)
-                    except Exception:
-                        pass
-
+                # Hunter as additional contact source
                 if settings.hunter_api_key:
                     try:
                         hunter = await hunter_search(company.website, settings.hunter_api_key)

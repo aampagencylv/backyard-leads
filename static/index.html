@@ -869,7 +869,7 @@
             const data = await api(path);
             const panel = document.getElementById('contacts-panel');
             if (!data || data.length === 0) {
-                panel.innerHTML = '<p style="color:#666">No contacts yet. Pursue companies to auto-create contacts via Apollo/Hunter.</p>';
+                panel.innerHTML = '<p style="color:#666">No contacts yet. Pursue companies to auto-create contacts via Netrows/Hunter.</p>';
                 return;
             }
             panel.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
@@ -880,21 +880,60 @@
                         <th style="padding:8px">Phone</th>
                         <th style="padding:8px">Company</th>
                         <th style="padding:8px">Status</th>
+                        <th style="padding:8px">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
                     ${data.map(c => `
                         <tr style="border-bottom:1px solid #f5f5f5;cursor:pointer" onclick="openCompanyDetail(${c.company_id})">
                             <td style="padding:8px">${escapeHtml(c.name) || '—'}${c.title ? `<div style="font-size:11px;color:#888">${escapeHtml(c.title)}</div>` : ''}${c.is_primary ? ' <span style="font-size:9px;background:var(--bmp-green);color:white;padding:1px 4px;border-radius:2px">PRIMARY</span>' : ''}</td>
-                            <td style="padding:8px">${c.email ? `<a href="mailto:${escapeHtml(c.email)}" onclick="event.stopPropagation()" style="color:var(--bmp-orange);text-decoration:none">${escapeHtml(c.email)}</a>` : '<em style="color:#bbb">—</em>'}${c.email_status === 'bounced' ? ' <span style="font-size:9px;color:#c0392b">BOUNCED</span>' : ''}${c.unsubscribed_at ? ' <span style="font-size:9px;color:#c0392b">UNSUB</span>' : ''}</td>
+                            <td style="padding:8px">${c.email ? `<a href="mailto:${escapeHtml(c.email)}" onclick="event.stopPropagation()" style="color:var(--bmp-orange);text-decoration:none">${escapeHtml(c.email)}</a>` : '<em style="color:#bbb">—</em>'}
+                                ${c.email_status === 'valid' ? ' <span style="font-size:9px;color:var(--bmp-green)">VALID</span>' : ''}
+                                ${c.email_status === 'invalid' ? ' <span style="font-size:9px;color:#c0392b">INVALID</span>' : ''}
+                                ${c.email_status === 'bounced' ? ' <span style="font-size:9px;color:#c0392b">BOUNCED</span>' : ''}
+                                ${c.unsubscribed_at ? ' <span style="font-size:9px;color:#c0392b">UNSUB</span>' : ''}</td>
                             <td style="padding:8px">${c.phone ? escapeHtml(c.phone) : '<em style="color:#bbb">—</em>'}</td>
                             <td style="padding:8px">${escapeHtml(c.company_name)}</td>
                             <td style="padding:8px"><span class="status-badge status-${c.company_status}">${c.company_status}</span></td>
+                            <td style="padding:8px" onclick="event.stopPropagation()">
+                                <div style="display:flex;gap:4px;flex-wrap:wrap">
+                                    ${c.email && !c.has_sequence && c.email_status !== 'invalid' && c.email_status !== 'bounced' && !c.unsubscribed_at
+                                        ? `<button class="btn btn-success btn-xs" onclick="startSequenceFromContacts(${c.id}, ${c.company_id})">Start Sequence</button>`
+                                        : c.has_sequence ? '<span style="font-size:10px;color:#888">Sequence active</span>' : ''}
+                                    ${c.email && c.email_status !== 'valid' && c.email_status !== 'bounced'
+                                        ? `<button class="btn btn-secondary btn-xs" onclick="verifyContactEmail(${c.id})">Verify</button>`
+                                        : ''}
+                                </div>
+                            </td>
                         </tr>
                     `).join('')}
                 </tbody>
             </table>`;
         }
+
+        // ============ Contact actions from Contacts page ============
+
+        async function verifyContactEmail(contactId) {
+            toast('Verifying email via Hunter...');
+            const data = await api(`/api/contacts/${contactId}/verify-email`, { method: 'POST' });
+            if (data) {
+                toast(`Email: ${data.result} (score: ${data.score}) → ${data.email_status}`);
+                loadContacts(_lastContactMode || 'all');
+            }
+        }
+
+        async function startSequenceFromContacts(contactId, companyId) {
+            if (!confirm('Generate a 4-email outreach sequence for this contact?')) return;
+            toast('Generating sequence...');
+            const data = await api(`/api/contacts/${contactId}/generate-sequence`, { method: 'POST' });
+            if (data) {
+                toast(`Sequence created (${data.emails_created} emails). Opening company...`);
+                openCompanyDetail(companyId);
+            }
+        }
+
+        let _lastContactMode = 'all';
+        const _origLoadContacts = loadContacts;
 
         // ============ Global search (top bar) ============
         let _searchDebounce = null;

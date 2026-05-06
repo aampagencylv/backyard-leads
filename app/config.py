@@ -8,7 +8,6 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./leads.db"
     anthropic_api_key: str = ""
     google_maps_api_key: str = ""
-    apollo_api_key: str = ""
     hunter_api_key: str = ""
     netrows_api_key: str = ""
     resend_api_key: str = ""

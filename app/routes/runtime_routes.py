@@ -3,6 +3,7 @@ Org-level runtime config endpoints (currently just the Netrows API key).
 Surfaced in the Settings UI so the team can rotate keys without SSH.
 """
 from __future__ import annotations
+from typing import Optional
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
@@ -17,7 +18,7 @@ router = APIRouter(prefix="/api", tags=["runtime-config"])
 
 
 class UpdateRuntimeConfigRequest(BaseModel):
-    netrows_api_key: str | None = None
+    netrows_api_key: Optional[str] = None
 
 
 @router.get("/runtime-config")

@@ -29,6 +29,7 @@ class User(Base):
     scheduling_url = Column(String(255), nullable=False, default="")
 
     sending_enabled = Column(Boolean, default=False)
+    role = Column(String(20), nullable=False, default="sales_rep")  # admin, sales_rep, read_only
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     searches = relationship("Search", back_populates="user")
@@ -261,3 +262,15 @@ class Task(Base):
 
     company = relationship("Company", back_populates="tasks")
     user = relationship("User", back_populates="tasks")
+
+
+class SavedView(Base):
+    """User-saved filter presets for Companies and Pipeline pages."""
+    __tablename__ = "saved_views"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    page = Column(String(30), nullable=False)  # "companies" or "pipeline"
+    name = Column(String(100), nullable=False)
+    filters_json = Column(Text, nullable=False)  # JSON dict of filter params
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))

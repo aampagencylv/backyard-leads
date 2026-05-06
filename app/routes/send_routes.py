@@ -49,6 +49,8 @@ async def send_single_email(
         raise HTTPException(status_code=400, detail="Contact has no email address. Add one first.")
     if contact.unsubscribed_at:
         raise HTTPException(status_code=400, detail="Contact has unsubscribed.")
+    if contact.email_status == "invalid":
+        raise HTTPException(status_code=400, detail="Contact email is marked invalid. Verify or update the email before sending.")
 
     company = (await db.execute(select(Company).where(Company.id == email.company_id))).scalar_one_or_none()
     if not company:

@@ -9,7 +9,7 @@ from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from pydantic import BaseModel
 
 from app.database import get_db
@@ -22,7 +22,9 @@ from app.services.netrows_enrichment import (
     find_email_by_name as netrows_find_email_by_name,
     find_email_by_linkedin as netrows_find_email_by_linkedin,
 )
+from app.services.hunter_enrichment import verify_email as hunter_verify_email
 from app.config import settings
+from app.runtime_config import get_netrows_api_key
 
 router = APIRouter(prefix="/api", tags=["contacts"])
 
@@ -38,10 +40,20 @@ async def list_all_contacts(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """List every contact across all companies, with company name attached."""
+    """List every contact across all companies, with company name and sequence status."""
+    email_count_sq = (
+        select(
+            GeneratedEmail.contact_id,
+            func.count(GeneratedEmail.id).label("email_count"),
+        )
+        .group_by(GeneratedEmail.contact_id)
+        .subquery()
+    )
     query = (
-        select(Contact, Company.name, Company.status)
+        select(Contact, Company.name, Company.status,
+               func.coalesce(email_count_sq.c.email_count, 0).label("email_count"))
         .join(Company, Contact.company_id == Company.id)
+        .outerjoin(email_count_sq, Contact.id == email_count_sq.c.contact_id)
         .order_by(Contact.updated_at.desc())
     )
     if company_status:
@@ -67,9 +79,10 @@ async def list_all_contacts(
             "linkedin_url": c.linkedin_url,
             "is_primary": c.is_primary,
             "email_status": c.email_status,
+            "has_sequence": ecount > 0,
             "unsubscribed_at": c.unsubscribed_at.isoformat() if c.unsubscribed_at else None,
         }
-        for c, cname, cstatus in rows
+        for c, cname, cstatus, ecount in rows
     ]
 
 
@@ -425,3 +438,49 @@ async def lookup_contact_email(
     await db.commit()
     await db.refresh(contact)
     return _contact_summary(contact)
+
+
+# ============================================================
+# Email verification via Hunter
+# ============================================================
+
+@router.post("/contacts/{contact_id}/verify-email")
+async def verify_contact_email(
+    contact_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Verify a contact's email via Hunter's email verifier."""
+    contact = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    if not contact.email:
+        raise HTTPException(status_code=400, detail="Contact has no email to verify")
+    if not settings.hunter_api_key:
+        raise HTTPException(status_code=400, detail="Hunter API key not configured")
+
+    result = await hunter_verify_email(contact.email, settings.hunter_api_key)
+    hunter_result = result.get("result", "unknown")
+    score = result.get("score", 0)
+
+    if hunter_result == "deliverable":
+        contact.email_status = "valid"
+    elif hunter_result == "undeliverable":
+        contact.email_status = "invalid"
+    else:
+        contact.email_status = "unknown"
+
+    db.add(Activity(
+        company_id=contact.company_id, contact_id=contact.id, user_id=user.id,
+        activity_type="email_verified",
+        content=f"Email verified: {contact.email} -> {hunter_result} (score: {score})",
+    ))
+    await db.commit()
+
+    return {
+        "contact_id": contact.id,
+        "email": contact.email,
+        "email_status": contact.email_status,
+        "result": hunter_result,
+        "score": score,
+    }

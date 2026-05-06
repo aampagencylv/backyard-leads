@@ -55,3 +55,17 @@ async def get_current_user(
     if user is None:
         raise credentials_exception
     return user
+
+
+async def require_admin(user: User = Depends(get_current_user)) -> User:
+    """Only admins can access this endpoint."""
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+
+async def require_sales_rep(user: User = Depends(get_current_user)) -> User:
+    """Sales reps and admins can access. Read-only users cannot."""
+    if user.role == "read_only":
+        raise HTTPException(status_code=403, detail="Read-only accounts cannot perform this action")
+    return user
