@@ -1280,101 +1280,255 @@
             }
         }
 
+        let _currentCompanyData = null;
+
         function renderCompanyDetail(d) {
+            _currentCompanyData = d;
             const el = document.getElementById('company-detail');
+            el.dataset.companyId = d.id;
             const problems = d.problems_found || [];
+            const contactsWithEmail = d.contacts.filter(c => c.email);
+            const primaryContact = d.contacts.find(c => c.is_primary) || d.contacts[0];
+            const selectedContactId = primaryContact ? primaryContact.id : null;
+
             el.innerHTML = `
-                <div class="page-header">
+                <!-- Header -->
+                <div class="page-header" style="margin-bottom:12px">
                     <div>
-                        <h1>${escapeHtml(d.name)}</h1>
+                        <h1 style="margin:0">${escapeHtml(d.name)}</h1>
                         <div style="font-size:13px;color:#666;margin-top:4px">
                             ${d.website ? `<a href="${escapeHtml(d.website)}" target="_blank">${escapeHtml(d.website.replace(/^https?:\/\//,''))}</a> · ` : ''}
                             ${escapeHtml(d.city || '')}${d.state ? ', ' + escapeHtml(d.state) : ''}
                             ${d.phone ? ' · ' + escapeHtml(d.phone) : ''}
+                            ${d.employee_count ? ` · ${d.employee_count} employees` : ''}
+                            ${d.linkedin_url ? ` · <a href="${escapeHtml(d.linkedin_url)}" target="_blank" style="color:#0077B5">LinkedIn</a>` : ''}
                         </div>
                     </div>
-                    <div>
-                        <span class="status-badge status-${d.status}">${d.status}</span>
+                    <div style="display:flex;gap:8px;align-items:center">
+                        <span class="status-badge status-${d.status}" style="font-size:13px;padding:4px 12px">${d.status}</span>
+                        ${d.website && !d.enriched ? `<button class="btn btn-secondary btn-sm" onclick="enrichContactsFromCompany(${d.id})">Enrich</button>` : ''}
                     </div>
                 </div>
 
-                <div style="display:grid;grid-template-columns:1fr 380px;gap:16px">
-                    <!-- Left: deals, activity, reviews -->
+                <!-- Three-column layout -->
+                <div style="display:grid;grid-template-columns:260px 1fr 280px;gap:12px;align-items:start">
+
+                    <!-- LEFT: Contacts + Deal summary -->
                     <div>
                         <div class="panel">
-                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-                                <h3 style="margin:0">Deals (${d.deals.length})</h3>
-                                <button class="btn btn-secondary btn-sm" onclick="addDeal(${d.id})">+ Add Deal</button>
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                                <h3 style="margin:0;font-size:14px">Contacts</h3>
+                                <div style="display:flex;gap:4px">
+                                    ${d.website ? `<button class="btn btn-secondary btn-xs" onclick="enrichContactsFromCompany(${d.id})">Enrich</button>` : ''}
+                                    <button class="btn btn-primary btn-xs" onclick="addContact(${d.id})">+</button>
+                                </div>
                             </div>
-                            <div id="deals-list">${renderDeals(d.deals)}</div>
+                            ${d.contacts.length === 0 ? '<p style="font-size:12px;color:#888">No contacts yet</p>' : d.contacts.map(c => `
+                                <div style="padding:8px;margin-bottom:6px;border-radius:6px;background:${c.id === selectedContactId ? 'var(--bmp-cream)' : '#f8f9fa'};border:1px solid ${c.id === selectedContactId ? '#e8d5c4' : '#eee'};cursor:pointer" onclick="switchSequenceContact(${d.id}, ${c.id})">
+                                    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+                                        <div style="min-width:0">
+                                            <strong style="font-size:13px">${escapeHtml(c.name) || '(no name)'}</strong>
+                                            ${c.is_primary ? '<span style="font-size:9px;background:var(--bmp-green);color:white;padding:0 4px;border-radius:2px;margin-left:3px">1st</span>' : ''}
+                                        </div>
+                                        <div style="display:flex;gap:3px;flex-shrink:0">
+                                            ${c.linkedin_url ? `<a href="${escapeHtml(c.linkedin_url)}" target="_blank" onclick="event.stopPropagation()" style="color:#0077B5;font-size:11px;text-decoration:none" title="LinkedIn">in</a>` : ''}
+                                            <button class="btn btn-secondary btn-xs" onclick="event.stopPropagation();editContact(${c.id})" style="padding:2px 5px;font-size:10px">Edit</button>
+                                        </div>
+                                    </div>
+                                    ${c.title ? `<div style="font-size:11px;color:#888">${escapeHtml(c.title)}</div>` : ''}
+                                    ${c.email ? `<div style="font-size:11px;color:var(--bmp-orange)">${escapeHtml(c.email)}</div>` : '<div style="font-size:11px;color:#ccc">no email</div>'}
+                                    ${c.phone ? `<div style="font-size:11px;color:#888">${escapeHtml(c.phone)}</div>` : ''}
+                                    ${c.emails.length > 0 ? `<div style="font-size:10px;color:var(--bmp-green);margin-top:2px">${c.emails.filter(e=>e.is_sent).length}/${c.emails.length} steps sent</div>` : ''}
+                                </div>
+                            `).join('')}
                         </div>
 
+                        <!-- Deal summary (compact) -->
                         <div class="panel">
-                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-                                <h3 style="margin:0">Activity Timeline</h3>
-                                <button class="btn btn-secondary btn-sm" onclick="addNote(${d.id})">+ Add Note</button>
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                                <h3 style="margin:0;font-size:14px">Deals</h3>
+                                <button class="btn btn-secondary btn-xs" onclick="addDeal(${d.id})">+</button>
+                            </div>
+                            ${d.deals.length ? d.deals.map(deal => `
+                                <div style="padding:6px 8px;background:#f8f9fa;border-radius:6px;margin-bottom:4px;font-size:12px">
+                                    <div style="display:flex;justify-content:space-between">
+                                        <strong>${escapeHtml(deal.package_label || deal.name)}</strong>
+                                        <span>${deal.value ? '$' + Number(deal.value).toLocaleString() + '/mo' : ''}</span>
+                                    </div>
+                                    <div style="color:#888">${deal.stage} · ${deal.probability}%${deal.contract_months ? ` · ${deal.contract_months}mo` : ''}</div>
+                                </div>
+                            `).join('') : '<p style="font-size:12px;color:#888">No deals</p>'}
+                        </div>
+                    </div>
+
+                    <!-- CENTER: Sequence (the main workspace) -->
+                    <div>
+                        <div class="panel" id="sequence-panel">
+                            ${renderSequencePanel(d, selectedContactId)}
+                        </div>
+
+                        <!-- Activity Timeline -->
+                        <div class="panel">
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                                <h3 style="margin:0;font-size:14px">Activity Timeline</h3>
+                                <button class="btn btn-secondary btn-xs" onclick="addNote(${d.id})">+ Note</button>
                             </div>
                             <div id="timeline-list">${renderTimeline(d.timeline)}</div>
                         </div>
 
+                        <!-- Reviews -->
                         <div class="panel">
-                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-                                <h3 style="margin:0">Reviews <span style="color:#888;font-size:12px;font-weight:400">${d.reviews ? `(${d.reviews.length})` : ''}</span></h3>
-                                <div style="display:flex;gap:6px">
-                                    <span style="font-size:11px;color:#888">${d.reviews_fetched_at ? 'fetched ' + fmtRelative(d.reviews_fetched_at) : 'never fetched'}</span>
-                                    <button class="btn btn-secondary btn-sm" onclick="refreshReviews(${d.id})">🔄 Refresh</button>
-                                </div>
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                                <h3 style="margin:0;font-size:14px">Reviews ${d.reviews ? `(${d.reviews.length})` : ''}</h3>
+                                <button class="btn btn-secondary btn-xs" onclick="refreshReviews(${d.id})">Refresh</button>
                             </div>
                             <div id="reviews-list">${renderReviews(d.reviews || [])}</div>
                         </div>
-
-                        <!-- Problems Found -->
-                        <div class="panel">
-                            <h3>Problems Found (${problems.length})</h3>
-                            <div>${problems.length ? problems.slice(0, 8).map(p => `<div style="font-size:12px;margin:4px 0"><span class="problem-tag ${escapeHtml(p.severity || 'medium')}">${escapeHtml(p.severity || 'medium')}</span> ${escapeHtml(p.detail || p.type || '')}</div>`).join('') : '<span style="font-size:12px;color:#888">No analysis yet. Click Enrich to analyze.</span>'}</div>
-                        </div>
                     </div>
 
-                    <!-- Right: contacts, tags, tasks -->
+                    <!-- RIGHT: Tags, Tasks, Problems -->
                     <div>
-                        <!-- Contacts -->
                         <div class="panel">
-                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-                                <h3 style="margin:0">Contacts (${d.contacts.length})</h3>
-                                <div style="display:flex;gap:6px">
-                                    ${d.website ? `<button class="btn btn-secondary btn-xs" onclick="enrichContactsFromCompany(${d.id})" title="Look up contacts via Netrows/Hunter">Enrich</button>` : ''}
-                                    <button class="btn btn-primary btn-xs" onclick="addContact(${d.id})">+ Add</button>
-                                </div>
-                            </div>
-                            <div id="contacts-list">${renderContacts(d.contacts)}</div>
-                        </div>
-
-                        <!-- Tags -->
-                        <div class="panel">
-                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-                                <h3 style="margin:0">Tags</h3>
-                            </div>
-                            <div id="company-tags" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">
+                            <h3 style="font-size:14px">Tags</h3>
+                            <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">
                                 ${(d.tags||[]).map(t => `<span style="background:${escapeHtml(t.color)}22;color:${escapeHtml(t.color)};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600">${escapeHtml(t.name)} <a onclick="removeCompanyTag(${d.id},${t.id})" style="cursor:pointer;margin-left:2px">×</a></span>`).join('') || '<span style="font-size:12px;color:#888">None</span>'}
                             </div>
                             <div style="display:flex;gap:4px">
-                                <input type="text" id="new-tag-input-${d.id}" placeholder="Add or create tag..." style="flex:1;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px" onkeydown="if(event.key==='Enter')addTagToCompany(${d.id})">
+                                <input type="text" id="new-tag-input-${d.id}" placeholder="Add tag..." style="flex:1;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:11px" onkeydown="if(event.key==='Enter')addTagToCompany(${d.id})">
                                 <button class="btn btn-secondary btn-xs" onclick="addTagToCompany(${d.id})">Add</button>
                             </div>
                         </div>
 
-                        <!-- Tasks -->
                         <div class="panel">
                             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-                                <h3 style="margin:0">Tasks</h3>
-                                <button class="btn btn-secondary btn-xs" onclick="addTask(${d.id})">+ Task</button>
+                                <h3 style="margin:0;font-size:14px">Tasks</h3>
+                                <button class="btn btn-secondary btn-xs" onclick="addTask(${d.id})">+</button>
                             </div>
                             <div id="tasks-list">Loading...</div>
+                        </div>
+
+                        <div class="panel">
+                            <h3 style="font-size:14px">Problems (${problems.length})</h3>
+                            ${problems.length ? `<div style="max-height:300px;overflow-y:auto">${problems.slice(0,10).map(p => `<div style="font-size:11px;margin:3px 0"><span class="problem-tag ${escapeHtml(p.severity||'medium')}" style="font-size:10px">${escapeHtml(p.severity||'')}</span> ${escapeHtml((p.detail||p.type||'').slice(0,80))}</div>`).join('')}</div>` : '<span style="font-size:12px;color:#888">No analysis yet</span>'}
                         </div>
                     </div>
                 </div>
             `;
             loadCompanyTasks(d.id);
+        }
+
+        function renderSequencePanel(d, contactId) {
+            const contact = d.contacts.find(c => c.id === contactId);
+            const contactsWithEmail = d.contacts.filter(c => c.email);
+
+            if (!d.contacts.length) {
+                return '<div style="text-align:center;padding:30px;color:#888"><p>No contacts yet.</p><p>Add a contact or click Enrich to find decision makers.</p></div>';
+            }
+
+            if (!contact) {
+                return '<div style="text-align:center;padding:30px;color:#888"><p>Select a contact from the left to view their sequence.</p></div>';
+            }
+
+            const emails = contact.emails || [];
+            const sentCount = emails.filter(e => e.is_sent).length;
+            const hasUnsent = emails.some(e => !e.is_sent);
+
+            return `
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                    <h3 style="margin:0;font-size:14px">Outreach Sequence</h3>
+                    <div style="display:flex;align-items:center;gap:8px">
+                        <span style="font-size:12px;color:#888">Sending to:</span>
+                        <select id="sequence-contact-select" onchange="switchSequenceContact(${d.id}, parseInt(this.value))" style="padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px">
+                            ${d.contacts.map(c => `<option value="${c.id}" ${c.id === contactId ? 'selected' : ''}>${escapeHtml(c.name || c.email || '(unnamed)')}</option>`).join('')}
+                        </select>
+                    </div>
+                </div>
+
+                ${emails.length === 0 ? `
+                    <div style="text-align:center;padding:20px;background:#f8f9fa;border-radius:8px">
+                        ${contact.email ? `
+                            <p style="color:#666;margin-bottom:8px">No sequence yet for ${escapeHtml(contact.name || contact.email)}</p>
+                            <button class="btn btn-success" onclick="generateContactSequence(${contact.id})">Generate Sequence</button>
+                        ` : `
+                            <p style="color:#888">This contact has no email address.</p>
+                            <p style="font-size:12px;color:#aaa">Add an email first, then generate a sequence.</p>
+                        `}
+                    </div>
+                ` : `
+                    <!-- Sequence controls -->
+                    <div style="background:var(--bmp-cream);border:1px solid #e8d5c4;border-radius:8px;padding:12px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center">
+                        <div>
+                            <strong style="font-size:13px">${sentCount === 0 ? 'Ready to start' : hasUnsent ? 'In progress' : 'Sequence complete'}</strong>
+                            <div style="font-size:11px;color:#888">${sentCount}/${emails.length} steps completed${contact.email ? ' · ' + escapeHtml(contact.email) : ''}</div>
+                        </div>
+                        <div style="display:flex;gap:6px">
+                            ${hasUnsent && contact.email ? `<button class="btn btn-success btn-sm" onclick="sendNextInSequence(${contact.id})" style="padding:8px 16px">${sentCount === 0 ? 'Start Sequence' : 'Send Next'}</button>` : ''}
+                            ${hasUnsent ? `<button class="btn btn-secondary btn-xs" onclick="pauseSequence(${contact.id})">Pause</button>` : ''}
+                            <button class="btn btn-secondary btn-xs" onclick="deleteSequence(${contact.id})">Delete</button>
+                            <button class="btn btn-secondary btn-xs" onclick="regenerateSequence(${contact.id})">Regen</button>
+                        </div>
+                    </div>
+
+                    <!-- Steps list -->
+                    ${emails.map(e => renderEmailCard(e, contact.id)).join('')}
+
+                    <div style="margin-top:8px;text-align:center">
+                        <button class="btn btn-secondary btn-xs" onclick="addStepToSequence(${contact.id})">+ Add Step</button>
+                    </div>
+                `}
+            `;
+        }
+
+        function switchSequenceContact(companyId, contactId) {
+            if (_currentCompanyData) {
+                const panel = document.getElementById('sequence-panel');
+                if (panel) panel.innerHTML = renderSequencePanel(_currentCompanyData, contactId);
+            }
+        }
+
+        async function addStepToSequence(contactId) {
+            const root = document.getElementById('modal-root');
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:480px">
+                        <h2>Add Step to Sequence</h2>
+                        <div class="form-group">
+                            <label>Step Type</label>
+                            <select id="step-type-select" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px">
+                                <option value="email">Email</option>
+                                <option value="linkedin">LinkedIn Message</option>
+                                <option value="call">Phone Call</option>
+                                <option value="text">Text Message</option>
+                                <option value="custom">Custom Task</option>
+                            </select>
+                        </div>
+                        <div class="form-group"><label>Title / Subject</label><input type="text" id="step-subject" placeholder="Follow up on proposal"></div>
+                        <div class="form-group"><label>Body / Message / Notes</label><textarea id="step-body" rows="4" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px" placeholder="Write the message or call script..."></textarea></div>
+                        <div class="form-group"><label>Day (from sequence start)</label><input type="number" id="step-delay" value="0" min="0"></div>
+                        <div class="modal-actions" style="display:flex;gap:8px;margin-top:16px">
+                            <button class="btn btn-secondary" onclick="document.getElementById('modal-root').innerHTML=''">Cancel</button>
+                            <button class="btn btn-primary" onclick="submitAddStep(${contactId})">Add Step</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function submitAddStep(contactId) {
+            const data = await api(`/api/send/contact/${contactId}/add-step`, {
+                method: 'POST',
+                body: JSON.stringify({
+                    step_type: document.getElementById('step-type-select').value,
+                    subject: document.getElementById('step-subject').value,
+                    body: document.getElementById('step-body').value,
+                    delay_days: parseInt(document.getElementById('step-delay').value) || 0,
+                }),
+            });
+            if (data) {
+                toast('Step added');
+                document.getElementById('modal-root').innerHTML = '';
+                _refreshCurrentCompany();
+            }
         }
 
         function renderContacts(contacts) {
@@ -1676,8 +1830,7 @@
         }
 
         function _refreshCurrentCompany() {
-            // Re-render the currently open company detail
-            const detailEl = document.getElementById('company-detail-root');
+            const detailEl = document.getElementById('company-detail');
             if (detailEl && detailEl.dataset.companyId) {
                 openCompanyDetail(parseInt(detailEl.dataset.companyId));
             }
