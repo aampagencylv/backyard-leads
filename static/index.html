@@ -16,233 +16,145 @@
             --bmp-cream: #FFF8F0;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: #f5f7f5;
-            color: #1a1a1a;
-        }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f7f5; color: #1a1a1a; }
         .hidden { display: none !important; }
 
-        /* Auth Screen */
-        .auth-container {
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: linear-gradient(135deg, var(--bmp-green-dark) 0%, var(--bmp-green) 50%, var(--bmp-green-light) 100%);
-        }
-        .auth-card {
-            background: white;
-            border-radius: 16px;
-            padding: 40px;
-            width: 420px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-        }
+        /* Auth */
+        .auth-container { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, var(--bmp-green-dark) 0%, var(--bmp-green) 50%, var(--bmp-green-light) 100%); }
+        .auth-card { background: white; border-radius: 16px; padding: 40px; width: 420px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); }
         .auth-logo { text-align: center; margin-bottom: 24px; }
         .auth-logo img { width: 280px; }
-        .auth-card h1 {
-            font-size: 20px;
-            margin-bottom: 4px;
-            color: var(--bmp-green);
-            text-align: center;
-        }
+        .auth-card h1 { font-size: 20px; margin-bottom: 4px; color: var(--bmp-green); text-align: center; }
         .auth-card p { color: #666; margin-bottom: 24px; text-align: center; font-size: 13px; }
         .form-group { margin-bottom: 16px; }
         .form-group label { display: block; font-size: 14px; font-weight: 500; margin-bottom: 4px; color: #333; }
-        .form-group input {
-            width: 100%;
-            padding: 10px 14px;
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            font-size: 14px;
-        }
-        .form-group input:focus { outline: none; border-color: var(--bmp-green); box-shadow: 0 0 0 2px rgba(27,94,32,0.1); }
-        .btn {
-            padding: 10px 20px;
-            border: none;
-            border-radius: 8px;
-            font-size: 14px;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        .btn-primary {
-            background: var(--bmp-orange);
-            color: white;
-            padding: 12px 24px;
-        }
+        .form-group input, .form-group textarea, .form-group select { width: 100%; padding: 10px 14px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; font-family: inherit; }
+        .form-group input:focus, .form-group textarea:focus, .form-group select:focus { outline: none; border-color: var(--bmp-green); box-shadow: 0 0 0 2px rgba(27,94,32,0.1); }
+        .btn { padding: 10px 20px; border: none; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
+        .btn-primary { background: var(--bmp-orange); color: white; padding: 12px 24px; }
         .auth-card .btn-primary { width: 100%; }
         .btn-primary:hover { background: var(--bmp-orange-hover); }
         .btn-secondary { background: #e8ece8; color: #333; }
         .btn-secondary:hover { background: #d0d5d0; }
         .btn-success { background: var(--bmp-green); color: white; }
         .btn-success:hover { background: var(--bmp-green-dark); }
+        .btn-danger { background: #fde8e8; color: #c0392b; }
+        .btn-danger:hover { background: #fcd5d5; }
         .btn-sm { padding: 6px 12px; font-size: 12px; }
+        .btn-xs { padding: 3px 8px; font-size: 11px; }
         .auth-toggle { text-align: center; margin-top: 16px; font-size: 14px; color: #666; }
         .auth-toggle a { color: var(--bmp-orange); cursor: pointer; text-decoration: none; font-weight: 500; }
         .auth-error { background: #fde8e8; color: #c0392b; padding: 8px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 12px; display: none; }
 
-        /* App Layout */
+        /* App layout */
         .app-container { display: flex; min-height: 100vh; }
-        .sidebar {
-            width: 240px;
-            background: var(--bmp-green-dark);
-            color: white;
-            padding: 0;
-            position: fixed;
-            height: 100vh;
-            overflow-y: auto;
-        }
-        .sidebar-brand {
-            padding: 16px;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
-            text-align: center;
-        }
+        .sidebar { width: 240px; background: var(--bmp-green-dark); color: white; padding: 0; position: fixed; height: 100vh; overflow-y: auto; }
+        .sidebar-brand { padding: 16px; border-bottom: 1px solid rgba(255,255,255,0.1); text-align: center; }
         .sidebar-brand img { width: 180px; margin-bottom: 4px; }
         .sidebar-brand small { color: rgba(255,255,255,0.5); font-size: 11px; display: block; }
         .sidebar-nav { padding: 12px 0; }
-        .sidebar-nav a {
-            display: block;
-            padding: 10px 20px;
-            color: rgba(255,255,255,0.7);
-            text-decoration: none;
-            font-size: 14px;
-            transition: all 0.2s;
-            border-left: 3px solid transparent;
-        }
+        .sidebar-nav a { display: flex; align-items: center; justify-content: space-between; padding: 10px 20px; color: rgba(255,255,255,0.7); text-decoration: none; font-size: 14px; transition: all 0.2s; border-left: 3px solid transparent; cursor: pointer; }
         .sidebar-nav a:hover { background: rgba(255,255,255,0.05); color: white; }
         .sidebar-nav a.active { background: rgba(255,255,255,0.1); color: white; border-left-color: var(--bmp-orange); }
-        .sidebar-user {
-            position: absolute;
-            bottom: 0;
-            width: 100%;
-            padding: 16px 20px;
-            border-top: 1px solid rgba(255,255,255,0.1);
-            font-size: 13px;
-            color: rgba(255,255,255,0.5);
-        }
+        .nav-badge { background: var(--bmp-orange); color: white; padding: 1px 7px; border-radius: 10px; font-size: 10px; font-weight: 600; min-width: 18px; text-align: center; }
+        .sidebar-user { position: absolute; bottom: 0; width: 100%; padding: 16px 20px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 13px; color: rgba(255,255,255,0.5); }
         .sidebar-user .logout { color: var(--bmp-orange-light); cursor: pointer; }
 
-        .main-content {
-            margin-left: 240px;
-            flex: 1;
-            padding: 30px;
-        }
-        .page-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 24px;
-        }
+        .main-content { margin-left: 240px; flex: 1; padding: 30px; }
+        .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
         .page-header h1 { font-size: 24px; }
 
-        /* Search Box */
-        .search-box {
-            background: white;
-            border-radius: 12px;
-            padding: 24px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-            margin-bottom: 24px;
-        }
-        .search-box h3 { margin-bottom: 16px; font-size: 16px; }
-        .search-form {
-            display: grid;
-            grid-template-columns: 1fr 1fr auto;
-            gap: 16px;
-            align-items: end;
-        }
+        /* Cards / panels */
+        .panel { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); margin-bottom: 16px; }
+        .panel h3 { font-size: 15px; margin-bottom: 12px; }
+        .search-box { background: white; border-radius: 12px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); margin-bottom: 24px; }
+        .search-form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 16px; align-items: end; }
         .search-form .form-group { margin-bottom: 0; }
         .search-form .btn { height: 42px; white-space: nowrap; }
-        .search-form select,
-        .search-form input[type="text"],
-        .search-form input[type="number"] {
-            width: 100%;
-            padding: 10px 14px;
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            font-size: 14px;
-        }
-        .search-form-advanced {
-            display: grid;
-            grid-template-columns: 2fr 1fr 100px 120px auto;
-            gap: 16px;
-            align-items: end;
-        }
+        .search-form-advanced { display: grid; grid-template-columns: 2fr 1fr 100px 120px auto; gap: 16px; align-items: end; }
 
-        /* Lead Cards */
-        .leads-grid { display: grid; gap: 16px; }
-        .lead-card {
-            background: white;
-            border-radius: 12px;
-            padding: 20px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-            border-left: 4px solid #ddd;
-            transition: all 0.2s;
-        }
-        .lead-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.1); }
-        .lead-card.enriched { border-left-color: #27ae60; }
-        .lead-card.has-problems { border-left-color: #e67e22; }
-        .lead-card-header { display: flex; justify-content: space-between; align-items: flex-start; }
-        .lead-card-header h3 { font-size: 16px; margin-bottom: 4px; }
-        .lead-card-meta { font-size: 13px; color: #666; margin-bottom: 12px; }
-        .lead-card-meta span { margin-right: 16px; }
-        .lead-problems { margin: 12px 0; }
-        .problem-tag {
-            display: inline-block;
-            padding: 3px 10px;
-            border-radius: 12px;
-            font-size: 11px;
-            font-weight: 500;
-            margin: 2px 4px 2px 0;
-        }
+        /* Company cards */
+        .companies-grid { display: grid; gap: 16px; }
+        .company-card { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); border-left: 4px solid #ddd; transition: all 0.2s; }
+        .company-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.1); }
+        .company-card.enriched { border-left-color: #27ae60; }
+        .company-card.has-problems { border-left-color: #e67e22; }
+        .company-card-header { display: flex; justify-content: space-between; align-items: flex-start; }
+        .company-card-header h3 { font-size: 16px; margin-bottom: 4px; }
+        .company-card-meta { font-size: 13px; color: #666; margin: 8px 0 12px; }
+        .company-card-meta span { margin-right: 16px; }
+
+        .problem-tag { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 500; margin: 2px 4px 2px 0; }
         .problem-tag.critical { background: #fde8e8; color: #c0392b; }
         .problem-tag.high { background: #fef3e2; color: #d35400; }
         .problem-tag.medium { background: #fef9e7; color: #f39c12; }
         .problem-tag.low { background: #eafaf1; color: #27ae60; }
-        .lead-actions { display: flex; gap: 8px; margin-top: 12px; }
+        .lead-actions, .company-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 
-        /* Email Preview */
-        .email-preview {
-            background: #f8f9fa;
-            border-radius: 8px;
-            padding: 16px;
-            margin-top: 12px;
-            font-size: 13px;
-        }
-        .email-preview .subject { font-weight: 600; margin-bottom: 8px; }
-        .email-preview .body { white-space: pre-wrap; color: #444; line-height: 1.5; }
+        /* Email previews */
+        .email-card { background: #f8f9fa; border-radius: 8px; padding: 14px; margin: 8px 0; font-size: 13px; border-left: 3px solid #ddd; }
+        .email-card.sent { border-left-color: var(--bmp-green); }
+        .email-card.paused { border-left-color: #95a5a6; opacity: 0.7; }
+        .email-card .meta { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 11px; font-weight: 600; color: #999; text-transform: uppercase; }
+        .email-card .meta.sent { color: var(--bmp-green); }
+        .email-card .subject { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+        .email-card .body { color: #444; white-space: pre-wrap; line-height: 1.5; max-height: 240px; overflow-y: auto; }
+
+        /* Contacts panel */
+        .contact-card { background: #f9faf9; border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; border: 1px solid #e8ece8; }
+        .contact-card.primary { border-color: var(--bmp-green); background: #f4faf4; }
+        .contact-card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+        .contact-card-header h4 { font-size: 14px; margin: 0; }
+        .contact-card-meta { font-size: 12px; color: #666; margin: 4px 0 0; }
+        .contact-card-meta a { color: var(--bmp-orange); text-decoration: none; }
+        .contact-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+        .contact-card .sequence-toggle { font-size: 11px; color: var(--bmp-green); cursor: pointer; user-select: none; margin-top: 8px; }
+        .contact-card .sequence-toggle:hover { text-decoration: underline; }
+
+        /* Deals */
+        .deal-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-radius: 8px; margin-bottom: 6px; background: #f9faf9; border: 1px solid #e8ece8; }
+        .deal-row .deal-name { font-weight: 500; font-size: 13px; }
+        .deal-row .deal-meta { font-size: 11px; color: #888; }
+        .deal-stage { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
+
+        /* Pipeline kanban */
+        .kanban { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 12px; }
+        .kanban-column { background: #ecf0ec; border-radius: 10px; padding: 12px; min-width: 280px; max-width: 280px; flex: 0 0 280px; }
+        .kanban-column h4 { font-size: 13px; margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center; }
+        .kanban-column .col-total { font-size: 11px; color: #666; font-weight: 400; }
+        .kanban-column .col-body { min-height: 60px; }
+        .kanban-column.drop-target { background: #d8e6d8; }
+        .kanban-card { background: white; border-radius: 8px; padding: 12px; margin-bottom: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); cursor: grab; user-select: none; border-left: 3px solid var(--bmp-green); }
+        .kanban-card.dragging { opacity: 0.4; }
+        .kanban-card .name { font-weight: 600; font-size: 13px; }
+        .kanban-card .value { color: var(--bmp-orange); font-weight: 600; font-size: 13px; margin-top: 4px; }
+        .kanban-card .meta { font-size: 11px; color: #666; margin-top: 4px; }
+
+        /* Activity timeline */
+        .timeline-item { padding: 10px 0; border-bottom: 1px solid #eee; font-size: 13px; }
+        .timeline-item:last-child { border-bottom: none; }
+        .timeline-meta { font-size: 11px; color: #999; margin-top: 2px; }
+        .timeline-icon { display: inline-block; width: 18px; text-align: center; margin-right: 4px; }
+
+        /* Tasks */
+        .task-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #eee; font-size: 13px; }
+        .task-row:last-child { border-bottom: none; }
+        .task-row .due { font-size: 11px; color: #888; }
+        .task-row .due.overdue { color: #c0392b; font-weight: 600; }
+        .task-row.completed { opacity: 0.5; text-decoration: line-through; }
+        .task-row input[type="checkbox"] { width: 16px; height: 16px; }
 
         /* Stats */
         .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
-        .stat-card {
-            background: white;
-            border-radius: 12px;
-            padding: 20px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-            text-align: center;
-        }
-        .stat-card .number { font-size: 32px; font-weight: 700; color: var(--bmp-green); }
+        .stat-card { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); text-align: center; }
+        .stat-card .number { font-size: 28px; font-weight: 700; color: var(--bmp-green); }
+        .stat-card .number.orange { color: var(--bmp-orange); }
         .stat-card .label { font-size: 13px; color: #666; margin-top: 4px; }
 
-        /* Loading */
-        .spinner {
-            display: inline-block;
-            width: 16px;
-            height: 16px;
-            border: 2px solid #ddd;
-            border-top-color: var(--bmp-orange);
-            border-radius: 50%;
-            animation: spin 0.6s linear infinite;
-        }
+        /* Misc */
+        .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid #ddd; border-top-color: var(--bmp-orange); border-radius: 50%; animation: spin 0.6s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
-
-        .status-badge {
-            padding: 3px 8px;
-            border-radius: 4px;
-            font-size: 11px;
-            font-weight: 600;
-            text-transform: uppercase;
-        }
+        .status-badge { padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
         .status-new { background: #e8f4fd; color: #2980b9; }
         .status-pursuing { background: #f3e8fd; color: #8e44ad; }
         .status-sequencing { background: #fef9e7; color: #f39c12; }
@@ -251,31 +163,25 @@
         .status-qualified { background: #d5f5e3; color: #1e8449; }
         .status-converted { background: #abebc6; color: #196f3d; }
         .status-not_interested { background: #f2f3f4; color: #7f8c8d; }
-
-        .toast {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            background: var(--bmp-green);
-            color: white;
-            padding: 12px 20px;
-            border-radius: 8px;
-            font-size: 14px;
-            z-index: 1000;
-            animation: slideUp 0.3s;
-        }
+        .stage-prospecting { background: #e8f4fd; color: #2980b9; }
+        .stage-qualified { background: #f3e8fd; color: #8e44ad; }
+        .stage-proposal { background: #fef9e7; color: #f39c12; }
+        .stage-negotiation { background: #fdebd0; color: #e67e22; }
+        .stage-closed_won { background: #d5f5e3; color: #1e8449; }
+        .stage-closed_lost { background: #f2f3f4; color: #7f8c8d; }
+        .toast { position: fixed; bottom: 20px; right: 20px; background: var(--bmp-green); color: white; padding: 12px 20px; border-radius: 8px; font-size: 14px; z-index: 1000; animation: slideUp 0.3s; }
         @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } }
     </style>
 </head>
 <body>
-    <!-- Auth Screen -->
+    <!-- ===================== AUTH SCREEN ===================== -->
     <div id="auth-screen" class="auth-container">
         <div class="auth-card">
             <div class="auth-logo">
-                <img src="https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz-1024x269.png" alt="Backyard Marketing Pros">
+                <img src="https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz.png" alt="BMP">
             </div>
-            <h1>Prospector</h1>
-            <p>Lead Intelligence Platform</p>
+            <h1>Prospector + CRM</h1>
+            <p>Sign in to your team account</p>
 
             <div id="auth-error" class="auth-error"></div>
 
@@ -289,318 +195,141 @@
                     <input type="password" id="login-password" placeholder="Your password" onkeydown="if(event.key==='Enter')login()">
                 </div>
                 <button class="btn btn-primary" onclick="login()">Sign In</button>
-                <div class="auth-toggle">
-                    No account? <a onclick="showRegister()">Request access</a>
-                </div>
+                <div class="auth-toggle">No account? <a onclick="showRegister()">Request access</a></div>
             </div>
 
             <div id="register-form" class="hidden">
-                <div class="form-group">
-                    <label>First Name</label>
-                    <input type="text" id="reg-first-name" placeholder="Steve">
-                </div>
-                <div class="form-group">
-                    <label>Last Name</label>
-                    <input type="text" id="reg-last-name" placeholder="Edwards">
-                </div>
+                <div class="form-group"><label>First Name</label><input type="text" id="reg-first-name" placeholder="Steve"></div>
+                <div class="form-group"><label>Last Name</label><input type="text" id="reg-last-name" placeholder="Edwards"></div>
                 <div class="form-group">
                     <label>Email</label>
                     <input type="email" id="reg-email" placeholder="you@backyardmarketingpros.com">
                     <small style="color:#888;font-size:11px">Must be a @backyardmarketingpros.com or @aamp.agency email</small>
                 </div>
-                <div class="form-group">
-                    <label>Password</label>
-                    <input type="password" id="reg-password" placeholder="Choose a password" onkeydown="if(event.key==='Enter')register()">
-                </div>
+                <div class="form-group"><label>Password</label><input type="password" id="reg-password" placeholder="Choose a password" onkeydown="if(event.key==='Enter')register()"></div>
                 <button class="btn btn-primary" onclick="register()">Create Account</button>
-                <div class="auth-toggle">
-                    Have an account? <a onclick="showLogin()">Sign in</a>
-                </div>
+                <div class="auth-toggle">Already have an account? <a onclick="showLogin()">Sign in</a></div>
             </div>
         </div>
     </div>
 
-    <!-- Main App -->
+    <!-- ===================== APP SCREEN ===================== -->
     <div id="app-screen" class="app-container hidden">
         <aside class="sidebar">
             <div class="sidebar-brand">
-                <img src="https://backyardmarketingpros.com/wp-content/uploads/2024/09/BMP_Logo_Color_Horiz-White-1024x269.png" alt="BMP">
-                <small>Prospector</small>
+                <img src="https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz_white-text.png" alt="BMP" onerror="this.src='https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz.png'">
+                <small>Prospector + CRM</small>
             </div>
             <nav class="sidebar-nav">
-                <a href="#" class="active" onclick="showPage('dashboard')">Dashboard</a>
-                <a href="#" onclick="showPage('search')">Find Leads</a>
-                <a href="#" onclick="showPage('leads')">All Leads</a>
-                <a href="#" onclick="showPage('pipeline')">Pipeline <span id="pipeline-count" style="background:var(--bmp-orange);color:white;padding:1px 6px;border-radius:10px;font-size:10px;margin-left:4px"></span></a>
-                <a href="#" onclick="showPage('settings')" style="margin-top:12px;border-top:1px solid rgba(255,255,255,0.1);padding-top:12px">Settings</a>
+                <a class="active" data-page="dashboard" onclick="showPage('dashboard')">Dashboard</a>
+                <a data-page="search" onclick="showPage('search')">Find Leads</a>
+                <a data-page="companies" onclick="showPage('companies')">Companies <span id="nav-companies-count" class="nav-badge"></span></a>
+                <a data-page="pipeline" onclick="showPage('pipeline')">Pipeline <span id="nav-pipeline-count" class="nav-badge"></span></a>
+                <a data-page="tasks" onclick="showPage('tasks')">Tasks <span id="nav-tasks-count" class="nav-badge"></span></a>
+                <a data-page="settings" onclick="showPage('settings')" style="margin-top:12px;border-top:1px solid rgba(255,255,255,0.1);padding-top:12px">Settings</a>
             </nav>
             <div class="sidebar-user">
                 <div id="user-name"></div>
-                <a class="logout" onclick="logout()">Sign out</a>
+                <span class="logout" onclick="logout()">Sign out</span>
             </div>
         </aside>
 
         <main class="main-content">
-            <!-- Dashboard Page -->
+
+            <!-- Dashboard -->
             <div id="page-dashboard">
                 <div class="page-header"><h1>Dashboard</h1></div>
                 <div class="stats-row">
-                    <div class="stat-card">
-                        <div class="number" id="stat-total">0</div>
-                        <div class="label">Total Leads</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="number" id="stat-enriched">0</div>
-                        <div class="label">Enriched</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="number" id="stat-emailed">0</div>
-                        <div class="label">Emails Generated</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="number" id="stat-problems">0</div>
-                        <div class="label">Problems Found</div>
-                    </div>
+                    <div class="stat-card"><div class="number" id="stat-companies">0</div><div class="label">Total Companies</div></div>
+                    <div class="stat-card"><div class="number orange" id="stat-pipeline-value">$0</div><div class="label">Pipeline Value</div></div>
+                    <div class="stat-card"><div class="number" id="stat-forecast">$0</div><div class="label">Weighted Forecast</div></div>
+                    <div class="stat-card"><div class="number" id="stat-tasks-open">0</div><div class="label">My Open Tasks</div></div>
                 </div>
-                <div class="search-box">
-                    <h3>Quick Search</h3>
-                    <div class="search-form">
-                        <div class="form-group">
-                            <label>Business Type</label>
-                            <select id="quick-keyword">
-                                <option value="">-- Select a type --</option>
-                                <option value="pool builders">Pool Builders</option>
-                                <option value="pool service and maintenance">Pool Service & Maintenance</option>
-                                <option value="landscaping companies">Landscaping Companies</option>
-                                <option value="lawn care service">Lawn Care Service</option>
-                                <option value="outdoor kitchen builders">Outdoor Kitchen Builders</option>
-                                <option value="deck builders">Deck Builders</option>
-                                <option value="fence companies">Fence Companies</option>
-                                <option value="patio contractors">Patio Contractors</option>
-                                <option value="hardscape contractors">Hardscape Contractors</option>
-                                <option value="irrigation companies">Irrigation Companies</option>
-                                <option value="tree service">Tree Service</option>
-                                <option value="concrete contractors">Concrete Contractors</option>
-                                <option value="landscape lighting">Landscape Lighting</option>
-                                <option value="pergola builders">Pergola Builders</option>
-                                <option value="retaining wall contractors">Retaining Wall Contractors</option>
-                                <option value="custom">Custom (type below)</option>
-                            </select>
-                            <input type="text" id="quick-keyword-custom" class="hidden" placeholder="Type custom business type..." style="margin-top:6px">
-                        </div>
-                        <div class="form-group">
-                            <label>Location</label>
-                            <input type="text" id="quick-location" placeholder="Phoenix, AZ">
-                        </div>
-                        <button class="btn btn-primary" onclick="runSearch()">Search</button>
-                    </div>
+                <div class="panel">
+                    <h3>Recent Companies</h3>
+                    <div id="recent-companies"></div>
                 </div>
-                <!-- Dashboard results actions bar -->
-                <div id="dashboard-actions" class="hidden" style="background:white;border-radius:12px;padding:16px 20px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,0.06);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-                    <div style="display:flex;align-items:center;gap:12px">
-                        <label style="font-size:13px;cursor:pointer;display:flex;align-items:center;gap:4px">
-                            <input type="checkbox" id="select-all-dashboard" onchange="toggleSelectAll('recent-leads')"> Select All
-                        </label>
-                        <span id="dashboard-selected-count" style="color:var(--bmp-orange);font-size:13px;font-weight:600"></span>
-                    </div>
-                    <div style="display:flex;gap:8px">
-                        <button class="btn btn-success btn-sm" onclick="pursueSelected()" id="btn-pursue-dashboard">Pursue Selected</button>
-                    </div>
-                </div>
-                <div id="recent-leads" class="leads-grid"></div>
             </div>
 
-            <!-- Search Page -->
+            <!-- Find Leads -->
             <div id="page-search" class="hidden">
                 <div class="page-header"><h1>Find Leads</h1></div>
                 <div class="search-box">
-                    <h3>Search Google Maps for Businesses</h3>
-                    <div class="search-form-advanced">
-                        <div class="form-group">
-                            <label>Business Type</label>
-                            <select id="search-keyword">
-                                <option value="">-- Select a type --</option>
-                                <option value="pool builders">Pool Builders</option>
-                                <option value="pool service and maintenance">Pool Service & Maintenance</option>
-                                <option value="landscaping companies">Landscaping Companies</option>
-                                <option value="lawn care service">Lawn Care Service</option>
-                                <option value="outdoor kitchen builders">Outdoor Kitchen Builders</option>
-                                <option value="deck builders">Deck Builders</option>
-                                <option value="fence companies">Fence Companies</option>
-                                <option value="patio contractors">Patio Contractors</option>
-                                <option value="hardscape contractors">Hardscape Contractors</option>
-                                <option value="irrigation companies">Irrigation Companies</option>
-                                <option value="tree service">Tree Service</option>
-                                <option value="concrete contractors">Concrete Contractors</option>
-                                <option value="landscape lighting">Landscape Lighting</option>
-                                <option value="pergola builders">Pergola Builders</option>
-                                <option value="retaining wall contractors">Retaining Wall Contractors</option>
-                                <option value="custom">Custom (type below)</option>
-                            </select>
-                            <input type="text" id="search-keyword-custom" class="hidden" placeholder="Type custom business type..." style="margin-top:6px">
-                        </div>
-                        <div class="form-group">
-                            <label>Location</label>
-                            <input type="text" id="search-location" placeholder="Phoenix, AZ">
-                        </div>
-                        <div class="form-group">
-                            <label>Max Results</label>
-                            <input type="number" id="search-max" value="20" min="5" max="60">
-                        </div>
-                        <div class="form-group">
-                            <label>Min Reviews</label>
-                            <input type="number" id="search-min-reviews" value="0" min="0">
-                        </div>
-                        <button class="btn btn-primary" onclick="runSearchFull()">Find Businesses</button>
+                    <h3>Search businesses by keyword + location</h3>
+                    <div class="search-form">
+                        <div class="form-group"><label>Keyword</label><input type="text" id="search-keyword" placeholder="pool builders"></div>
+                        <div class="form-group"><label>Location</label><input type="text" id="search-location" placeholder="Las Vegas, NV"></div>
+                        <button class="btn btn-primary" onclick="runSearch()">Search</button>
                     </div>
                 </div>
-
-                <!-- Search results actions bar -->
-                <div id="search-actions" class="hidden" style="background:white;border-radius:12px;padding:16px 20px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,0.06);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-                    <div style="display:flex;align-items:center;gap:12px">
-                        <label style="font-size:13px;cursor:pointer;display:flex;align-items:center;gap:4px">
-                            <input type="checkbox" id="select-all-search" onchange="toggleSelectAll('search-results')"> Select All
-                        </label>
-                        <span id="search-results-count" style="font-weight:600"></span>
-                        <span id="selected-count-display" style="color:var(--bmp-orange);font-size:13px;font-weight:600"></span>
-                    </div>
-                    <div style="display:flex;gap:8px">
-                        <button class="btn btn-success btn-sm" onclick="pursueSelected()" id="btn-pursue" disabled style="opacity:0.5">Pursue Selected</button>
-                        <button class="btn btn-secondary btn-sm" onclick="autoEnrichAll()">Analyze All Websites</button>
-                    </div>
-                </div>
-
-                <div id="search-results" class="leads-grid"></div>
+                <div id="search-results"></div>
             </div>
 
-            <!-- Leads Page -->
-            <div id="page-leads" class="hidden">
+            <!-- Companies (was "All Leads") -->
+            <div id="page-companies" class="hidden">
                 <div class="page-header">
-                    <h1>All Leads</h1>
-                    <div style="display:flex;gap:8px;align-items:center">
-                        <select id="filter-min-reviews" onchange="loadAllLeads()" style="padding:6px 10px;border-radius:6px;border:1px solid #ddd;font-size:12px">
-                            <option value="0">All sizes</option>
-                            <option value="10">10+ reviews</option>
-                            <option value="25">25+ reviews</option>
-                            <option value="50">50+ reviews</option>
-                            <option value="100">100+ reviews</option>
-                        </select>
-                        <select id="filter-sort" onchange="loadAllLeads()" style="padding:6px 10px;border-radius:6px;border:1px solid #ddd;font-size:12px">
-                            <option value="reviews">Most Reviews</option>
-                            <option value="rating">Highest Rated</option>
-                            <option value="created_at">Newest</option>
-                            <option value="name">Name A-Z</option>
-                        </select>
-                        <button class="btn btn-secondary btn-sm" onclick="filterLeads('all')">All</button>
-                        <button class="btn btn-secondary btn-sm" onclick="filterLeads('enriched')">Enriched</button>
-                        <button class="btn btn-secondary btn-sm" onclick="filterLeads('new')">New</button>
+                    <h1>Companies</h1>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap">
+                        <button class="btn btn-secondary btn-sm" onclick="loadCompanies('all')">All</button>
+                        <button class="btn btn-secondary btn-sm" onclick="loadCompanies('new')">New</button>
+                        <button class="btn btn-secondary btn-sm" onclick="loadCompanies('sequencing')">Sequencing</button>
+                        <button class="btn btn-secondary btn-sm" onclick="loadCompanies('contacted')">Contacted</button>
+                        <button class="btn btn-secondary btn-sm" onclick="loadCompanies('replied')">Replied</button>
+                        <button class="btn btn-secondary btn-sm" onclick="loadCompanies('qualified')">Qualified</button>
                     </div>
                 </div>
-                <div style="background:white;border-radius:12px;padding:12px 20px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,0.06);display:flex;justify-content:space-between;align-items:center">
-                    <div style="display:flex;align-items:center;gap:12px">
-                        <label style="font-size:13px;cursor:pointer;display:flex;align-items:center;gap:4px">
-                            <input type="checkbox" id="select-all-leads" onchange="toggleSelectAll('all-leads')"> Select All
-                        </label>
-                        <span id="leads-selected-count" style="color:var(--bmp-orange);font-size:13px;font-weight:600"></span>
-                    </div>
-                    <div style="display:flex;gap:8px">
-                        <button class="btn btn-success btn-sm" onclick="pursueSelected()" id="btn-pursue-leads">Pursue Selected</button>
-                    </div>
-                </div>
-                <div id="all-leads" class="leads-grid"></div>
+                <div id="all-companies"></div>
             </div>
 
-            <!-- Emails Page -->
-            <!-- Pipeline Page -->
+            <!-- Pipeline (kanban) -->
             <div id="page-pipeline" class="hidden">
                 <div class="page-header">
                     <h1>Pipeline</h1>
+                    <div id="pipeline-totals" style="font-size:13px;color:#666"></div>
+                </div>
+                <div id="kanban" class="kanban"></div>
+            </div>
+
+            <!-- Tasks -->
+            <div id="page-tasks" class="hidden">
+                <div class="page-header">
+                    <h1>Tasks</h1>
                     <div style="display:flex;gap:8px">
-                        <button class="btn btn-secondary btn-sm" onclick="loadPipeline('all')">All</button>
-                        <button class="btn btn-secondary btn-sm" onclick="loadPipeline('pursuing')">Enriching</button>
-                        <button class="btn btn-secondary btn-sm" onclick="loadPipeline('sequencing')">Sequencing</button>
-                        <button class="btn btn-secondary btn-sm" onclick="loadPipeline('contacted')">Contacted</button>
-                        <button class="btn btn-secondary btn-sm" onclick="loadPipeline('qualified')">Qualified</button>
+                        <button class="btn btn-secondary btn-sm" onclick="loadTasks('mine')">My Open</button>
+                        <button class="btn btn-secondary btn-sm" onclick="loadTasks('all')">Team Open</button>
                     </div>
                 </div>
-
-                <div class="stats-row" style="grid-template-columns:repeat(5,1fr)">
-                    <div class="stat-card">
-                        <div class="number" id="pipe-pursuing">0</div>
-                        <div class="label">Enriching</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="number" id="pipe-sequencing">0</div>
-                        <div class="label">Sequencing</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="number" id="pipe-contacted">0</div>
-                        <div class="label">Contacted</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="number" id="pipe-qualified">0</div>
-                        <div class="label">Qualified</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="number" style="color:var(--bmp-orange)" id="pipe-no-email">0</div>
-                        <div class="label">Missing Email</div>
-                    </div>
-                </div>
-
-                <div id="pipeline-leads" class="leads-grid"></div>
+                <div class="panel" id="tasks-panel"></div>
             </div>
 
-            <!-- CRM Lead Detail Page -->
-            <div id="page-lead-detail" class="hidden">
-                <div style="margin-bottom:16px">
-                    <a href="#" onclick="showPage('pipeline')" style="color:var(--bmp-green);text-decoration:none;font-size:13px">Back to Pipeline</a>
-                </div>
-                <div id="lead-detail-content"></div>
+            <!-- Company Detail -->
+            <div id="page-company-detail" class="hidden">
+                <div style="margin-bottom:12px"><a href="#" onclick="showPage('companies');return false" style="color:var(--bmp-green);text-decoration:none;font-size:13px">← Back to Companies</a></div>
+                <div id="company-detail"></div>
             </div>
 
-            <!-- Settings Page -->
+            <!-- Settings (signature) -->
             <div id="page-settings" class="hidden">
                 <div class="page-header"><h1>Settings</h1></div>
-
                 <div class="search-box" style="max-width:600px">
                     <h3>Your Profile</h3>
-                    <p style="font-size:13px;color:#666;margin-bottom:16px">These fields populate the standardized BMP email signature. The signature itself is fixed — only your details vary.</p>
-
-                    <div class="form-group">
-                        <label>First Name</label>
-                        <input type="text" id="settings-first-name" placeholder="Steve">
-                    </div>
-                    <div class="form-group">
-                        <label>Last Name</label>
-                        <input type="text" id="settings-last-name" placeholder="Edwards">
-                    </div>
-                    <div class="form-group">
-                        <label>Nickname / Title Line</label>
-                        <input type="text" id="settings-nickname" placeholder="Founder &amp; Chief Marketing Pro">
-                    </div>
-                    <div class="form-group">
-                        <label>Mobile Phone</label>
-                        <input type="text" id="settings-phone-number" placeholder="702-555-1234">
-                    </div>
-                    <div class="form-group">
-                        <label>Scheduling Link</label>
-                        <input type="text" id="settings-scheduling-url" placeholder="https://calendly.com/your-link">
-                    </div>
-
+                    <p style="font-size:13px;color:#666;margin-bottom:16px">These fields populate the standardized BMP email signature. Only your details vary.</p>
+                    <div class="form-group"><label>First Name</label><input type="text" id="settings-first-name" placeholder="Steve"></div>
+                    <div class="form-group"><label>Last Name</label><input type="text" id="settings-last-name" placeholder="Edwards"></div>
+                    <div class="form-group"><label>Nickname / Title Line</label><input type="text" id="settings-nickname" placeholder="Founder &amp; Chief Marketing Pro"></div>
+                    <div class="form-group"><label>Mobile Phone</label><input type="text" id="settings-phone-number" placeholder="702-555-1234"></div>
+                    <div class="form-group"><label>Scheduling Link</label><input type="text" id="settings-scheduling-url" placeholder="https://calendly.com/your-link"></div>
                     <div style="background:#f5f7f5;border-radius:8px;padding:12px;margin:16px 0;font-size:13px">
                         <div><strong>Sends from:</strong> <span id="settings-send-from" style="color:var(--bmp-green)"></span></div>
                         <div><strong>Replies go to:</strong> <span id="settings-reply-to" style="color:var(--bmp-green)"></span></div>
                     </div>
-
                     <button class="btn btn-primary" onclick="saveProfile()">Save Profile</button>
                 </div>
-
                 <div class="search-box" style="max-width:600px;margin-top:16px">
                     <h3>Email Signature Preview</h3>
-                    <p style="font-size:13px;color:#666;margin-bottom:16px">This is what your signature looks like. Update your profile fields above to change what shows here.</p>
+                    <p style="font-size:13px;color:#666;margin-bottom:16px">This is what your signature looks like. Edit your profile fields above to update it.</p>
                     <div id="signature-preview" style="background:#fff;border:1px solid #e5e7eb;border-radius:6px;padding:16px"></div>
                 </div>
-
                 <div class="search-box" style="max-width:600px;margin-top:16px">
                     <h3>Email Sending</h3>
                     <div style="display:flex;align-items:center;gap:12px;padding:8px 0">
@@ -609,19 +338,37 @@
                             <span>Enable email sending</span>
                         </label>
                     </div>
-                    <p style="font-size:12px;color:#888;margin-top:4px">When disabled, you can still generate and review sequences, but the Send buttons will be locked. Enable this once your Resend domain is verified.</p>
+                    <p style="font-size:12px;color:#888;margin-top:4px">When disabled, you can still generate and review sequences, but Send buttons are locked. Enable once your Resend domain is verified.</p>
                 </div>
             </div>
         </main>
     </div>
 
     <script>
+        // ============ State + helpers ============
         let token = localStorage.getItem('token');
         let currentUser = null;
+        if (token) checkAuth();
 
-        // Check auth on load
-        if (token) {
-            checkAuth();
+        function escapeHtml(text) {
+            if (text === null || text === undefined) return '';
+            return String(text)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function fmtMoney(n) {
+            if (n === null || n === undefined) return '—';
+            return '$' + Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
+        }
+
+        function fmtDate(iso) {
+            if (!iso) return '';
+            const d = new Date(iso);
+            return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
         }
 
         async function api(path, options = {}) {
@@ -634,9 +381,18 @@
                 },
             });
             if (res.status === 401) { logout(); return null; }
-            return res.json();
+            try { return await res.json(); } catch(e) { return null; }
         }
 
+        function toast(msg) {
+            const t = document.createElement('div');
+            t.className = 'toast';
+            t.textContent = msg;
+            document.body.appendChild(t);
+            setTimeout(() => t.remove(), 3000);
+        }
+
+        // ============ Auth ============
         async function checkAuth() {
             try {
                 const user = await api('/api/auth/me');
@@ -646,17 +402,16 @@
                     document.getElementById('app-screen').classList.remove('hidden');
                     document.getElementById('user-name').textContent = user.name;
                     loadDashboard();
+                    refreshNavBadges();
                 }
             } catch(e) { logout(); }
         }
-
         async function login() {
             const email = document.getElementById('login-email').value;
             const password = document.getElementById('login-password').value;
             const formData = new URLSearchParams();
             formData.append('username', email);
             formData.append('password', password);
-
             const res = await fetch('/api/auth/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -671,31 +426,20 @@
                 showAuthError(data.detail || 'Invalid email or password');
             }
         }
-
-        function showAuthError(msg) {
-            const el = document.getElementById('auth-error');
-            el.textContent = msg;
-            el.style.display = 'block';
-            setTimeout(() => { el.style.display = 'none'; }, 5000);
-        }
-
         async function register() {
-            const email = document.getElementById('reg-email').value.trim().toLowerCase();
-            const allowedDomains = ['backyardmarketingpros.com', 'aamp.agency'];
-            const emailDomain = email.split('@')[1];
-
-            if (!allowedDomains.includes(emailDomain)) {
+            const email = document.getElementById('reg-email').value.trim();
+            const allowed = ['backyardmarketingpros.com', 'aamp.agency'];
+            if (!allowed.includes(email.split('@')[1])) {
                 showAuthError('Registration is restricted to @backyardmarketingpros.com and @aamp.agency emails.');
                 return;
             }
-
             const res = await fetch('/api/auth/register', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     first_name: document.getElementById('reg-first-name').value,
                     last_name: document.getElementById('reg-last-name').value,
-                    email: email,
+                    email,
                     password: document.getElementById('reg-password').value,
                 }),
             });
@@ -708,801 +452,569 @@
                 showAuthError(data.detail || 'Registration failed');
             }
         }
-
         function logout() {
-            token = null;
             localStorage.removeItem('token');
-            document.getElementById('auth-screen').classList.remove('hidden');
-            document.getElementById('app-screen').classList.add('hidden');
+            token = null;
+            location.reload();
         }
+        function showRegister() { document.getElementById('login-form').classList.add('hidden'); document.getElementById('register-form').classList.remove('hidden'); }
+        function showLogin() { document.getElementById('login-form').classList.remove('hidden'); document.getElementById('register-form').classList.add('hidden'); }
+        function showAuthError(msg) { const el = document.getElementById('auth-error'); el.textContent = msg; el.style.display = 'block'; }
 
-        function showRegister() {
-            document.getElementById('login-form').classList.add('hidden');
-            document.getElementById('register-form').classList.remove('hidden');
-        }
-        function showLogin() {
-            document.getElementById('register-form').classList.add('hidden');
-            document.getElementById('login-form').classList.remove('hidden');
-        }
-
+        // ============ Page nav ============
         function showPage(page) {
             document.querySelectorAll('[id^="page-"]').forEach(el => el.classList.add('hidden'));
             document.getElementById(`page-${page}`).classList.remove('hidden');
-            document.querySelectorAll('.sidebar-nav a').forEach(a => a.classList.remove('active'));
-            event.target.classList.add('active');
-
-            if (page === 'leads') loadAllLeads();
+            document.querySelectorAll('.sidebar-nav a').forEach(a => a.classList.toggle('active', a.dataset.page === page));
             if (page === 'dashboard') loadDashboard();
+            if (page === 'companies') loadCompanies('all');
             if (page === 'pipeline') loadPipeline();
+            if (page === 'tasks') loadTasks('mine');
             if (page === 'settings') loadSettings();
         }
 
-        // Show/hide custom keyword input when "Custom" is selected
-        document.querySelectorAll('#quick-keyword, #search-keyword').forEach(sel => {
-            sel.addEventListener('change', function() {
-                const customInput = this.id === 'quick-keyword'
-                    ? document.getElementById('quick-keyword-custom')
-                    : document.getElementById('search-keyword-custom');
-                if (this.value === 'custom') {
-                    customInput.classList.remove('hidden');
-                    customInput.focus();
-                } else {
-                    customInput.classList.add('hidden');
-                }
-            });
-        });
+        async function refreshNavBadges() {
+            const [companies, pipeline, myTasks] = await Promise.all([
+                api('/api/companies/?status=sequencing'),
+                api('/api/pipeline'),
+                api('/api/crm/tasks/upcoming'),
+            ]);
+            if (companies) document.getElementById('nav-companies-count').textContent = companies.length || '';
+            if (pipeline) {
+                const open = ['prospecting','qualified','proposal','negotiation'].reduce((s, st) => s + (pipeline.totals[st]?.count || 0), 0);
+                document.getElementById('nav-pipeline-count').textContent = open || '';
+            }
+            if (myTasks) document.getElementById('nav-tasks-count').textContent = myTasks.length || '';
+        }
 
+        // ============ Dashboard ============
         async function loadDashboard() {
-            const leads = await api('/api/leads/');
-            if (!leads) return;
-
-            document.getElementById('stat-total').textContent = leads.length;
-            document.getElementById('stat-enriched').textContent = leads.filter(l => l.enriched).length;
-            document.getElementById('stat-emailed').textContent = leads.filter(l => l.email_generated).length;
-
-            let totalProblems = 0;
-            leads.forEach(l => { totalProblems += l.problem_count || 0; });
-            document.getElementById('stat-problems').textContent = totalProblems;
-
-            // Update pipeline badge
-            const activeStatuses = ['pursuing', 'sequencing', 'contacted', 'qualified'];
-            const pipelineActive = leads.filter(l => activeStatuses.includes(l.status)).length;
-            const pipeCount = document.getElementById('pipeline-count');
-            if (pipeCount) pipeCount.textContent = pipelineActive || '';
-
-            // Show recent leads
-            renderLeads(leads.slice(0, 10), 'recent-leads');
-        }
-
-        let lastSearchId = null;
-
-        function getKeyword(prefix) {
-            const sel = document.getElementById(prefix + '-keyword');
-            if (sel.value === 'custom') {
-                return document.getElementById(prefix + '-keyword-custom').value.trim();
+            const [companies, pipeline, forecast, tasks] = await Promise.all([
+                api('/api/companies/'),
+                api('/api/pipeline'),
+                api('/api/forecast'),
+                api('/api/crm/tasks/upcoming'),
+            ]);
+            if (companies) document.getElementById('stat-companies').textContent = companies.length;
+            if (pipeline) {
+                const total = ['prospecting','qualified','proposal','negotiation'].reduce((s, st) => s + (pipeline.totals[st]?.value || 0), 0);
+                document.getElementById('stat-pipeline-value').textContent = fmtMoney(total);
             }
-            return sel.value;
+            if (forecast) document.getElementById('stat-forecast').textContent = fmtMoney(forecast.weighted_forecast);
+            if (tasks) document.getElementById('stat-tasks-open').textContent = tasks.length;
+            if (companies) renderCompanies(companies.slice(0, 10), 'recent-companies');
         }
 
-        async function runSearch() {
-            const keyword = getKeyword('quick');
-            const location = document.getElementById('quick-location').value.trim();
-            if (!keyword) { toast('Select or type a business type'); return; }
-            if (!location) { toast('Enter a location (e.g. Phoenix, AZ)'); return; }
-            await doSearch(keyword, location, 20);
+        // ============ Companies ============
+        async function loadCompanies(filter) {
+            const path = filter === 'all' ? '/api/companies/' : `/api/companies/?status=${filter}`;
+            const data = await api(path);
+            if (data) renderCompanies(data, 'all-companies');
         }
 
-        async function runSearchFull() {
-            const keyword = getKeyword('search');
-            const location = document.getElementById('search-location').value.trim();
-            const max = document.getElementById('search-max').value;
-            if (!keyword) { toast('Select or type a business type'); return; }
-            if (!location) { toast('Enter a location (e.g. Phoenix, AZ)'); return; }
-            await doSearch(keyword, location, parseInt(max), 'search-results');
-        }
-
-        async function doSearch(keyword, location, maxResults, targetEl = 'recent-leads') {
-            toast('Searching Google Maps... this may take 10-30 seconds');
-            const data = await api('/api/search/', {
-                method: 'POST',
-                body: JSON.stringify({ keyword, location, max_results: maxResults }),
-            });
-            if (data) {
-                lastSearchId = data.search_id;
-                toast(`Found ${data.results_count} businesses! Select the ones you want to pursue.`);
-                const leads = await api(`/api/leads/?search_id=${data.search_id}&sort_by=reviews`);
-                renderLeads(leads, targetEl);
-
-                // Show the appropriate actions bar
-                if (targetEl === 'search-results') {
-                    const actionsBar = document.getElementById('search-actions');
-                    if (actionsBar) {
-                        actionsBar.classList.remove('hidden');
-                        document.getElementById('search-results-count').textContent = `${data.results_count} businesses found`;
-                    }
-                } else if (targetEl === 'recent-leads') {
-                    const dashActions = document.getElementById('dashboard-actions');
-                    if (dashActions) dashActions.classList.remove('hidden');
-                }
-            }
-        }
-
-        async function loadAllLeads(filter = 'all') {
-            const minReviews = document.getElementById('filter-min-reviews')?.value || 0;
-            const sortBy = document.getElementById('filter-sort')?.value || 'reviews';
-            let params = `?sort_by=${sortBy}`;
-            if (parseInt(minReviews) > 0) params += `&min_reviews=${minReviews}`;
-            if (filter === 'enriched') params += '&enriched_only=true';
-            else if (filter !== 'all') params += `&status=${filter}`;
-
-            const leads = await api(`/api/leads/${params}`);
-            if (leads) renderLeads(leads, 'all-leads');
-        }
-
-        function filterLeads(filter) { loadAllLeads(filter); }
-
-        function renderLeads(leads, containerId) {
+        function renderCompanies(companies, containerId) {
             const container = document.getElementById(containerId);
-            if (!leads || leads.length === 0) {
-                container.innerHTML = '<p style="color:#666;padding:20px;">No leads yet. Run a search to find businesses.</p>';
+            if (!companies || companies.length === 0) {
+                container.innerHTML = '<p style="color:#666;padding:20px">No companies yet. Run a search to find businesses.</p>';
                 return;
             }
-
-            container.innerHTML = leads.map(lead => `
-                <div class="lead-card ${lead.enriched ? 'enriched' : ''} ${lead.problem_count > 0 ? 'has-problems' : ''}" data-lead-id="${lead.id}">
-                    <div class="lead-card-header">
-                        <div style="display:flex;align-items:center;gap:8px">
-                            ${lead.status === 'new' ? `<input type="checkbox" class="lead-checkbox" value="${lead.id}" onchange="updateSelectedCount()">` : ''}
-                            <h3 style="margin:0"><a href="#" onclick="openLeadDetail(${lead.id});return false" style="color:inherit;text-decoration:none;border-bottom:1px dashed #ccc">${lead.business_name}</a></h3>
-                            <span class="status-badge status-${lead.status}">${lead.status}</span>
-                            ${lead.problem_count > 0 ? `<span style="background:#fde8e8;color:#c0392b;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;margin-left:6px">${lead.problem_count} issues found</span>` : ''}
+            container.innerHTML = companies.map(c => `
+                <div class="company-card ${c.enriched ? 'enriched' : ''} ${c.problem_count > 0 ? 'has-problems' : ''}">
+                    <div class="company-card-header">
+                        <div style="flex:1">
+                            <h3><a href="#" onclick="openCompanyDetail(${c.id});return false" style="color:inherit;text-decoration:none;border-bottom:1px dashed #ccc">${escapeHtml(c.name)}</a></h3>
+                            <span class="status-badge status-${c.status}">${c.status}</span>
+                            ${c.problem_count > 0 ? `<span style="background:#fde8e8;color:#c0392b;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;margin-left:6px">${c.problem_count} issues found</span>` : ''}
                         </div>
                         <div style="text-align:right">
-                            ${lead.review_count ? `<div style="font-size:20px;font-weight:700;color:${lead.review_count >= 50 ? '#27ae60' : lead.review_count >= 20 ? '#f39c12' : '#999'}">${lead.review_count}</div><div style="font-size:10px;color:#666">reviews</div>` : '<div style="font-size:11px;color:#999">No reviews</div>'}
-                            ${lead.rating ? `<div style="color:#f39c12;font-size:13px;margin-top:2px">★ ${lead.rating}</div>` : ''}
+                            ${c.review_count ? `<div style="font-size:18px;font-weight:700;color:${c.review_count >= 50 ? '#27ae60' : c.review_count >= 20 ? '#f39c12' : '#999'}">${c.review_count}</div><div style="font-size:10px;color:#666">reviews</div>` : '<div style="font-size:11px;color:#999">No reviews</div>'}
+                            ${c.rating ? `<div style="color:#f39c12;font-size:12px;margin-top:2px">★ ${c.rating}</div>` : ''}
                         </div>
                     </div>
-                    <div class="lead-card-meta">
-                        ${lead.phone ? `<span>📞 ${lead.phone}</span>` : ''}
-                        ${lead.website ? `<span>🌐 <a href="${lead.website}" target="_blank">${lead.website.replace('https://','').replace('http://','').slice(0,30)}</a></span>` : ''}
-                        ${lead.city ? `<span>📍 ${lead.city}, ${lead.state}</span>` : ''}
-                        ${lead.review_count >= 50 ? '<span style="background:#eafaf1;color:#27ae60;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600">HIGH VALUE</span>' : ''}
+                    <div class="company-card-meta">
+                        ${c.phone ? `<span>📞 ${escapeHtml(c.phone)}</span>` : ''}
+                        ${c.website ? `<span>🌐 <a href="${escapeHtml(c.website)}" target="_blank" rel="noreferrer">${escapeHtml(c.website.replace(/^https?:\/\//,'').slice(0,40))}</a></span>` : ''}
+                        ${c.city ? `<span>📍 ${escapeHtml(c.city)}, ${escapeHtml(c.state || '')}</span>` : ''}
                     </div>
-                    ${lead.contact_name ? `
-                        <div style="background:#f0f7ff;border-radius:6px;padding:8px 12px;margin:8px 0;font-size:13px">
-                            <strong>${lead.contact_name}</strong>${lead.contact_title ? ` — ${lead.contact_title}` : ''}
-                            ${lead.contact_email ? `<br><span style="color:var(--bmp-orange)">${lead.contact_email}</span>` : ''}
-                        </div>
-                    ` : ''}
-                    ${lead.enriched ? `
-                        <div class="lead-problems">
-                            ${(lead.problems_found || []).map(p => `
-                                <span class="problem-tag ${p.severity}">${p.type.replace(/_/g, ' ')}</span>
-                            `).join('')}
-                        </div>
-                        ${lead.enrichment_summary ? `<p style="font-size:13px;color:#555;margin:8px 0">${lead.enrichment_summary}</p>` : ''}
-                    ` : ''}
-                    <div class="lead-actions">
-                        ${lead.status === 'new' && !lead.enriched && lead.website ? `<button class="btn btn-secondary btn-sm" onclick="enrichLead(${lead.id})">Analyze Website</button>` : ''}
-                        ${lead.status === 'new' && lead.enriched && !lead.email_generated ? `<button class="btn btn-success btn-sm" onclick="generateEmail(${lead.id})">Generate Email</button>` : ''}
-                        ${lead.email_generated ? `<button class="btn btn-secondary btn-sm" onclick="viewEmails(${lead.id})">View Sequence (${lead.status === 'sequencing' ? 'active' : lead.status})</button>` : ''}
-                        ${lead.phone ? `<button class="btn btn-secondary btn-sm" onclick="copyToClipboard('${lead.phone}')">Copy Phone</button>` : ''}
-                        ${lead.status === 'sequencing' || lead.status === 'contacted' ? `<button class="btn btn-success btn-sm" onclick="markReplied(${lead.id})">Mark as Replied</button>` : ''}
+                    ${c.enriched && c.problems_found ? `<div>${c.problems_found.slice(0, 4).map(p => `<span class="problem-tag ${escapeHtml(p.severity || 'medium')}">${escapeHtml((p.type || '').replace(/_/g,' '))}</span>`).join('')}</div>` : ''}
+                    ${c.enrichment_summary ? `<p style="font-size:13px;color:#555;margin:8px 0">${escapeHtml(c.enrichment_summary)}</p>` : ''}
+                    <div class="company-actions">
+                        ${c.status === 'new' && !c.enriched && c.website ? `<button class="btn btn-secondary btn-sm" onclick="enrichCompany(${c.id})">Analyze Website</button>` : ''}
+                        ${c.status === 'new' && c.enriched ? `<button class="btn btn-success btn-sm" onclick="pursueCompanies([${c.id}])">Pursue (Enrich + Generate Sequence)</button>` : ''}
+                        <button class="btn btn-secondary btn-sm" onclick="openCompanyDetail(${c.id})">Open</button>
                     </div>
-                    <div id="email-preview-${lead.id}"></div>
                 </div>
             `).join('');
         }
 
-        async function enrichLead(leadId) {
-            toast('Analyzing website + local SEO + looking up contacts via Apollo...');
-            const data = await api(`/api/leads/${leadId}/enrich`, { method: 'POST' });
+        async function enrichCompany(id) {
+            toast('Analyzing website...');
+            const data = await api(`/api/companies/${id}/enrich`, { method: 'POST' });
             if (data) {
-                let msg = `Found ${data.problems_found} issues!`;
-                if (data.contact && data.contact.name) {
-                    msg += ` Contact found: ${data.contact.name}`;
-                    if (data.contact.title) msg += ` (${data.contact.title})`;
-                    if (data.contact.email) msg += ` - ${data.contact.email}`;
-                } else {
-                    msg += ' No contact found in Apollo — you can add one manually.';
-                }
-                if (data.local_seo && data.local_seo.score !== undefined) {
-                    msg += ` | SEO Score: ${data.local_seo.score}/100`;
-                }
-                toast(msg);
-                loadDashboard();
-                loadAllLeads();
-                if (lastSearchId) {
-                    const leads = await api(`/api/leads/?search_id=${lastSearchId}&sort_by=reviews`);
-                    if (leads) renderLeads(leads, 'search-results');
-                }
+                toast(`${data.contacts_added} contact(s) added; ${data.problems_found} problems found`);
+                loadCompanies('all');
             }
         }
 
-        async function autoEnrichAll() {
-            if (!lastSearchId) { toast('Run a search first'); return; }
-
-            toast('Analyzing all websites... this will take a minute or two');
-            const leads = await api(`/api/leads/?search_id=${lastSearchId}`);
-            if (!leads) return;
-
-            const toEnrich = leads.filter(l => !l.enriched && l.website);
-            let enriched = 0;
-
-            for (const lead of toEnrich) {
-                try {
-                    const data = await api(`/api/leads/${lead.id}/enrich`, { method: 'POST' });
-                    if (data) {
-                        enriched++;
-                        toast(`Analyzed ${enriched}/${toEnrich.length}: ${lead.business_name} (${data.problems_found} issues)`);
-                    }
-                } catch(e) {
-                    // Continue on error
-                }
-            }
-
-            toast(`Done! Analyzed ${enriched} websites.`);
-            // Reload the results sorted by problems
-            const updatedLeads = await api(`/api/leads/?search_id=${lastSearchId}&sort_by=reviews`);
-            if (updatedLeads) renderLeads(updatedLeads, 'search-results');
-            loadDashboard();
-        }
-
-        function toggleSelectAll(containerId) {
-            const container = document.getElementById(containerId);
-            const selectAllMap = {
-                'search-results': 'select-all-search',
-                'recent-leads': 'select-all-dashboard',
-                'all-leads': 'select-all-leads',
-            };
-            const selectAll = document.getElementById(selectAllMap[containerId]);
-            const checkboxes = container.querySelectorAll('.lead-checkbox');
-            checkboxes.forEach(cb => cb.checked = selectAll.checked);
-            updateSelectedCount();
-        }
-
-        function updateSelectedCount() {
-            const checked = document.querySelectorAll('.lead-checkbox:checked');
-            const count = checked.length;
-            const label = count > 0 ? `${count} selected` : '';
-
-            // Update all count displays
-            ['selected-count-display', 'dashboard-selected-count', 'leads-selected-count'].forEach(id => {
-                const el = document.getElementById(id);
-                if (el) el.textContent = label;
-            });
-
-            // Update all pursue buttons
-            ['btn-pursue', 'btn-pursue-dashboard', 'btn-pursue-leads'].forEach(id => {
-                const btn = document.getElementById(id);
-                if (btn) {
-                    btn.disabled = count === 0;
-                    btn.style.opacity = count === 0 ? '0.5' : '1';
-                    btn.textContent = count > 0 ? `Pursue ${count} Selected` : 'Pursue Selected';
-                }
-            });
-        }
-
-        async function markReplied(leadId) {
-            await api(`/api/leads/${leadId}/status?status=qualified`, { method: 'PATCH' });
-            toast('Lead marked as qualified! Ready for HubSpot.');
-            loadDashboard();
-            loadAllLeads();
-        }
-
-        async function pursueSelected() {
-            const checked = document.querySelectorAll('.lead-checkbox:checked');
-            const leadIds = Array.from(checked).map(cb => parseInt(cb.value));
-
-            if (leadIds.length === 0) { toast('Select leads to pursue first'); return; }
-
-            // Disable button and show progress
-            document.querySelectorAll('[id^="btn-pursue"]').forEach(btn => {
-                btn.disabled = true;
-                btn.textContent = 'Processing...';
-                btn.style.opacity = '0.5';
-            });
-
-            toast(`Pursuing ${leadIds.length} leads... Analyzing websites, finding contacts, and generating email sequences. This takes 1-2 min per lead.`);
-
-            // Process one at a time so user sees progress
-            let completed = 0;
-            for (const leadId of leadIds) {
-                try {
-                    const data = await api('/api/leads/pursue', {
-                        method: 'POST',
-                        body: JSON.stringify({ lead_ids: [leadId] }),
-                    });
-                    completed++;
-                    if (data && data.results && data.results[0]) {
-                        const r = data.results[0];
-                        toast(`(${completed}/${leadIds.length}) ${r.business_name}: ${r.steps.join(', ')}`);
-                    }
-                } catch(e) {
-                    completed++;
-                    toast(`(${completed}/${leadIds.length}) Error processing lead`);
-                }
-            }
-
-            toast(`Done! Processed ${completed} leads with email sequences.`);
-
-            // Re-enable buttons
-            document.querySelectorAll('[id^="btn-pursue"]').forEach(btn => {
-                btn.disabled = false;
-                btn.textContent = 'Pursue Selected';
-                btn.style.opacity = '1';
-            });
-
-            // Reload both views
-            if (lastSearchId) {
-                const leads = await api(`/api/leads/?search_id=${lastSearchId}&sort_by=reviews`);
-                if (leads) {
-                    renderLeads(leads, 'search-results');
-                    renderLeads(leads, 'recent-leads');
-                }
-            }
-            loadDashboard();
-        }
-
-        async function generateEmail(leadId) {
-            toast('Generating personalized email...');
-            const data = await api(`/api/leads/${leadId}/generate-email`, { method: 'POST' });
-            if (data) {
-                const preview = document.getElementById(`email-preview-${leadId}`);
-                if (preview) {
-                    preview.innerHTML = `
-                        <div class="email-preview">
-                            <div class="subject">Subject: ${data.subject}</div>
-                            <div class="body">${data.body}</div>
-                            <button class="btn btn-secondary btn-sm" style="margin-top:8px" onclick="copyToClipboard(\`${escapeHtml(data.subject)}\\n\\n${escapeHtml(data.body)}\`)">📋 Copy Email</button>
-                        </div>
-                    `;
-                }
-                toast('Email generated!');
-            }
-        }
-
-        async function viewEmails(leadId) {
-            const data = await api(`/api/leads/${leadId}`);
-            if (data && data.emails) {
-                const preview = document.getElementById(`email-preview-${leadId}`);
-                const hasContactEmail = !!data.contact_email;
-                if (preview) {
-                    let html = '';
-
-                    // Show contact email or prompt to add one
-                    if (!hasContactEmail) {
-                        html += `<div style="background:#fef9e7;border-radius:8px;padding:12px;margin-bottom:8px;font-size:13px">
-                            <strong>No contact email found.</strong> Add one to send:
-                            <div style="display:flex;gap:6px;margin-top:6px">
-                                <input type="email" id="manual-email-${leadId}" placeholder="owner@example.com" style="flex:1;padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px">
-                                <button class="btn btn-primary btn-sm" onclick="saveContactEmail(${leadId})">Save</button>
-                            </div>
-                        </div>`;
-                    } else {
-                        html += `<div style="background:#eafaf1;border-radius:8px;padding:8px 12px;margin-bottom:8px;font-size:13px">
-                            Sending to: <strong>${data.contact_email}</strong>
-                            <button class="btn btn-success btn-sm" style="margin-left:8px" onclick="sendNextInSequence(${leadId})">Send Next Email</button>
-                        </div>`;
-                    }
-
-                    html += data.emails.map((e, i) => `
-                        <div class="email-preview" data-email-id="${e.id}" style="border-left:3px solid ${e.is_sent ? '#1B5E20' : '#ddd'};margin-bottom:8px">
-                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-                                <span style="font-size:11px;font-weight:600;text-transform:uppercase;color:${e.is_sent ? '#1B5E20' : '#999'}">
-                                    Email ${e.sequence_order} — ${e.email_type.replace(/_/g, ' ')} ${e.is_sent ? '(SENT)' : `(Day ${e.send_delay_days || 0})`}
-                                </span>
-                                <div style="display:flex;gap:4px">
-                                    ${!e.is_sent ? `<button class="btn btn-secondary btn-sm" onclick="editEmail(${e.id}, '${escapeHtml(e.subject)}', \`${escapeHtml(e.body)}\`)">Edit</button>` : ''}
-                                    ${!e.is_sent && hasContactEmail ? `<button class="btn btn-primary btn-sm" onclick="sendSingleEmail(${e.id})">Send</button>` : ''}
-                                </div>
-                            </div>
-                            <div class="subject" style="font-weight:600;margin-bottom:4px">Subject: ${e.subject}</div>
-                            <div class="body">${e.body}</div>
-                            <div id="email-edit-${e.id}"></div>
-                        </div>
-                    `).join('');
-
-                    preview.innerHTML = html;
-                }
-            }
-        }
-
-        async function sendSingleEmail(emailId) {
-            toast('Sending email...');
-            const data = await api(`/api/send/email/${emailId}`, { method: 'POST' });
-            if (data && data.success) {
-                toast(`Sent to ${data.sent_to} from ${data.from}`);
-                loadDashboard();
-            }
-        }
-
-        async function sendNextInSequence(leadId) {
-            toast('Sending next email in sequence...');
-            const data = await api(`/api/send/sequence/${leadId}`, { method: 'POST' });
-            if (data) {
-                if (data.complete) {
-                    toast('All emails in this sequence have been sent!');
-                } else {
-                    toast(`Sent ${data.email_type} email. ${data.remaining_in_sequence} remaining.`);
-                }
-                viewEmails(leadId);
-                loadDashboard();
-            }
-        }
-
-        async function saveContactEmail(leadId) {
-            const emailInput = document.getElementById(`manual-email-${leadId}`);
-            const email = emailInput.value.trim();
-            if (!email) { toast('Enter an email address'); return; }
-
-            const data = await api(`/api/send/lead/${leadId}/email`, {
-                method: 'PATCH',
-                body: JSON.stringify({ contact_email: email }),
+        async function pursueCompanies(ids) {
+            toast(`Pursuing ${ids.length} company...`);
+            const data = await api('/api/companies/pursue', {
+                method: 'POST',
+                body: JSON.stringify({ company_ids: ids }),
             });
             if (data) {
-                toast(`Contact email saved: ${data.contact_email}`);
-                viewEmails(leadId);
+                toast(`Pursued ${data.pursued} company(ies). Check Pipeline.`);
+                loadCompanies('all');
+                refreshNavBadges();
             }
         }
 
-        function copyToClipboard(text) {
-            navigator.clipboard.writeText(text);
-            toast('Copied to clipboard!');
+        // ============ Find Leads / Search ============
+        async function runSearch() {
+            const keyword = document.getElementById('search-keyword').value;
+            const location = document.getElementById('search-location').value;
+            if (!keyword || !location) { toast('Enter both keyword and location'); return; }
+            toast(`Searching for "${keyword}" in ${location}...`);
+            const data = await api('/api/search/', {
+                method: 'POST',
+                body: JSON.stringify({ keyword, location, max_results: 20 }),
+            });
+            if (data && data.search_id) {
+                toast(`Found ${data.results_count} businesses.`);
+                const list = await api(`/api/companies/?search_id=${data.search_id}`);
+                if (list) renderCompanies(list, 'search-results');
+            }
         }
 
-        function escapeHtml(text) {
-            return text.replace(/`/g, '\\`').replace(/\$/g, '\\$');
-        }
-
-        // ============ CRM Lead Detail ============
-
-        async function openLeadDetail(leadId) {
-            document.querySelectorAll('[id^="page-"]').forEach(el => el.classList.add('hidden'));
-            document.getElementById('page-lead-detail').classList.remove('hidden');
-            document.querySelectorAll('.sidebar-nav a').forEach(a => a.classList.remove('active'));
-
-            const data = await api(`/api/crm/leads/${leadId}/full`);
+        // ============ Pipeline kanban ============
+        const PIPELINE_STAGES = ['prospecting','qualified','proposal','negotiation','closed_won','closed_lost'];
+        async function loadPipeline() {
+            const data = await api('/api/pipeline');
             if (!data) return;
-
-            const tags = await api('/api/crm/tags') || [];
-            const users = await api('/api/crm/users') || [];
-
-            const container = document.getElementById('lead-detail-content');
-            container.innerHTML = `
-                <!-- Header -->
-                <div style="background:white;border-radius:12px;padding:24px;box-shadow:0 2px 8px rgba(0,0,0,0.06);margin-bottom:16px">
-                    <div style="display:flex;justify-content:space-between;align-items:flex-start">
-                        <div>
-                            <h1 style="font-size:22px;margin-bottom:4px">${data.business_name}</h1>
-                            <div style="font-size:13px;color:#666">
-                                ${data.city ? `${data.city}, ${data.state}` : ''} ${data.business_type ? `| ${data.business_type}` : ''}
-                                ${data.rating ? `| ★ ${data.rating} (${data.review_count || 0} reviews)` : ''}
+            const k = document.getElementById('kanban');
+            k.innerHTML = PIPELINE_STAGES.map(stage => `
+                <div class="kanban-column" data-stage="${stage}" ondragover="kanbanDragOver(event,this)" ondragleave="kanbanDragLeave(event,this)" ondrop="kanbanDrop(event,this)">
+                    <h4>
+                        <span>${stage.replace('_',' ').replace('closed','closed:')}</span>
+                        <span class="col-total">${data.totals[stage]?.count || 0} · ${fmtMoney(data.totals[stage]?.value || 0)}</span>
+                    </h4>
+                    <div class="col-body">
+                        ${(data.columns[stage] || []).map(d => `
+                            <div class="kanban-card" draggable="true" ondragstart="kanbanDragStart(event,${d.id})" ondragend="kanbanDragEnd(event)" onclick="openCompanyDetail(${d.company.id})">
+                                <div class="name">${escapeHtml(d.company.name)}</div>
+                                <div class="meta">${escapeHtml(d.name)}</div>
+                                <div class="value">${fmtMoney(d.value)}</div>
+                                ${d.expected_close_date ? `<div class="meta">Close: ${fmtDate(d.expected_close_date)}</div>` : ''}
                             </div>
-                            ${data.website ? `<a href="${data.website}" target="_blank" style="font-size:13px;color:var(--bmp-green)">${data.website}</a>` : ''}
-                        </div>
-                        <div style="text-align:right">
-                            <span class="status-badge status-${data.status}" style="font-size:13px;padding:4px 12px">${data.status}</span>
-                            <div style="margin-top:8px">
-                                <select onchange="updateDeal(${data.id}, 'deal_stage', this.value)" style="padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px">
-                                    ${['prospect','proposal','negotiation','closed_won','closed_lost'].map(s =>
-                                        `<option value="${s}" ${data.deal_stage === s ? 'selected' : ''}>${s.replace(/_/g,' ')}</option>`
-                                    ).join('')}
-                                </select>
+                        `).join('')}
+                    </div>
+                </div>
+            `).join('');
+            const grandValue = ['prospecting','qualified','proposal','negotiation'].reduce((s, st) => s + (data.totals[st]?.value || 0), 0);
+            document.getElementById('pipeline-totals').textContent = `Open pipeline: ${fmtMoney(grandValue)}`;
+        }
+        function kanbanDragStart(e, dealId) { e.dataTransfer.setData('text/plain', dealId); e.target.classList.add('dragging'); }
+        function kanbanDragEnd(e) { e.target.classList.remove('dragging'); }
+        function kanbanDragOver(e, col) { e.preventDefault(); col.classList.add('drop-target'); }
+        function kanbanDragLeave(e, col) { col.classList.remove('drop-target'); }
+        async function kanbanDrop(e, col) {
+            e.preventDefault();
+            col.classList.remove('drop-target');
+            const dealId = e.dataTransfer.getData('text/plain');
+            const newStage = col.dataset.stage;
+            await api(`/api/deals/${dealId}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ stage: newStage }),
+            });
+            toast(`Moved to ${newStage.replace('_',' ')}`);
+            loadPipeline();
+            refreshNavBadges();
+        }
+
+        // ============ Tasks ============
+        async function loadTasks(mode) {
+            const path = mode === 'mine' ? '/api/crm/tasks/upcoming' : '/api/crm/tasks/all';
+            const data = await api(path);
+            if (!data) return;
+            const panel = document.getElementById('tasks-panel');
+            if (data.length === 0) {
+                panel.innerHTML = `<p style="color:#666">No open tasks.</p>`;
+                return;
+            }
+            const now = new Date();
+            panel.innerHTML = data.map(t => {
+                const due = t.due_date ? new Date(t.due_date) : null;
+                const overdue = due && due < now;
+                return `
+                    <div class="task-row">
+                        <input type="checkbox" onchange="completeTask(${t.id})">
+                        <div style="flex:1">
+                            <div>${escapeHtml(t.description)}</div>
+                            <div class="due ${overdue ? 'overdue' : ''}">
+                                ${due ? (overdue ? 'OVERDUE: ' : 'Due ') + fmtDate(t.due_date) : 'No due date'}
+                                · <a href="#" onclick="openCompanyDetail(${t.company_id});return false">${escapeHtml(t.company_name)}</a>
+                                ${t.owner_name ? ` · ${escapeHtml(t.owner_name)}` : ''}
                             </div>
                         </div>
                     </div>
+                `;
+            }).join('');
+        }
+        async function completeTask(id) {
+            await api(`/api/crm/tasks/${id}/complete`, { method: 'PATCH' });
+            toast('Task completed!');
+            loadTasks('mine');
+            refreshNavBadges();
+        }
 
-                    <!-- Tags -->
-                    <div style="margin-top:12px;display:flex;gap:4px;align-items:center;flex-wrap:wrap">
-                        ${data.tags.map(t => `<span style="background:${t.color}22;color:${t.color};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600">${t.name} <a onclick="removeTag(${data.id},${t.id})" style="cursor:pointer;margin-left:2px">x</a></span>`).join('')}
-                        <select id="add-tag-select" onchange="addTagToLead(${data.id})" style="padding:2px 6px;border:1px solid #ddd;border-radius:4px;font-size:11px">
-                            <option value="">+ Tag</option>
-                            ${tags.map(t => `<option value="${t.id}">${t.name}</option>`).join('')}
-                            <option value="__new__">Create new tag...</option>
-                        </select>
+        // ============ Company Detail ============
+        async function openCompanyDetail(id) {
+            const data = await api(`/api/companies/${id}/full`);
+            if (!data) return;
+            showPage('company-detail');
+            renderCompanyDetail(data);
+        }
+
+        function renderCompanyDetail(d) {
+            const el = document.getElementById('company-detail');
+            const problems = d.problems_found || [];
+            el.innerHTML = `
+                <div class="page-header">
+                    <div>
+                        <h1>${escapeHtml(d.name)}</h1>
+                        <div style="font-size:13px;color:#666;margin-top:4px">
+                            ${d.website ? `<a href="${escapeHtml(d.website)}" target="_blank">${escapeHtml(d.website.replace(/^https?:\/\//,''))}</a> · ` : ''}
+                            ${escapeHtml(d.city || '')}${d.state ? ', ' + escapeHtml(d.state) : ''}
+                            ${d.phone ? ' · ' + escapeHtml(d.phone) : ''}
+                        </div>
                     </div>
-
-                    <!-- Deal & Assignment -->
-                    <div style="display:flex;gap:24px;margin-top:16px;padding-top:12px;border-top:1px solid #eee;font-size:13px">
-                        <div>
-                            <label style="font-weight:600;font-size:11px;color:#888;display:block">Deal Value</label>
-                            <div style="display:flex;align-items:center;gap:4px">
-                                $<input type="number" id="deal-value-${data.id}" value="${data.deal_value || ''}" placeholder="0" onchange="updateDeal(${data.id}, 'deal_value', this.value)" style="width:80px;padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:13px">/mo
-                            </div>
-                        </div>
-                        <div>
-                            <label style="font-weight:600;font-size:11px;color:#888;display:block">Assigned To</label>
-                            <select onchange="updateDeal(${data.id}, 'assigned_to', this.value)" style="padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
-                                <option value="">Unassigned</option>
-                                ${users.map(u => `<option value="${u.id}" ${data.assigned_to === u.id ? 'selected' : ''}>${u.name}</option>`).join('')}
-                            </select>
-                        </div>
-                        <div>
-                            <label style="font-weight:600;font-size:11px;color:#888;display:block">Phone</label>
-                            <span>${data.phone || 'N/A'}</span>
-                        </div>
+                    <div>
+                        <span class="status-badge status-${d.status}">${d.status}</span>
                     </div>
                 </div>
 
-                <!-- Two column layout -->
-                <div style="display:grid;grid-template-columns:1fr 350px;gap:16px">
-                    <!-- Left: Timeline + Emails -->
+                <div style="display:grid;grid-template-columns:2fr 1fr;gap:16px">
+                    <!-- Left: contacts + deals + activity -->
                     <div>
-                        <!-- Contact Card -->
-                        <div style="background:white;border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,0.06);margin-bottom:16px">
-                            <h3 style="font-size:15px;margin-bottom:12px">Contact Info</h3>
-                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px">
-                                <div>
-                                    <label style="font-size:11px;color:#888;display:block">Name</label>
-                                    <input type="text" id="ci-name-${data.id}" value="${data.contact_name || ''}" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
-                                </div>
-                                <div>
-                                    <label style="font-size:11px;color:#888;display:block">Title</label>
-                                    <input type="text" id="ci-title-${data.id}" value="${data.contact_title || ''}" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
-                                </div>
-                                <div>
-                                    <label style="font-size:11px;color:#888;display:block">Email</label>
-                                    <input type="email" id="ci-email-${data.id}" value="${data.contact_email || ''}" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
-                                </div>
-                                <div>
-                                    <label style="font-size:11px;color:#888;display:block">Phone</label>
-                                    <input type="text" id="ci-phone-${data.id}" value="${data.contact_phone || ''}" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
-                                </div>
-                                <div style="grid-column:1/-1">
-                                    <label style="font-size:11px;color:#888;display:block">LinkedIn</label>
-                                    <input type="text" id="ci-linkedin-${data.id}" value="${data.contact_linkedin || ''}" placeholder="https://linkedin.com/in/..." style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
-                                </div>
+                        <div class="panel">
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                                <h3 style="margin:0">Contacts (${d.contacts.length})</h3>
+                                <button class="btn btn-secondary btn-sm" onclick="addContact(${d.id})">+ Add Contact</button>
                             </div>
-                            <button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="saveContact(${data.id})">Save Contact</button>
+                            <div id="contacts-list">${renderContacts(d.contacts)}</div>
                         </div>
 
-                        <!-- Add Note -->
-                        <div style="background:white;border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,0.06);margin-bottom:16px">
-                            <div style="display:flex;gap:8px;margin-bottom:8px">
-                                <select id="note-type-${data.id}" style="padding:6px 8px;border:1px solid #ddd;border-radius:6px;font-size:12px">
-                                    <option value="note">Note</option>
-                                    <option value="call">Call Log</option>
-                                    <option value="meeting">Meeting</option>
-                                    <option value="linkedin_message">LinkedIn Message</option>
-                                </select>
+                        <div class="panel">
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                                <h3 style="margin:0">Deals (${d.deals.length})</h3>
+                                <button class="btn btn-secondary btn-sm" onclick="addDeal(${d.id})">+ Add Deal</button>
                             </div>
-                            <textarea id="note-text-${data.id}" rows="3" placeholder="Add a note, log a call, record a meeting..." style="width:100%;padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;resize:vertical"></textarea>
-                            <button class="btn btn-primary btn-sm" style="margin-top:6px" onclick="addNote(${data.id})">Add to Timeline</button>
+                            <div id="deals-list">${renderDeals(d.deals)}</div>
                         </div>
 
-                        <!-- Timeline -->
-                        <div style="background:white;border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,0.06);margin-bottom:16px">
-                            <h3 style="font-size:15px;margin-bottom:16px">Timeline</h3>
-                            <div id="timeline-${data.id}">
-                                ${data.timeline.length === 0 ? '<p style="color:#999;font-size:13px">No activity yet</p>' : ''}
-                                ${data.timeline.map(a => `
-                                    <div style="display:flex;gap:12px;padding:10px 0;border-bottom:1px solid #f0f0f0">
-                                        <div style="width:32px;height:32px;border-radius:50%;background:${getActivityColor(a.type)};display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0">${getActivityIcon(a.type)}</div>
-                                        <div style="flex:1;min-width:0">
-                                            <div style="font-size:13px">${a.content}</div>
-                                            <div style="font-size:11px;color:#999;margin-top:2px">${a.user_name || 'System'} · ${formatDate(a.created_at)}</div>
-                                        </div>
-                                    </div>
-                                `).join('')}
+                        <div class="panel">
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                                <h3 style="margin:0">Activity Timeline</h3>
+                                <button class="btn btn-secondary btn-sm" onclick="addNote(${d.id})">+ Add Note</button>
                             </div>
+                            <div id="timeline-list">${renderTimeline(d.timeline)}</div>
                         </div>
-
-                        <!-- Email Sequence -->
-                        ${data.emails.length > 0 ? `
-                        <div style="background:white;border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,0.06)">
-                            <h3 style="font-size:15px;margin-bottom:16px">Email Sequence</h3>
-                            ${data.emails.map(e => `
-                                <div class="email-preview" style="border-left:3px solid ${e.is_sent ? '#1B5E20' : '#ddd'};margin-bottom:8px">
-                                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-                                        <span style="font-size:11px;font-weight:600;text-transform:uppercase;color:${e.is_sent ? '#1B5E20' : '#999'}">Email ${e.sequence_order} — ${e.email_type.replace(/_/g,' ')} ${e.is_sent ? '(SENT)' : ''}</span>
-                                        <div style="display:flex;gap:4px">
-                                            ${!e.is_sent ? `<button class="btn btn-secondary btn-sm" onclick="editEmail(${e.id}, '${escapeHtml(e.subject)}', \`${escapeHtml(e.body)}\`)">Edit</button>` : ''}
-                                            ${!e.is_sent && data.contact_email ? `<button class="btn btn-primary btn-sm" onclick="sendSingleEmail(${e.id})">Send</button>` : ''}
-                                        </div>
-                                    </div>
-                                    <div style="font-weight:600;font-size:13px">Subject: ${e.subject}</div>
-                                    <div style="font-size:13px;color:#444;white-space:pre-wrap;margin-top:4px">${e.body}</div>
-                                    <div id="email-edit-${e.id}"></div>
-                                </div>
-                            `).join('')}
-                        </div>
-                        ` : ''}
                     </div>
 
-                    <!-- Right sidebar: Tasks + Problems -->
+                    <!-- Right: tags, problems, tasks -->
                     <div>
-                        <!-- Tasks -->
-                        <div style="background:white;border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,0.06);margin-bottom:16px">
-                            <h3 style="font-size:15px;margin-bottom:12px">Tasks</h3>
-                            <div id="tasks-${data.id}">
-                                ${data.tasks.map(t => `
-                                    <div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid #f5f5f5">
-                                        <input type="checkbox" ${t.completed ? 'checked disabled' : ''} onchange="completeTask(${t.id}, ${data.id})" style="margin-top:2px">
-                                        <div style="flex:1">
-                                            <div style="font-size:13px;${t.completed ? 'text-decoration:line-through;color:#999' : ''}">${t.description}</div>
-                                            ${t.due_date ? `<div style="font-size:11px;color:#888">${formatDate(t.due_date)}</div>` : ''}
-                                        </div>
-                                    </div>
-                                `).join('')}
-                                ${data.tasks.length === 0 ? '<p style="color:#999;font-size:13px">No tasks</p>' : ''}
-                            </div>
-                            <div style="margin-top:8px;display:flex;gap:4px">
-                                <input type="text" id="new-task-${data.id}" placeholder="Add a task..." style="flex:1;padding:6px 8px;border:1px solid #ddd;border-radius:6px;font-size:12px" onkeydown="if(event.key==='Enter')addTask(${data.id})">
-                                <input type="date" id="new-task-date-${data.id}" style="padding:6px 8px;border:1px solid #ddd;border-radius:6px;font-size:12px">
-                                <button class="btn btn-primary btn-sm" onclick="addTask(${data.id})">Add</button>
-                            </div>
+                        <div class="panel">
+                            <h3>Tags</h3>
+                            <div id="company-tags">${(d.tags||[]).map(t => `<span style="background:${escapeHtml(t.color)}22;color:${escapeHtml(t.color)};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;margin-right:4px">${escapeHtml(t.name)}</span>`).join('') || '<span style="font-size:12px;color:#888">None</span>'}</div>
                         </div>
-
-                        <!-- Enrichment / Problems -->
-                        ${data.enriched ? `
-                        <div style="background:white;border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,0.06);margin-bottom:16px">
-                            <h3 style="font-size:15px;margin-bottom:8px">Issues Found (${data.problem_count})</h3>
-                            <p style="font-size:12px;color:#666;margin-bottom:8px">${data.enrichment_summary || ''}</p>
-                            ${data.problems_found.slice(0,8).map(p => `
-                                <div style="padding:6px 0;border-bottom:1px solid #f5f5f5;font-size:12px">
-                                    <span class="problem-tag ${p.severity}" style="margin-right:4px">${p.severity}</span>
-                                    ${p.detail || p.type}
-                                </div>
-                            `).join('')}
+                        <div class="panel">
+                            <h3>Problems Found</h3>
+                            <div>${problems.length ? problems.map(p => `<div style="font-size:12px;margin:4px 0"><span class="problem-tag ${escapeHtml(p.severity || 'medium')}">${escapeHtml(p.severity || 'medium')}</span> ${escapeHtml(p.detail || p.type || '')}</div>`).join('') : '<span style="font-size:12px;color:#888">No analysis yet</span>'}</div>
                         </div>
-                        ` : ''}
-
-                        <!-- Quick Actions -->
-                        <div style="background:white;border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,0.06)">
-                            <h3 style="font-size:15px;margin-bottom:12px">Quick Actions</h3>
-                            <div style="display:flex;flex-direction:column;gap:6px">
-                                ${data.phone ? `<a href="tel:${data.phone}" class="btn btn-secondary btn-sm" style="text-align:center;text-decoration:none">Call ${data.phone}</a>` : ''}
-                                ${data.contact_email ? `<a href="mailto:${data.contact_email}" class="btn btn-secondary btn-sm" style="text-align:center;text-decoration:none">Email ${data.contact_email}</a>` : ''}
-                                ${data.contact_linkedin ? `<a href="${data.contact_linkedin}" target="_blank" class="btn btn-secondary btn-sm" style="text-align:center;text-decoration:none">LinkedIn Profile</a>` : ''}
-                                ${data.website ? `<a href="${data.website}" target="_blank" class="btn btn-secondary btn-sm" style="text-align:center;text-decoration:none">Visit Website</a>` : ''}
-                                ${!data.enriched && data.website ? `<button class="btn btn-success btn-sm" onclick="enrichLead(${data.id})">Analyze Website</button>` : ''}
+                        <div class="panel">
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                                <h3 style="margin:0">Tasks</h3>
+                                <button class="btn btn-secondary btn-sm" onclick="addTask(${d.id})">+ Task</button>
                             </div>
+                            <div id="tasks-list">Loading...</div>
                         </div>
                     </div>
                 </div>
             `;
+            loadCompanyTasks(d.id);
         }
 
-        function getActivityIcon(type) {
-            const icons = { note: '📝', call: '📞', meeting: '🤝', email_sent: '📧', email_opened: '👁', email_clicked: '🔗', email_bounced: '⚠', status_change: '🔄', enriched: '🔍', linkedin_message: '💼', task_created: '📋', task_completed: '✅', deal_update: '💰', contact_updated: '👤' };
-            return icons[type] || '•';
+        function renderContacts(contacts) {
+            if (!contacts.length) return '<p style="font-size:12px;color:#888;margin:8px 0">No contacts yet. Add one or run "Analyze Website" to enrich via Apollo/Hunter.</p>';
+            return contacts.map(c => {
+                const cardId = `contact-${c.id}`;
+                return `
+                <div class="contact-card ${c.is_primary ? 'primary' : ''}" id="${cardId}">
+                    <div class="contact-card-header">
+                        <div>
+                            <h4>${escapeHtml(c.name) || '(no name)'} ${c.is_primary ? '<span style="font-size:10px;background:var(--bmp-green);color:white;padding:1px 6px;border-radius:3px;margin-left:4px">PRIMARY</span>' : ''}</h4>
+                            <div class="contact-card-meta">
+                                ${c.title ? escapeHtml(c.title) + ' · ' : ''}
+                                ${c.email ? `<a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a>` : '<em>no email</em>'}
+                                ${c.phone ? ' · ' + escapeHtml(c.phone) : ''}
+                                ${c.unsubscribed_at ? ' · <span style="color:#c0392b">UNSUBSCRIBED</span>' : ''}
+                                ${c.email_status === 'bounced' ? ' · <span style="color:#c0392b">BOUNCED</span>' : ''}
+                            </div>
+                        </div>
+                        <div class="contact-actions">
+                            <button class="btn btn-secondary btn-xs" onclick="editContact(${c.id})">Edit</button>
+                            ${!c.email ? `<button class="btn btn-secondary btn-xs" onclick="setContactEmail(${c.id})">Set Email</button>` : ''}
+                            ${c.emails.length === 0 ? `<button class="btn btn-success btn-xs" onclick="generateContactSequence(${c.id})">Generate Sequence</button>` : ''}
+                        </div>
+                    </div>
+                    <div class="sequence-toggle" onclick="toggleSequence('${cardId}')">${c.emails.length > 0 ? `▼ Show sequence (${c.emails.length} emails)` : ''}</div>
+                    <div class="sequence-body" id="${cardId}-seq" style="display:none;margin-top:8px">
+                        ${c.emails.map(e => renderEmailCard(e, c.id)).join('')}
+                        ${c.emails.length > 0 && c.email && !c.unsubscribed_at ? `
+                            <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+                                <button class="btn btn-success btn-sm" onclick="sendNextInSequence(${c.id})">Send Next Email</button>
+                                ${c.emails.some(e => !e.is_sent && !e.paused_at) ? `<button class="btn btn-secondary btn-sm" onclick="pauseSequence(${c.id})">Pause Sequence</button>` : ''}
+                                ${c.emails.some(e => e.paused_at) ? `<button class="btn btn-secondary btn-sm" onclick="resumeSequence(${c.id})">Resume</button>` : ''}
+                            </div>
+                        ` : ''}
+                    </div>
+                </div>
+                `;
+            }).join('');
         }
 
-        function getActivityColor(type) {
-            const colors = { note: '#e8f4fd', call: '#eafaf1', meeting: '#f3e8fd', email_sent: '#e8f4fd', email_opened: '#fef9e7', deal_update: '#fef3e2', task_completed: '#d5f5e3' };
-            return colors[type] || '#f5f5f5';
+        function renderEmailCard(e, contactId) {
+            const klass = e.is_sent ? 'email-card sent' : (e.paused_at ? 'email-card paused' : 'email-card');
+            const meta = e.is_sent ? 'sent' : '';
+            return `
+                <div class="${klass}" data-email-id="${e.id}">
+                    <div class="meta ${meta}">
+                        <span>Email ${e.sequence_order} — ${escapeHtml((e.email_type||'').replace(/_/g,' '))} ${e.is_sent ? '· SENT' : (e.paused_at ? '· PAUSED' : `· Day ${e.send_delay_days||0}`)}</span>
+                        <span>
+                            ${!e.is_sent ? `<button class="btn btn-secondary btn-xs" onclick="editEmail(${e.id})">Edit</button>` : ''}
+                            ${!e.is_sent ? `<button class="btn btn-danger btn-xs" onclick="deleteEmail(${e.id})">Delete</button>` : ''}
+                        </span>
+                    </div>
+                    <div class="subject">Subject: ${escapeHtml(e.subject)}</div>
+                    <div class="body">${escapeHtml(e.body)}</div>
+                </div>
+            `;
         }
 
-        function formatDate(iso) {
-            if (!iso) return '';
-            const d = new Date(iso);
-            const now = new Date();
-            const diff = now - d;
-            if (diff < 60000) return 'just now';
-            if (diff < 3600000) return `${Math.floor(diff/60000)}m ago`;
-            if (diff < 86400000) return `${Math.floor(diff/3600000)}h ago`;
-            if (diff < 604800000) return `${Math.floor(diff/86400000)}d ago`;
-            return d.toLocaleDateString();
+        function toggleSequence(cardId) {
+            const body = document.getElementById(cardId + '-seq');
+            const toggle = document.querySelector(`#${cardId} .sequence-toggle`);
+            if (body.style.display === 'none') {
+                body.style.display = 'block';
+                if (toggle) toggle.textContent = toggle.textContent.replace('▼', '▲');
+            } else {
+                body.style.display = 'none';
+                if (toggle) toggle.textContent = toggle.textContent.replace('▲', '▼');
+            }
         }
 
-        async function addNote(leadId) {
-            const type = document.getElementById(`note-type-${leadId}`).value;
-            const content = document.getElementById(`note-text-${leadId}`).value.trim();
-            if (!content) { toast('Write something first'); return; }
+        function renderDeals(deals) {
+            if (!deals.length) return '<p style="font-size:12px;color:#888;margin:8px 0">No deals yet. Add one to track this opportunity.</p>';
+            return deals.map(d => `
+                <div class="deal-row">
+                    <div>
+                        <div class="deal-name">${escapeHtml(d.name)}</div>
+                        <div class="deal-meta">
+                            ${fmtMoney(d.value)} · ${d.probability}% prob
+                            ${d.expected_close_date ? ' · Close: ' + fmtDate(d.expected_close_date) : ''}
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:6px;align-items:center">
+                        <span class="deal-stage stage-${d.stage}">${d.stage.replace('_',' ')}</span>
+                        <button class="btn btn-secondary btn-xs" onclick="editDeal(${d.id})">Edit</button>
+                    </div>
+                </div>
+            `).join('');
+        }
 
-            await api(`/api/crm/leads/${leadId}/note`, {
+        function renderTimeline(items) {
+            if (!items.length) return '<p style="font-size:12px;color:#888">No activity yet.</p>';
+            const icons = {
+                note: '📝', call: '📞', meeting: '🤝', email_sent: '📧', email_opened: '👀',
+                email_clicked: '🖱️', email_bounced: '⚠️', email_complained: '🚫',
+                email_replied: '↩️', status_change: '🔄', enriched: '🧪', linkedin_message: '💼',
+                task_created: '✅', task_completed: '✓', deal_created: '💰', deal_update: '💼',
+                contact_added: '👤', sequence_created: '📨', sequence_paused: '⏸️',
+                sequence_resumed: '▶️', unsubscribed: '🚪',
+            };
+            return items.map(a => `
+                <div class="timeline-item">
+                    <div><span class="timeline-icon">${icons[a.type] || '•'}</span>${escapeHtml(a.content)}</div>
+                    <div class="timeline-meta">${escapeHtml(a.user_name || 'System')} · ${fmtDate(a.created_at)}</div>
+                </div>
+            `).join('');
+        }
+
+        async function loadCompanyTasks(companyId) {
+            const data = await api(`/api/crm/companies/${companyId}/tasks`);
+            const el = document.getElementById('tasks-list');
+            if (!el) return;
+            if (!data || data.length === 0) {
+                el.innerHTML = '<p style="font-size:12px;color:#888">No tasks.</p>';
+                return;
+            }
+            el.innerHTML = data.map(t => `
+                <div class="task-row ${t.completed ? 'completed' : ''}">
+                    <input type="checkbox" ${t.completed ? 'checked disabled' : ''} onchange="completeTask(${t.id});setTimeout(()=>loadCompanyTasks(${companyId}),300)">
+                    <div style="flex:1">
+                        <div>${escapeHtml(t.description)}</div>
+                        <div class="due">${t.due_date ? 'Due ' + fmtDate(t.due_date) : 'No due date'}</div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // ============ Contact / Deal / Task / Email actions ============
+        async function addContact(companyId) {
+            const first = prompt('First name:'); if (first === null) return;
+            const last = prompt('Last name:') || '';
+            const email = prompt('Email (optional):') || '';
+            const title = prompt('Title (optional):') || '';
+            await api(`/api/companies/${companyId}/contacts`, {
+                method: 'POST',
+                body: JSON.stringify({ first_name: first, last_name: last, email, title }),
+            });
+            toast('Contact added.');
+            openCompanyDetail(companyId);
+        }
+        async function editContact(contactId) {
+            const c = await api(`/api/contacts/${contactId}`); if (!c) return;
+            const first = prompt('First name:', c.first_name || ''); if (first === null) return;
+            const last = prompt('Last name:', c.last_name || '');
+            const email = prompt('Email:', c.email || '');
+            const title = prompt('Title:', c.title || '');
+            const phone = prompt('Phone:', c.phone || '');
+            await api(`/api/contacts/${contactId}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ first_name: first, last_name: last, email, title, phone }),
+            });
+            toast('Contact updated.');
+            openCompanyDetail(c.company_id);
+        }
+        async function setContactEmail(contactId) {
+            const email = prompt('Email address:'); if (!email) return;
+            const c = await api(`/api/contacts/${contactId}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ email }),
+            });
+            if (c) { toast('Email saved.'); openCompanyDetail(c.company_id); }
+        }
+        async function generateContactSequence(contactId) {
+            toast('Generating sequence...');
+            const data = await api(`/api/contacts/${contactId}/generate-sequence`, { method: 'POST' });
+            if (data && data.emails_created) {
+                toast(`Generated ${data.emails_created} emails.`);
+                const c = await api(`/api/contacts/${contactId}`);
+                if (c) openCompanyDetail(c.company_id);
+            } else if (data && data.detail) {
+                toast(data.detail);
+            }
+        }
+
+        async function sendNextInSequence(contactId) {
+            const data = await api(`/api/send/contact/${contactId}/sequence`, { method: 'POST' });
+            if (data && data.success) {
+                toast(`Sent to ${data.sent_to}. ${data.remaining_in_sequence} remaining.`);
+                const c = await api(`/api/contacts/${contactId}`);
+                if (c) openCompanyDetail(c.company_id);
+            } else if (data && data.complete) {
+                toast('All emails in this sequence have been sent.');
+            } else if (data && data.detail) {
+                toast(data.detail);
+            }
+        }
+        async function pauseSequence(contactId) {
+            await api(`/api/send/contact/${contactId}/pause`, { method: 'POST' });
+            toast('Sequence paused.');
+            const c = await api(`/api/contacts/${contactId}`); if (c) openCompanyDetail(c.company_id);
+        }
+        async function resumeSequence(contactId) {
+            await api(`/api/send/contact/${contactId}/resume`, { method: 'POST' });
+            toast('Sequence resumed.');
+            const c = await api(`/api/contacts/${contactId}`); if (c) openCompanyDetail(c.company_id);
+        }
+
+        async function editEmail(emailId) {
+            // Fetch the email card via the DOM (we already rendered it)
+            const card = document.querySelector(`[data-email-id="${emailId}"]`);
+            if (!card) return;
+            const subject = card.querySelector('.subject').textContent.replace(/^Subject:\s*/, '');
+            const body = card.querySelector('.body').textContent;
+            const newSubject = prompt('Subject:', subject); if (newSubject === null) return;
+            const newBody = prompt('Body:', body); if (newBody === null) return;
+            await api(`/api/send/email/${emailId}/edit`, {
+                method: 'PATCH',
+                body: JSON.stringify({ subject: newSubject, body: newBody }),
+            });
+            toast('Email updated.');
+            // Re-fetch the company detail
+            const url = window.location.hash; // hack: we don't have the company id easily — refetch from contact
+        }
+        async function deleteEmail(emailId) {
+            if (!confirm('Delete this queued email?')) return;
+            await api(`/api/send/email/${emailId}`, { method: 'DELETE' });
+            toast('Email deleted.');
+        }
+
+        async function addDeal(companyId) {
+            const name = prompt('Deal name:', `Deal — ${new Date().toLocaleDateString()}`); if (!name) return;
+            const value = prompt('Monthly value (USD, leave blank to set later):');
+            const stage = prompt('Stage (prospecting/qualified/proposal/negotiation/closed_won/closed_lost):', 'prospecting');
+            await api(`/api/companies/${companyId}/deals`, {
+                method: 'POST',
+                body: JSON.stringify({ name, value: value ? parseFloat(value) : null, stage: stage || 'prospecting' }),
+            });
+            toast('Deal created.');
+            openCompanyDetail(companyId);
+        }
+        async function editDeal(dealId) {
+            const d = await api(`/api/deals/${dealId}`); if (!d) return;
+            const value = prompt('Value (USD):', d.value ?? '');
+            const stage = prompt('Stage:', d.stage);
+            const closeDate = prompt('Expected close date (YYYY-MM-DD):', d.expected_close_date ? d.expected_close_date.slice(0,10) : '');
+            const lostReason = stage === 'closed_lost' ? prompt('Lost reason:', d.lost_reason || '') : null;
+            await api(`/api/deals/${dealId}`, {
+                method: 'PATCH',
+                body: JSON.stringify({
+                    value: value ? parseFloat(value) : null,
+                    stage,
+                    expected_close_date: closeDate || null,
+                    lost_reason: lostReason,
+                }),
+            });
+            toast('Deal updated.');
+            openCompanyDetail(d.company_id);
+        }
+
+        async function addTask(companyId) {
+            const description = prompt('Task description:'); if (!description) return;
+            const due = prompt('Due date (YYYY-MM-DD, optional):');
+            await api(`/api/crm/companies/${companyId}/tasks`, {
+                method: 'POST',
+                body: JSON.stringify({ description, due_date: due || null }),
+            });
+            toast('Task added.');
+            loadCompanyTasks(companyId);
+            refreshNavBadges();
+        }
+
+        async function addNote(companyId) {
+            const content = prompt('Note (or call/meeting note):'); if (!content) return;
+            const type = prompt('Type (note/call/meeting):', 'note') || 'note';
+            await api(`/api/crm/companies/${companyId}/note`, {
                 method: 'POST',
                 body: JSON.stringify({ content, activity_type: type }),
             });
-            toast('Added to timeline');
-            openLeadDetail(leadId);
-        }
-
-        async function addTask(leadId) {
-            const desc = document.getElementById(`new-task-${leadId}`).value.trim();
-            const date = document.getElementById(`new-task-date-${leadId}`).value;
-            if (!desc) return;
-
-            await api(`/api/crm/leads/${leadId}/tasks`, {
-                method: 'POST',
-                body: JSON.stringify({ description: desc, due_date: date || null }),
-            });
-            toast('Task added');
-            openLeadDetail(leadId);
-        }
-
-        async function completeTask(taskId, leadId) {
-            await api(`/api/crm/tasks/${taskId}/complete`, { method: 'PATCH' });
-            toast('Task completed');
-            openLeadDetail(leadId);
-        }
-
-        async function updateDeal(leadId, field, value) {
-            const body = {};
-            if (field === 'deal_value') body.deal_value = parseFloat(value) || 0;
-            if (field === 'deal_stage') body.deal_stage = value;
-            if (field === 'assigned_to') body.assigned_to = parseInt(value) || null;
-
-            await api(`/api/crm/leads/${leadId}/deal`, {
-                method: 'PATCH',
-                body: JSON.stringify(body),
-            });
-            toast('Updated');
-        }
-
-        async function saveContact(leadId) {
-            const data = {
-                contact_name: document.getElementById(`ci-name-${leadId}`).value,
-                contact_email: document.getElementById(`ci-email-${leadId}`).value,
-                contact_title: document.getElementById(`ci-title-${leadId}`).value,
-                contact_phone: document.getElementById(`ci-phone-${leadId}`).value,
-                contact_linkedin: document.getElementById(`ci-linkedin-${leadId}`).value,
-            };
-            await api(`/api/crm/leads/${leadId}/contact`, {
-                method: 'PATCH',
-                body: JSON.stringify(data),
-            });
-            toast('Contact saved');
-        }
-
-        async function addTagToLead(leadId) {
-            const sel = document.getElementById('add-tag-select');
-            if (sel.value === '__new__') {
-                const name = prompt('Tag name:');
-                if (!name) { sel.value = ''; return; }
-                const color = '#1B5E20';
-                const tag = await api('/api/crm/tags', {
-                    method: 'POST',
-                    body: JSON.stringify({ name, color }),
-                });
-                if (tag) {
-                    await api(`/api/crm/leads/${leadId}/tags/${tag.id}`, { method: 'POST' });
-                    openLeadDetail(leadId);
-                }
-            } else if (sel.value) {
-                await api(`/api/crm/leads/${leadId}/tags/${sel.value}`, { method: 'POST' });
-                openLeadDetail(leadId);
-            }
-        }
-
-        async function removeTag(leadId, tagId) {
-            await api(`/api/crm/leads/${leadId}/tags/${tagId}`, { method: 'DELETE' });
-            openLeadDetail(leadId);
-        }
-
-        // ============ Pipeline ============
-
-        async function loadPipeline(filter = 'all') {
-            const activeStatuses = ['pursuing', 'sequencing', 'contacted', 'qualified'];
-            let leads;
-
-            if (filter === 'all') {
-                // Get all active leads (not new, not converted, not not_interested)
-                const allLeads = await api('/api/leads/?sort_by=reviews');
-                leads = allLeads ? allLeads.filter(l => activeStatuses.includes(l.status)) : [];
-            } else {
-                leads = await api(`/api/leads/?status=${filter}&sort_by=reviews`) || [];
-            }
-
-            // Update pipeline stats
-            const allForStats = await api('/api/leads/?sort_by=reviews') || [];
-            const active = allForStats.filter(l => activeStatuses.includes(l.status));
-            document.getElementById('pipe-pursuing').textContent = active.filter(l => l.status === 'pursuing').length;
-            document.getElementById('pipe-sequencing').textContent = active.filter(l => l.status === 'sequencing').length;
-            document.getElementById('pipe-contacted').textContent = active.filter(l => l.status === 'contacted').length;
-            document.getElementById('pipe-qualified').textContent = active.filter(l => l.status === 'qualified').length;
-            document.getElementById('pipe-no-email').textContent = active.filter(l => !l.contact_email).length;
-
-            // Update sidebar badge
-            const pipeCount = document.getElementById('pipeline-count');
-            if (pipeCount) pipeCount.textContent = active.length || '';
-
-            renderLeads(leads, 'pipeline-leads');
+            toast('Note added.');
+            openCompanyDetail(companyId);
         }
 
         // ============ Settings ============
-
         async function loadSettings() {
             const data = await api('/api/send/profile');
             if (!data) return;
@@ -1516,7 +1028,6 @@
             document.getElementById('settings-reply-to').textContent = data.reply_to;
             document.getElementById('signature-preview').innerHTML = data.signature_html || '';
         }
-
         async function saveProfile() {
             const data = await api('/api/send/profile', {
                 method: 'PATCH',
@@ -1535,66 +1046,10 @@
             document.getElementById('signature-preview').innerHTML = data.signature_html || '';
             document.getElementById('user-name').textContent = data.name;
         }
-
         async function toggleSending() {
             const enabled = document.getElementById('settings-sending-enabled').checked;
-            await api('/api/send/profile', {
-                method: 'PATCH',
-                body: JSON.stringify({ sending_enabled: enabled }),
-            });
+            await api('/api/send/profile', { method: 'PATCH', body: JSON.stringify({ sending_enabled: enabled }) });
             toast(enabled ? 'Sending enabled' : 'Sending disabled');
-        }
-
-        // ============ Email Editing ============
-
-        async function editEmail(emailId, currentSubject, currentBody) {
-            const preview = document.getElementById(`email-edit-${emailId}`);
-            if (!preview) return;
-            preview.innerHTML = `
-                <div style="background:white;border:2px solid var(--bmp-orange);border-radius:8px;padding:16px;margin-top:8px">
-                    <div class="form-group">
-                        <label style="font-weight:600;font-size:12px">Subject</label>
-                        <input type="text" id="edit-subject-${emailId}" value="${currentSubject.replace(/"/g, '&quot;')}" style="width:100%;padding:8px 12px;border:1px solid #ddd;border-radius:6px;font-size:13px">
-                    </div>
-                    <div class="form-group">
-                        <label style="font-weight:600;font-size:12px">Body</label>
-                        <textarea id="edit-body-${emailId}" rows="8" style="width:100%;padding:8px 12px;border:1px solid #ddd;border-radius:6px;font-size:13px;font-family:inherit;resize:vertical">${currentBody}</textarea>
-                    </div>
-                    <div style="display:flex;gap:8px">
-                        <button class="btn btn-primary btn-sm" onclick="saveEmailEdit(${emailId})">Save Changes</button>
-                        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('email-edit-${emailId}').innerHTML=''">Cancel</button>
-                    </div>
-                </div>
-            `;
-        }
-
-        async function saveEmailEdit(emailId) {
-            const subject = document.getElementById(`edit-subject-${emailId}`).value;
-            const body = document.getElementById(`edit-body-${emailId}`).value;
-            const data = await api(`/api/send/email/${emailId}/edit`, {
-                method: 'PATCH',
-                body: JSON.stringify({ subject, body }),
-            });
-            if (data) {
-                toast('Email updated!');
-                // Find the lead ID from the closest card and refresh
-                const card = document.querySelector(`[data-email-id="${emailId}"]`);
-                document.getElementById(`email-edit-${emailId}`).innerHTML = '';
-                // Re-render by finding parent lead
-                const leadCards = document.querySelectorAll('.lead-card');
-                leadCards.forEach(c => {
-                    const leadId = c.getAttribute('data-lead-id');
-                    if (leadId) viewEmails(parseInt(leadId));
-                });
-            }
-        }
-
-        function toast(msg) {
-            const el = document.createElement('div');
-            el.className = 'toast';
-            el.textContent = msg;
-            document.body.appendChild(el);
-            setTimeout(() => el.remove(), 3000);
         }
     </script>
 </body>
