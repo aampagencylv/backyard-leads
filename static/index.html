@@ -1298,26 +1298,23 @@
                     </div>
                 </div>
 
-                <div style="display:grid;grid-template-columns:2fr 1fr;gap:16px">
-                    <!-- Left: contacts + deals + activity -->
+                <div style="display:grid;grid-template-columns:1fr 380px;gap:16px">
+                    <!-- Left: deals, activity, reviews -->
                     <div>
-                        <div class="panel">
-                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-                                <h3 style="margin:0">Contacts (${d.contacts.length})</h3>
-                                <div style="display:flex;gap:6px">
-                                    ${d.website ? `<button class="btn btn-secondary btn-sm" onclick="enrichContactsFromCompany(${d.id})" title="Look up contacts via Apollo / Hunter using the company's website">🔎 Enrich</button>` : ''}
-                                    <button class="btn btn-primary btn-sm" onclick="addContact(${d.id})">+ Add Contact</button>
-                                </div>
-                            </div>
-                            <div id="contacts-list">${renderContacts(d.contacts)}</div>
-                        </div>
-
                         <div class="panel">
                             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
                                 <h3 style="margin:0">Deals (${d.deals.length})</h3>
                                 <button class="btn btn-secondary btn-sm" onclick="addDeal(${d.id})">+ Add Deal</button>
                             </div>
                             <div id="deals-list">${renderDeals(d.deals)}</div>
+                        </div>
+
+                        <div class="panel">
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                                <h3 style="margin:0">Activity Timeline</h3>
+                                <button class="btn btn-secondary btn-sm" onclick="addNote(${d.id})">+ Add Note</button>
+                            </div>
+                            <div id="timeline-list">${renderTimeline(d.timeline)}</div>
                         </div>
 
                         <div class="panel">
@@ -1331,29 +1328,46 @@
                             <div id="reviews-list">${renderReviews(d.reviews || [])}</div>
                         </div>
 
+                        <!-- Problems Found -->
                         <div class="panel">
-                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-                                <h3 style="margin:0">Activity Timeline</h3>
-                                <button class="btn btn-secondary btn-sm" onclick="addNote(${d.id})">+ Add Note</button>
-                            </div>
-                            <div id="timeline-list">${renderTimeline(d.timeline)}</div>
+                            <h3>Problems Found (${problems.length})</h3>
+                            <div>${problems.length ? problems.slice(0, 8).map(p => `<div style="font-size:12px;margin:4px 0"><span class="problem-tag ${escapeHtml(p.severity || 'medium')}">${escapeHtml(p.severity || 'medium')}</span> ${escapeHtml(p.detail || p.type || '')}</div>`).join('') : '<span style="font-size:12px;color:#888">No analysis yet. Click Enrich to analyze.</span>'}</div>
                         </div>
                     </div>
 
-                    <!-- Right: tags, problems, tasks -->
+                    <!-- Right: contacts, tags, tasks -->
                     <div>
+                        <!-- Contacts -->
                         <div class="panel">
-                            <h3>Tags</h3>
-                            <div id="company-tags">${(d.tags||[]).map(t => `<span style="background:${escapeHtml(t.color)}22;color:${escapeHtml(t.color)};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;margin-right:4px">${escapeHtml(t.name)}</span>`).join('') || '<span style="font-size:12px;color:#888">None</span>'}</div>
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                                <h3 style="margin:0">Contacts (${d.contacts.length})</h3>
+                                <div style="display:flex;gap:6px">
+                                    ${d.website ? `<button class="btn btn-secondary btn-xs" onclick="enrichContactsFromCompany(${d.id})" title="Look up contacts via Netrows/Hunter">Enrich</button>` : ''}
+                                    <button class="btn btn-primary btn-xs" onclick="addContact(${d.id})">+ Add</button>
+                                </div>
+                            </div>
+                            <div id="contacts-list">${renderContacts(d.contacts)}</div>
                         </div>
+
+                        <!-- Tags -->
                         <div class="panel">
-                            <h3>Problems Found</h3>
-                            <div>${problems.length ? problems.map(p => `<div style="font-size:12px;margin:4px 0"><span class="problem-tag ${escapeHtml(p.severity || 'medium')}">${escapeHtml(p.severity || 'medium')}</span> ${escapeHtml(p.detail || p.type || '')}</div>`).join('') : '<span style="font-size:12px;color:#888">No analysis yet</span>'}</div>
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                                <h3 style="margin:0">Tags</h3>
+                            </div>
+                            <div id="company-tags" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">
+                                ${(d.tags||[]).map(t => `<span style="background:${escapeHtml(t.color)}22;color:${escapeHtml(t.color)};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600">${escapeHtml(t.name)} <a onclick="removeCompanyTag(${d.id},${t.id})" style="cursor:pointer;margin-left:2px">×</a></span>`).join('') || '<span style="font-size:12px;color:#888">None</span>'}
+                            </div>
+                            <div style="display:flex;gap:4px">
+                                <input type="text" id="new-tag-input-${d.id}" placeholder="Add or create tag..." style="flex:1;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px" onkeydown="if(event.key==='Enter')addTagToCompany(${d.id})">
+                                <button class="btn btn-secondary btn-xs" onclick="addTagToCompany(${d.id})">Add</button>
+                            </div>
                         </div>
+
+                        <!-- Tasks -->
                         <div class="panel">
                             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
                                 <h3 style="margin:0">Tasks</h3>
-                                <button class="btn btn-secondary btn-sm" onclick="addTask(${d.id})">+ Task</button>
+                                <button class="btn btn-secondary btn-xs" onclick="addTask(${d.id})">+ Task</button>
                             </div>
                             <div id="tasks-list">Loading...</div>
                         </div>
@@ -1364,14 +1378,18 @@
         }
 
         function renderContacts(contacts) {
-            if (!contacts.length) return '<p style="font-size:12px;color:#888;margin:8px 0">No contacts yet. Add one or run "Analyze Website" to enrich via Apollo/Hunter.</p>';
+            if (!contacts.length) return '<p style="font-size:12px;color:#888;margin:8px 0">No contacts yet. Add one or click Enrich to find contacts via Netrows/Hunter.</p>';
             return contacts.map(c => {
                 const cardId = `contact-${c.id}`;
                 return `
                 <div class="contact-card ${c.is_primary ? 'primary' : ''}" id="${cardId}">
                     <div class="contact-card-header">
-                        <div>
-                            <h4>${escapeHtml(c.name) || '(no name)'} ${c.is_primary ? '<span style="font-size:10px;background:var(--bmp-green);color:white;padding:1px 6px;border-radius:3px;margin-left:4px">PRIMARY</span>' : ''}</h4>
+                        <div style="flex:1;min-width:0">
+                            <h4 style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                                ${escapeHtml(c.name) || '(no name)'}
+                                ${c.linkedin_url ? `<a href="${escapeHtml(c.linkedin_url)}" target="_blank" rel="noreferrer" style="color:#0077B5;font-size:12px;text-decoration:none" title="View LinkedIn Profile">LinkedIn</a>` : ''}
+                                ${c.is_primary ? '<span style="font-size:10px;background:var(--bmp-green);color:white;padding:1px 6px;border-radius:3px">PRIMARY</span>' : ''}
+                            </h4>
                             <div class="contact-card-meta">
                                 ${c.title ? escapeHtml(c.title) + ' · ' : ''}
                                 ${c.email ? `<a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a>` : '<em>no email</em>'}
@@ -1380,12 +1398,14 @@
                                 ${c.email_status === 'bounced' ? ' · <span style="color:#c0392b">BOUNCED</span>' : ''}
                             </div>
                         </div>
-                        <div class="contact-actions">
+                        <div class="contact-actions" style="display:flex;flex-wrap:wrap;gap:4px">
                             <button class="btn btn-secondary btn-xs" onclick="editContact(${c.id})">Edit</button>
                             ${!c.email ? `<button class="btn btn-secondary btn-xs" onclick="setContactEmail(${c.id})">Set Email</button>` : ''}
-                            ${(!c.email && (c.linkedin_url || (c.first_name && c.last_name))) ? `<button class="btn btn-secondary btn-xs" onclick="lookupContactEmail(${c.id})" title="Find verified email via Netrows">🔍 Lookup Email</button>` : ''}
-                            ${c.linkedin_url ? `<button class="btn btn-secondary btn-xs" onclick="refreshContactPosts(${c.id})" title="Pull recent LinkedIn posts for personalization">🔄 Posts</button>` : ''}
-                            ${c.emails.length === 0 ? `<button class="btn btn-success btn-xs" onclick="generateContactSequence(${c.id})">Generate Sequence</button>` : ''}
+                            ${(!c.email && (c.linkedin_url || (c.first_name && c.last_name))) ? `<button class="btn btn-secondary btn-xs" onclick="lookupContactEmail(${c.id})">Lookup Email</button>` : ''}
+                            ${c.linkedin_url ? `<button class="btn btn-secondary btn-xs" onclick="refreshContactPosts(${c.id})">Posts</button>` : ''}
+                            ${c.emails.length === 0 && c.email ? `<button class="btn btn-success btn-xs" onclick="generateContactSequence(${c.id})">Generate Sequence</button>` : ''}
+                            ${c.emails.length > 0 ? `<button class="btn btn-danger btn-xs" onclick="deleteSequence(${c.id})">Delete Sequence</button>` : ''}
+                            ${c.emails.length > 0 ? `<button class="btn btn-secondary btn-xs" onclick="regenerateSequence(${c.id})">Regenerate</button>` : ''}
                         </div>
                     </div>
                     ${c.recent_posts && c.recent_posts.length ? `
@@ -1403,7 +1423,7 @@
                     <div style="margin-top:12px;padding-top:10px;border-top:1px dashed #d8e0d8">
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
                             <strong style="font-size:12px;color:var(--bmp-green);text-transform:uppercase;letter-spacing:0.5px">Outreach Sequence (${c.emails.length} steps)</strong>
-                            <span class="sequence-toggle" onclick="toggleSequence('${cardId}')" style="margin-top:0">Collapse ▲</span>
+                            <span class="sequence-toggle" onclick="toggleSequence('${cardId}')" style="margin-top:0">Expand ▼</span>
                         </div>
                         ${c.email && !c.unsubscribed_at && c.emails.some(e => !e.is_sent) ? `
                             <div style="background:var(--bmp-cream);border:1px solid #e8d5c4;border-radius:8px;padding:12px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center">
@@ -1420,7 +1440,7 @@
                                 </div>
                             </div>
                         ` : ''}
-                        <div class="sequence-body" id="${cardId}-seq" style="display:block">
+                        <div class="sequence-body" id="${cardId}-seq" style="display:none">
                             ${c.emails.map(e => renderEmailCard(e, c.id)).join('')}
                         </div>
                     </div>
@@ -1671,12 +1691,67 @@
             toast('Generating sequence...');
             const data = await api(`/api/contacts/${contactId}/generate-sequence`, { method: 'POST' });
             if (data && data.emails_created) {
-                toast(`Generated ${data.emails_created} emails.`);
+                toast(`Generated ${data.emails_created} steps.`);
                 const c = await api(`/api/contacts/${contactId}`);
                 if (c) openCompanyDetail(c.company_id);
             } else if (data && data.detail) {
                 toast(data.detail);
             }
+        }
+
+        async function deleteSequence(contactId) {
+            if (!confirm('Delete the entire sequence for this contact? This cannot be undone.')) return;
+            // Delete all unsent emails for this contact
+            const contact = await api(`/api/contacts/${contactId}`);
+            if (!contact) return;
+            // Use the company full endpoint to get emails
+            const company = await api(`/api/companies/${contact.company_id}/full`);
+            if (!company) return;
+            const contactData = company.contacts.find(c => c.id === contactId);
+            if (contactData) {
+                for (const e of contactData.emails) {
+                    if (!e.is_sent) {
+                        await api(`/api/send/email/${e.id}`, { method: 'DELETE' });
+                    }
+                }
+            }
+            toast('Sequence deleted');
+            openCompanyDetail(contact.company_id);
+        }
+
+        async function regenerateSequence(contactId) {
+            if (!confirm('Delete the current sequence and generate a new one?')) return;
+            await deleteSequence(contactId);
+            await generateContactSequence(contactId);
+        }
+
+        async function addTagToCompany(companyId) {
+            const input = document.getElementById(`new-tag-input-${companyId}`);
+            const tagName = input.value.trim();
+            if (!tagName) return;
+
+            // Check if tag exists, create if not
+            const tags = await api('/api/crm/tags');
+            let tag = tags ? tags.find(t => t.name.toLowerCase() === tagName.toLowerCase()) : null;
+
+            if (!tag) {
+                tag = await api('/api/crm/tags', {
+                    method: 'POST',
+                    body: JSON.stringify({ name: tagName, color: '#1B5E20' }),
+                });
+            }
+
+            if (tag) {
+                await api(`/api/crm/companies/${companyId}/tags/${tag.id}`, { method: 'POST' });
+                toast(`Tag "${tagName}" added`);
+                input.value = '';
+                openCompanyDetail(companyId);
+            }
+        }
+
+        async function removeCompanyTag(companyId, tagId) {
+            await api(`/api/crm/companies/${companyId}/tags/${tagId}`, { method: 'DELETE' });
+            openCompanyDetail(companyId);
         }
 
         async function sendNextInSequence(contactId) {
