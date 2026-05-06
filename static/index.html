@@ -282,7 +282,8 @@
                 <a data-page="contacts" onclick="showPage('contacts')">Contacts <span id="nav-contacts-count" class="nav-badge"></span></a>
                 <a data-page="pipeline" onclick="showPage('pipeline')">Pipeline <span id="nav-pipeline-count" class="nav-badge"></span></a>
                 <a data-page="tasks" onclick="showPage('tasks')">Tasks <span id="nav-tasks-count" class="nav-badge"></span></a>
-                <a data-page="settings" onclick="showPage('settings')" style="margin-top:12px;border-top:1px solid rgba(255,255,255,0.1);padding-top:12px">Settings</a>
+                <a data-page="autopilot" onclick="showPage('autopilot')" style="margin-top:12px;border-top:1px solid rgba(255,255,255,0.1);padding-top:12px">Auto Pilot</a>
+                <a data-page="settings" onclick="showPage('settings')">Settings</a>
             </nav>
             <div class="sidebar-user">
                 <div id="user-name"></div>
@@ -470,6 +471,15 @@
             </div>
 
             <!-- Settings (signature) -->
+            <!-- Auto Pilot Page -->
+            <div id="page-autopilot" class="hidden">
+                <div class="page-header">
+                    <h1>Auto Pilot</h1>
+                    <button class="btn btn-primary" onclick="showCreateCampaignModal()">+ New Campaign</button>
+                </div>
+                <div id="campaigns-list"></div>
+            </div>
+
             <div id="page-settings" class="hidden">
                 <div class="page-header"><h1>Settings</h1></div>
                 <div class="search-box" style="max-width:600px">
@@ -732,6 +742,7 @@
             if (page === 'pipeline') loadPipeline();
             if (page === 'tasks') loadTasks('mine');
             if (page === 'settings') loadSettings();
+            if (page === 'autopilot') loadCampaigns();
         }
 
         async function refreshNavBadges() {
@@ -1695,6 +1706,212 @@
             });
             toast('Activity logged.');
             openCompanyDetail(companyId);
+        }
+
+        // ============ Auto Pilot ============
+
+        const BMP_BUSINESS_TYPES = [
+            "pool builders", "pool service and maintenance", "landscaping companies",
+            "lawn care service", "outdoor kitchen builders", "deck builders",
+            "fence companies", "patio contractors", "hardscape contractors",
+            "irrigation companies", "tree service", "concrete contractors",
+            "landscape lighting", "pergola builders", "retaining wall contractors",
+        ];
+
+        async function loadCampaigns() {
+            const data = await api('/api/campaigns/');
+            const panel = document.getElementById('campaigns-list');
+            if (!data || data.length === 0) {
+                panel.innerHTML = '<div style="background:white;border-radius:12px;padding:40px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,0.06)"><h3 style="color:#888">No campaigns yet</h3><p style="color:#aaa;font-size:14px">Create your first Auto Pilot campaign to start autonomous prospecting.</p></div>';
+                return;
+            }
+            panel.innerHTML = data.map(c => `
+                <div style="background:white;border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,0.06);margin-bottom:16px;border-left:4px solid ${c.status === 'running' ? 'var(--bmp-green)' : c.status === 'completed' ? '#888' : c.status === 'paused' ? 'var(--bmp-orange)' : '#ddd'}">
+                    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+                        <div>
+                            <h3 style="margin:0 0 4px">${escapeHtml(c.name)}</h3>
+                            <div style="font-size:12px;color:#888">
+                                ${c.business_types.join(', ')} | ${c.locations.join(', ')}
+                            </div>
+                            <div style="font-size:12px;color:#888;margin-top:2px">
+                                Reviews: ${c.min_reviews}–${c.max_reviews} | Rating: ${c.min_rating}+ | Max/day: ${c.max_prospects_per_day}
+                            </div>
+                            <div style="font-size:12px;color:#888;margin-top:2px">
+                                Team: ${c.members.map(m => m.name).join(', ') || 'None'} | Mode: ${c.mode}
+                            </div>
+                        </div>
+                        <span class="status-badge status-${c.status}" style="font-size:13px;padding:4px 12px">${c.status}</span>
+                    </div>
+
+                    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-top:16px">
+                        <div style="text-align:center;padding:8px;background:#f8f9fa;border-radius:6px">
+                            <div style="font-size:20px;font-weight:700;color:var(--bmp-green)">${c.total_prospects_found}</div>
+                            <div style="font-size:10px;color:#888">Found</div>
+                        </div>
+                        <div style="text-align:center;padding:8px;background:#f8f9fa;border-radius:6px">
+                            <div style="font-size:20px;font-weight:700;color:var(--bmp-green)">${c.total_qualified}</div>
+                            <div style="font-size:10px;color:#888">Qualified</div>
+                        </div>
+                        <div style="text-align:center;padding:8px;background:#f8f9fa;border-radius:6px">
+                            <div style="font-size:20px;font-weight:700;color:var(--bmp-green)">${c.total_sequences_created}</div>
+                            <div style="font-size:10px;color:#888">Sequences</div>
+                        </div>
+                        <div style="text-align:center;padding:8px;background:#f8f9fa;border-radius:6px">
+                            <div style="font-size:20px;font-weight:700;color:var(--bmp-orange)">${c.total_replies}</div>
+                            <div style="font-size:10px;color:#888">Replies</div>
+                        </div>
+                        <div style="text-align:center;padding:8px;background:#f8f9fa;border-radius:6px">
+                            <div style="font-size:20px;font-weight:700">${c.prospects_today}</div>
+                            <div style="font-size:10px;color:#888">Today</div>
+                        </div>
+                        <div style="text-align:center;padding:8px;background:#f8f9fa;border-radius:6px">
+                            <div style="font-size:20px;font-weight:700">${c.current_location_index}/${c.locations.length}</div>
+                            <div style="font-size:10px;color:#888">Markets</div>
+                        </div>
+                    </div>
+
+                    <div style="display:flex;gap:8px;margin-top:12px">
+                        ${c.status === 'draft' || c.status === 'paused' ? `<button class="btn btn-success btn-sm" onclick="startCampaign(${c.id})">Start</button>` : ''}
+                        ${c.status === 'running' ? `<button class="btn btn-primary btn-sm" onclick="runCampaignBatch(${c.id})">Run Next Batch</button>` : ''}
+                        ${c.status === 'running' ? `<button class="btn btn-secondary btn-sm" onclick="pauseCampaign(${c.id})">Pause</button>` : ''}
+                        <button class="btn btn-secondary btn-sm" onclick="viewCampaignLogs(${c.id})">View Logs</button>
+                    </div>
+                    <div id="campaign-logs-${c.id}" style="margin-top:8px"></div>
+                </div>
+            `).join('');
+        }
+
+        async function showCreateCampaignModal() {
+            const users = await api('/api/crm/users') || [];
+
+            openModal('New Auto Pilot Campaign', `
+                <div class="form-group">
+                    <label>Campaign Name</label>
+                    <input type="text" id="camp-name" placeholder="Phoenix Pool Builders Q2">
+                </div>
+                <div class="form-group">
+                    <label>Business Types</label>
+                    <div id="camp-types" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
+                        ${BMP_BUSINESS_TYPES.map(t => `<label style="font-size:12px;display:flex;align-items:center;gap:3px;background:#f5f5f5;padding:3px 8px;border-radius:4px"><input type="checkbox" value="${t}" class="camp-type-cb"> ${t}</label>`).join('')}
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Locations (one per line)</label>
+                    <textarea id="camp-locations" rows="3" placeholder="Phoenix, AZ&#10;Scottsdale, AZ&#10;Las Vegas, NV" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px"></textarea>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+                    <div class="form-group">
+                        <label>Min Reviews</label>
+                        <input type="number" id="camp-min-rev" value="20">
+                    </div>
+                    <div class="form-group">
+                        <label>Max Reviews</label>
+                        <input type="number" id="camp-max-rev" value="300">
+                    </div>
+                    <div class="form-group">
+                        <label>Min Rating</label>
+                        <input type="number" id="camp-min-rating" value="3.5" step="0.5">
+                    </div>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+                    <div class="form-group">
+                        <label>Max Prospects/Day</label>
+                        <input type="number" id="camp-max-day" value="10">
+                    </div>
+                    <div class="form-group">
+                        <label>Contact Cooldown (days)</label>
+                        <input type="number" id="camp-cooldown" value="90">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Team Members (round-robin)</label>
+                    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
+                        ${users.map(u => `<label style="font-size:12px;display:flex;align-items:center;gap:3px;background:#f5f5f5;padding:3px 8px;border-radius:4px"><input type="checkbox" value="${u.id}" class="camp-member-cb" checked> ${escapeHtml(u.name)}</label>`).join('')}
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Mode</label>
+                    <select id="camp-mode" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px">
+                        <option value="moderate">Moderate — BDR approves before first send</option>
+                        <option value="full_auto">Full Auto — sends automatically (use with caution)</option>
+                    </select>
+                </div>
+            `, async () => {
+                const types = Array.from(document.querySelectorAll('.camp-type-cb:checked')).map(cb => cb.value);
+                const locations = document.getElementById('camp-locations').value.split('\\n').map(l => l.trim()).filter(Boolean);
+                const memberIds = Array.from(document.querySelectorAll('.camp-member-cb:checked')).map(cb => parseInt(cb.value));
+
+                if (!types.length) { toast('Select at least one business type'); return; }
+                if (!locations.length) { toast('Enter at least one location'); return; }
+
+                const data = await api('/api/campaigns/', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        name: document.getElementById('camp-name').value || 'New Campaign',
+                        business_types: types,
+                        locations: locations,
+                        min_reviews: parseInt(document.getElementById('camp-min-rev').value) || 20,
+                        max_reviews: parseInt(document.getElementById('camp-max-rev').value) || 300,
+                        min_rating: parseFloat(document.getElementById('camp-min-rating').value) || 3.5,
+                        max_prospects_per_day: parseInt(document.getElementById('camp-max-day').value) || 10,
+                        contact_cooldown_days: parseInt(document.getElementById('camp-cooldown').value) || 90,
+                        mode: document.getElementById('camp-mode').value,
+                        member_ids: memberIds,
+                    }),
+                });
+                if (data) {
+                    toast('Campaign created! Click Start to begin.');
+                    closeModal();
+                    loadCampaigns();
+                }
+            });
+        }
+
+        async function startCampaign(id) {
+            await api(`/api/campaigns/${id}/start`, { method: 'POST' });
+            toast('Campaign started! Click "Run Next Batch" to process the first market.');
+            loadCampaigns();
+        }
+
+        async function pauseCampaign(id) {
+            await api(`/api/campaigns/${id}/pause`, { method: 'POST' });
+            toast('Campaign paused.');
+            loadCampaigns();
+        }
+
+        async function runCampaignBatch(id) {
+            toast('Running batch... searching, enriching, qualifying. This may take a minute.');
+            const data = await api(`/api/campaigns/${id}/run-batch`, { method: 'POST' });
+            if (data) {
+                if (data.status === 'completed') {
+                    toast('Campaign completed! All markets have been searched.');
+                } else if (data.status === 'daily_cap_reached') {
+                    toast(`Daily cap reached (${data.prospects_today} prospects today). Run again tomorrow.`);
+                } else {
+                    toast(`Batch done: ${data.business_type} in ${data.location} — Found ${data.searched}, New ${data.new_companies}, Qualified ${data.qualified}, Sequences ${data.sequences_created}`);
+                }
+                loadCampaigns();
+            }
+        }
+
+        async function viewCampaignLogs(id) {
+            const logs = await api(`/api/campaigns/${id}/logs?limit=20`);
+            const container = document.getElementById(`campaign-logs-${id}`);
+            if (!logs || !logs.length) {
+                container.innerHTML = '<p style="font-size:12px;color:#999">No activity yet</p>';
+                return;
+            }
+            container.innerHTML = `
+                <div style="max-height:200px;overflow-y:auto;font-size:12px;background:#f8f9fa;border-radius:6px;padding:8px">
+                    ${logs.map(l => `
+                        <div style="padding:3px 0;border-bottom:1px solid #eee;display:flex;gap:8px">
+                            <span style="color:#888;white-space:nowrap">${formatDate(l.created_at)}</span>
+                            <span style="font-weight:600;color:${l.action === 'error' ? '#c0392b' : l.action === 'sequence_created' ? 'var(--bmp-green)' : l.action === 'skipped' ? '#888' : '#333'}">${l.action}</span>
+                            <span>${escapeHtml(l.detail)}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
         }
 
         // ============ Settings ============

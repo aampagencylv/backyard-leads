@@ -272,7 +272,88 @@ class SavedView(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    page = Column(String(30), nullable=False)  # "companies" or "pipeline"
+    page = Column(String(30), nullable=False)
     name = Column(String(100), nullable=False)
-    filters_json = Column(Text, nullable=False)  # JSON dict of filter params
+    filters_json = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+# Many-to-many: campaigns <-> users (round-robin team)
+campaign_members = Table(
+    "campaign_members",
+    Base.metadata,
+    Column("campaign_id", Integer, ForeignKey("campaigns.id"), primary_key=True),
+    Column("user_id", Integer, ForeignKey("users.id"), primary_key=True),
+)
+
+
+class Campaign(Base):
+    """
+    Auto Pilot campaign. Defines target criteria, locations, and qualification rules.
+    Runs autonomously: search → enrich → qualify → generate sequence.
+    Moderate mode: sequences created but not auto-sent (BDR approves).
+    """
+    __tablename__ = "campaigns"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    # Target criteria
+    business_types = Column(Text, nullable=False)  # JSON list: ["pool builders", "landscaping companies"]
+    locations = Column(Text, nullable=False)  # JSON list: ["Phoenix, AZ", "Las Vegas, NV"]
+    min_reviews = Column(Integer, default=20)
+    max_reviews = Column(Integer, default=300)
+    min_rating = Column(Float, default=3.5)
+    must_have_website = Column(Boolean, default=True)
+
+    # Qualification rules
+    max_ai_visibility_score = Column(Integer, default=40)  # Below this = opportunity
+    min_problems = Column(Integer, default=3)  # At least this many issues found
+    contact_required = Column(Boolean, default=True)  # Must find an email to qualify
+
+    # Sending rules
+    max_prospects_per_day = Column(Integer, default=10)
+    mode = Column(String(20), default="moderate")  # moderate = needs approval, full_auto = sends automatically
+
+    # Dedup
+    contact_cooldown_days = Column(Integer, default=90)  # Don't re-contact within this window
+
+    # Round-robin state
+    last_assigned_index = Column(Integer, default=0)  # Tracks which team member got the last lead
+
+    # Campaign state
+    status = Column(String(20), default="draft")  # draft, running, paused, completed
+    # Progress tracking
+    total_locations_searched = Column(Integer, default=0)
+    total_prospects_found = Column(Integer, default=0)
+    total_qualified = Column(Integer, default=0)
+    total_sequences_created = Column(Integer, default=0)
+    total_emails_sent = Column(Integer, default=0)
+    total_replies = Column(Integer, default=0)
+
+    # Execution state — tracks where we are in the campaign
+    current_location_index = Column(Integer, default=0)  # Which location we're processing
+    current_business_type_index = Column(Integer, default=0)  # Which business type within that location
+    prospects_today = Column(Integer, default=0)  # Reset daily
+    last_run_at = Column(DateTime, nullable=True)
+    last_daily_reset = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    creator = relationship("User", foreign_keys=[created_by])
+    members = relationship("User", secondary=campaign_members)
+
+
+class CampaignLog(Base):
+    """Log of every action Auto Pilot takes — full audit trail."""
+    __tablename__ = "campaign_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    campaign_id = Column(Integer, ForeignKey("campaigns.id"), nullable=False)
+    action = Column(String(50), nullable=False)  # searched, enriched, qualified, skipped, sequence_created, error
+    detail = Column(Text, default="")
+    company_id = Column(Integer, nullable=True)
+    contact_id = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))

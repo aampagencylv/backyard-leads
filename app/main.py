@@ -16,6 +16,7 @@ from app.routes import (
     runtime_routes,
     unsubscribe_routes,
     view_routes,
+    campaign_routes,
 )
 
 
@@ -51,6 +52,7 @@ app.include_router(dashboard_routes.router)
 app.include_router(runtime_routes.router)
 app.include_router(unsubscribe_routes.router)
 app.include_router(view_routes.router)
+app.include_router(campaign_routes.router)
 
 # Serve static frontend
 app.mount("/static", StaticFiles(directory="static"), name="static")

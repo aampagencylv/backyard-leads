@@ -34,6 +34,7 @@ ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_leads_to_com
 ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_netrows_caches
 ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_runtime_config
 ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_roles_and_views
+ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_campaigns
 ExecStart=/opt/backyard-leads/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=5
