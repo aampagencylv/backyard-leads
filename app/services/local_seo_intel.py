@@ -65,10 +65,18 @@ class LocalSEOAnalysis:
     has_yelp_link: bool = False
     citation_signals: List[str] = field(default_factory=list)
 
-    # AI Search Readiness
+    # AI Search Readiness (GEO / AEO)
     robots_blocks_ai: bool = False
     has_llms_txt: bool = False
     ai_crawler_status: Dict[str, str] = field(default_factory=dict)
+    has_faq_schema: bool = False
+    has_speakable_schema: bool = False
+    has_howto_schema: bool = False
+    has_author_page: bool = False
+    has_about_page: bool = False
+    has_team_page: bool = False
+    content_citability_score: int = 0  # 0-100, how AI-quotable the content is
+    ai_visibility_score: int = 0  # 0-100, overall AI readiness
 
     # Problems & Opportunities
     findings: List[Dict] = field(default_factory=list)
@@ -115,7 +123,10 @@ async def analyze_local_seo(url: str, business_name: str = "", business_type_hin
             _check_citations(soup, html, analysis)
             _check_click_to_call(soup, html, analysis)
 
-            # Check robots.txt and AI crawlers
+            # AI visibility (GEO / AEO) — most important for established businesses
+            _check_ai_schema(soup, html, analysis)
+            _check_ai_citability(soup, html, analysis)
+            _check_eeat_signals(soup, html, analysis)
             await _check_ai_readiness(client, url, analysis)
 
             # Calculate score
@@ -415,8 +426,166 @@ def _check_click_to_call(soup: BeautifulSoup, html: str, analysis: LocalSEOAnaly
         })
 
 
+def _check_ai_schema(soup: BeautifulSoup, html: str, analysis: LocalSEOAnalysis):
+    """Check for AI-friendly schema types: FAQ, HowTo, Speakable."""
+    scripts = soup.find_all("script", type="application/ld+json")
+
+    for script in scripts:
+        try:
+            data = json.loads(script.string)
+            items = data if isinstance(data, list) else [data]
+            if isinstance(data, dict) and "@graph" in data:
+                items = data["@graph"]
+
+            for item in items:
+                item_type = str(item.get("@type", ""))
+                if "FAQPage" in item_type:
+                    analysis.has_faq_schema = True
+                if "HowTo" in item_type:
+                    analysis.has_howto_schema = True
+                if item.get("speakable"):
+                    analysis.has_speakable_schema = True
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+    if not analysis.has_faq_schema:
+        analysis.findings.append({
+            "category": "high",
+            "issue": "No FAQ schema for AI answers",
+            "detail": "No FAQPage structured data found — AI engines use FAQ schema to generate direct answers",
+            "talking_point": "When someone asks ChatGPT or Google AI 'how much does a pool cost in Phoenix?' — your competitors with FAQ schema show up as the answer. You don't have this, so AI skips your site entirely."
+        })
+
+
+def _check_ai_citability(soup: BeautifulSoup, html: str, analysis: LocalSEOAnalysis):
+    """Check how AI-quotable the content is (citability signals)."""
+    body = soup.find("body")
+    if not body:
+        return
+
+    text = body.get_text(separator=" ", strip=True)
+    words = text.split()
+    word_count = len(words)
+    score = 0
+
+    # 1. Content length — AI needs substance to cite
+    if word_count >= 1500:
+        score += 20
+    elif word_count >= 800:
+        score += 10
+    elif word_count >= 400:
+        score += 5
+
+    # 2. Specific statistics and numbers (AI loves quotable stats)
+    stat_patterns = [r'\d+%', r'\$[\d,]+', r'\d+\s+years?', r'\d+\s+projects?',
+                     r'\d+\s+clients?', r'\d+\s+customers?', r'since\s+\d{4}']
+    stat_count = sum(len(re.findall(p, text, re.IGNORECASE)) for p in stat_patterns)
+    if stat_count >= 5:
+        score += 20
+    elif stat_count >= 2:
+        score += 10
+
+    # 3. Definition/answer patterns — content that directly answers questions
+    answer_patterns = [
+        r'\b\w+\s+is\s+(?:a|an|the)\s',
+        r'\btypically\s+(?:costs?|ranges?|takes?)',
+        r'\baverage\s+(?:cost|price|time)',
+        r'\bstep\s+\d',
+        r'\bfirst[,.]?\s',
+        r'\baccording to\b',
+    ]
+    answer_count = sum(1 for p in answer_patterns if re.search(p, text, re.IGNORECASE))
+    if answer_count >= 3:
+        score += 20
+    elif answer_count >= 1:
+        score += 10
+
+    # 4. Proper nouns and named entities (self-contained, AI-extractable)
+    proper_nouns = len(re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b', text))
+    if proper_nouns >= 10:
+        score += 10
+    elif proper_nouns >= 5:
+        score += 5
+
+    # 5. Lists and structured content — AI extracts these well
+    lists = soup.find_all(["ul", "ol"])
+    if len(lists) >= 3:
+        score += 15
+    elif len(lists) >= 1:
+        score += 8
+
+    # 6. Headers structure — clear topic segmentation
+    headers = soup.find_all(["h2", "h3"])
+    if len(headers) >= 5:
+        score += 15
+    elif len(headers) >= 2:
+        score += 8
+
+    analysis.content_citability_score = min(100, score)
+
+    if analysis.content_citability_score < 30:
+        analysis.findings.append({
+            "category": "high",
+            "issue": "Low AI citability score",
+            "detail": f"Citability: {analysis.content_citability_score}/100 — content is not structured for AI to quote",
+            "talking_point": "Your website content isn't structured in a way that AI search engines can quote or cite. When ChatGPT answers 'who is the best pool builder in your area,' it pulls from sites with specific stats, clear answers, and structured content. Your site doesn't give AI anything to work with."
+        })
+    elif analysis.content_citability_score < 60:
+        analysis.findings.append({
+            "category": "medium",
+            "issue": "Moderate AI citability",
+            "detail": f"Citability: {analysis.content_citability_score}/100 — room for improvement",
+            "talking_point": "Your content has some elements AI can work with, but competitors with more specific stats, FAQ sections, and structured answers will get cited over you in ChatGPT and Google AI Overviews."
+        })
+
+
+def _check_eeat_signals(soup: BeautifulSoup, html: str, analysis: LocalSEOAnalysis):
+    """Check for E-E-A-T signals that AI engines use to evaluate trustworthiness."""
+    html_lower = html.lower()
+    links = soup.find_all("a", href=True)
+    link_hrefs = [a["href"].lower() for a in links]
+    link_texts = [a.get_text(strip=True).lower() for a in links]
+
+    # About/Team/Author pages — trust signals for AI
+    about_indicators = ["about", "about-us", "our-story", "who-we-are"]
+    team_indicators = ["team", "our-team", "staff", "leadership"]
+    author_indicators = ["author", "written-by", "by-line"]
+
+    for href in link_hrefs:
+        for ind in about_indicators:
+            if ind in href:
+                analysis.has_about_page = True
+                break
+        for ind in team_indicators:
+            if ind in href:
+                analysis.has_team_page = True
+                break
+
+    # Check for credentials/licensing mentions
+    credential_patterns = ["licensed", "insured", "bonded", "certified", "accredited",
+                           "years of experience", "year experience", "established in",
+                           "founded in", "since 19", "since 20"]
+    has_credentials = any(p in html_lower for p in credential_patterns)
+
+    if not analysis.has_about_page and not analysis.has_team_page:
+        analysis.findings.append({
+            "category": "medium",
+            "issue": "No About/Team page for E-E-A-T",
+            "detail": "AI engines evaluate expertise and trust — no about/team page found",
+            "talking_point": "AI search engines like ChatGPT evaluate whether a business is trustworthy before recommending it. Your site doesn't have an About or Team page — that's a trust signal that's easy to add and makes AI more likely to cite you."
+        })
+
+    if not has_credentials:
+        analysis.findings.append({
+            "category": "medium",
+            "issue": "No credentials or licensing mentioned",
+            "detail": "No 'licensed', 'insured', 'bonded', 'certified', or experience claims found",
+            "talking_point": "Your website doesn't mention licensing, insurance, or years of experience. AI gives preference to businesses that demonstrate expertise — adding 'Licensed & Insured since 2015' is a simple change that boosts AI trust."
+        })
+
+
 async def _check_ai_readiness(client: httpx.AsyncClient, url: str, analysis: LocalSEOAnalysis):
-    """Check if AI crawlers are blocked in robots.txt."""
+    """Check robots.txt AI crawler access and llms.txt presence."""
     from urllib.parse import urlparse
     parsed = urlparse(url)
     robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
@@ -429,31 +598,55 @@ async def _check_ai_readiness(client: httpx.AsyncClient, url: str, analysis: Loc
             ai_crawlers = ["gptbot", "claudebot", "perplexitybot", "google-extended"]
             for crawler in ai_crawlers:
                 if crawler in robots_text:
-                    # Check if disallowed
                     if f"user-agent: {crawler}" in robots_text:
                         analysis.ai_crawler_status[crawler] = "referenced"
-                        # Simple check for disallow after the user-agent
                         if "disallow: /" in robots_text:
                             analysis.robots_blocks_ai = True
                             analysis.ai_crawler_status[crawler] = "blocked"
 
             if analysis.robots_blocks_ai:
                 analysis.findings.append({
-                    "category": "medium",
+                    "category": "high",
                     "issue": "AI crawlers blocked in robots.txt",
                     "detail": f"Blocked: {[k for k,v in analysis.ai_crawler_status.items() if v == 'blocked']}",
-                    "talking_point": "Your website is blocking AI search engines (ChatGPT, Claude, Perplexity) — 45% of consumers now use AI for local recommendations, and you're invisible to them."
+                    "talking_point": "Your website is actively blocking AI search engines (ChatGPT, Claude, Perplexity) in your robots.txt file. 45% of consumers now use AI for local recommendations, and you're completely invisible to all of them."
                 })
     except Exception:
         pass
 
-    # Check for llms.txt
+    # Check for llms.txt — the new standard for telling AI about your business
     try:
         llms_url = f"{parsed.scheme}://{parsed.netloc}/llms.txt"
         response = await client.get(llms_url, timeout=5)
         analysis.has_llms_txt = response.status_code == 200
     except Exception:
         pass
+
+    if not analysis.has_llms_txt:
+        analysis.findings.append({
+            "category": "high",
+            "issue": "No llms.txt file",
+            "detail": "llms.txt tells AI engines what your business does, your services, and your service area",
+            "talking_point": "Your website doesn't have an llms.txt file — this is the new standard for telling AI engines like ChatGPT and Claude about your business. Without it, AI has to guess what you do. Your competitors who add this file get recommended first."
+        })
+
+    # Calculate AI visibility sub-score
+    ai_score = 0
+    if analysis.has_llms_txt:
+        ai_score += 20
+    if not analysis.robots_blocks_ai:
+        ai_score += 15
+    if analysis.has_faq_schema:
+        ai_score += 20
+    if analysis.has_speakable_schema:
+        ai_score += 10
+    if analysis.has_about_page or analysis.has_team_page:
+        ai_score += 10
+    if analysis.content_citability_score >= 60:
+        ai_score += 25
+    elif analysis.content_citability_score >= 30:
+        ai_score += 10
+    analysis.ai_visibility_score = min(100, ai_score)
 
 
 def _calculate_score(analysis: LocalSEOAnalysis):
@@ -491,10 +684,15 @@ def local_seo_to_dict(analysis: LocalSEOAnalysis) -> dict:
     return {
         "url": analysis.url,
         "score": analysis.score,
+        "ai_visibility_score": analysis.ai_visibility_score,
+        "content_citability_score": analysis.content_citability_score,
         "business_type": analysis.business_type,
         "industry_vertical": analysis.industry_vertical,
         "has_local_business_schema": analysis.has_local_business_schema,
         "schema_type": analysis.schema_type,
+        "has_faq_schema": analysis.has_faq_schema,
+        "has_llms_txt": analysis.has_llms_txt,
+        "robots_blocks_ai": analysis.robots_blocks_ai,
         "has_map_embed": analysis.has_map_embed,
         "has_reviews": analysis.has_testimonials or analysis.has_review_schema,
         "review_count": analysis.review_count_on_page,
@@ -507,6 +705,8 @@ def local_seo_to_dict(analysis: LocalSEOAnalysis) -> dict:
         "has_click_to_call": analysis.has_click_to_call,
         "citation_signals": analysis.citation_signals,
         "ai_crawler_status": analysis.ai_crawler_status,
+        "has_about_page": analysis.has_about_page,
+        "has_team_page": analysis.has_team_page,
         "findings": analysis.findings,
         "finding_count": len(analysis.findings),
     }

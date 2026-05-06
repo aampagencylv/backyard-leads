@@ -27,6 +27,7 @@ from app.services.netrows_enrichment import (
     find_decision_makers as netrows_find_decision_makers,
     google_maps_reviews as netrows_maps_reviews,
     reverse_email_lookup as netrows_reverse_lookup,
+    enrich_company_by_domain as netrows_company_enrich,
 )
 from app.services.local_seo_intel import analyze_local_seo, local_seo_to_dict
 from app.config import settings
@@ -43,10 +44,12 @@ router = APIRouter(prefix="/api/companies", tags=["companies"])
 async def list_companies(
     search_id: Optional[int] = None,
     status: Optional[str] = None,
-    lifecycle: Optional[str] = None,  # "active" = anything we've engaged with (excludes 'new'); "new" = raw scrape; None = all
+    lifecycle: Optional[str] = None,
     enriched_only: bool = False,
     min_reviews: Optional[int] = None,
+    max_reviews: Optional[int] = None,
     min_rating: Optional[float] = None,
+    has_website: Optional[bool] = None,
     sort_by: str = "reviews",
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -64,8 +67,12 @@ async def list_companies(
         query = query.where(Company.enriched == True)
     if min_reviews:
         query = query.where(Company.review_count >= min_reviews)
+    if max_reviews:
+        query = query.where(Company.review_count <= max_reviews)
     if min_rating:
         query = query.where(Company.rating >= min_rating)
+    if has_website is True:
+        query = query.where(Company.website.isnot(None), Company.website != "")
 
     if sort_by == "reviews":
         query = query.order_by(Company.review_count.desc().nullslast())
@@ -342,6 +349,20 @@ async def enrich_company(
         except Exception:
             pass
 
+    # Company enrichment — employee count, industry
+    if await get_netrows_api_key(db):
+        try:
+            ce = await netrows_company_enrich(company.website, await get_netrows_api_key(db))
+            if ce:
+                if ce.employee_count:
+                    company.employee_count = ce.employee_count
+                if ce.industry and not company.business_type:
+                    company.industry = ce.industry
+                if ce.linkedin_username and not company.linkedin_url:
+                    company.linkedin_url = f"https://linkedin.com/company/{ce.linkedin_username}"
+        except Exception:
+            pass
+
     # Local SEO
     seo_data = None
     try:
@@ -360,7 +381,7 @@ async def enrich_company(
                 "angle": f["talking_point"],
             })
         company.problems_found = json.dumps(existing)
-        company.enrichment_summary = (company.enrichment_summary or "") + f" Local SEO Score: {seo.score}/100."
+        company.enrichment_summary = (company.enrichment_summary or "") + f" Local SEO: {seo.score}/100 | AI Visibility: {seo.ai_visibility_score}/100."
     except Exception:
         pass
 
@@ -487,7 +508,7 @@ async def pursue_companies(
                             "angle": f["talking_point"],
                         })
                     company.problems_found = json.dumps(existing)
-                    company.enrichment_summary = (company.enrichment_summary or "") + f" Local SEO Score: {seo.score}/100."
+                    company.enrichment_summary = (company.enrichment_summary or "") + f" Local SEO: {seo.score}/100 | AI Visibility: {seo.ai_visibility_score}/100."
                 except Exception:
                     pass
 
@@ -664,6 +685,9 @@ def _company_summary(c: Company) -> dict:
         "site_speed_score": c.site_speed_score,
         "status": c.status,
         "email_generated": c.email_generated,
+        "employee_count": c.employee_count,
+        "industry": c.industry,
+        "linkedin_url": c.linkedin_url,
         "created_at": c.created_at.isoformat() if c.created_at else None,
     }
 

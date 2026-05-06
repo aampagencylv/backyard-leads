@@ -37,6 +37,18 @@ async def migrate():
             """))
             print("migrate_roles_and_views: created saved_views table")
 
+        # Add employee_count and industry to companies
+        comp_cols = await conn.execute(text("PRAGMA table_info(companies)"))
+        comp_col_names = [r[1] for r in comp_cols.fetchall()]
+
+        if "employee_count" not in comp_col_names:
+            await conn.execute(text("ALTER TABLE companies ADD COLUMN employee_count INTEGER"))
+            print("migrate_roles_and_views: added companies.employee_count")
+
+        if "industry" not in comp_col_names:
+            await conn.execute(text("ALTER TABLE companies ADD COLUMN industry VARCHAR(255)"))
+            print("migrate_roles_and_views: added companies.industry")
+
 
 if __name__ == "__main__":
     asyncio.run(migrate())

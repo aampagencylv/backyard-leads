@@ -125,28 +125,29 @@ def _check_seo(soup: BeautifulSoup, analysis: WebsiteAnalysis):
     h1s = soup.find_all("h1")
     analysis.h1_tags = [h.get_text(strip=True) for h in h1s[:5]]
 
+    # Only flag these as issues if truly missing — most established businesses have these
     if not analysis.page_title:
         analysis.problems.append({
             "type": "missing_title",
-            "severity": "high",
+            "severity": "low",
             "detail": "No page title tag found",
-            "angle": "Your site has no title tag — Google doesn't know what to show when people search for your services."
+            "angle": "Your site has no title tag — basic but important for search visibility."
         })
 
     if not analysis.meta_description:
         analysis.problems.append({
             "type": "missing_meta_description",
-            "severity": "medium",
+            "severity": "low",
             "detail": "No meta description found",
-            "angle": "Your site is missing a meta description — you're letting Google decide how to describe your business in search results."
+            "angle": "Your site is missing a meta description — a quick fix for better search snippets."
         })
 
     if not h1s:
         analysis.problems.append({
             "type": "missing_h1",
-            "severity": "medium",
+            "severity": "low",
             "detail": "No H1 heading found on homepage",
-            "angle": "Your homepage doesn't have a clear headline — visitors don't immediately know what you do."
+            "angle": "Your homepage doesn't have a clear headline."
         })
 
 
@@ -163,9 +164,9 @@ def _check_performance(analysis: WebsiteAnalysis):
     if not analysis.has_ssl:
         analysis.problems.append({
             "type": "no_ssl",
-            "severity": "high",
+            "severity": "low",
             "detail": "Website not using HTTPS",
-            "angle": "Your site isn't secure (no HTTPS) — Google penalizes this in rankings and browsers show a 'Not Secure' warning to visitors."
+            "angle": "Your site isn't secure (no HTTPS) — rare for established businesses but worth fixing."
         })
 
 
@@ -184,9 +185,9 @@ def _check_content(soup: BeautifulSoup, html: str, analysis: WebsiteAnalysis):
     if not analysis.has_blog:
         analysis.problems.append({
             "type": "no_blog",
-            "severity": "medium",
+            "severity": "low",
             "detail": "No blog or content section found",
-            "angle": "You don't have a blog — your competitors who do are ranking for searches like 'best pool designs 2025' and getting free leads from Google."
+            "angle": "No blog content — this limits your ability to rank for long-tail searches and feed AI engines with citable content."
         })
 
 
@@ -215,16 +216,9 @@ def _check_social(soup: BeautifulSoup, html: str, analysis: WebsiteAnalysis):
     if not analysis.has_social_links:
         analysis.problems.append({
             "type": "no_social",
-            "severity": "medium",
+            "severity": "low",
             "detail": "No social media links found on website",
-            "angle": "There are no social media links on your site — homeowners check Instagram and Facebook before hiring. You're invisible where they're looking."
-        })
-    elif "Instagram" not in analysis.social_platforms:
-        analysis.problems.append({
-            "type": "no_instagram",
-            "severity": "medium",
-            "detail": "No Instagram presence linked",
-            "angle": "You're not on Instagram — for visual businesses like yours, Instagram is where homeowners go to see your work before they call."
+            "angle": "No social media links on your site — minor issue, most customers find you through search and AI now."
         })
 
 

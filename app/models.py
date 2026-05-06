@@ -95,7 +95,9 @@ class Company(Base):
     pushed_to_hubspot = Column(Boolean, default=False)
     sequence_started_at = Column(DateTime, nullable=True)
 
-    # Lead source / classification
+    # Company intel
+    employee_count = Column(Integer, nullable=True)
+    industry = Column(String(255), nullable=True)
     linkedin_url = Column(String(500), nullable=True)
 
     # Google Maps reviews cache (Netrows /google-maps/reviews)

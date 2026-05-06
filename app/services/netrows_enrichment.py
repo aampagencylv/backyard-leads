@@ -403,3 +403,55 @@ async def linkedin_recent_posts(
             comments=p.get("comments") or p.get("comment_count"),
         ))
     return posts
+
+
+# ============================================================
+# Company enrichment by domain — employee count, industry, HQ
+# ============================================================
+
+@dataclass
+class CompanyEnrichment:
+    name: Optional[str] = None
+    employee_count: Optional[int] = None
+    industry: Optional[str] = None
+    headquarters: Optional[str] = None
+    linkedin_id: Optional[str] = None
+    linkedin_username: Optional[str] = None
+    founded: Optional[str] = None
+
+
+async def enrich_company_by_domain(domain: str, api_key: str) -> Optional[CompanyEnrichment]:
+    """
+    Look up company info by domain via Netrows /companies/by-domain.
+    Returns employee count, industry, HQ location. 1 credit per call.
+    """
+    domain = _clean_domain(domain)
+    if not domain or not api_key:
+        return None
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        try:
+            r = await client.get(
+                f"{BASE_URL}/companies/by-domain",
+                params={"domain": domain},
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        except httpx.HTTPError:
+            return None
+
+    if r.status_code != 200:
+        return None
+
+    data = r.json() or {}
+    # Handle nested data envelope
+    company = data.get("data") or data
+
+    return CompanyEnrichment(
+        name=company.get("name"),
+        employee_count=company.get("employeeCount"),
+        industry=company.get("industry"),
+        headquarters=company.get("headquarters"),
+        linkedin_id=str(company.get("id", "")),
+        linkedin_username=company.get("username"),
+        founded=company.get("founded"),
+    )
