@@ -182,6 +182,15 @@
         .stage-closed_lost { background: #f2f3f4; color: #7f8c8d; }
         .toast { position: fixed; bottom: 20px; right: 20px; background: var(--bmp-green); color: white; padding: 12px 20px; border-radius: 8px; font-size: 14px; z-index: 1000; animation: slideUp 0.3s; }
         @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } }
+
+        /* Modal */
+        .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 2000; display: flex; align-items: flex-start; justify-content: center; padding: 60px 20px 20px; overflow-y: auto; }
+        .modal-card { background: white; border-radius: 12px; padding: 24px; width: 100%; max-width: 480px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); }
+        .modal-card h2 { font-size: 18px; margin-bottom: 16px; color: var(--bmp-green-dark); }
+        .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
+        .modal-card .form-group { margin-bottom: 12px; }
+        .modal-card label { font-size: 13px; font-weight: 500; }
+        .modal-card .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     </style>
 </head>
 <body>
@@ -400,6 +409,9 @@
         </main>
     </div>
 
+    <!-- Modal mount point -->
+    <div id="modal-root"></div>
+
     <script>
         // ============ State + helpers ============
         let token = localStorage.getItem('token');
@@ -460,6 +472,64 @@
             t.textContent = msg;
             document.body.appendChild(t);
             setTimeout(() => t.remove(), 3000);
+        }
+
+        // ============ Modal helper ============
+        // Opens a modal with the given fields. Returns Promise that resolves with the field values
+        // (object) on Save, or null on Cancel/backdrop-click.
+        // fields: [{ key, label, type='text', value='', placeholder='', required=false, half=false }]
+        function openModal(title, fields, opts = {}) {
+            return new Promise(resolve => {
+                const root = document.getElementById('modal-root');
+                const fieldHTML = fields.map(f => {
+                    const id = `modal-field-${f.key}`;
+                    const required = f.required ? ' required' : '';
+                    const tag = f.type === 'textarea'
+                        ? `<textarea id="${id}" rows="${f.rows || 4}" placeholder="${escapeHtml(f.placeholder || '')}"${required}>${escapeHtml(f.value || '')}</textarea>`
+                        : f.type === 'select'
+                          ? `<select id="${id}"${required}>${(f.options || []).map(o => `<option value="${escapeHtml(o.value)}" ${o.value === f.value ? 'selected' : ''}>${escapeHtml(o.label)}</option>`).join('')}</select>`
+                          : `<input type="${f.type || 'text'}" id="${id}" value="${escapeHtml(f.value || '')}" placeholder="${escapeHtml(f.placeholder || '')}"${required}>`;
+                    return `<div class="form-group" style="${f.half ? '' : 'grid-column: 1 / -1;'}"><label>${escapeHtml(f.label)}${f.required ? ' *' : ''}</label>${tag}</div>`;
+                }).join('');
+                root.innerHTML = `
+                    <div class="modal-backdrop" id="modal-backdrop">
+                        <div class="modal-card" onclick="event.stopPropagation()">
+                            <h2>${escapeHtml(title)}</h2>
+                            <div class="field-row">${fieldHTML}</div>
+                            <div class="modal-actions">
+                                <button class="btn btn-secondary" id="modal-cancel">${escapeHtml(opts.cancelLabel || 'Cancel')}</button>
+                                <button class="btn btn-primary" id="modal-save">${escapeHtml(opts.saveLabel || 'Save')}</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                const close = (val) => {
+                    document.removeEventListener('keydown', onKey);
+                    root.innerHTML = '';
+                    resolve(val);
+                };
+                const onKey = (e) => { if (e.key === 'Escape') close(null); };
+                document.addEventListener('keydown', onKey);
+                document.getElementById('modal-backdrop').addEventListener('click', () => close(null));
+                document.getElementById('modal-cancel').addEventListener('click', () => close(null));
+                document.getElementById('modal-save').addEventListener('click', () => {
+                    const values = {};
+                    let missing = null;
+                    fields.forEach(f => {
+                        const el = document.getElementById(`modal-field-${f.key}`);
+                        const v = el.value.trim();
+                        values[f.key] = v;
+                        if (f.required && !v) missing = f.label;
+                    });
+                    if (missing) { toast(`${missing} is required`); return; }
+                    close(values);
+                });
+                // Focus first field
+                setTimeout(() => {
+                    const first = fields[0] && document.getElementById(`modal-field-${fields[0].key}`);
+                    if (first) first.focus();
+                }, 50);
+            });
         }
 
         // ============ Auth ============
@@ -877,7 +947,10 @@
                         <div class="panel">
                             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
                                 <h3 style="margin:0">Contacts (${d.contacts.length})</h3>
-                                <button class="btn btn-secondary btn-sm" onclick="addContact(${d.id})">+ Add Contact</button>
+                                <div style="display:flex;gap:6px">
+                                    ${d.website ? `<button class="btn btn-secondary btn-sm" onclick="enrichContactsFromCompany(${d.id})" title="Look up contacts via Apollo / Hunter using the company's website">🔎 Enrich</button>` : ''}
+                                    <button class="btn btn-primary btn-sm" onclick="addContact(${d.id})">+ Add Contact</button>
+                                </div>
                             </div>
                             <div id="contacts-list">${renderContacts(d.contacts)}</div>
                         </div>
@@ -1055,39 +1128,57 @@
         }
 
         // ============ Contact / Deal / Task / Email actions ============
-        async function addContact(companyId) {
-            const first = prompt('First name:'); if (first === null) return;
-            const last = prompt('Last name:') || '';
-            const email = prompt('Email (optional):') || '';
-            const title = prompt('Title (optional):') || '';
-            await api(`/api/companies/${companyId}/contacts`, {
-                method: 'POST',
-                body: JSON.stringify({ first_name: first, last_name: last, email, title }),
-            });
-            toast('Contact added.');
-            openCompanyDetail(companyId);
+        function _contactFields(c = {}) {
+            return [
+                { key: 'first_name', label: 'First Name', value: c.first_name || '', placeholder: 'Steve', half: true },
+                { key: 'last_name',  label: 'Last Name',  value: c.last_name  || '', placeholder: 'Edwards', half: true },
+                { key: 'title',      label: 'Title',      value: c.title      || '', placeholder: 'Owner / GM' },
+                { key: 'email',      label: 'Email',      value: c.email      || '', type: 'email', placeholder: 'name@business.com' },
+                { key: 'phone',      label: 'Phone',      value: c.phone      || '', placeholder: '702-555-1234', half: true },
+                { key: 'linkedin_url', label: 'LinkedIn URL', value: c.linkedin_url || '', placeholder: 'https://linkedin.com/in/...', half: true },
+            ];
         }
+
+        async function addContact(companyId) {
+            const values = await openModal('Add Contact', _contactFields(), { saveLabel: 'Add Contact' });
+            if (!values) return;
+            const data = await api(`/api/companies/${companyId}/contacts`, {
+                method: 'POST',
+                body: JSON.stringify(values),
+            });
+            if (data) { toast('Contact added.'); openCompanyDetail(companyId); }
+        }
+
         async function editContact(contactId) {
             const c = await api(`/api/contacts/${contactId}`); if (!c) return;
-            const first = prompt('First name:', c.first_name || ''); if (first === null) return;
-            const last = prompt('Last name:', c.last_name || '');
-            const email = prompt('Email:', c.email || '');
-            const title = prompt('Title:', c.title || '');
-            const phone = prompt('Phone:', c.phone || '');
+            const values = await openModal('Edit Contact', _contactFields(c), { saveLabel: 'Save Changes' });
+            if (!values) return;
             await api(`/api/contacts/${contactId}`, {
                 method: 'PATCH',
-                body: JSON.stringify({ first_name: first, last_name: last, email, title, phone }),
+                body: JSON.stringify(values),
             });
             toast('Contact updated.');
             openCompanyDetail(c.company_id);
         }
+
         async function setContactEmail(contactId) {
-            const email = prompt('Email address:'); if (!email) return;
-            const c = await api(`/api/contacts/${contactId}`, {
-                method: 'PATCH',
-                body: JSON.stringify({ email }),
-            });
-            if (c) { toast('Email saved.'); openCompanyDetail(c.company_id); }
+            const c = await api(`/api/contacts/${contactId}`); if (!c) return;
+            const values = await openModal('Set Email Address', [
+                { key: 'email', label: 'Email', type: 'email', value: c.email || '', required: true, placeholder: 'name@business.com' },
+            ], { saveLabel: 'Save' });
+            if (!values) return;
+            await api(`/api/contacts/${contactId}`, { method: 'PATCH', body: JSON.stringify({ email: values.email }) });
+            toast('Email saved.');
+            openCompanyDetail(c.company_id);
+        }
+
+        async function enrichContactsFromCompany(companyId) {
+            toast('Looking up contacts via Apollo + Hunter...');
+            const data = await api(`/api/companies/${companyId}/enrich`, { method: 'POST' });
+            if (data) {
+                toast(`${data.contacts_added || 0} contact(s) added; ${data.problems_found || 0} problems found`);
+                openCompanyDetail(companyId);
+            }
         }
         async function generateContactSequence(contactId) {
             toast('Generating sequence...');
@@ -1146,42 +1237,78 @@
             toast('Email deleted.');
         }
 
+        const STAGE_OPTIONS = [
+            { value: 'prospecting',  label: 'Prospecting' },
+            { value: 'qualified',    label: 'Qualified' },
+            { value: 'proposal',     label: 'Proposal' },
+            { value: 'negotiation',  label: 'Negotiation' },
+            { value: 'closed_won',   label: 'Closed Won' },
+            { value: 'closed_lost',  label: 'Closed Lost' },
+        ];
+
         async function addDeal(companyId) {
-            const name = prompt('Deal name:', `Deal — ${new Date().toLocaleDateString()}`); if (!name) return;
-            const value = prompt('Monthly value (USD, leave blank to set later):');
-            const stage = prompt('Stage (prospecting/qualified/proposal/negotiation/closed_won/closed_lost):', 'prospecting');
+            const c = await api(`/api/companies/${companyId}/full`);
+            const defaultName = c ? `${c.name} — ${new Date().toLocaleDateString()}` : 'New Deal';
+            const values = await openModal('Add Deal', [
+                { key: 'name',  label: 'Deal Name', value: defaultName, required: true },
+                { key: 'value', label: 'Value (USD)', type: 'number', placeholder: '2400', half: true },
+                { key: 'stage', label: 'Stage', type: 'select', value: 'prospecting', options: STAGE_OPTIONS, half: true },
+                { key: 'expected_close_date', label: 'Expected Close', type: 'date' },
+            ], { saveLabel: 'Create Deal' });
+            if (!values) return;
             await api(`/api/companies/${companyId}/deals`, {
                 method: 'POST',
-                body: JSON.stringify({ name, value: value ? parseFloat(value) : null, stage: stage || 'prospecting' }),
+                body: JSON.stringify({
+                    name: values.name,
+                    value: values.value ? parseFloat(values.value) : null,
+                    stage: values.stage,
+                    expected_close_date: values.expected_close_date || null,
+                }),
             });
             toast('Deal created.');
             openCompanyDetail(companyId);
+            refreshNavBadges();
         }
+
         async function editDeal(dealId) {
             const d = await api(`/api/deals/${dealId}`); if (!d) return;
-            const value = prompt('Value (USD):', d.value ?? '');
-            const stage = prompt('Stage:', d.stage);
-            const closeDate = prompt('Expected close date (YYYY-MM-DD):', d.expected_close_date ? d.expected_close_date.slice(0,10) : '');
-            const lostReason = stage === 'closed_lost' ? prompt('Lost reason:', d.lost_reason || '') : null;
+            const fields = [
+                { key: 'name',  label: 'Deal Name', value: d.name, required: true },
+                { key: 'value', label: 'Value (USD)', type: 'number', value: d.value ?? '', half: true },
+                { key: 'stage', label: 'Stage', type: 'select', value: d.stage, options: STAGE_OPTIONS, half: true },
+                { key: 'expected_close_date', label: 'Expected Close', type: 'date',
+                  value: d.expected_close_date ? d.expected_close_date.slice(0,10) : '' },
+            ];
+            // Only show Lost Reason field when stage is closed_lost
+            if (d.stage === 'closed_lost') {
+                fields.push({ key: 'lost_reason', label: 'Lost Reason', value: d.lost_reason || '', placeholder: 'No budget / went w/ competitor / etc.' });
+            }
+            const values = await openModal('Edit Deal', fields, { saveLabel: 'Save Changes' });
+            if (!values) return;
             await api(`/api/deals/${dealId}`, {
                 method: 'PATCH',
                 body: JSON.stringify({
-                    value: value ? parseFloat(value) : null,
-                    stage,
-                    expected_close_date: closeDate || null,
-                    lost_reason: lostReason,
+                    name: values.name,
+                    value: values.value ? parseFloat(values.value) : null,
+                    stage: values.stage,
+                    expected_close_date: values.expected_close_date || null,
+                    lost_reason: values.lost_reason ?? null,
                 }),
             });
             toast('Deal updated.');
             openCompanyDetail(d.company_id);
+            refreshNavBadges();
         }
 
         async function addTask(companyId) {
-            const description = prompt('Task description:'); if (!description) return;
-            const due = prompt('Due date (YYYY-MM-DD, optional):');
+            const values = await openModal('Add Task', [
+                { key: 'description', label: 'What needs to happen?', type: 'textarea', required: true, rows: 3, placeholder: 'Follow up next week...' },
+                { key: 'due_date',    label: 'Due Date (optional)', type: 'date' },
+            ], { saveLabel: 'Add Task' });
+            if (!values) return;
             await api(`/api/crm/companies/${companyId}/tasks`, {
                 method: 'POST',
-                body: JSON.stringify({ description, due_date: due || null }),
+                body: JSON.stringify({ description: values.description, due_date: values.due_date || null }),
             });
             toast('Task added.');
             loadCompanyTasks(companyId);
@@ -1189,13 +1316,22 @@
         }
 
         async function addNote(companyId) {
-            const content = prompt('Note (or call/meeting note):'); if (!content) return;
-            const type = prompt('Type (note/call/meeting):', 'note') || 'note';
+            const values = await openModal('Add Activity', [
+                { key: 'activity_type', label: 'Type', type: 'select', value: 'note', options: [
+                    { value: 'note',    label: 'Note' },
+                    { value: 'call',    label: 'Call Log' },
+                    { value: 'meeting', label: 'Meeting Notes' },
+                    { value: 'linkedin_message', label: 'LinkedIn Message' },
+                ]},
+                { key: 'content', label: 'Details', type: 'textarea', required: true, rows: 5,
+                  placeholder: 'What happened? Key takeaways?' },
+            ], { saveLabel: 'Log Activity' });
+            if (!values) return;
             await api(`/api/crm/companies/${companyId}/note`, {
                 method: 'POST',
-                body: JSON.stringify({ content, activity_type: type }),
+                body: JSON.stringify({ content: values.content, activity_type: values.activity_type }),
             });
-            toast('Note added.');
+            toast('Activity logged.');
             openCompanyDetail(companyId);
         }
 
