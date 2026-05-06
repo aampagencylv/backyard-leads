@@ -24,6 +24,7 @@ from app.services.website_intel import analyze_website, analysis_to_dict
 from app.services.email_generator import generate_cold_email, generate_follow_up
 from app.services.apollo_enrichment import enrich_from_domain
 from app.services.hunter_enrichment import search_domain as hunter_search
+from app.services.netrows_enrichment import find_decision_makers as netrows_find_decision_makers
 from app.services.local_seo_intel import analyze_local_seo, local_seo_to_dict
 from app.config import settings
 
@@ -266,10 +267,32 @@ async def enrich_company(
     company.problems_found = json.dumps(analysis.problems)
     company.enrichment_summary = _summarize(analysis)
 
-    # Apollo + Hunter — both always run; import everything they find
-    apollo_data, hunter_data = None, None
+    # Netrows + Apollo + Hunter — all always run; import everything they find
+    netrows_data, apollo_data, hunter_data = None, None, None
+    netrows_added, netrows_found = 0, 0
     apollo_added, apollo_found = 0, 0
     hunter_added, hunter_found = 0, 0
+
+    # Netrows decision-maker first — verified owner emails for SMB (10 credits/call)
+    if settings.netrows_api_key:
+        try:
+            nr = await netrows_find_decision_makers(company.website, settings.netrows_api_key)
+            netrows_data = {
+                "decision_makers": [{
+                    "email": dm.email, "full_name": dm.full_name,
+                    "job_title": dm.job_title, "linkedin_url": dm.linkedin_url,
+                    "email_status": dm.email_status, "category": dm.category,
+                } for dm in nr.decision_makers],
+                "generic_emails": nr.generic_emails,
+                "error": nr.error,
+            }
+            netrows_found = len(nr.decision_makers)
+            for dm in nr.decision_makers:
+                if await _ensure_contact(db, company_id, dm.full_name, dm.email,
+                                         dm.job_title, None, dm.linkedin_url):
+                    netrows_added += 1
+        except Exception as e:
+            netrows_data = {"error": str(e)[:200]}
 
     if settings.apollo_api_key:
         try:
@@ -315,7 +338,7 @@ async def enrich_company(
         except Exception as e:
             hunter_data = {"error": str(e)[:200]}
 
-    contacts_added = apollo_added + hunter_added
+    contacts_added = netrows_added + apollo_added + hunter_added
 
     # Local SEO
     seo_data = None
@@ -343,12 +366,14 @@ async def enrich_company(
         company_id=company.id, user_id=user.id, activity_type="enriched",
         content=(
             f"Enriched: {len(json.loads(company.problems_found) if company.problems_found else [])} problems · "
+            f"Netrows found {netrows_found}/added {netrows_added} · "
             f"Apollo found {apollo_found}/added {apollo_added} · "
             f"Hunter found {hunter_found}/added {hunter_added}"
         ),
         metadata_json=json.dumps({
-            "apollo_found": apollo_found, "apollo_added": apollo_added,
-            "hunter_found": hunter_found, "hunter_added": hunter_added,
+            "netrows_found": netrows_found, "netrows_added": netrows_added,
+            "apollo_found":  apollo_found,  "apollo_added":  apollo_added,
+            "hunter_found":  hunter_found,  "hunter_added":  hunter_added,
         }),
     ))
     await db.commit()
@@ -359,6 +384,8 @@ async def enrich_company(
         "name": company.name,
         "problems_found": len(json.loads(company.problems_found) if company.problems_found else []),
         "contacts_added": contacts_added,
+        "netrows_found": netrows_found,
+        "netrows_added": netrows_added,
         "apollo_found": apollo_found,
         "apollo_added": apollo_added,
         "hunter_found": hunter_found,
@@ -366,6 +393,7 @@ async def enrich_company(
         "analysis": analysis_dict,
         "local_seo": seo_data,
         "summary": company.enrichment_summary,
+        "netrows": netrows_data,
         "apollo": apollo_data,
         "hunter": hunter_data,
     }
@@ -429,7 +457,17 @@ async def pursue_companies(
                 company.problems_found = json.dumps(analysis.problems)
                 company.enrichment_summary = _summarize(analysis)
 
-                # Apollo + Hunter — both always run, import everything
+                # Netrows decision-maker first (verified owner emails for SMB)
+                if settings.netrows_api_key:
+                    try:
+                        nr = await netrows_find_decision_makers(company.website, settings.netrows_api_key)
+                        for dm in nr.decision_makers:
+                            await _ensure_contact(db, company.id, dm.full_name, dm.email,
+                                                  dm.job_title, None, dm.linkedin_url)
+                    except Exception:
+                        pass
+
+                # Apollo + Hunter as additional sources
                 if settings.apollo_api_key:
                     try:
                         apollo = await enrich_from_domain(company.website, settings.apollo_api_key)

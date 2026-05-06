@@ -1343,12 +1343,13 @@
         }
 
         async function enrichContactsFromCompany(companyId) {
-            toast('Looking up contacts via Apollo + Hunter...');
+            toast('Looking up decision makers via Netrows + Hunter...');
             const data = await api(`/api/companies/${companyId}/enrich`, { method: 'POST' });
             if (data) {
+                const n = `Netrows ${data.netrows_found ?? 0}→${data.netrows_added ?? 0}`;
                 const a = `Apollo ${data.apollo_found ?? 0}→${data.apollo_added ?? 0}`;
                 const h = `Hunter ${data.hunter_found ?? 0}→${data.hunter_added ?? 0}`;
-                toast(`${data.contacts_added || 0} new contact(s) added · ${a} · ${h}`);
+                toast(`${data.contacts_added || 0} new contact(s) · ${n} · ${a} · ${h}`);
                 openCompanyDetail(companyId);
             }
         }
