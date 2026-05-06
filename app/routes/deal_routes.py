@@ -17,23 +17,50 @@ from app.auth import get_current_user
 router = APIRouter(prefix="/api", tags=["deals"])
 
 
-# Stage probability defaults (overridden if explicitly set on the deal)
+# Stage probability defaults
 STAGE_PROBABILITY = {
-    "prospecting": 5,
-    "qualified":   15,
-    "proposal":    35,
-    "negotiation": 65,
+    "prospecting": 10,
+    "qualified":   25,
+    "proposal":    50,
+    "negotiation": 75,
     "closed_won":  100,
     "closed_lost": 0,
 }
 
 PIPELINE_STAGES = ["prospecting", "qualified", "proposal", "negotiation", "closed_won", "closed_lost"]
 
+# BMP Packages
+BMP_PACKAGES = {
+    "foundation": {"name": "Foundation", "monthly": 2000},
+    "essential":  {"name": "Essential",  "monthly": 4000},
+    "growth":     {"name": "Growth",     "monthly": 6000},
+    "scale":      {"name": "Scale",      "monthly": 8000},
+}
+
+
+def recommend_package(employee_count: int = None) -> str:
+    """Auto-recommend a package based on company size."""
+    if not employee_count or employee_count <= 5:
+        return "foundation"
+    elif employee_count <= 15:
+        return "essential"
+    elif employee_count <= 50:
+        return "growth"
+    else:
+        return "scale"
+
+
+def package_monthly_value(package: str) -> float:
+    """Get monthly price for a package."""
+    return BMP_PACKAGES.get(package, {}).get("monthly", 0)
+
 
 class CreateDealRequest(BaseModel):
     name: str
     value: Optional[float] = None
     stage: str = "prospecting"
+    package: Optional[str] = None  # foundation, essential, growth, scale
+    contract_months: int = 6  # 6 or 12
     expected_close_date: Optional[str] = None
     assigned_to: Optional[int] = None
 
@@ -42,10 +69,25 @@ class UpdateDealRequest(BaseModel):
     name: Optional[str] = None
     value: Optional[float] = None
     stage: Optional[str] = None
+    package: Optional[str] = None
+    contract_months: Optional[int] = None
     probability: Optional[int] = None
     expected_close_date: Optional[str] = None
     lost_reason: Optional[str] = None
     assigned_to: Optional[int] = None
+
+
+@router.get("/packages")
+async def list_packages(user: User = Depends(get_current_user)):
+    """List available BMP packages with pricing."""
+    return {
+        "packages": [
+            {"key": k, "name": v["name"], "monthly": v["monthly"],
+             "annual": v["monthly"] * 12, "six_month": v["monthly"] * 6}
+            for k, v in BMP_PACKAGES.items()
+        ],
+        "stage_probabilities": STAGE_PROBABILITY,
+    }
 
 
 @router.get("/companies/{company_id}/deals")
@@ -74,18 +116,33 @@ async def create_deal(
         raise HTTPException(status_code=404, detail="Company not found")
 
     close_date = _parse_date(req.expected_close_date)
+
+    # Auto-recommend package if not specified
+    pkg = req.package
+    if not pkg and company.employee_count:
+        pkg = recommend_package(company.employee_count)
+
+    # Set value from package if not explicitly provided
+    monthly = req.value
+    if not monthly and pkg:
+        monthly = package_monthly_value(pkg)
+
     deal = Deal(
         company_id=company_id,
         name=req.name,
-        value=req.value,
+        value=monthly,
         stage=req.stage,
+        package=pkg,
+        contract_months=req.contract_months,
         probability=STAGE_PROBABILITY.get(req.stage, 0),
         expected_close_date=close_date,
         assigned_to=req.assigned_to or user.id,
     )
     db.add(deal)
+
+    pkg_label = BMP_PACKAGES.get(pkg, {}).get("name", pkg or "custom") if pkg else "custom"
     db.add(Activity(company_id=company_id, user_id=user.id, activity_type="deal_created",
-                    content=f"Deal created: {req.name} ({req.stage})"))
+                    content=f"Deal created: {req.name} — {pkg_label} ${monthly or 0:,.0f}/mo × {req.contract_months}mo"))
     await db.commit()
     await db.refresh(deal)
     return _deal_to_dict(deal)
@@ -138,6 +195,17 @@ async def update_deal(
         deal.lost_reason = req.lost_reason
     if req.assigned_to is not None:
         deal.assigned_to = req.assigned_to
+    if req.package is not None and req.package != deal.package:
+        deal.package = req.package
+        # Auto-update value if they changed the package
+        if req.value is None:
+            deal.value = package_monthly_value(req.package)
+            changes.append(f"package: {BMP_PACKAGES.get(req.package, {}).get('name', req.package)} (${deal.value:,.0f}/mo)")
+        else:
+            changes.append(f"package: {req.package}")
+    if req.contract_months is not None:
+        deal.contract_months = req.contract_months
+        changes.append(f"contract: {req.contract_months} months")
 
     if changes:
         db.add(Activity(company_id=deal.company_id, user_id=user.id, deal_id=deal.id,
@@ -239,21 +307,55 @@ async def forecast(
     )
     deals = result.scalars().all()
 
-    total_pipeline = sum((d.value or 0) for d in deals)
-    weighted = sum(((d.value or 0) * (d.probability or 0) / 100.0) for d in deals)
+    # MRR calculations
+    total_mrr = sum((d.value or 0) for d in deals)
+    weighted_mrr = sum(((d.value or 0) * (d.probability or 0) / 100.0) for d in deals)
+    total_arr = total_mrr * 12
+    weighted_arr = weighted_mrr * 12
+
+    # TCV = total contract value
+    total_tcv = sum(((d.value or 0) * (d.contract_months or 6)) for d in deals)
+    weighted_tcv = sum(((d.value or 0) * (d.contract_months or 6) * (d.probability or 0) / 100.0) for d in deals)
+
+    # By stage
+    by_stage = {}
+    for stage in ("prospecting", "qualified", "proposal", "negotiation"):
+        stage_deals = [d for d in deals if d.stage == stage]
+        by_stage[stage] = {
+            "count": len(stage_deals),
+            "mrr": sum((d.value or 0) for d in stage_deals),
+            "probability": STAGE_PROBABILITY.get(stage, 0),
+        }
+
+    # By package
+    by_package = {}
+    for pkg_key, pkg_info in BMP_PACKAGES.items():
+        pkg_deals = [d for d in deals if d.package == pkg_key]
+        by_package[pkg_key] = {
+            "name": pkg_info["name"],
+            "count": len(pkg_deals),
+            "mrr": sum((d.value or 0) for d in pkg_deals),
+        }
 
     won = (await db.execute(
         select(Deal).where(Deal.pipeline == pipeline, Deal.stage == "closed_won")
     )).scalars().all()
-    won_total = sum((d.value or 0) for d in won)
+    won_mrr = sum((d.value or 0) for d in won)
 
     return {
         "pipeline": pipeline,
         "open_deal_count": len(deals),
-        "open_pipeline_value": total_pipeline,
-        "weighted_forecast": round(weighted, 2),
+        "potential_mrr": round(total_mrr, 2),
+        "potential_arr": round(total_arr, 2),
+        "weighted_mrr": round(weighted_mrr, 2),
+        "weighted_arr": round(weighted_arr, 2),
+        "potential_tcv": round(total_tcv, 2),
+        "weighted_tcv": round(weighted_tcv, 2),
+        "by_stage": by_stage,
+        "by_package": by_package,
         "closed_won_count": len(won),
-        "closed_won_value": won_total,
+        "closed_won_mrr": won_mrr,
+        "closed_won_arr": won_mrr * 12,
     }
 
 
@@ -262,6 +364,11 @@ async def forecast(
 # ============================================================
 
 def _deal_to_dict(d: Deal) -> dict:
+    monthly = d.value or 0
+    contract = d.contract_months or 6
+    pkg = d.package or ""
+    pkg_label = BMP_PACKAGES.get(pkg, {}).get("name", pkg.title()) if pkg else "Custom"
+    weighted = monthly * (d.probability or 0) / 100
     return {
         "id": d.id,
         "company_id": d.company_id,
@@ -270,6 +377,13 @@ def _deal_to_dict(d: Deal) -> dict:
         "stage": d.stage,
         "pipeline": d.pipeline,
         "probability": d.probability,
+        "package": pkg,
+        "package_label": pkg_label,
+        "contract_months": contract,
+        "mrr": monthly,
+        "arr": monthly * 12,
+        "tcv": monthly * contract,  # Total contract value
+        "weighted_mrr": weighted,
         "expected_close_date": d.expected_close_date.isoformat() if d.expected_close_date else None,
         "closed_at": d.closed_at.isoformat() if d.closed_at else None,
         "lost_reason": d.lost_reason,

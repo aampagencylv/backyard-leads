@@ -883,11 +883,17 @@ async def pursue_companies(
                                    Deal.stage.in_(("prospecting", "qualified", "proposal", "negotiation")))
             )).scalar_one_or_none()
             if not existing_deal:
+                from app.routes.deal_routes import recommend_package, package_monthly_value, STAGE_PROBABILITY as DEAL_STAGE_PROB
+                pkg = recommend_package(company.employee_count)
+                monthly = package_monthly_value(pkg)
                 deal = Deal(
                     company_id=company.id,
                     name=f"{company.name} — Initial Deal",
+                    value=monthly,
+                    package=pkg,
+                    contract_months=6,
                     stage="prospecting",
-                    probability=5,
+                    probability=DEAL_STAGE_PROB.get("prospecting", 10),
                     assigned_to=user.id,
                 )
                 db.add(deal)

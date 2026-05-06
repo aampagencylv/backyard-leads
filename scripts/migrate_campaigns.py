@@ -80,6 +80,18 @@ async def migrate():
             await conn.execute(text("ALTER TABLE generated_emails ADD COLUMN step_type VARCHAR(20) DEFAULT 'email'"))
             print("migrate_campaigns: added generated_emails.step_type")
 
+        # Add package fields to deals
+        deal_cols = await conn.execute(text("PRAGMA table_info(deals)"))
+        deal_col_names = [r[1] for r in deal_cols.fetchall()]
+
+        if "package" not in deal_col_names:
+            await conn.execute(text("ALTER TABLE deals ADD COLUMN package VARCHAR(50)"))
+            print("migrate_campaigns: added deals.package")
+
+        if "contract_months" not in deal_col_names:
+            await conn.execute(text("ALTER TABLE deals ADD COLUMN contract_months INTEGER DEFAULT 6"))
+            print("migrate_campaigns: added deals.contract_months")
+
 
 if __name__ == "__main__":
     asyncio.run(migrate())

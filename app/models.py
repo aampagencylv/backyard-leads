@@ -155,20 +155,24 @@ class Contact(Base):
 
 
 class Deal(Base):
-    """A revenue opportunity at a Company. Multiple deals per company supported (over time, or in parallel)."""
+    """A revenue opportunity at a Company. Multiple deals per company supported."""
     __tablename__ = "deals"
 
     id = Column(Integer, primary_key=True, index=True)
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
 
     name = Column(String(255), nullable=False)
-    value = Column(Float, nullable=True)  # monthly retainer or one-time
-    stage = Column(String(50), default="prospecting")  # prospecting, qualified, proposal, negotiation, closed_won, closed_lost
+    value = Column(Float, nullable=True)  # monthly retainer value
+    stage = Column(String(50), default="prospecting")
     pipeline = Column(String(50), default="default")
-    probability = Column(Integer, default=0)  # 0-100, used for forecast
+    probability = Column(Integer, default=0)  # 0-100
     expected_close_date = Column(DateTime, nullable=True)
     closed_at = Column(DateTime, nullable=True)
     lost_reason = Column(String(255), nullable=True)
+
+    # BMP Package system
+    package = Column(String(50), nullable=True)  # foundation, essential, growth, scale
+    contract_months = Column(Integer, default=6)  # 6 or 12
 
     assigned_to = Column(Integer, ForeignKey("users.id"), nullable=True)
 
