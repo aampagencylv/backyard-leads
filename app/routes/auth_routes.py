@@ -193,13 +193,47 @@ async def invite_user(
     await db.commit()
     await db.refresh(new_user)
 
+    # Send welcome email with credentials via Resend
+    email_sent = False
+    try:
+        from app.config import settings
+        if settings.resend_api_key:
+            import httpx
+            await httpx.AsyncClient(timeout=10).post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {settings.resend_api_key}", "Content-Type": "application/json"},
+                json={
+                    "from": f"Backyard Marketing Pros <noreply@{settings.send_domain}>",
+                    "to": [new_user.email],
+                    "subject": "Welcome to BMP Prospector — Your Account is Ready",
+                    "html": f"""
+                    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:500px;margin:0 auto;padding:20px">
+                        <img src="https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz-1024x269.png" style="width:250px;margin-bottom:20px" alt="BMP">
+                        <h2 style="color:#1B5E20">Welcome to Prospector, {new_user.first_name}!</h2>
+                        <p>Your account has been created. Here are your login credentials:</p>
+                        <div style="background:#f5f7f5;border-radius:8px;padding:16px;margin:16px 0">
+                            <p><strong>URL:</strong> <a href="{settings.public_url}">{settings.public_url}</a></p>
+                            <p><strong>Email:</strong> {new_user.email}</p>
+                            <p><strong>Temporary Password:</strong> {temp_password}</p>
+                        </div>
+                        <p style="color:#666;font-size:13px">Please change your password after your first login by going to Settings.</p>
+                        <p>— The BMP Team</p>
+                    </div>
+                    """,
+                },
+            )
+            email_sent = True
+    except Exception:
+        pass
+
     return {
         "id": new_user.id,
         "email": new_user.email,
         "name": new_user.full_name,
         "role": new_user.role,
         "temp_password": temp_password,
-        "message": f"User created. Temporary password: {temp_password} — share this securely with the user.",
+        "welcome_email_sent": email_sent,
+        "message": f"User created. {'Welcome email sent!' if email_sent else 'Temporary password: ' + temp_password}",
     }
 
 
@@ -247,3 +281,80 @@ async def update_user(
         "sending_enabled": target.sending_enabled,
         "is_active": target.is_active,
     }
+
+
+# ============ Password Management ============
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@router.post("/change-password")
+async def change_password(
+    req: ChangePasswordRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Change your own password (requires current password)."""
+    if not verify_password(req.current_password, user.hashed_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    if len(req.new_password) < 6:
+        raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
+
+    user.hashed_password = hash_password(req.new_password)
+    await db.commit()
+    return {"message": "Password changed successfully"}
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+@router.post("/forgot-password")
+async def forgot_password(
+    req: ForgotPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Send a password reset email with a temporary new password."""
+    result = await db.execute(select(User).where(User.email == req.email.strip().lower()))
+    user = result.scalar_one_or_none()
+
+    # Always return success to prevent email enumeration
+    if not user:
+        return {"message": "If that email exists, a reset link has been sent."}
+
+    import secrets
+    temp_password = secrets.token_urlsafe(10)
+    user.hashed_password = hash_password(temp_password)
+    await db.commit()
+
+    # Send reset email
+    try:
+        from app.config import settings
+        if settings.resend_api_key:
+            import httpx
+            await httpx.AsyncClient(timeout=10).post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {settings.resend_api_key}", "Content-Type": "application/json"},
+                json={
+                    "from": f"Backyard Marketing Pros <noreply@{settings.send_domain}>",
+                    "to": [user.email],
+                    "subject": "Password Reset — BMP Prospector",
+                    "html": f"""
+                    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:500px;margin:0 auto;padding:20px">
+                        <img src="https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz-1024x269.png" style="width:250px;margin-bottom:20px" alt="BMP">
+                        <h2 style="color:#1B5E20">Password Reset</h2>
+                        <p>Hi {user.first_name}, your password has been reset.</p>
+                        <div style="background:#f5f7f5;border-radius:8px;padding:16px;margin:16px 0">
+                            <p><strong>Your new temporary password:</strong> {temp_password}</p>
+                        </div>
+                        <p>Log in at <a href="{settings.public_url}">{settings.public_url}</a> and change your password in Settings.</p>
+                    </div>
+                    """,
+                },
+            )
+    except Exception:
+        pass
+
+    return {"message": "If that email exists, a reset link has been sent."}
