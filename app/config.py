@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     resend_webhook_secret: str = ""
     send_domain: str = "go.backyardmarketingpros.com"
     reply_domain: str = "backyardmarketingpros.com"
+    public_url: str = "https://prospector.backyardmarketingpros.com"
+    bmp_postal_address: str = "Backyard Marketing Pros, Las Vegas, NV"  # CAN-SPAM requires a real postal address; override in .env
 
     class Config:
         env_file = ".env"

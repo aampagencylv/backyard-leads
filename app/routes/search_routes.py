@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
 from app.database import get_db
-from app.models import User, Search, Lead
+from app.models import User, Search, Company
 from app.auth import get_current_user
 from app.config import settings
 from app.services.map_scraper import search_businesses
@@ -57,11 +57,11 @@ async def create_search(
         max_results=req.max_results,
     )
 
-    # Save leads to database
+    # Save companies to database
     for biz in businesses:
-        lead = Lead(
+        company = Company(
             search_id=search.id,
-            business_name=biz.name,
+            name=biz.name,
             phone=biz.phone,
             website=biz.website,
             address=biz.address,
@@ -71,7 +71,7 @@ async def create_search(
             review_count=biz.review_count,
             business_type=biz.business_type,
         )
-        db.add(lead)
+        db.add(company)
 
     search.results_count = len(businesses)
     await db.commit()
@@ -81,7 +81,7 @@ async def create_search(
         keyword=req.keyword,
         location=req.location,
         results_count=len(businesses),
-        message=f"Found {len(businesses)} businesses. Use /api/leads to view and enrich them.",
+        message=f"Found {len(businesses)} businesses. Use /api/companies to view and enrich them.",
     )
 
 

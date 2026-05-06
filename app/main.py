@@ -4,7 +4,16 @@ from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from app.database import init_db
-from app.routes import auth_routes, search_routes, lead_routes, send_routes, crm_routes
+from app.routes import (
+    auth_routes,
+    search_routes,
+    company_routes,
+    contact_routes,
+    deal_routes,
+    send_routes,
+    crm_routes,
+    unsubscribe_routes,
+)
 
 
 @asynccontextmanager
@@ -30,9 +39,12 @@ app.add_middleware(
 # API routes
 app.include_router(auth_routes.router)
 app.include_router(search_routes.router)
-app.include_router(lead_routes.router)
+app.include_router(company_routes.router)
+app.include_router(contact_routes.router)
+app.include_router(deal_routes.router)
 app.include_router(send_routes.router)
 app.include_router(crm_routes.router)
+app.include_router(unsubscribe_routes.router)
 
 # Serve static frontend
 app.mount("/static", StaticFiles(directory="static"), name="static")
