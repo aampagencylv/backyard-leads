@@ -65,14 +65,75 @@
 
 ---
 
+## ✅ Completed this session (2026-05-06)
+
+1. User access levels (admin/sales_rep/read_only) + admin user management
+2. Apollo cleanup — removed entirely, Netrows + Hunter is the enrichment chain
+3. Email validation pre-send — Hunter /v2/email-verifier, blocks sending to invalid
+4. Saved views / filter presets — backend ready, frontend dropdowns pending
+5. Start Sequence button on Contacts page
+6. AI visibility / GEO checks — llms.txt, FAQ schema, content citability, E-E-A-T
+7. Company size enrichment via Netrows /companies/by-domain + /companies/details
+8. Review range filters (min + max) on Find Leads page
+9. De-prioritized basic SEO checks (SSL, H1, meta → low severity)
+10. Personal email tone — first name only, no sign-off, casual
+11. Auto Pilot campaigns — full campaign system with cron automation
+12. Multi-channel sequences — email + LinkedIn steps, reschedule, add/insert steps
+13. Manual company creation + CSV upload with auto-enrich + auto-sequence
+14. Admin user invites with welcome email
+15. Password reset + change password
+16. Company filtering (city search, sort, qualify/unqualify)
+17. Three-column company detail (contacts left, sequence center, info right)
+18. Tag management (create, add, remove on companies)
+19. Delete/regenerate sequence buttons
+20. LinkedIn links on contact cards
+21. BMP package system (Foundation/Essential/Growth/Scale) with auto-recommendation
+22. MRR/ARR forecast with pipeline stage probabilities
+23. Company Intel panel (LinkedIn company data, Google rating, enrichment summary)
+
+---
+
 ## 🟢 Backlog — ranked by ROI
 
-### High value, low effort (next session targets)
-- [ ] **User access levels / permissions** *(user-flagged tonight)* — design admin / sales-rep / read-only roles. Right now everyone can see everything. ~3 hr
-- [ ] **Apollo cleanup** — remove the dead Apollo code path now that Netrows replaced it. ~30 min
-- [ ] **Email validation pre-send** — Hunter Starter includes 1k/mo verifications; wire `/v2/email-verifier`. ~30 min
-- [ ] **Tasks page filter chips** — today / this week / overdue (currently just mine/team). ~30 min
-- [ ] **Saved views / filter presets** on Companies + Pipeline (e.g., "My active deals", "Stale 14d+", "High-intent prospects"). ~1 hr
+### 🔥 Next priority: Missive Integration
+
+**Phase 1 — Missive webhook (1-2 days):**
+- Missive webhook receiver at `/api/missive/webhook`
+- When email arrives from a known contact → auto-log to CRM timeline
+- Auto-pause the active sequence for that contact
+- Auto-set company status to "replied"
+- Zero BDR behavior change — just works in background
+
+**Phase 2 — Missive sidebar app (1 week):**
+- Sidebar app hosted at `/missive-sidebar`
+- Shows company/contact card when BDR opens an email
+- Sequence status, deal info, problems found
+- "Mark Replied" / "Add Note" / "Open in CRM" buttons
+- BDR sees CRM context without leaving Missive
+
+**Phase 3 — Full Missive send integration (future):**
+- Send FROM Missive instead of Resend
+- Sequence creates draft in Missive, BDR reviews and sends
+- Full two-way sync — every email in/out logged
+- Eliminates Resend dependency for sending
+
+**Architecture:**
+```
+Outbound: Prospector → Resend → steve@go.backyardmarketingpros.com → Prospect
+Reply:    Prospect → steve@backyardmarketingpros.com → Missive → Webhook → Prospector
+Sidebar:  Missive iframe → prospector.backyardmarketingpros.com/missive-sidebar
+```
+Missive API docs: missiveapp.com/help/api
+
+### Twilio Integration (future)
+- Call from platform (click-to-call on contact card)
+- Text messaging as a sequence step type (already modeled)
+- Call recording + transcription → auto-log to timeline
+- SMS sequence steps auto-send via Twilio
+
+### Other high-value items
+- [ ] **Dashboard MRR/ARR cards** — wire forecast API to dashboard KPI strip
+- [ ] **Saved views UI** — dropdown on Companies + Pipeline pages (API ready)
 
 ### Tier 2 Netrows (~3 hr total)
 - [ ] `/businesses/search` (Yellow Pages) — alternative SMB owner finder
