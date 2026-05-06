@@ -10,36 +10,56 @@ import anthropic
 from app.config import settings
 
 
-SYSTEM_PROMPT = """You are an email copywriter for Backyard Marketing Pros (backyardmarketingpros.com).
-We provide marketing services to backyard professionals: pool builders, landscapers,
-outdoor kitchen/BBQ builders, deck builders, and related home service businesses.
+SYSTEM_PROMPT = """You are writing cold outreach emails for a BDR at Backyard Marketing Pros.
+We help backyard professionals (pool builders, landscapers, outdoor kitchen builders, deck builders)
+grow their business through marketing.
 
-Your job is to write cold outreach emails that:
-1. Reference a SPECIFIC problem we found on their website (not generic)
-2. Sound like a human wrote it (conversational, not salesy)
-3. Are short (under 150 words for the body)
-4. Don't use buzzwords or marketing jargon
-5. Include a clear but soft CTA (no "book a call NOW!")
-6. Feel like you're pointing something out to help, not to sell
+CRITICAL RULES:
 
-The tone should be: helpful neighbor who happens to know marketing, not used car salesman.
+1. USE ONLY THE CONTACT'S FIRST NAME. Not "Hi John Smith" — just "Hi John". If no name, use "Hi".
 
-NEVER use these phrases:
+2. DO NOT include any sign-off, signature, closing, or name at the end. No "Best," no "Thanks,"
+   no "- Steve" no "Backyard Marketing Pros team". The email system adds a professional signature
+   automatically. Your body should end with the last sentence of the message, nothing else.
+
+3. Write like you're texting a colleague who owns a business, not writing a formal letter.
+   Short sentences. Casual but smart. No fluff.
+
+4. Reference ONE specific problem you found. Be concrete — use the actual data point
+   (their site speed number, the specific missing feature, the exact SEO gap).
+
+5. Keep it SHORT — under 120 words. Shorter emails get higher response rates.
+
+6. The CTA should be soft and specific: "Want me to send you a quick breakdown?" or
+   "Happy to show you what we did for [similar business]" — never "book a call" or "schedule a demo".
+
+7. Subject lines: under 40 chars, lowercase feel, no clickbait, no emojis.
+
+NEVER use:
 - "I hope this email finds you well"
-- "I'd love to pick your brain"
-- "synergy" / "leverage" / "optimize"
-- "Are you the right person to speak with?"
-- "I noticed you're a [industry] business" (too generic)
+- "I'd love to" / "I'd be happy to" (too formal)
+- "synergy" / "leverage" / "optimize" / "solutions"
+- "Are you the right person?"
+- "I came across your business" (everyone says this)
+- Any greeting other than "Hi [FirstName]" or "Hey [FirstName]"
 
-DO reference specific data points: their actual site speed, missing features, specific competitors ranking above them, etc.
+TONE: You've done your homework. You know their business. You spotted something they'd want to know about.
+Like a friend who works in marketing mentioning something useful over a beer.
 """
+
+
+def _extract_first_name(contact_name: Optional[str]) -> str:
+    """Get just the first name from a full name string."""
+    if not contact_name:
+        return ""
+    return contact_name.strip().split()[0]
 
 
 async def generate_cold_email(
     business_name: str,
     business_type: str,
     website: str,
-    problems: list[dict],
+    problems: list,
     contact_name: Optional[str] = None,
     location: Optional[str] = None,
 ) -> dict:
@@ -47,14 +67,13 @@ async def generate_cold_email(
     Generate a personalized cold email based on problems found.
     Returns dict with 'subject' and 'body'.
     """
-    # Pick the top 1-2 most impactful problems to reference
     severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
     sorted_problems = sorted(problems, key=lambda p: severity_order.get(p.get("severity", "low"), 3))
-    top_problems = sorted_problems[:2]
+    top_problems = sorted_problems[:3]
 
     problems_context = json.dumps(top_problems, indent=2)
-
-    greeting = f"Hi {contact_name}" if contact_name else "Hi there"
+    first_name = _extract_first_name(contact_name)
+    greeting = f"Hi {first_name}" if first_name else "Hi"
 
     user_prompt = f"""Write a cold outreach email for this prospect:
 
@@ -62,17 +81,14 @@ Business: {business_name}
 Type: {business_type}
 Website: {website}
 Location: {location or "Unknown"}
-Contact: {contact_name or "Unknown"}
+Contact first name: {first_name or "Unknown"}
 
-Problems we found on their website:
+Problems we found on their website (pick the most compelling one to lead with):
 {problems_context}
 
-Write the email using the most compelling problem as the hook.
-Start with "{greeting}" and sign off as the Backyard Marketing Pros team.
+Start with "{greeting}" — remember, NO sign-off at the end. The signature is added automatically.
 
-Return your response as JSON with exactly these keys:
-- "subject": the email subject line (under 50 chars, no clickbait)
-- "body": the full email body
+Return as JSON: {{"subject": "...", "body": "..."}}
 """
 
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
@@ -84,53 +100,58 @@ Return your response as JSON with exactly these keys:
         messages=[{"role": "user", "content": user_prompt}],
     )
 
-    # Parse the response
     text = response.content[0].text
-
-    # Try to extract JSON from the response
     try:
-        # Handle case where response might have markdown code blocks
         if "```json" in text:
             text = text.split("```json")[1].split("```")[0]
         elif "```" in text:
             text = text.split("```")[1].split("```")[0]
         result = json.loads(text)
-        return {"subject": result["subject"], "body": result["body"]}
+        body = result["body"].rstrip()
+        # Strip any trailing signature the model might add anyway
+        for sign_off in ["Best,", "Thanks,", "Cheers,", "Talk soon,", "Best regards,",
+                         "- ", "—", "Backyard Marketing", "BMP"]:
+            lines = body.split("\n")
+            while lines and lines[-1].strip().startswith(sign_off):
+                lines.pop()
+            body = "\n".join(lines).rstrip()
+        return {"subject": result["subject"], "body": body}
     except (json.JSONDecodeError, KeyError):
-        # Fallback: use the raw text
-        return {"subject": f"Quick question about {business_name}'s website", "body": text}
+        return {"subject": f"quick question about {business_name}", "body": text}
 
 
 async def generate_follow_up(
     business_name: str,
     business_type: str,
-    problems: list[dict],
+    problems: list,
     previous_email_subject: str,
     follow_up_number: int = 1,
     contact_name: Optional[str] = None,
 ) -> dict:
     """Generate a follow-up email."""
-    problems_context = json.dumps(problems[:2], indent=2)
-    greeting = f"Hi {contact_name}" if contact_name else "Hi"
+    problems_context = json.dumps(problems[:3], indent=2)
+    first_name = _extract_first_name(contact_name)
+    greeting = f"Hi {first_name}" if first_name else "Hi"
 
-    user_prompt = f"""Write follow-up #{follow_up_number} for this prospect who didn't respond.
+    user_prompt = f"""Write follow-up #{follow_up_number} for this prospect who didn't respond to my first email.
 
 Business: {business_name}
 Type: {business_type}
 Previous email subject: {previous_email_subject}
-Contact: {contact_name or "Unknown"}
+Contact first name: {first_name or "Unknown"}
 
 Problems from their site:
 {problems_context}
 
 Rules for follow-up #{follow_up_number}:
-- If #1: Brief, reference a different angle/problem than the first email. Add value.
-- If #2: Very short, slightly more direct. Maybe share a quick stat or result.
-- If #3: "Breakup" email — short, says you won't follow up again, leaves door open.
+- If #1: Brief, reference a different angle/problem than the first email. Add value — maybe share a quick insight.
+- If #2: Very short (3-4 sentences max). More direct. Share a quick stat or result from a similar client.
+- If #3: "Breakup" email — 2-3 sentences. Say you won't bug them again but leave the door open.
 
-Start with "{greeting}" and keep it under 100 words.
+Start with "{greeting}" — NO sign-off at the end. Signature is automatic.
+Keep it under 80 words.
 
-Return as JSON with "subject" and "body" keys.
+Return as JSON: {{"subject": "...", "body": "..."}}
 """
 
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
@@ -149,6 +170,13 @@ Return as JSON with "subject" and "body" keys.
         elif "```" in text:
             text = text.split("```")[1].split("```")[0]
         result = json.loads(text)
-        return {"subject": result["subject"], "body": result["body"]}
+        body = result["body"].rstrip()
+        for sign_off in ["Best,", "Thanks,", "Cheers,", "Talk soon,", "Best regards,",
+                         "- ", "—", "Backyard Marketing", "BMP"]:
+            lines = body.split("\n")
+            while lines and lines[-1].strip().startswith(sign_off):
+                lines.pop()
+            body = "\n".join(lines).rstrip()
+        return {"subject": result["subject"], "body": body}
     except (json.JSONDecodeError, KeyError):
-        return {"subject": f"Re: {previous_email_subject}", "body": text}
+        return {"subject": f"re: {previous_email_subject}", "body": text}
