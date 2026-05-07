@@ -1944,6 +1944,7 @@
                     <div style="display:flex;gap:8px;align-items:center">
                         <span class="status-badge status-${d.status}" style="font-size:13px;padding:4px 12px">${d.status}</span>
                         ${d.website ? `<button class="btn btn-secondary btn-sm" onclick="enrichContactsFromCompany(${d.id})">${d.enriched ? 'Re-Enrich' : 'Enrich'}</button>` : ''}
+                        ${d.enriched ? `<button class="btn btn-primary btn-sm" onclick="generateAuditReport(${d.id})">AI Findability Audit</button>` : ''}
                     </div>
                 </div>
 
@@ -2661,6 +2662,17 @@
             await api(`/api/contacts/${contactId}`, { method: 'PATCH', body: JSON.stringify({ email: values.email }) });
             toast('Email saved.');
             openCompanyDetail(c.company_id);
+        }
+
+        async function generateAuditReport(companyId) {
+            toast('Generating AI Findability Audit... this takes 15-30 seconds');
+            const data = await api(`/api/companies/${companyId}/audit`, { method: 'POST' });
+            if (data) {
+                toast(`Audit complete! Grade: ${data.overall_grade} | AI Score: ${data.ai_findability_score}/100`);
+                // Open report in new tab
+                if (data.url) window.open(data.url, '_blank');
+                openCompanyDetail(companyId);
+            }
         }
 
         async function enrichContactsFromCompany(companyId) {
