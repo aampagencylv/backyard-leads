@@ -381,3 +381,182 @@ Return as JSON: {{"body": "the text message, under 240 chars, no signature"}}
         return {"body": body, "char_count": len(body)}
     except (json.JSONDecodeError, KeyError):
         return {"body": text.strip(), "char_count": len(text.strip())}
+
+
+# ============================================================
+# Post-call sequence generator
+#
+# Reads the call transcript + Claude takeaways and drafts a 3-step follow-up:
+#   Step 1 (~2 hr after the call): Thank-you email referencing 2-3 concrete things
+#                                   they discussed
+#   Step 2 (Day 2): iMessage bump if they haven't replied to Step 1
+#   Step 3 (Day 5): Calendar nudge with 2-3 specific time options
+#
+# Each step is highly personalized — not "thanks for our call", but "thanks
+# for walking me through how the new pool spec form has been hurting your
+# close rate; here's a quick mockup of what I was sketching".
+# ============================================================
+
+POST_CALL_SYSTEM_PROMPT = """You are writing a 3-step follow-up sequence after a sales discovery call.
+The BDR is at Backyard Marketing Pros. The recipient is a backyard professional
+who just spoke with us on the phone.
+
+You will be given:
+  - The call transcript (with diarized speaker labels)
+  - A pre-generated AI summary of the call (the "takeaways")
+
+Your job: write 3 distinct follow-up touches that build on the actual conversation.
+
+CRITICAL RULES (every step):
+
+1. Reference SPECIFIC THINGS they said on the call. Not generic recap. If they
+   mentioned a competitor, a frustration, a metric, a goal — quote it back.
+   Show you were listening.
+
+2. Use first name only. If no name is known, omit the greeting.
+
+3. NO sign-off. Email signatures are added automatically; iMessages don't have them.
+
+4. Match the tone of the call. If they were casual, be casual. If they were
+   professional and reserved, mirror that.
+
+PER-STEP SHAPE:
+
+Step 1 — Thank-you email (sent ~2 hours after the call):
+  - Subject: short and specific to what was discussed (e.g. "the lead-form thing
+    you mentioned" — NOT "great talking with you")
+  - Body: 80-120 words. Open with one specific thing from the call. Either:
+    (a) deliver something concrete they asked for ("here's that pricing breakdown
+        for the silver package")
+    (b) recap the agreed-upon next step ("you said you'd loop in your operations
+        manager — happy to send a calendar invite when you're ready")
+    (c) share a relevant insight you didn't get to on the call
+
+Step 2 — iMessage bump (sent Day 2 if no reply):
+  - Under 200 chars. Casual text vibe.
+  - One short line referencing the call without restating the entire ask.
+  - Example: "Hey John — just bumping the email from Tuesday in case it got
+    buried. Did you get a chance to look at the pricing?"
+
+Step 3 — Calendar nudge (sent Day 5 if still no reply):
+  - Subject: super specific. "next steps on the website rebuild" not "checking in"
+  - Body: 60-90 words. Acknowledge the lag without being passive-aggressive.
+    Offer 2-3 specific time options ("Tuesday 10am, Wednesday 2pm, or Thursday
+    3pm any work?"). Make it easy to say yes.
+
+NEVER:
+- "I hope you're well"
+- "Just following up"
+- "Wanted to circle back"
+- "Touching base"
+- Re-introducing yourself or restating who BMP is — they just spent 30 min on
+  the phone with you, they know.
+"""
+
+
+async def generate_post_call_sequence(
+    business_name: str,
+    business_type: str,
+    contact_name: Optional[str],
+    transcript: str,
+    summary: Optional[str] = None,
+    duration_seconds: Optional[int] = None,
+) -> list[dict]:
+    """Returns a list of 3 step dicts, each with: step_type, day, subject,
+    body, channel-appropriate fields. Caller wraps these into GeneratedEmail
+    rows under sequence_label='post_call'.
+
+    If transcript is short or empty, falls back to a generic 3-step template
+    rather than failing — the BDR can edit before the steps fire.
+    """
+    first_name = _extract_first_name(contact_name)
+    transcript = (transcript or "").strip()
+
+    # Truncate transcript at ~6000 chars to stay within reasonable token budget.
+    # Diarized transcripts can run long; the first ~6k chars usually capture
+    # the meat of a 30-min call.
+    if len(transcript) > 6000:
+        transcript = transcript[:6000] + "\n\n[transcript truncated for length]"
+
+    # Fallback if no transcript — return generic shells the BDR can edit
+    if len(transcript) < 200:
+        return [
+            {
+                "step_type": "email", "day": 0,
+                "subject": f"following up on our call",
+                "body": f"Hi {first_name or 'there'} — quick follow-up from our chat earlier. Wanted to make sure I have everything I need on my end. Let me know if anything else came to mind.",
+            },
+            {
+                "step_type": "imessage", "day": 2,
+                "subject": "iMessage bump (post-call)",
+                "body": f"Hey {first_name or 'there'} — just bumping my email from a couple days ago. Got a sec?",
+            },
+            {
+                "step_type": "email", "day": 5,
+                "subject": "next steps?",
+                "body": f"Hey {first_name or 'there'} — wanted to see if you had a chance to think on what we discussed. Happy to grab another quick call if that's easier — Tuesday 10am, Wednesday 2pm, or Thursday 3pm any work?",
+            },
+        ]
+
+    duration_min = round((duration_seconds or 0) / 60)
+    summary_block = f"\nAI takeaways from the call:\n{summary}\n" if summary else ""
+
+    user_prompt = f"""Write a 3-step follow-up sequence after this call.
+
+Business: {business_name}
+Type: {business_type}
+Contact first name: {first_name or "(unknown)"}
+Call duration: {duration_min} minutes
+{summary_block}
+Call transcript (diarized):
+{transcript}
+
+Return JSON only, no other text:
+{{
+  "step1_email_subject": "...",
+  "step1_email_body": "...",
+  "step2_imessage_body": "...",
+  "step3_email_subject": "...",
+  "step3_email_body": "..."
+}}
+"""
+
+    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    response = await client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=2000,
+        system=POST_CALL_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_prompt}],
+    )
+
+    text = response.content[0].text
+    try:
+        if "```json" in text:
+            text = text.split("```json")[1].split("```")[0]
+        elif "```" in text:
+            text = text.split("```")[1].split("```")[0]
+        r = json.loads(text)
+        return [
+            {
+                "step_type": "email", "day": 0,
+                "subject": (r.get("step1_email_subject") or "following up").strip(),
+                "body":    (r.get("step1_email_body") or "").strip(),
+            },
+            {
+                "step_type": "imessage", "day": 2,
+                "subject": "iMessage bump (post-call)",
+                "body":    (r.get("step2_imessage_body") or "").strip(),
+            },
+            {
+                "step_type": "email", "day": 5,
+                "subject": (r.get("step3_email_subject") or "next steps?").strip(),
+                "body":    (r.get("step3_email_body") or "").strip(),
+            },
+        ]
+    except (json.JSONDecodeError, KeyError, AttributeError):
+        # Parse failed — fall back to generic shells (better than nothing)
+        return [
+            {"step_type": "email",    "day": 0, "subject": "following up on our call", "body": text[:1000]},
+            {"step_type": "imessage", "day": 2, "subject": "iMessage bump (post-call)", "body": f"Hey {first_name or 'there'} — bumping my email from a couple days ago"},
+            {"step_type": "email",    "day": 5, "subject": "next steps?", "body": f"Hey {first_name or 'there'} — let me know if a quick call this week works."},
+        ]

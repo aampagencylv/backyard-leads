@@ -2005,10 +2005,16 @@
             const skipBadges = (e.skip_if || []).length > 0
                 ? ` <span style="font-size:9px;color:#888">[skip-if: ${(e.skip_if||[]).map(escapeHtml).join(', ')}]</span>`
                 : '';
+            // Only pending steps are draggable — reordering DONE/SKIPPED steps makes no sense
+            const isDraggable = !e.is_sent && !isSkipped;
+            const dragAttrs = isDraggable
+                ? `draggable="true" ondragstart="seqDragStart(event,${e.id})" ondragover="seqDragOver(event,${e.id})" ondragleave="seqDragLeave(event,${e.id})" ondrop="seqDrop(event,${e.id},${contactId})" ondragend="seqDragEnd(event)"`
+                : '';
+            const handle = isDraggable ? '<span style="cursor:grab;user-select:none;color:#bbb;margin-right:4px" title="Drag to reorder">⋮⋮</span>' : '';
             return `
-                <div class="${klass}" data-email-id="${e.id}">
+                <div class="${klass}" data-email-id="${e.id}" data-sequence-label="${escapeHtml(e.sequence_label || 'main')}" ${dragAttrs}>
                     <div class="meta ${meta}">
-                        <span>${icon} Step ${e.sequence_order} — ${escapeHtml((e.email_type||'').replace(/_/g,' '))} ${stateLabel}${auto}${skipBadges}</span>
+                        <span>${handle}${icon} Step ${e.sequence_order} — ${escapeHtml((e.email_type||'').replace(/_/g,' '))} ${stateLabel}${auto}${skipBadges}</span>
                         <span>
                             ${!e.is_sent && !isSkipped ? `<button class="btn btn-secondary btn-xs" onclick="editEmail(${e.id})">Edit</button>` : ''}
                             ${!e.is_sent && !isSkipped && stype !== 'email' && stype !== 'imessage' ? `<button class="btn btn-success btn-xs" onclick="completeStep(${e.id})">Mark Done</button>` : ''}
@@ -2019,6 +2025,80 @@
                     <div class="body">${escapeHtml(e.body)}</div>
                 </div>
             `;
+        }
+
+        // ============================================================
+        // Sequence step drag-and-drop reorder
+        //
+        // Drops above the target by default. Hover position decides above/below
+        // (top half → drop above, bottom half → drop below). On drop we reorder
+        // the DOM, then PATCH /api/sequences/reorder with the new ordered ID list.
+        // Only pending steps participate (rendered with draggable=true). DONE
+        // and SKIPPED steps stay where they are.
+        // ============================================================
+        let _seqDragId = null;
+        function seqDragStart(ev, stepId) {
+            _seqDragId = stepId;
+            ev.dataTransfer.effectAllowed = 'move';
+            ev.dataTransfer.setData('text/plain', String(stepId));
+            ev.currentTarget.style.opacity = '0.4';
+        }
+        function seqDragOver(ev, targetId) {
+            if (_seqDragId == null || _seqDragId === targetId) return;
+            ev.preventDefault();
+            ev.dataTransfer.dropEffect = 'move';
+            const card = ev.currentTarget;
+            const rect = card.getBoundingClientRect();
+            const above = (ev.clientY - rect.top) < rect.height / 2;
+            card.style.borderTop = above ? '3px solid var(--bmp-orange)' : '';
+            card.style.borderBottom = !above ? '3px solid var(--bmp-orange)' : '';
+        }
+        function seqDragLeave(ev, targetId) {
+            ev.currentTarget.style.borderTop = '';
+            ev.currentTarget.style.borderBottom = '';
+        }
+        function seqDragEnd(ev) {
+            // Cleanup of any stuck visual cues
+            document.querySelectorAll('.email-card').forEach(c => {
+                c.style.opacity = '';
+                c.style.borderTop = '';
+                c.style.borderBottom = '';
+            });
+            _seqDragId = null;
+        }
+        async function seqDrop(ev, targetId, contactId) {
+            ev.preventDefault();
+            if (_seqDragId == null || _seqDragId === targetId) { seqDragEnd(ev); return; }
+            const draggedId = _seqDragId;
+            const targetCard = ev.currentTarget;
+            const draggedCard = document.querySelector(`.email-card[data-email-id="${draggedId}"]`);
+            if (!draggedCard || !targetCard) { seqDragEnd(ev); return; }
+
+            const rect = targetCard.getBoundingClientRect();
+            const above = (ev.clientY - rect.top) < rect.height / 2;
+            // Reorder the DOM optimistically — if the PATCH fails we'll re-render from the server
+            if (above) targetCard.parentNode.insertBefore(draggedCard, targetCard);
+            else targetCard.parentNode.insertBefore(draggedCard, targetCard.nextSibling);
+            seqDragEnd(ev);
+
+            // Build the new ordered ID list from the DOM, in render order
+            const container = draggedCard.parentNode;
+            const sequenceLabel = draggedCard.dataset.sequenceLabel || 'main';
+            const orderedIds = Array.from(container.querySelectorAll(`.email-card[data-sequence-label="${sequenceLabel}"]`))
+                .map(c => parseInt(c.dataset.emailId, 10))
+                .filter(n => !isNaN(n));
+
+            const data = await api('/api/sequences/reorder', {
+                method: 'PATCH',
+                body: JSON.stringify({ contact_id: contactId, sequence_label: sequenceLabel, ordered_step_ids: orderedIds }),
+            });
+            if (data && data.reordered) {
+                toast(`Reordered ${data.reordered} steps`);
+                _refreshCurrentCompany();
+            } else {
+                // Failure path — refresh to get authoritative order back
+                _refreshCurrentCompany();
+            }
         }
 
         async function completeStep(emailId) {
@@ -2156,6 +2236,7 @@
                 if (a.recording_url && !a.transcript) buttons.push(`<button class="btn btn-secondary btn-xs" onclick="retranscribeCall(${a.id})">🔄 Transcribe</button>`);
                 if (a.transcript) buttons.push(`<button class="btn btn-secondary btn-xs" onclick="toggleCallExpand(${a.id},'transcript')">📄 Transcript</button>`);
                 if (a.call_summary) buttons.push(`<button class="btn btn-secondary btn-xs" onclick="toggleCallExpand(${a.id},'summary')">✨ Takeaways</button>`);
+                if (a.transcript) buttons.push(`<button class="btn btn-success btn-xs" onclick="triggerPostCallSequence(${a.id})" title="Generate a 3-step follow-up sequence (thank-you email + iMessage bump + calendar nudge) using this call's transcript">📅 Post-Call Sequence</button>`);
                 return `
                     <div class="timeline-item">
                         ${baseRow}
@@ -2372,6 +2453,21 @@
         async function resumeSequence(contactId) {
             const data = await api(`/api/sequences/resume/${contactId}`, { method: 'POST' });
             if (data) { toast(`Resumed ${data.resumed} steps (re-anchored to today)`); _refreshCurrentCompany(); }
+        }
+
+        async function triggerPostCallSequence(activityId) {
+            if (!confirm('Generate a 3-step post-call follow-up sequence?\n\n' +
+                         'Day 0 (~2 hr from now): Thank-you email referencing specific things from the transcript.\n' +
+                         'Day 2: iMessage bump if they haven\'t replied.\n' +
+                         'Day 5: Calendar nudge with 2-3 specific time options.\n\n' +
+                         'Auto-pauses if they reply or pick up the phone.')) return;
+            toast('Reading the transcript and drafting follow-up steps…');
+            const data = await api(`/api/sequences/post-call/${activityId}`, { method: 'POST' });
+            if (data && data.created) {
+                const when = data.first_send_at ? new Date(data.first_send_at).toLocaleString() : 'in ~2 hours';
+                toast(`✓ ${data.created}-step post-call sequence queued. First email: ${when}`);
+                _refreshCurrentCompany();
+            }
         }
 
         async function deleteSequence(contactId) {
