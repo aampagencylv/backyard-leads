@@ -162,3 +162,89 @@ async def release_number(creds: TwilioCredentials, phone_sid: str) -> None:
 
 def number_to_dict(n: TwilioNumber) -> dict:
     return asdict(n)
+
+
+# ============================================================
+# Phase 2: Voice SDK access tokens + outbound TwiML
+# ============================================================
+
+def generate_access_token(creds: TwilioCredentials, identity: str, ttl_seconds: int = 3600) -> str:
+    """
+    Mint a JWT access token for the Twilio Voice JavaScript SDK.
+    Token includes a VoiceGrant tied to the TwiML App SID, so when the
+    SDK initiates a call it'll hit our /voice/twiml endpoint.
+
+    Identity uniquely identifies this rep's browser session — we use
+    'bmp_user_{id}' (set at user creation, see migrate_twilio_fields).
+    """
+    if not creds.is_voice_sdk_ready:
+        raise ValueError(
+            "Twilio not fully configured for SDK: need account_sid + auth_token + "
+            "api_key_sid + api_key_secret + twiml_app_sid"
+        )
+
+    # Lazy import so the module loads even if twilio package isn't installed locally
+    from twilio.jwt.access_token import AccessToken
+    from twilio.jwt.access_token.grants import VoiceGrant
+
+    token = AccessToken(
+        creds.account_sid,
+        creds.api_key_sid,
+        creds.api_key_secret,
+        identity=identity,
+        ttl=ttl_seconds,
+    )
+    voice_grant = VoiceGrant(
+        outgoing_application_sid=creds.twiml_app_sid,
+        incoming_allow=True,  # so the same identity can RECEIVE inbound calls (Phase 4)
+    )
+    token.add_grant(voice_grant)
+    return token.to_jwt()
+
+
+def build_outbound_twiml(
+    to_number: str,
+    caller_id: str,
+    record_calls: bool = True,
+    recording_status_callback: Optional[str] = None,
+    consent_disclosure: bool = True,
+) -> str:
+    """
+    Build the TwiML response for an outbound call initiated via the Voice SDK.
+
+    record_calls — if True, both legs are recorded ('record-from-answer-dual').
+    consent_disclosure — if True, plays a brief 2-party-consent message before
+      connecting. Required in NV, CA, FL, IL, MD, MA, MT, NH, PA, WA, CT, DE.
+    """
+    from twilio.twiml.voice_response import VoiceResponse, Dial
+
+    response = VoiceResponse()
+    if consent_disclosure:
+        response.say(
+            "This call may be recorded for quality and training purposes.",
+            voice="Polly.Joanna-Neural",
+        )
+
+    dial = Dial(caller_id=caller_id)
+    if record_calls:
+        dial.record = "record-from-answer-dual"
+        if recording_status_callback:
+            dial.recording_status_callback = recording_status_callback
+            dial.recording_status_callback_event = "completed"
+    dial.number(to_number)
+    response.append(dial)
+    return str(response)
+
+
+def parse_inbound_twiml(from_number: str, dial_to_user_identity: str) -> str:
+    """
+    TwiML for INBOUND calls — ring the rep's browser via their identity.
+    If they don't pick up, fall through to voicemail (Phase 4).
+    """
+    from twilio.twiml.voice_response import VoiceResponse, Dial
+
+    response = VoiceResponse()
+    dial = Dial(timeout=20, action="/api/twilio/voice/inbound-fallback")
+    dial.client(dial_to_user_identity)
+    response.append(dial)
+    return str(response)

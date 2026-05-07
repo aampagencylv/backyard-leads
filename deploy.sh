@@ -36,6 +36,7 @@ ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_runtime_conf
 ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_roles_and_views
 ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_campaigns
 ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_twilio_fields
+ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_call_fields
 ExecStart=/opt/backyard-leads/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=5

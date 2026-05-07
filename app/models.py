@@ -237,6 +237,18 @@ class Activity(Base):
     activity_type = Column(String(50), nullable=False)
     content = Column(Text, default="")
     metadata_json = Column(Text, nullable=True)
+
+    # Call-specific columns (populated when activity_type='call' or 'voicemail')
+    twilio_call_sid = Column(String(50), nullable=True, index=True)
+    call_duration_seconds = Column(Integer, nullable=True)
+    call_direction = Column(String(20), nullable=True)  # 'outbound' | 'inbound'
+    call_outcome = Column(String(40), nullable=True)
+    # outcome values: connected, voicemail, no_answer, busy, declined,
+    #                 wrong_number, gatekeeper, failed
+    recording_url = Column(String(500), nullable=True)
+    transcript = Column(Text, nullable=True)
+    call_summary = Column(Text, nullable=True)  # AI-generated takeaways
+
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     company = relationship("Company", back_populates="activities")

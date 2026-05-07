@@ -226,7 +226,41 @@
         .modal-card .form-group { margin-bottom: 12px; }
         .modal-card label { font-size: 13px; font-weight: 500; }
         .modal-card .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+        /* Dialer */
+        .dialer { background: linear-gradient(180deg, #fafafa 0%, white 100%); border-radius: 12px; padding: 20px; box-shadow: 0 20px 60px rgba(0,0,0,0.25); width: 100%; max-width: 420px; }
+        .dialer-header { display: flex; gap: 12px; align-items: center; padding-bottom: 12px; border-bottom: 1px solid #eee; }
+        .dialer-header .avatar { width: 44px; height: 44px; border-radius: 50%; background: var(--bmp-green); color: white; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 700; }
+        .dialer-header .name { font-weight: 600; font-size: 15px; }
+        .dialer-header .meta { font-size: 12px; color: #888; }
+        .dialer-state { text-align: center; padding: 20px 12px 16px; }
+        .dialer-state .number { font-family: monospace; font-size: 18px; font-weight: 600; }
+        .dialer-state .status { font-size: 13px; color: #888; margin-top: 4px; }
+        .dialer-state .status.connecting { color: var(--bmp-orange); }
+        .dialer-state .status.in-call { color: var(--bmp-green); }
+        .dialer-state .status.ended { color: #888; }
+        .dialer-timer { font-family: monospace; font-size: 26px; font-weight: 700; margin-top: 6px; color: var(--bmp-green); }
+        .dialer-controls { display: flex; gap: 10px; justify-content: center; margin: 16px 0; flex-wrap: wrap; }
+        .dialer-btn { width: 56px; height: 56px; border-radius: 50%; border: none; cursor: pointer; font-size: 18px; transition: all .15s; display: flex; align-items: center; justify-content: center; }
+        .dialer-btn.mute { background: #e5e7eb; color: #333; }
+        .dialer-btn.mute.active { background: var(--bmp-orange); color: white; }
+        .dialer-btn.hangup { background: #dc3545; color: white; width: 64px; height: 64px; }
+        .dialer-btn.hangup:hover { background: #c0392b; }
+        .dialer-btn.keypad { background: #e5e7eb; color: #333; }
+        .dialer-btn:hover { transform: scale(1.05); }
+        .dialer-keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; max-width: 240px; margin: 12px auto; }
+        .dialer-keypad button { padding: 14px; font-size: 18px; font-weight: 600; background: #f5f5f5; border: 1px solid #e0e0e0; border-radius: 8px; cursor: pointer; }
+        .dialer-keypad button:hover { background: #e8ece8; }
+        .dialer-notes { width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; min-height: 70px; resize: vertical; font-family: inherit; margin-top: 12px; }
+        .dialer-outcome { width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; margin-top: 8px; }
+
+        /* Phone link */
+        .call-link { color: var(--bmp-green); cursor: pointer; text-decoration: none; border-bottom: 1px dotted var(--bmp-green); }
+        .call-link:hover { color: var(--bmp-green-dark); }
+        .call-link::before { content: "📞 "; }
     </style>
+    <!-- Twilio Voice JS SDK v2 — for click-to-call browser dialer -->
+    <script src="https://unpkg.com/@twilio/voice-sdk@2.10.2/dist/twilio.min.js" defer></script>
 </head>
 <body>
     <!-- ===================== AUTH SCREEN ===================== -->
@@ -1031,7 +1065,7 @@
                                 ${c.email_status === 'invalid' ? ' <span style="font-size:9px;color:#c0392b">INVALID</span>' : ''}
                                 ${c.email_status === 'bounced' ? ' <span style="font-size:9px;color:#c0392b">BOUNCED</span>' : ''}
                                 ${c.unsubscribed_at ? ' <span style="font-size:9px;color:#c0392b">UNSUB</span>' : ''}</td>
-                            <td style="padding:8px">${c.phone ? escapeHtml(c.phone) : (c.company_phone ? `<span style="color:#888">${escapeHtml(c.company_phone)}</span> <span style="font-size:9px;color:#bbb">office</span>` : '<em style="color:#bbb">—</em>')}</td>
+                            <td style="padding:8px" onclick="event.stopPropagation()">${c.phone ? `<a class="call-link" onclick="callContact(${c.id});return false">${escapeHtml(c.phone)}</a>` : (c.company_phone ? `<span style="color:#888">${escapeHtml(c.company_phone)}</span> <span style="font-size:9px;color:#bbb">office</span>` : '<em style="color:#bbb">—</em>')}</td>
                             <td style="padding:8px">${escapeHtml(c.company_name)}</td>
                             <td style="padding:8px"><span class="status-badge status-${c.company_status}">${c.company_status}</span></td>
                             <td style="padding:8px" onclick="event.stopPropagation()">
@@ -1634,7 +1668,7 @@
                             <div class="contact-card-meta">
                                 ${c.title ? escapeHtml(c.title) + ' · ' : ''}
                                 ${c.email ? `<a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a>` : '<em>no email</em>'}
-                                ${c.phone ? ' · ' + escapeHtml(c.phone) : ''}
+                                ${c.phone ? ` · <a class="call-link" onclick="event.stopPropagation();callContact(${c.id})">${escapeHtml(c.phone)}</a>` : ''}
                                 ${c.unsubscribed_at ? ' · <span style="color:#c0392b">UNSUBSCRIBED</span>' : ''}
                                 ${c.email_status === 'bounced' ? ' · <span style="color:#c0392b">BOUNCED</span>' : ''}
                             </div>
@@ -2923,6 +2957,257 @@
             if (data) {
                 toast(`Released ${phoneNumber}`);
                 loadTwilioOwnedNumbers();
+            }
+        }
+
+        // ============================================================
+        // Twilio Voice Dialer (Phase 2 — click-to-call)
+        // ============================================================
+
+        // Singleton state for the active call session
+        const dialerState = {
+            device: null,         // Twilio.Device instance
+            tokenExpiresAt: 0,
+            call: null,           // active Twilio.Call
+            startedAt: null,      // ms epoch when call connected
+            timerInterval: null,
+            muted: false,
+            keypadOpen: false,
+            ctx: null,            // {contact, sid, etc} for the active call
+        };
+
+        async function ensureTwilioDevice() {
+            // SDK may not be loaded yet (deferred)
+            if (typeof Twilio === 'undefined' || !Twilio.Device) {
+                toast('Voice SDK still loading, try again in a sec…');
+                return null;
+            }
+            const now = Date.now();
+            if (dialerState.device && dialerState.tokenExpiresAt > now + 60000) {
+                return dialerState.device;
+            }
+
+            const data = await api('/api/twilio/voice/token', { method: 'POST' });
+            if (!data) return null;
+            const token = data.token;
+
+            try {
+                if (dialerState.device) {
+                    dialerState.device.updateToken(token);
+                } else {
+                    dialerState.device = new Twilio.Device(token, {
+                        codecPreferences: ['opus', 'pcmu'],
+                        edge: 'ashburn',
+                    });
+                    dialerState.device.on('error', (e) => {
+                        console.error('Twilio Device error:', e);
+                        toast('Dialer error: ' + (e.message || e.code || 'unknown'));
+                    });
+                    // Inbound call handler (Phase 4)
+                    dialerState.device.on('incoming', (call) => {
+                        // For now, just auto-reject inbound — Phase 4 will pop the modal
+                        call.reject();
+                    });
+                }
+                dialerState.tokenExpiresAt = now + (data.expires_in * 1000);
+                dialerState.fromNumber = data.from_number;
+                return dialerState.device;
+            } catch (e) {
+                console.error('Failed to init Twilio Device:', e);
+                toast('Failed to initialize dialer: ' + (e.message || e));
+                return null;
+            }
+        }
+
+        async function startCall(contact) {
+            if (!contact || (!contact.phone && !contact.company_phone)) {
+                toast('No phone number on this contact'); return;
+            }
+            const toNumber = contact.phone || contact.company_phone;
+            const device = await ensureTwilioDevice();
+            if (!device) return;
+
+            openDialerModal(contact, toNumber);
+
+            try {
+                const call = await device.connect({ params: { To: toNumber } });
+                dialerState.call = call;
+                dialerState.ctx = { contact, sid: null, started: false };
+
+                call.on('accept', (c) => {
+                    dialerState.ctx.sid = c.parameters.CallSid;
+                    dialerState.startedAt = Date.now();
+                    dialerState.ctx.started = true;
+                    setDialerStatus('in-call', 'Connected');
+                    startDialerTimer();
+                });
+                call.on('disconnect', () => {
+                    setDialerStatus('ended', 'Call ended');
+                    stopDialerTimer();
+                    dialerState.call = null;
+                });
+                call.on('cancel', () => {
+                    setDialerStatus('ended', 'Cancelled');
+                    stopDialerTimer();
+                    dialerState.call = null;
+                });
+                call.on('reject', () => {
+                    setDialerStatus('ended', 'Declined');
+                    stopDialerTimer();
+                    dialerState.call = null;
+                });
+                call.on('error', (e) => {
+                    console.error('Call error:', e);
+                    setDialerStatus('ended', 'Error: ' + (e.message || e.code));
+                    stopDialerTimer();
+                    dialerState.call = null;
+                });
+            } catch (e) {
+                console.error('connect() failed:', e);
+                toast('Could not start call: ' + (e.message || e));
+                closeDialerModal();
+            }
+        }
+
+        // Globally callable from any phone-link click
+        async function callContact(contactId) {
+            const c = await api(`/api/contacts/${contactId}`);
+            if (c) startCall(c);
+        }
+
+        // ----- Dialer modal -----
+        function openDialerModal(contact, toNumber) {
+            const initials = ((contact.first_name||'')[0]||'') + ((contact.last_name||'')[0]||'');
+            const root = document.getElementById('modal-root');
+            root.innerHTML = `
+                <div class="modal-backdrop" id="dialer-backdrop">
+                    <div class="dialer" onclick="event.stopPropagation()">
+                        <div class="dialer-header">
+                            <div class="avatar">${escapeHtml((initials || (contact.email||'?')[0] || '?').toUpperCase())}</div>
+                            <div style="flex:1">
+                                <div class="name">${escapeHtml(contact.name || contact.email || '(unnamed)')}</div>
+                                <div class="meta">${escapeHtml(contact.title || '')}${contact.title && contact.company_name ? ' · ' : ''}${escapeHtml(contact.company_name || '')}</div>
+                            </div>
+                        </div>
+                        <div class="dialer-state">
+                            <div class="number">${escapeHtml(toNumber)}</div>
+                            <div class="status connecting" id="dialer-status">Connecting…</div>
+                            <div class="dialer-timer" id="dialer-timer" style="display:none">00:00</div>
+                        </div>
+                        <div class="dialer-controls">
+                            <button class="dialer-btn mute" id="dialer-mute" onclick="toggleMute()" title="Mute">🔇</button>
+                            <button class="dialer-btn hangup" onclick="endCall()" title="Hang up">📵</button>
+                            <button class="dialer-btn keypad" id="dialer-keypad-toggle" onclick="toggleKeypad()" title="Keypad">⌨️</button>
+                        </div>
+                        <div class="dialer-keypad hidden" id="dialer-keypad">
+                            ${['1','2','3','4','5','6','7','8','9','*','0','#'].map(d =>
+                                `<button onclick="sendDtmf('${d}')">${d}</button>`).join('')}
+                        </div>
+                        <textarea class="dialer-notes" id="dialer-notes" placeholder="Notes from the call (saved automatically when you close this dialog)…"></textarea>
+                        <select class="dialer-outcome" id="dialer-outcome">
+                            <option value="">Outcome (pick one before you hang up)</option>
+                            <option value="connected">Connected — had a real conversation</option>
+                            <option value="voicemail">Left voicemail</option>
+                            <option value="no_answer">No answer</option>
+                            <option value="busy">Line busy</option>
+                            <option value="wrong_number">Wrong number</option>
+                            <option value="gatekeeper">Reached gatekeeper</option>
+                            <option value="declined">Declined / not interested</option>
+                            <option value="failed">Call failed</option>
+                        </select>
+                        <div class="modal-actions">
+                            <button class="btn btn-primary" onclick="finishDialer()">Save &amp; Close</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            // Backdrop click does NOT close — user must Save & Close to log
+        }
+
+        function setDialerStatus(klass, text) {
+            const el = document.getElementById('dialer-status');
+            if (!el) return;
+            el.className = 'status ' + klass;
+            el.textContent = text;
+            const timer = document.getElementById('dialer-timer');
+            if (timer) timer.style.display = (klass === 'in-call') ? 'block' : 'none';
+        }
+
+        function startDialerTimer() {
+            stopDialerTimer();
+            dialerState.timerInterval = setInterval(() => {
+                const secs = Math.floor((Date.now() - dialerState.startedAt) / 1000);
+                const m = String(Math.floor(secs/60)).padStart(2,'0');
+                const s = String(secs%60).padStart(2,'0');
+                const t = document.getElementById('dialer-timer');
+                if (t) t.textContent = `${m}:${s}`;
+            }, 500);
+        }
+        function stopDialerTimer() {
+            if (dialerState.timerInterval) clearInterval(dialerState.timerInterval);
+            dialerState.timerInterval = null;
+        }
+
+        function toggleMute() {
+            if (!dialerState.call) return;
+            dialerState.muted = !dialerState.muted;
+            dialerState.call.mute(dialerState.muted);
+            const btn = document.getElementById('dialer-mute');
+            if (btn) btn.classList.toggle('active', dialerState.muted);
+        }
+        function toggleKeypad() {
+            const k = document.getElementById('dialer-keypad');
+            if (k) k.classList.toggle('hidden');
+        }
+        function sendDtmf(d) {
+            if (!dialerState.call) return;
+            dialerState.call.sendDigits(d);
+        }
+        function endCall() {
+            if (dialerState.call) dialerState.call.disconnect();
+        }
+
+        function closeDialerModal() {
+            stopDialerTimer();
+            const root = document.getElementById('modal-root');
+            if (root) root.innerHTML = '';
+            dialerState.call = null;
+            dialerState.ctx = null;
+            dialerState.muted = false;
+        }
+
+        async function finishDialer() {
+            const ctx = dialerState.ctx;
+            if (!ctx || !ctx.contact) { closeDialerModal(); return; }
+
+            // If still in a call, end it first
+            if (dialerState.call) {
+                try { dialerState.call.disconnect(); } catch (e) { /* noop */ }
+            }
+
+            const notes = (document.getElementById('dialer-notes')?.value || '').trim();
+            const outcome = document.getElementById('dialer-outcome')?.value || '';
+            const duration = ctx.started ? Math.floor((Date.now() - dialerState.startedAt) / 1000) : 0;
+
+            if (ctx.sid) {
+                await api('/api/twilio/voice/log-call', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        call_sid: ctx.sid,
+                        contact_id: ctx.contact.id,
+                        duration_seconds: duration,
+                        direction: 'outbound',
+                        outcome: outcome || (duration > 0 ? 'connected' : 'no_answer'),
+                        notes,
+                    }),
+                });
+                toast('Call logged to timeline');
+            }
+            closeDialerModal();
+            // Refresh the company detail if we're on it, so the new Activity shows up
+            if (ctx.contact.company_id && document.getElementById('page-company-detail') &&
+                !document.getElementById('page-company-detail').classList.contains('hidden')) {
+                openCompanyDetail(ctx.contact.company_id);
             }
         }
 

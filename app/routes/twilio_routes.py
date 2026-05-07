@@ -6,13 +6,17 @@ add the dialer + webhook routes.
 """
 from __future__ import annotations
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException
+from datetime import datetime, timezone
+import json
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Form
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
 
-from app.database import get_db
-from app.models import User
+from app.database import get_db, async_session
+from app.models import User, Contact, Company, Activity
 from app.auth import get_current_user
 from app.runtime_config import get_twilio_credentials
 from app.services.twilio_voice import (
@@ -21,8 +25,11 @@ from app.services.twilio_voice import (
     list_owned_numbers,
     release_number,
     number_to_dict,
+    generate_access_token,
+    build_outbound_twiml,
     TwilioError,
 )
+from app.config import settings
 
 router = APIRouter(prefix="/api/twilio", tags=["twilio"])
 
@@ -184,4 +191,231 @@ async def assign_twilio_number(
         "user_id": target.id,
         "twilio_phone_number": target.twilio_phone_number,
         "twilio_identity": target.twilio_identity,
+    }
+
+
+# ============================================================
+# Voice SDK access token (BDR's browser fetches this every ~50 min)
+# ============================================================
+
+@router.post("/voice/token")
+async def voice_token(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Mint a Twilio Voice SDK access token for the current rep."""
+    if not user.twilio_phone_number:
+        raise HTTPException(status_code=400,
+                            detail="You don't have a Twilio number assigned. Ask an admin to assign one in Settings.")
+    if not user.twilio_identity:
+        # Backfill if somehow missing
+        user.twilio_identity = f"bmp_user_{user.id}"
+        await db.commit()
+
+    creds = await get_twilio_credentials(db)
+    if not creds.is_voice_sdk_ready:
+        raise HTTPException(status_code=400,
+                            detail="Twilio not fully configured for browser dialing. "
+                                   "Need API Key SID, API Key Secret, and TwiML App SID in Settings.")
+    try:
+        jwt_token = generate_access_token(creds, identity=user.twilio_identity, ttl_seconds=3600)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return {
+        "token": jwt_token,
+        "identity": user.twilio_identity,
+        "from_number": user.twilio_phone_number,
+        "expires_in": 3600,
+    }
+
+
+# ============================================================
+# Twilio webhooks — public endpoints called by Twilio infrastructure
+# ============================================================
+
+@router.post("/voice/twiml")
+async def voice_twiml(request: Request):
+    """
+    TwiML endpoint Twilio hits when the SDK initiates an outbound call.
+    Receives From=client:bmp_user_X, To={number to dial}.
+    Returns TwiML: <Dial callerId={rep's number} record>{To}</Dial>
+    """
+    form = await request.form()
+    from_identity_raw = form.get("From", "")  # e.g. "client:bmp_user_3"
+    to_number = form.get("To", "").strip()
+
+    if not to_number:
+        return Response(
+            content="<Response><Say>Missing destination number.</Say></Response>",
+            media_type="application/xml",
+        )
+
+    # Resolve the rep's caller ID by their identity
+    identity = from_identity_raw.replace("client:", "") if from_identity_raw else ""
+    caller_id = None
+    if identity:
+        async with async_session() as db:
+            u = (await db.execute(select(User).where(User.twilio_identity == identity))).scalar_one_or_none()
+            if u and u.twilio_phone_number:
+                caller_id = u.twilio_phone_number
+
+    if not caller_id:
+        return Response(
+            content="<Response><Say>This rep does not have a verified caller ID assigned.</Say></Response>",
+            media_type="application/xml",
+        )
+
+    recording_callback = f"{settings.public_url.rstrip('/')}/api/twilio/voice/recording"
+    twiml = build_outbound_twiml(
+        to_number=to_number,
+        caller_id=caller_id,
+        record_calls=True,
+        recording_status_callback=recording_callback,
+        consent_disclosure=True,
+    )
+    return Response(content=twiml, media_type="application/xml")
+
+
+@router.post("/voice/status")
+async def voice_status(request: Request):
+    """
+    Status callback from Twilio. Fires on call lifecycle events.
+    We persist duration once 'completed' fires.
+    """
+    form = await request.form()
+    call_sid = form.get("CallSid")
+    call_status = form.get("CallStatus", "")
+    duration = form.get("CallDuration")
+
+    if not call_sid:
+        return Response(content="", media_type="application/xml")
+
+    async with async_session() as db:
+        act = (await db.execute(
+            select(Activity).where(Activity.twilio_call_sid == call_sid)
+        )).scalar_one_or_none()
+        if act:
+            if duration:
+                try:
+                    act.call_duration_seconds = int(duration)
+                except (TypeError, ValueError):
+                    pass
+            # Map status to outcome if not already set
+            if not act.call_outcome:
+                if call_status == "completed":
+                    act.call_outcome = "connected" if (duration and int(duration) > 0) else "no_answer"
+                elif call_status == "busy":
+                    act.call_outcome = "busy"
+                elif call_status in ("failed", "canceled"):
+                    act.call_outcome = "failed"
+                elif call_status == "no-answer":
+                    act.call_outcome = "no_answer"
+            await db.commit()
+
+    return Response(content="", media_type="application/xml")
+
+
+@router.post("/voice/recording")
+async def voice_recording(request: Request):
+    """Recording-complete webhook. Saves URL onto the matching Activity."""
+    form = await request.form()
+    call_sid = form.get("CallSid")
+    recording_url = form.get("RecordingUrl")
+    if not (call_sid and recording_url):
+        return Response(content="", media_type="application/xml")
+
+    async with async_session() as db:
+        act = (await db.execute(
+            select(Activity).where(Activity.twilio_call_sid == call_sid)
+        )).scalar_one_or_none()
+        if act:
+            act.recording_url = recording_url
+            await db.commit()
+    # Phase 3 will kick off transcription here.
+    return Response(content="", media_type="application/xml")
+
+
+# ============================================================
+# Frontend posts here when the dialer modal closes
+# ============================================================
+
+class LogCallRequest(BaseModel):
+    call_sid: str
+    contact_id: int
+    duration_seconds: int = 0
+    direction: str = "outbound"  # outbound | inbound
+    outcome: Optional[str] = None  # connected, voicemail, no_answer, ...
+    notes: str = ""
+
+
+@router.post("/voice/log-call")
+async def log_call(
+    req: LogCallRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Create an Activity row when the dialer modal closes."""
+    contact = (await db.execute(select(Contact).where(Contact.id == req.contact_id))).scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    # Don't double-create — the Twilio status webhook may have made a stub
+    existing = (await db.execute(
+        select(Activity).where(Activity.twilio_call_sid == req.call_sid)
+    )).scalar_one_or_none()
+
+    summary = req.notes or {
+        "connected": "Call connected — see notes",
+        "voicemail": "Left a voicemail",
+        "no_answer": "No answer",
+        "busy": "Line busy",
+        "wrong_number": "Wrong number",
+        "gatekeeper": "Reached gatekeeper",
+        "declined": "Declined / not interested",
+    }.get(req.outcome or "", "Call logged")
+
+    if existing:
+        existing.contact_id = contact.id
+        existing.user_id = user.id
+        existing.content = summary
+        existing.call_duration_seconds = req.duration_seconds or existing.call_duration_seconds
+        existing.call_direction = req.direction
+        if req.outcome:
+            existing.call_outcome = req.outcome
+        await db.commit()
+        await db.refresh(existing)
+        return _activity_to_dict(existing)
+
+    activity = Activity(
+        company_id=contact.company_id,
+        contact_id=contact.id,
+        user_id=user.id,
+        activity_type="call",
+        content=summary,
+        twilio_call_sid=req.call_sid,
+        call_duration_seconds=req.duration_seconds,
+        call_direction=req.direction,
+        call_outcome=req.outcome,
+        metadata_json=json.dumps({"logged_via": "dialer-modal"}),
+    )
+    db.add(activity)
+    await db.commit()
+    await db.refresh(activity)
+    return _activity_to_dict(activity)
+
+
+def _activity_to_dict(a: Activity) -> dict:
+    return {
+        "id": a.id,
+        "company_id": a.company_id,
+        "contact_id": a.contact_id,
+        "type": a.activity_type,
+        "content": a.content,
+        "twilio_call_sid": a.twilio_call_sid,
+        "call_duration_seconds": a.call_duration_seconds,
+        "call_direction": a.call_direction,
+        "call_outcome": a.call_outcome,
+        "recording_url": a.recording_url,
+        "created_at": a.created_at.isoformat() if a.created_at else None,
     }
