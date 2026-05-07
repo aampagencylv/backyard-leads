@@ -222,11 +222,11 @@ class GeneratedEmail(Base):
     contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=False)
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
 
-    # Step type: email = auto-sendable, others = BDR task
-    step_type = Column(String(20), default="email")  # email, linkedin, call, text, custom
+    # Step type: email/imessage = auto-sendable by engine; call/linkedin = creates BDR Task
+    step_type = Column(String(20), default="email")  # email, imessage, linkedin, call, text, custom
     subject = Column(String(500), nullable=False)  # email subject, or task title for non-email
-    body = Column(Text, nullable=False)  # email body, or LinkedIn message / call script / task notes
-    email_type = Column(String(50), default="cold")  # cold, follow_up_1, follow_up_2, breakup, linkedin_connect, linkedin_message, call, text
+    body = Column(Text, nullable=False)  # email body, iMessage text, LinkedIn message, call talk-track, task notes
+    email_type = Column(String(50), default="cold")  # cold, follow_up_1, follow_up_2, breakup, linkedin_connect, linkedin_message, call, text, imessage
     sequence_order = Column(Integer, default=1)
     send_delay_days = Column(Integer, default=0)
     scheduled_send_at = Column(DateTime, nullable=True)
@@ -234,6 +234,24 @@ class GeneratedEmail(Base):
     is_sent = Column(Boolean, default=False)  # for emails: actually sent. For tasks: completed by BDR.
     paused_at = Column(DateTime, nullable=True)
     problems_referenced = Column(Text)
+
+    # Sequence engine v1 (auto-execution)
+    # Skip conditions evaluated at run-time. JSON array of strings: 'no_email', 'no_phone',
+    # 'no_linkedin', 'opted_out', 'landline'. When any condition matches, the step is skipped
+    # (skipped_at set + Activity logged) and the next step continues normally.
+    skip_if_json = Column(Text, nullable=True)
+    skipped_at = Column(DateTime, nullable=True)
+    skip_reason = Column(String(80), nullable=True)
+    # auto_execute=True: engine fires the step automatically (email, imessage)
+    # auto_execute=False: engine creates a Task on the BDR (call, linkedin)
+    auto_execute = Column(Boolean, default=False, nullable=False)
+    # Group steps into named sequences on the same contact: 'main', 'post_call', 'reactivation'
+    sequence_label = Column(String(40), default="main", nullable=False)
+    # Channel-specific payload (e.g. iMessage already-personalized text, call talk-track template)
+    payload_json = Column(Text, nullable=True)
+    # Resulting Task id when auto_execute=False — lets us check completion to advance the sequence
+    task_id = Column(Integer, ForeignKey("tasks.id"), nullable=True)
+
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     contact = relationship("Contact", back_populates="emails")

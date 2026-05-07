@@ -1942,6 +1942,7 @@
                             ${(!c.email && (c.linkedin_url || (c.first_name && c.last_name))) ? `<button class="btn btn-secondary btn-xs" onclick="lookupContactEmail(${c.id})">Lookup Email</button>` : ''}
                             ${c.linkedin_url ? `<button class="btn btn-secondary btn-xs" onclick="refreshContactPosts(${c.id})">Posts</button>` : ''}
                             ${c.emails.length === 0 && c.email ? `<button class="btn btn-success btn-xs" onclick="generateContactSequence(${c.id})">Generate Sequence</button>` : ''}
+                            ${c.emails.length === 0 ? `<button class="btn btn-success btn-xs" onclick="start30DaySequence(${c.id})" title="Multi-channel 30-day cadence: email + LinkedIn + call + iMessage with auto-pause on reply">▶️ Start 30-day</button>` : ''}
                             ${c.emails.length > 0 ? `<button class="btn btn-danger btn-xs" onclick="deleteSequence(${c.id})">Delete Sequence</button>` : ''}
                             ${c.emails.length > 0 ? `<button class="btn btn-secondary btn-xs" onclick="regenerateSequence(${c.id})">Regenerate</button>` : ''}
                         </div>
@@ -1990,17 +1991,28 @@
 
         function renderEmailCard(e, contactId) {
             const stype = e.step_type || 'email';
-            const icon = stype === 'linkedin' ? '💼' : stype === 'call' ? '📞' : stype === 'text' ? '💬' : '📧';
-            const klass = e.is_sent ? 'email-card sent' : (e.paused_at ? 'email-card paused' : 'email-card');
+            const iconMap = { linkedin: '💼', call: '📞', text: '💬', imessage: '💬', email: '📧' };
+            const icon = iconMap[stype] || '•';
+            const isSkipped = !!e.skipped_at;
+            const klass = e.is_sent ? 'email-card sent'
+                        : isSkipped ? 'email-card paused'
+                        : (e.paused_at ? 'email-card paused' : 'email-card');
             const meta = e.is_sent ? 'sent' : '';
+            const auto = e.auto_execute === false ? ' · BDR TASK' : (stype === 'imessage' ? ' · auto' : '');
+            const stateLabel = e.is_sent ? '· DONE'
+                              : isSkipped ? `· SKIPPED (${escapeHtml(e.skip_reason || 'unknown')})`
+                              : (e.paused_at ? '· PAUSED' : `· Day ${e.send_delay_days||0}`);
+            const skipBadges = (e.skip_if || []).length > 0
+                ? ` <span style="font-size:9px;color:#888">[skip-if: ${(e.skip_if||[]).map(escapeHtml).join(', ')}]</span>`
+                : '';
             return `
                 <div class="${klass}" data-email-id="${e.id}">
                     <div class="meta ${meta}">
-                        <span>${icon} Step ${e.sequence_order} — ${escapeHtml((e.email_type||'').replace(/_/g,' '))} ${e.is_sent ? '· DONE' : (e.paused_at ? '· PAUSED' : `· Day ${e.send_delay_days||0}`)}${stype !== 'email' ? ' · BDR TASK' : ''}</span>
+                        <span>${icon} Step ${e.sequence_order} — ${escapeHtml((e.email_type||'').replace(/_/g,' '))} ${stateLabel}${auto}${skipBadges}</span>
                         <span>
-                            ${!e.is_sent ? `<button class="btn btn-secondary btn-xs" onclick="editEmail(${e.id})">Edit</button>` : ''}
-                            ${!e.is_sent && stype !== 'email' ? `<button class="btn btn-success btn-xs" onclick="completeStep(${e.id})">Mark Done</button>` : ''}
-                            ${!e.is_sent ? `<button class="btn btn-danger btn-xs" onclick="deleteEmail(${e.id})">Delete</button>` : ''}
+                            ${!e.is_sent && !isSkipped ? `<button class="btn btn-secondary btn-xs" onclick="editEmail(${e.id})">Edit</button>` : ''}
+                            ${!e.is_sent && !isSkipped && stype !== 'email' && stype !== 'imessage' ? `<button class="btn btn-success btn-xs" onclick="completeStep(${e.id})">Mark Done</button>` : ''}
+                            ${!e.is_sent && !isSkipped ? `<button class="btn btn-danger btn-xs" onclick="deleteEmail(${e.id})">Delete</button>` : ''}
                         </span>
                     </div>
                     <div class="subject">${stype === 'email' ? 'Subject: ' : ''}${escapeHtml(e.subject)}</div>
@@ -2335,6 +2347,31 @@
             } else if (data && data.detail) {
                 toast(data.detail);
             }
+        }
+
+        async function start30DaySequence(contactId) {
+            if (!confirm('Start the 30-day multi-channel cadence?\n\n' +
+                         '13 touches across 30 days: 5 email, 4 call, 3 iMessage, 2 LinkedIn.\n' +
+                         'Email + iMessage send automatically. Call + LinkedIn create BDR tasks.\n' +
+                         'Auto-pauses if the contact replies, picks up the phone, or unsubscribes.')) return;
+            toast('Generating drafts (Claude is writing the emails)…');
+            const data = await api(`/api/sequences/start/${contactId}`, { method: 'POST' });
+            if (data && data.created) {
+                toast(`✓ ${data.created}-step sequence queued. First send goes out in ~60s.`);
+                const c = await api(`/api/contacts/${contactId}`);
+                if (c) openCompanyDetail(c.company_id);
+            }
+        }
+
+        async function pauseSequence(contactId) {
+            const reason = prompt('Why are you pausing? (optional)') || 'manual';
+            const data = await api(`/api/sequences/pause/${contactId}?reason=${encodeURIComponent(reason)}`, { method: 'POST' });
+            if (data) { toast(`Paused ${data.paused} steps`); _refreshCurrentCompany(); }
+        }
+
+        async function resumeSequence(contactId) {
+            const data = await api(`/api/sequences/resume/${contactId}`, { method: 'POST' });
+            if (data) { toast(`Resumed ${data.resumed} steps (re-anchored to today)`); _refreshCurrentCompany(); }
         }
 
         async function deleteSequence(contactId) {

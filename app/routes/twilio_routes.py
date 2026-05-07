@@ -835,6 +835,18 @@ async def log_call(
     db.add(activity)
     await db.commit()
     await db.refresh(activity)
+
+    # Sequence-engine listener: a real conversation pauses the sequence, just
+    # like an email/iMessage reply does. Definition of "real": connected outcome
+    # AND duration > 30s (filters out voicemails / no-answers / 5-second misdials).
+    if contact and (req.outcome or "") == "connected" and (req.duration_seconds or 0) > 30:
+        from app.services.sequence_engine import pause_sequence
+        try:
+            await pause_sequence(db, contact.id, reason="connected call >30s")
+            await db.commit()
+        except Exception:
+            pass  # listener failure shouldn't block the call log
+
     return _activity_to_dict(activity)
 
 
