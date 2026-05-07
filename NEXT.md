@@ -448,6 +448,12 @@ Track when a prospect clicks through from an email to backyardmarketingpros.com,
   - Probably wire `Sign in with Google` for user auth too while we're in there
 - [ ] **Ad-hoc email composer (one-off send, outside any sequence)** — Steve confirmed (2026-05-07): for the case where a BDR talks to a prospect on the phone and needs to fire a custom follow-up that doesn't fit any existing sequence step. Should include light formatting (bold/italic/links/lists — not a full WYSIWYG, just the essentials). Likely a 📧 button on the contact card next to the call/message links → opens a composer modal pre-filled with To / signature / suggested templates, with a rich-text body. Sends through the same Resend path the sequence engine uses; logs an `email_sent` Activity to the timeline. Should also auto-wrap URLs through `/t/{token}` (Phase 1 click tracking) so we know if they read it.
 - [ ] **"Pause / Resume / Send next" controls on existing sequences are already there**; only the new ad-hoc composer is needed for the one-off case.
+- [ ] **Contacts page — full sort/filter/delete/merge**:
+  - **Sort**: name, company, created date, last-activity, email status, sequence status
+  - **Filter**: company, tag, has email / no email (existing) + has phone / no phone, phone-type (mobile/landline/voip), opted out, sequence status (active/paused/none), hot-lead in last 30 min, owner, city/state
+  - **Bulk delete** (admin) — checkbox multi-select like the Companies page
+  - **Merge contacts** — same pattern as Merge Company. Mirror the schema: a `POST /api/contacts/merge` that re-points all child rows (Activities, GeneratedEmails, TrackingLinks, PageViews, Tasks via task.contact_id, hot_lead Activities) to the kept contact, unions notes, deletes duplicates. Useful for: same person on two companies, multiple email addresses for one person, etc.
+  - Multi-select bar mirrors the Companies merge bar — sticky bottom-center, shows N selected with Merge / Delete / Clear actions
 - [ ] **Calendly/iClosed-style scheduling tool**, integrated with Google Calendar:
   - Reads BDR availability from Google Calendar
   - Configurable buffer / meeting length / windows per user
