@@ -688,6 +688,18 @@
                     </div>
                 </div>
 
+                <!-- Website Visitor Tracking (Phase 2 snippet to embed on bymp.com) -->
+                <div class="search-box" style="max-width:600px;margin-top:16px">
+                    <h3 style="margin:0 0 6px">Website Visitor Tracking <span style="font-size:11px;font-weight:400;color:var(--bmp-green)">· active</span></h3>
+                    <p style="font-size:12px;color:#888;margin-bottom:8px">Email links auto-wrap through <code>/t/{token}</code> and log clicks to the timeline (already on, no setup). To track <strong>full page views</strong> across the website after a click-through, paste this script into <code>backyardmarketingpros.com</code> just before <code>&lt;/body&gt;</code>:</p>
+                    <pre id="wvt-snippet-box" style="background:#1f2326;color:#e6e6e6;padding:10px 12px;border-radius:6px;font-size:11px;overflow-x:auto;margin:0">&lt;script src=&quot;https://prospector.backyardmarketingpros.com/track.js&quot; async&gt;&lt;/script&gt;</pre>
+                    <div style="display:flex;gap:6px;margin-top:6px">
+                        <button class="btn btn-secondary btn-sm" onclick="copyWvtSnippet()">📋 Copy snippet</button>
+                        <a href="/track.js" target="_blank" rel="noreferrer" class="btn btn-secondary btn-sm" style="text-decoration:none">View track.js</a>
+                    </div>
+                    <p style="font-size:11px;color:#888;margin-top:8px"><strong>Once embedded</strong>: every page a tracked visitor loads becomes a timeline entry. 3+ pages in 30 min = 🔥 Hot Lead Activity (visible on dashboard + contact). The snippet drops a 1-year first-party cookie; visitors can clear it any time.</p>
+                </div>
+
                 <!-- Twilio Numbers (admin only) -->
                 <div id="twilio-numbers-panel" class="search-box hidden" style="max-width:600px;margin-top:16px">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -2236,6 +2248,7 @@
                 sequence_resumed: '▶️', unsubscribed: '🚪',
                 imessage_sent: '💬', imessage_received: '💬', imessage_read: '👁️',
                 sms_sent: '📱', sms_received: '📱', sms_opt_out: '🛑', sms_opt_in: '✅',
+                hot_lead: '🔥', sequence_step_skipped: '⏭️',
             };
             return items.map(a => {
                 _callPanels[a.id] = a;  // stash for later expand
@@ -3599,6 +3612,14 @@
                 body: JSON.stringify({ blooio_api_key: v }),
             });
             if (data) { toast('Blooio key saved'); loadRuntimeConfig(); }
+        }
+
+        function copyWvtSnippet() {
+            const text = document.getElementById('wvt-snippet-box').textContent.trim();
+            navigator.clipboard.writeText(text).then(
+                () => toast('Snippet copied — paste before </body> on backyardmarketingpros.com'),
+                () => toast('Copy failed — manually select and copy from the box')
+            );
         }
 
         async function saveBlooioSigningSecret() {

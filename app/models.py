@@ -354,6 +354,28 @@ class TrackingLink(Base):
     click_count = Column(Integer, default=0, nullable=False)
 
 
+class PageView(Base):
+    """A page on backyardmarketingpros.com that a tracked visitor loaded.
+    Phase 2 of Website Visitor Tracking. Visitor is identified by the
+    bmp_visitor cookie that we drop when they click /t/{token}.
+
+    Same visitor_token can appear across multiple pageviews (one session)
+    and across multiple sessions (returning visitor). Sessions are derived
+    at query time: pageviews within 30 min of each other = one session."""
+    __tablename__ = "page_views"
+
+    id = Column(Integer, primary_key=True, index=True)
+    visitor_token = Column(String(32), index=True, nullable=False)  # the TrackingLink.token
+    contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=True, index=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=True, index=True)
+    url = Column(Text, nullable=False)
+    page_title = Column(String(500), nullable=True)
+    referrer = Column(Text, nullable=True)
+    user_agent = Column(String(300), nullable=True)
+    ip = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+
+
 class Tag(Base):
     __tablename__ = "tags"
 
