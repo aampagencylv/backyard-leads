@@ -40,26 +40,37 @@ async def start(
     user: User = Depends(get_current_user),
 ):
     """Materialize the 30-day default template into queued steps for this contact.
-    Refuses if a non-paused 'main' sequence already exists — use pause+resume or
-    cancel first to avoid duplicates."""
+
+    Idempotent: any existing unsent + non-skipped steps under the same label
+    are deleted first, then the new template is created. Calling this twice
+    in a row produces one sequence (not two), which is what callers expect —
+    'start' means 'reset to fresh template', not 'append'. SENT steps stay on
+    the timeline as historical record.
+    """
     contact = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
 
-    # Idempotency check: already has unsent main-sequence steps
+    # Wipe any existing pending steps under this label first. This makes the
+    # whole operation a single atomic "reset to fresh sequence" — no race
+    # condition where two near-simultaneous calls each see "no existing" and
+    # both end up creating duplicate sequences.
     existing = (await db.execute(
         select(GeneratedEmail).where(
             GeneratedEmail.contact_id == contact_id,
             GeneratedEmail.sequence_label == label,
             GeneratedEmail.is_sent == False,
-            GeneratedEmail.skipped_at.is_(None),
-        ).limit(1)
-    )).scalar_one_or_none()
-    if existing:
-        raise HTTPException(status_code=400, detail=f"Active '{label}' sequence already exists for this contact")
+        )
+    )).scalars().all()
+    deleted = 0
+    for row in existing:
+        await db.delete(row)
+        deleted += 1
+    if deleted:
+        await db.flush()
 
     created = await start_sequence_from_template(db, contact, sequence_label=label)
-    return {"created": created, "template_steps": len(DEFAULT_30DAY_TEMPLATE)}
+    return {"created": created, "deleted_pending": deleted, "template_steps": len(DEFAULT_30DAY_TEMPLATE)}
 
 
 @router.get("/contact/{contact_id}")

@@ -2479,9 +2479,8 @@
         }
 
         async function regenerateSequence(contactId) {
-            if (!confirm('Delete the current sequence and generate a new one?')) return;
-            await deleteSequence(contactId);
-            await generateContactSequence(contactId);
+            if (!confirm('Wipe the current pending steps and generate a fresh 30-day sequence?\n\nSent steps stay on the timeline as history. This call is atomic — pending steps are replaced in one operation.')) return;
+            await generateContactSequence(contactId);  // server-side: deletes pending + creates fresh in one tx
         }
 
         // ============ Add Company + CSV Upload ============
