@@ -17,6 +17,10 @@ from dataclasses import dataclass, field
 
 from app.services.website_intel import analyze_website, WebsiteAnalysis
 from app.services.local_seo_intel import analyze_local_seo, LocalSEOAnalysis
+from app.services.dataforseo import (
+    onpage_instant, serp_check, domain_ranked_keywords, backlinks_summary,
+    OnPageResult, SERPResult, DomainKeywordsResult, BacklinksResult,
+)
 
 
 @dataclass
@@ -72,6 +76,23 @@ class AuditReport:
     has_social_links: bool = False
     tech_stack: List[str] = field(default_factory=list)
     page_title: str = ""
+
+    # DataForSEO data
+    domain_rank: int = 0  # Like DA (0-1000 scale)
+    backlinks_total: int = 0
+    referring_domains: int = 0
+    total_ranked_keywords: int = 0
+    organic_traffic_estimate: int = 0
+    top_keywords: List[Dict] = field(default_factory=list)  # [{keyword, position, volume}]
+    serp_competitors: List[Dict] = field(default_factory=list)  # Top 5 from SERP
+    has_ai_overview: bool = False  # Google shows AI overview for their keyword
+    has_local_pack: bool = False
+    has_featured_snippet: bool = False
+    schema_types_detected: List[str] = field(default_factory=list)  # From on-page API
+    images_without_alt: int = 0
+    internal_links: int = 0
+    external_links: int = 0
+    has_sitemap: bool = False
 
     # Google presence
     rating: float = 0
@@ -142,6 +163,67 @@ async def generate_audit(
     report.service_page_count = seo_analysis.service_page_count
     report.citation_signals = seo_analysis.citation_signals
 
+    # DataForSEO enrichment (if credentials available)
+    from app.config import settings
+    dfs_login = settings.dataforseo_login
+    dfs_pass = settings.dataforseo_password
+
+    if dfs_login and dfs_pass:
+        # Backlinks + domain authority
+        try:
+            bl = await backlinks_summary(website, dfs_login, dfs_pass)
+            if bl:
+                report.domain_rank = bl.rank
+                report.backlinks_total = bl.backlinks_total
+                report.referring_domains = bl.referring_domains
+        except Exception:
+            pass
+
+        # Ranked keywords
+        try:
+            kw = await domain_ranked_keywords(website, dfs_login, dfs_pass, limit=10)
+            if kw:
+                report.total_ranked_keywords = kw.total_keywords
+                report.organic_traffic_estimate = kw.organic_traffic
+                report.top_keywords = [
+                    {"keyword": k.keyword, "position": k.position, "volume": k.search_volume}
+                    for k in kw.top_keywords
+                ]
+        except Exception:
+            pass
+
+        # SERP check — who ranks for their main keyword
+        if business_type and city:
+            try:
+                search_term = f"{business_type} {city} {state}".strip()
+                location_name = f"{city},{state},United States" if state else f"{city},United States"
+                serp = await serp_check(search_term, location_name, dfs_login, dfs_pass)
+                if serp:
+                    report.has_ai_overview = serp.has_ai_overview
+                    report.has_local_pack = serp.has_local_pack
+                    report.has_featured_snippet = serp.has_featured_snippet
+                    report.serp_competitors = [
+                        {"rank": c.rank, "domain": c.domain, "title": c.title,
+                         "url": c.url, "is_featured": c.is_featured_snippet}
+                        for c in serp.competitors[:5]
+                    ]
+            except Exception:
+                pass
+
+        # On-page technical audit
+        try:
+            onpage = await onpage_instant(website, dfs_login, dfs_pass)
+            if onpage:
+                report.schema_types_detected = onpage.schema_types
+                report.images_without_alt = onpage.images_without_alt
+                report.internal_links = onpage.internal_links
+                report.external_links = onpage.external_links
+                report.has_sitemap = onpage.has_sitemap
+                if onpage.word_count:
+                    report.word_count = onpage.word_count
+        except Exception:
+            pass
+
     # Merge all findings from both analyses
     all_findings = []
     for p in web_analysis.problems:
@@ -152,6 +234,38 @@ async def generate_audit(
             "severity": f.get("category", "medium"),
             "detail": f.get("detail", ""),
             "angle": f.get("talking_point", ""),
+        })
+
+    # Add DataForSEO-derived findings
+    if report.total_ranked_keywords == 0:
+        all_findings.append({
+            "type": "No ranked keywords",
+            "severity": "high",
+            "detail": "Your website doesn't rank for any keywords on Google",
+            "angle": "Your website isn't appearing in Google search results for any keywords. This means every potential customer searching for your services is finding your competitors instead.",
+        })
+    elif report.total_ranked_keywords < 10:
+        all_findings.append({
+            "type": "Very few ranked keywords",
+            "severity": "medium",
+            "detail": f"Only ranking for {report.total_ranked_keywords} keywords",
+            "angle": f"Your site only ranks for {report.total_ranked_keywords} keywords. Competitors in your market typically rank for 50-200+. Each keyword you're missing is a customer going somewhere else.",
+        })
+
+    if report.domain_rank > 0 and report.domain_rank < 20:
+        all_findings.append({
+            "type": "Low domain authority",
+            "severity": "medium",
+            "detail": f"Domain authority score: {report.domain_rank}",
+            "angle": f"Your website's authority score is {report.domain_rank}. This affects how Google and AI rank your content. Building quality backlinks from local directories and industry sites would improve this.",
+        })
+
+    if report.referring_domains < 10:
+        all_findings.append({
+            "type": "Few referring domains",
+            "severity": "medium",
+            "detail": f"Only {report.referring_domains} websites link to yours",
+            "angle": f"Only {report.referring_domains} other websites link to yours. AI search engines use backlinks as a trust signal. Chamber of Commerce, BBB, Houzz, and local news sites are easy wins.",
         })
 
     # Sort by severity
@@ -344,6 +458,29 @@ def render_report_html(report: AuditReport, token: str, public_url: str = "") ->
             <h2>Key Findings ({len(report.findings)})</h2>
             {findings_html}
         </div>
+
+        {'<!-- Search Visibility -->' + chr(10) + '<div class="section"><h2>Search Visibility</h2>' +
+        f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:16px">' +
+        f'<div style="background:#f8f9fa;padding:16px;border-radius:8px;text-align:center"><div style="font-size:28px;font-weight:700;color:#1B5E20">{report.total_ranked_keywords}</div><div style="font-size:12px;color:#666">Keywords ranking on Google</div></div>' +
+        f'<div style="background:#f8f9fa;padding:16px;border-radius:8px;text-align:center"><div style="font-size:28px;font-weight:700;color:#E65100">{report.organic_traffic_estimate}</div><div style="font-size:12px;color:#666">Est. monthly organic visits</div></div>' +
+        f'<div style="background:#f8f9fa;padding:16px;border-radius:8px;text-align:center"><div style="font-size:28px;font-weight:700">{report.referring_domains}</div><div style="font-size:12px;color:#666">Referring domains</div></div>' +
+        '</div>' +
+        (('<h3 style="font-size:14px;margin-bottom:8px">Your Top Keywords</h3><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="border-bottom:1px solid #ddd"><th style="padding:6px;text-align:left">Keyword</th><th style="padding:6px;text-align:center">Position</th><th style="padding:6px;text-align:right">Monthly Searches</th></tr></thead><tbody>' +
+        ''.join(f'<tr style="border-bottom:1px solid #eee"><td style="padding:6px">{_esc(k.get("keyword",""))}</td><td style="padding:6px;text-align:center">{k.get("position","-")}</td><td style="padding:6px;text-align:right">{k.get("volume",0):,}</td></tr>' for k in report.top_keywords[:7]) +
+        '</tbody></table>') if report.top_keywords else '<p style="font-size:13px;color:#888">No keyword rankings detected — your website is not appearing in Google search results.</p>') +
+        (f'<div style="margin-top:12px;padding:12px;background:#FFF8F0;border-radius:8px;font-size:13px"><strong>Google SERP Features for your market:</strong> ' +
+        (' AI Overview appears' if report.has_ai_overview else '') +
+        (' | Local Pack appears' if report.has_local_pack else '') +
+        (' | Featured Snippet appears' if report.has_featured_snippet else '') +
+        ('' if (report.has_ai_overview or report.has_local_pack or report.has_featured_snippet) else 'Standard organic results') +
+        '</div>' if report.serp_competitors else '') +
+        '</div>' if (report.total_ranked_keywords or report.top_keywords or report.serp_competitors) else ''}
+
+        {('<!-- Who Ranks Above You -->' + chr(10) + '<div class="section"><h2>Who Ranks Above You</h2>' +
+        f'<p style="font-size:13px;color:#666;margin-bottom:12px">Top results for <strong>"{_esc(report.business_type)} {_esc(report.city)}"</strong> on Google:</p>' +
+        '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="border-bottom:1px solid #ddd"><th style="padding:6px;text-align:left">#</th><th style="padding:6px;text-align:left">Website</th><th style="padding:6px;text-align:left">Title</th></tr></thead><tbody>' +
+        ''.join(f'<tr style="border-bottom:1px solid #eee"><td style="padding:6px;font-weight:600">{c.get("rank","")}</td><td style="padding:6px;color:#0077B5">{_esc(c.get("domain",""))}</td><td style="padding:6px;color:#555">{_esc(c.get("title","")[:60])}</td></tr>' for c in report.serp_competitors[:5]) +
+        '</tbody></table></div>') if report.serp_competitors else ''}
 
         <!-- Competitor CTA -->
         <div class="cta-box">

@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     google_maps_api_key: str = ""
     hunter_api_key: str = ""
     netrows_api_key: str = ""
+    dataforseo_login: str = ""
+    dataforseo_password: str = ""
     resend_api_key: str = ""
     resend_webhook_secret: str = ""
     send_domain: str = "go.backyardmarketingpros.com"
