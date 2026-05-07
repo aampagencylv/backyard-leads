@@ -3366,32 +3366,19 @@
         }
 
         async function testBlooioConnection() {
-            const r = await fetch('/api/blooio/test', { headers: { 'Authorization': 'Bearer ' + localStorage.getItem('bmp_token') } });
-            if (r.ok) {
-                const data = await r.json();
+            const data = await api('/api/blooio/test');
+            if (data && data.success) {
                 const num = data.primary_number || (data.numbers && data.numbers[0]) || '(no number assigned)';
                 toast(`✓ Blooio connected. Sending from ${num}.`);
-            } else {
-                let msg = `Status ${r.status}`;
-                try { msg = (await r.json()).detail || msg; } catch (e) {}
-                toast('Blooio test failed: ' + msg);
             }
         }
 
         async function setupBlooioWebhook() {
             if (!confirm('Register the inbound webhook with Blooio?\n\nThis is idempotent — if it\'s already registered, nothing changes. Other webhooks (e.g. your GHL integration) are left untouched.')) return;
-            const r = await fetch('/api/blooio/webhook/setup', {
-                method: 'POST',
-                headers: { 'Authorization': 'Bearer ' + localStorage.getItem('bmp_token') },
-            });
-            if (r.ok) {
-                const data = await r.json();
+            const data = await api('/api/blooio/webhook/setup', { method: 'POST' });
+            if (data) {
                 if (data.already_registered) toast('✓ Webhook already registered — left in place.');
                 else toast('✓ Webhook registered with Blooio.');
-            } else {
-                let msg = `Status ${r.status}`;
-                try { msg = (await r.json()).detail || msg; } catch (e) {}
-                toast('Webhook setup failed: ' + msg);
             }
         }
 
