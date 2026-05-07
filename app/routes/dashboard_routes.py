@@ -242,12 +242,26 @@ async def get_dashboard(
         for a, cname, ufirst, ulast in feed_rows
     ]
 
+    # MRR / ARR
+    potential_mrr = pipeline_value  # monthly value of all open deals
+    weighted_mrr = weighted_forecast
+    potential_arr = potential_mrr * 12
+    weighted_arr = weighted_mrr * 12
+    won_mrr = won_mtd_value
+    won_arr = won_mrr * 12
+
     return {
         "kpis": {
             "pipeline_value": round(pipeline_value, 2),
             "weighted_forecast": round(weighted_forecast, 2),
+            "potential_mrr": round(potential_mrr, 2),
+            "weighted_mrr": round(weighted_mrr, 2),
+            "potential_arr": round(potential_arr, 2),
+            "weighted_arr": round(weighted_arr, 2),
             "won_mtd_value": round(won_mtd_value, 2),
             "won_mtd_count": won_mtd_count,
+            "won_mrr": round(won_mrr, 2),
+            "won_arr": round(won_arr, 2),
             "hot_leads_count": len(hot_leads),
             "open_tasks_count": open_tasks_count,
             "sent_this_week": sent_this_week,

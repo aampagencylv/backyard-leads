@@ -197,7 +197,8 @@ async def request_competitor_comparison(
 ):
     """
     When prospect clicks "See Your Competitive Comparison" in the report.
-    Creates a CRM task for the BDR team and shows a confirmation page.
+    Runs real-time competitor audits and generates a side-by-side comparison.
+    Also creates a CRM task for the BDR team.
     """
     report = (await db.execute(
         select(AuditReportModel).where(AuditReportModel.token == token)
@@ -209,27 +210,79 @@ async def request_competitor_comparison(
     company = (await db.execute(select(Company).where(Company.id == report.company_id))).scalar_one_or_none()
 
     if company:
-        # Log the engagement
         db.add(Activity(
             company_id=company.id,
             activity_type="competitor_comparison_requested",
             content=f"Prospect requested competitive comparison from audit report",
         ))
 
-        # Create urgent task for BDR
         if company.assigned_to:
             db.add(Task(
                 company_id=company.id,
                 user_id=company.assigned_to,
-                description=f"URGENT: {company.name} wants to see competitive comparison — high-intent signal, call them",
+                description=f"URGENT: {company.name} viewed competitive comparison — high-intent, call them",
                 due_date=datetime.now(timezone.utc),
             ))
 
-        # Qualify the lead if not already
         if company.status in ("new", "pursuing", "sequencing"):
             company.status = "qualified"
 
         await db.commit()
+
+    # Try to generate a real competitor comparison report
+    try:
+        from app.services.competitor_report import audit_competitor, render_comparison_html
+        from app.services.dataforseo import serp_check
+        import json
+
+        dfs_login = settings.dataforseo_login
+        dfs_pass = settings.dataforseo_password
+
+        # Build prospect data from stored audit
+        prospect = {
+            "name": company.name if company else "Your Business",
+            "website": company.website if company else "",
+            "ai_findability_score": report.ai_findability_score,
+            "content_citability_score": report.content_citability_score,
+            "local_seo_score": report.local_seo_score,
+            "ranked_keywords": 0,
+            "referring_domains": 0,
+            "domain_rank": 0,
+            "has_llms_txt": False,
+            "has_faq_schema": False,
+            "has_local_business_schema": False,
+        }
+
+        # Get top competitors from SERP
+        competitors = []
+        if dfs_login and dfs_pass and company and company.business_type and company.city:
+            search_term = f"{company.business_type} {company.city} {company.state or ''}".strip()
+            location = f"{company.city},{company.state},United States" if company.state else f"{company.city},United States"
+
+            serp = await serp_check(search_term, location, dfs_login, dfs_pass)
+            if serp and serp.competitors:
+                # Filter out the prospect's own domain
+                prospect_domain = (company.website or "").replace("https://", "").replace("http://", "").split("/")[0].replace("www.", "")
+                others = [c for c in serp.competitors if prospect_domain not in c.domain][:3]
+
+                for comp in others:
+                    url = comp.url if comp.url.startswith("http") else f"https://{comp.domain}"
+                    comp_data = await audit_competitor(url, comp.title or comp.domain, dfs_login, dfs_pass)
+                    competitors.append(comp_data)
+
+        if competitors:
+            html = render_comparison_html(
+                prospect=prospect,
+                competitors=competitors,
+                company_name=company.name if company else "",
+                city=company.city if company else "",
+                state=company.state if company else "",
+                business_type=company.business_type if company else "",
+            )
+            return HTMLResponse(html)
+
+    except Exception:
+        pass  # Fall through to confirmation page if anything fails
 
     # Show a branded confirmation page
     return HTMLResponse(f"""<!DOCTYPE html>

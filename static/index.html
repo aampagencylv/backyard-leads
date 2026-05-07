@@ -344,11 +344,15 @@
                 <div class="kpi-strip" id="kpi-strip">
                     <div class="kpi-tile" onclick="showPage('pipeline')">
                         <div class="kpi-value orange" id="kpi-pipeline-value">—</div>
-                        <div class="kpi-label">Pipeline Value</div>
+                        <div class="kpi-label">Potential MRR</div>
                     </div>
                     <div class="kpi-tile" onclick="showPage('pipeline')">
                         <div class="kpi-value" id="kpi-forecast">—</div>
-                        <div class="kpi-label">Weighted Forecast</div>
+                        <div class="kpi-label">Weighted MRR</div>
+                    </div>
+                    <div class="kpi-tile" onclick="showPage('pipeline')">
+                        <div class="kpi-value" id="kpi-arr" style="color:var(--bmp-green)">—</div>
+                        <div class="kpi-label">Weighted ARR</div>
                     </div>
                     <div class="kpi-tile">
                         <div class="kpi-value" id="kpi-won-mtd">—</div>
@@ -364,7 +368,7 @@
                     </div>
                     <div class="kpi-tile">
                         <div class="kpi-value" id="kpi-sent-week">—</div>
-                        <div class="kpi-label">Emails Sent This Week</div>
+                        <div class="kpi-label">Emails This Week</div>
                     </div>
                 </div>
 
@@ -1224,8 +1228,9 @@
 
             // KPIs
             const k = data.kpis;
-            document.getElementById('kpi-pipeline-value').textContent = fmtMoney(k.pipeline_value);
-            document.getElementById('kpi-forecast').textContent = fmtMoney(k.weighted_forecast);
+            document.getElementById('kpi-pipeline-value').textContent = fmtMoney(k.potential_mrr || k.pipeline_value);
+            document.getElementById('kpi-forecast').textContent = fmtMoney(k.weighted_mrr || k.weighted_forecast);
+            document.getElementById('kpi-arr').textContent = fmtMoney(k.weighted_arr || 0);
             document.getElementById('kpi-won-mtd').innerHTML = `${fmtMoney(k.won_mtd_value)} <span style="font-size:12px;color:#888;font-weight:400">(${k.won_mtd_count})</span>`;
             document.getElementById('kpi-hot-leads').textContent = k.hot_leads_count;
             document.getElementById('kpi-tasks').textContent = k.open_tasks_count;
