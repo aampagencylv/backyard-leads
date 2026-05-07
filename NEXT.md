@@ -423,6 +423,91 @@ Track when a prospect clicks through from an email to backyardmarketingpros.com,
 
 ---
 
+### 🔥 iClosed Integration — Gated Competitor Report + Scheduling
+
+**Context:** Competitor report is gated behind scheduling a call. Prospect sees a blurred preview, must book to unlock. Uses iClosed API instead of Calendly.
+
+**API:** `https://developer.iclosed.io/` — Bearer token auth (`iclosed_<key>`)
+- `GET /v1/events/timeSlots` — get available slots
+- `POST /v1/eventCalls` — book a call
+- `POST /v1/contacts` — create/upsert contact
+- Webhooks for real-time booking notifications
+
+**Gate page flow (/report/{token}/compare):**
+1. Background starts generating competitor report immediately
+2. Page shows blurred comparison table preview
+3. Below blur: "Schedule a 15-min call to walk through your results"
+4. iClosed booking widget embedded (or custom form that calls iClosed API)
+5. When prospect submits (name, phone, email, picks time):
+   - Creates/upserts contact in iClosed
+   - Books the call via `POST /v1/eventCalls`
+   - Updates contact in Prospector CRM (phone number, email)
+   - Un-gates the report — full comparison displayed
+   - BDR gets URGENT notification with phone number + meeting time
+   - Activity logged: "Brett booked a call for Tue 2pm to review competitor report"
+6. Repeat visits (after booking) show the full report immediately
+
+**Why iClosed over Calendly:** Team already uses it, has API for programmatic booking, can create contacts and log outcomes, webhooks for real-time notification.
+
+---
+
+### 🔥 Conditional Sequence Logic (if/then for channels)
+
+**Problem:** Sequences include LinkedIn and SMS steps, but many contacts don't have LinkedIn URLs or cell phones. Sending to channels we don't have data for is pointless.
+
+**Solution:** Skip conditions already exist on GeneratedEmail model (`skip_if_json`, `auto_execute`). Need to wire them properly:
+
+**Rules:**
+- SMS/iMessage step → skip if no phone number (`skip_if: ['no_phone']`)
+- SMS/iMessage step → skip if phone_type = 'landline' (`skip_if: ['landline']`)
+- LinkedIn step → skip if no linkedin_url (`skip_if: ['no_linkedin']`)
+- Email step → skip if no email (`skip_if: ['no_email']`)
+- Any step → skip if contact unsubscribed/opted out
+
+**Dynamic channel addition:**
+- When a phone number is ADDED to a contact after sequence was created:
+  - Check if there are skipped SMS steps → un-skip them (clear `skipped_at`)
+  - Or: auto-insert a new SMS step if the sequence didn't have one
+- Same for LinkedIn URL — adding it could trigger adding a LinkedIn step
+
+**Implementation:**
+- Sequence engine already evaluates `skip_if_json` — just need to populate it during sequence generation
+- Add a contact update hook: when phone/LinkedIn is updated, check for skipped steps
+
+---
+
+### Custom Fields for Companies + Contacts
+
+**Company custom fields:**
+- Total annual revenue (number)
+- Notes (text, unlimited)
+- Facebook URL
+- Instagram URL
+- Twitter/X URL
+- Source (how we found them — Google Maps, referral, upload, manual)
+- Industry sub-category
+
+**Contact custom fields:**
+- Cell phone (separate from office phone)
+- Personal email (separate from work email)
+- Facebook URL
+- Notes
+- Preferred contact method (email, phone, text, LinkedIn)
+- Best time to call
+
+**Implementation options:**
+1. **JSON blob** — `custom_fields_json TEXT` on Company and Contact. Flexible, no migrations needed for new fields. Query with JSON functions.
+2. **Dedicated columns** — one migration per field but better indexing/filtering.
+3. **EAV table** — `custom_field_values(entity_type, entity_id, field_name, field_value)`. Most flexible but hardest to query.
+
+**Recommendation:** Hybrid — dedicated columns for the most-used fields (revenue, cell phone, social URLs, notes) and a JSON blob for ad-hoc custom fields users create in the UI.
+
+**Netrows enrichment for social URLs:**
+- `/companies/details` sometimes returns social links
+- Facebook, Instagram, Twitter could auto-populate during enrichment
+
+---
+
 ### Automated Competitor Comparison Report
 When prospect clicks "See Your Competitive Comparison" in the audit report:
 1. System automatically runs audits on the top 3 SERP competitors (we already have them from DataForSEO)
