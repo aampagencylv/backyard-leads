@@ -358,3 +358,54 @@ async def forgot_password(
         pass
 
     return {"message": "If that email exists, a reset link has been sent."}
+
+
+# ============ BDR Reassignment ============
+
+class ReassignRequest(BaseModel):
+    from_user_id: int
+    to_user_id: int
+
+
+@router.post("/users/reassign")
+async def reassign_user(
+    req: ReassignRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    """Bulk reassign all companies, deals, and tasks from one user to another."""
+    from app.models import Company, Deal, Task
+    from sqlalchemy import update
+
+    from_user = (await db.execute(select(User).where(User.id == req.from_user_id))).scalar_one_or_none()
+    to_user = (await db.execute(select(User).where(User.id == req.to_user_id))).scalar_one_or_none()
+    if not from_user:
+        raise HTTPException(status_code=404, detail="Source user not found")
+    if not to_user:
+        raise HTTPException(status_code=404, detail="Target user not found")
+
+    companies_result = await db.execute(
+        update(Company).where(Company.assigned_to == req.from_user_id).values(assigned_to=req.to_user_id)
+    )
+    deals_result = await db.execute(
+        update(Deal).where(
+            Deal.assigned_to == req.from_user_id,
+            Deal.stage.notin_(["closed_won", "closed_lost"]),
+        ).values(assigned_to=req.to_user_id)
+    )
+    tasks_result = await db.execute(
+        update(Task).where(
+            Task.user_id == req.from_user_id,
+            Task.completed == False,
+        ).values(user_id=req.to_user_id)
+    )
+
+    await db.commit()
+
+    return {
+        "from": from_user.full_name,
+        "to": to_user.full_name,
+        "companies_moved": companies_result.rowcount,
+        "deals_moved": deals_result.rowcount,
+        "tasks_moved": tasks_result.rowcount,
+    }

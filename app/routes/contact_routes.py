@@ -37,11 +37,17 @@ router = APIRouter(prefix="/api", tags=["contacts"])
 async def list_all_contacts(
     company_status: Optional[str] = None,
     has_email: Optional[bool] = None,
-    has_phone: Optional[bool] = None,  # NEW: power-dialer filter
+    has_phone: Optional[bool] = None,
+    rep_id: Optional[int] = None,  # Admin filter: show only this rep's contacts
+    search: Optional[str] = None,  # Search by name or email
+    email_status: Optional[str] = None,  # valid, invalid, bounced, unknown
+    has_sequence: Optional[bool] = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """List every contact across all companies, with company name and sequence status."""
+    """List contacts with multi-tenant scoping and advanced filters."""
+    from app.scoping import scope_contacts
+
     email_count_sq = (
         select(
             GeneratedEmail.contact_id,
@@ -57,6 +63,10 @@ async def list_all_contacts(
         .outerjoin(email_count_sq, Contact.id == email_count_sq.c.contact_id)
         .order_by(Contact.updated_at.desc())
     )
+
+    # Multi-tenant scoping
+    query = scope_contacts(query, user, rep_id)
+
     if company_status:
         query = query.where(Company.status == company_status)
     if has_email is True:
@@ -68,6 +78,23 @@ async def list_all_contacts(
         query = query.where(Contact.phone.isnot(None), Contact.phone != "")
     elif has_phone is False:
         query = query.where((Contact.phone.is_(None)) | (Contact.phone == ""))
+
+    if search:
+        pattern = f"%{search}%"
+        from sqlalchemy import or_
+        query = query.where(or_(
+            (Contact.first_name + " " + Contact.last_name).ilike(pattern),
+            Contact.email.ilike(pattern),
+            Company.name.ilike(pattern),
+        ))
+
+    if email_status:
+        query = query.where(Contact.email_status == email_status)
+
+    if has_sequence is True:
+        query = query.where(email_count_sq.c.email_count > 0)
+    elif has_sequence is False:
+        query = query.where(func.coalesce(email_count_sq.c.email_count, 0) == 0)
 
     rows = (await db.execute(query)).all()
     return [

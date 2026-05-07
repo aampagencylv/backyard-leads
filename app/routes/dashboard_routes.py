@@ -67,9 +67,9 @@ async def get_dashboard(
     cutoff_stale = now - timedelta(days=STALE_DEAL_DAYS)
 
     # ---------- Pipeline-by-stage ----------
-    deals_open_or_done = (await db.execute(
-        select(Deal).where(Deal.pipeline == "default")
-    )).scalars().all()
+    from app.scoping import scope_deals, scope_companies
+    deal_query = scope_deals(select(Deal).where(Deal.pipeline == "default"), user)
+    deals_open_or_done = (await db.execute(deal_query)).scalars().all()
 
     by_stage: dict[str, dict] = {s: {"count": 0, "value": 0.0} for s in PIPELINE_STAGES}
     pipeline_value = 0.0

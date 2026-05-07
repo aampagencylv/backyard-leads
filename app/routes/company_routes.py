@@ -50,11 +50,13 @@ async def list_companies(
     max_reviews: Optional[int] = None,
     min_rating: Optional[float] = None,
     has_website: Optional[bool] = None,
+    rep_id: Optional[int] = None,  # Admin filter: show only this rep's companies
     sort_by: str = "reviews",
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    query = select(Company)
+    from app.scoping import scope_companies
+    query = scope_companies(select(Company), user, rep_id)
     if search_id:
         query = query.where(Company.search_id == search_id)
     if status:

@@ -243,10 +243,9 @@ async def pipeline_view(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Return deals grouped by stage for the kanban — open stages only by default."""
-    query = select(Deal).where(Deal.pipeline == pipeline)
-    if owner:
-        query = query.where(Deal.assigned_to == owner)
+    """Return deals grouped by stage for the kanban — scoped by user role."""
+    from app.scoping import scope_deals
+    query = scope_deals(select(Deal).where(Deal.pipeline == pipeline), user, owner)
     result = await db.execute(query.order_by(Deal.updated_at.desc()))
     deals = result.scalars().all()
 
@@ -300,11 +299,14 @@ async def forecast(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Simple forecast: weighted sum of open deals. value × probability / 100."""
+    """Forecast scoped by user role. Reps see their forecast only."""
+    from app.scoping import scope_deals
     open_stages = ("prospecting", "qualified", "proposal", "negotiation")
-    result = await db.execute(
-        select(Deal).where(Deal.pipeline == pipeline, Deal.stage.in_(open_stages))
+    query = scope_deals(
+        select(Deal).where(Deal.pipeline == pipeline, Deal.stage.in_(open_stages)),
+        user,
     )
+    result = await db.execute(query)
     deals = result.scalars().all()
 
     # MRR calculations
