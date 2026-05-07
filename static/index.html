@@ -1829,7 +1829,7 @@
                     <div style="text-align:center;padding:20px;background:#f8f9fa;border-radius:8px">
                         ${contact.email ? `
                             <p style="color:#666;margin-bottom:8px">No sequence yet for ${escapeHtml(contact.name || contact.email)}</p>
-                            <button class="btn btn-success" onclick="generateContactSequence(${contact.id})">Generate Sequence</button>
+                            <button class="btn btn-success" onclick="generateContactSequence(${contact.id})">▶️ Generate 30-day Sequence</button>
                         ` : `
                             <p style="color:#888">This contact has no email address.</p>
                             <p style="font-size:12px;color:#aaa">Add an email first, then generate a sequence.</p>
@@ -1941,8 +1941,7 @@
                             ${!c.email ? `<button class="btn btn-secondary btn-xs" onclick="setContactEmail(${c.id})">Set Email</button>` : ''}
                             ${(!c.email && (c.linkedin_url || (c.first_name && c.last_name))) ? `<button class="btn btn-secondary btn-xs" onclick="lookupContactEmail(${c.id})">Lookup Email</button>` : ''}
                             ${c.linkedin_url ? `<button class="btn btn-secondary btn-xs" onclick="refreshContactPosts(${c.id})">Posts</button>` : ''}
-                            ${c.emails.length === 0 && c.email ? `<button class="btn btn-success btn-xs" onclick="generateContactSequence(${c.id})">Generate Sequence</button>` : ''}
-                            ${c.emails.length === 0 ? `<button class="btn btn-success btn-xs" onclick="start30DaySequence(${c.id})" title="Multi-channel 30-day cadence: email + LinkedIn + call + iMessage with auto-pause on reply">▶️ Start 30-day</button>` : ''}
+                            ${c.emails.length === 0 ? `<button class="btn btn-success btn-xs" onclick="generateContactSequence(${c.id})" title="13 touches across 30 days: email + call + LinkedIn + iMessage with auto-pause on reply">▶️ Generate 30-day Sequence</button>` : ''}
                             ${c.emails.length > 0 ? `<button class="btn btn-danger btn-xs" onclick="deleteSequence(${c.id})">Delete Sequence</button>` : ''}
                             ${c.emails.length > 0 ? `<button class="btn btn-secondary btn-xs" onclick="regenerateSequence(${c.id})">Regenerate</button>` : ''}
                         </div>
@@ -2419,26 +2418,15 @@
             return enrichContactsFromCompany(id);
         }
         async function generateContactSequence(contactId) {
-            toast('Generating sequence...');
-            const data = await api(`/api/contacts/${contactId}/generate-sequence`, { method: 'POST' });
-            if (data && data.emails_created) {
-                toast(`Generated ${data.emails_created} steps.`);
-                const c = await api(`/api/contacts/${contactId}`);
-                if (c) openCompanyDetail(c.company_id);
-            } else if (data && data.detail) {
-                toast(data.detail);
-            }
-        }
-
-        async function start30DaySequence(contactId) {
-            if (!confirm('Start the 30-day multi-channel cadence?\n\n' +
-                         '13 touches across 30 days: 5 email, 4 call, 3 iMessage, 2 LinkedIn.\n' +
-                         'Email + iMessage send automatically. Call + LinkedIn create BDR tasks.\n' +
-                         'Auto-pauses if the contact replies, picks up the phone, or unsubscribes.')) return;
-            toast('Generating drafts (Claude is writing the emails)…');
+            // Now defaults to the 30-day multi-channel cadence: 13 touches —
+            // 5 email + 4 call + 3 iMessage + 2 LinkedIn — with auto-pause
+            // listeners on reply/connected-call/opt-out. The old email-only
+            // generate-sequence endpoint still exists for back-compat but is
+            // no longer wired to any button.
+            toast('Generating 30-day multi-channel sequence (Claude drafting emails)…');
             const data = await api(`/api/sequences/start/${contactId}`, { method: 'POST' });
             if (data && data.created) {
-                toast(`✓ ${data.created}-step sequence queued. First send goes out in ~60s.`);
+                toast(`✓ ${data.created}-step sequence queued. First send fires within 60s.`);
                 const c = await api(`/api/contacts/${contactId}`);
                 if (c) openCompanyDetail(c.company_id);
             }
