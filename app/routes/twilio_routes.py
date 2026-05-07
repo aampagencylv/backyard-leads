@@ -704,6 +704,8 @@ class LogCallRequest(BaseModel):
     call_sid: str
     contact_id: Optional[int] = None  # null when calling a company main line w/o primary contact
     company_id: Optional[int] = None  # required when contact_id is null
+    to_number: Optional[str] = None   # the number we actually dialed (improves timeline summary)
+    is_main_line: bool = False        # true when user clicked the company's main phone
     duration_seconds: int = 0
     direction: str = "outbound"  # outbound | inbound
     outcome: Optional[str] = None  # connected, voicemail, no_answer, ...
@@ -728,20 +730,58 @@ async def log_call(
     elif not company_id:
         raise HTTPException(status_code=400, detail="Either contact_id or company_id is required")
 
+    # Build a clear summary line — "Called {who} at {number} — outcome (mm:ss)"
+    company = None
+    if company_id:
+        company = (await db.execute(select(Company).where(Company.id == company_id))).scalar_one_or_none()
+
+    if req.is_main_line and company:
+        who = f"{company.name} main line"
+    elif contact:
+        who = contact.full_name or contact.email or "the prospect"
+    elif company:
+        who = company.name
+    else:
+        who = "unknown"
+
+    dialed = normalize_phone_e164(req.to_number) or req.to_number or ""
+    duration_str = ""
+    if req.duration_seconds:
+        m, s = divmod(req.duration_seconds, 60)
+        duration_str = f" ({m}:{s:02d})"
+
+    outcome_words = {
+        "connected": "connected",
+        "voicemail": "left voicemail",
+        "no_answer": "no answer",
+        "busy": "line busy",
+        "wrong_number": "wrong number",
+        "gatekeeper": "reached gatekeeper",
+        "declined": "declined",
+        "failed": "failed",
+    }
+    outcome_str = outcome_words.get(req.outcome or "", "")
+    auto_summary_parts = [f"Called {who}"]
+    if dialed:
+        auto_summary_parts.append(f"at {dialed}")
+    head = " ".join(auto_summary_parts)
+    if outcome_str:
+        head = f"{head} — {outcome_str}{duration_str}"
+    elif duration_str:
+        head = f"{head}{duration_str}"
+
+    # If user wrote notes, attach them BELOW the summary line so the timeline
+    # always identifies who/what was called even if the user typed something
+    # tangential.
+    if req.notes:
+        summary = f"{head}\n{req.notes}"
+    else:
+        summary = head
+
     # Don't double-create — the Twilio status webhook may have made a stub
     existing = (await db.execute(
         select(Activity).where(Activity.twilio_call_sid == req.call_sid)
     )).scalar_one_or_none()
-
-    summary = req.notes or {
-        "connected": "Call connected — see notes",
-        "voicemail": "Left a voicemail",
-        "no_answer": "No answer",
-        "busy": "Line busy",
-        "wrong_number": "Wrong number",
-        "gatekeeper": "Reached gatekeeper",
-        "declined": "Declined / not interested",
-    }.get(req.outcome or "", "Call logged")
 
     if existing:
         if contact:

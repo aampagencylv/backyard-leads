@@ -3485,32 +3485,37 @@
             if (c) startCall(c);
         }
 
-        // Click on a COMPANY's main phone — finds the primary contact (so the
-        // call logs to a real person on the timeline). If no primary contact
-        // exists, dials the company phone with no contact attribution.
+        // Click on a COMPANY's main phone — always dials the company main line
+        // (not redirected to a contact). If a primary contact is known, we
+        // attribute the call to them on the timeline; otherwise it's just a
+        // company-level activity.
         async function callCompany(companyId, companyPhone) {
             const detail = await api(`/api/companies/${companyId}/full`);
             if (!detail) return;
-            const primary = (detail.contacts || []).find(c => c.is_primary && (c.phone || c.email));
-            if (primary && primary.phone) {
-                primary.company_id = detail.id;
-                primary.company_name = detail.name;
-                startCall(primary);
-                return;
-            }
-            // No primary contact with phone — dial the company main number directly
+            const primary = (detail.contacts || []).find(c => c.is_primary);
+            const dialedNumber = companyPhone || detail.phone;
+            if (!dialedNumber) { toast('No phone number on this company'); return; }
             const stub = {
-                id: null,
-                first_name: '', last_name: '',
-                name: detail.name + ' (main line)',
-                title: '',
-                phone: companyPhone || detail.phone,
-                company_phone: companyPhone || detail.phone,
+                // Activity attribution — primary contact if known, else company-only
+                id: primary ? primary.id : null,
+                first_name: primary ? primary.first_name : '',
+                last_name: primary ? primary.last_name : '',
+                name: primary
+                    ? `${primary.name} (main line)`
+                    : `${detail.name} (main line)`,
+                title: primary ? primary.title : '',
+                // The actual number we dial — ALWAYS the company main, never
+                // redirected to the primary contact's direct phone.
+                phone: dialedNumber,
+                company_phone: dialedNumber,
                 company_id: detail.id,
                 company_name: detail.name,
-                email: '',
+                email: primary ? primary.email : '',
+                // Hint to the dialer that this is a company main-line call,
+                // so timeline notes show "Called {Company} (main line)" not
+                // "Called {Primary contact}"
+                _is_main_line: true,
             };
-            if (!stub.phone) { toast('No phone number on this company'); return; }
             startCall(stub);
         }
 
@@ -3711,6 +3716,11 @@
                         call_sid: ctx.sid,
                         contact_id: ctx.contact.id || null,
                         company_id: ctx.contact.company_id || null,
+                        // The actual number we dialed (helps the backend
+                        // produce a clear timeline summary like
+                        // "Called Linda at +14803383369")
+                        to_number: ctx.contact.phone || ctx.contact.company_phone || null,
+                        is_main_line: !!ctx.contact._is_main_line,
                         duration_seconds: duration,
                         direction: 'outbound',
                         outcome: outcome || (duration > 0 ? 'connected' : 'no_answer'),
