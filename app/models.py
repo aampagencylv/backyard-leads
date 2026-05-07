@@ -44,7 +44,7 @@ class User(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     searches = relationship("Search", back_populates="user")
-    activities = relationship("Activity", back_populates="user")
+    activities = relationship("Activity", back_populates="user", foreign_keys="[Activity.user_id]")
     tasks = relationship("Task", back_populates="user")
 
     @property
@@ -294,7 +294,7 @@ class Activity(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     company = relationship("Company", back_populates="activities")
-    user = relationship("User", back_populates="activities")
+    user = relationship("User", back_populates="activities", foreign_keys=[user_id])
 
 
 class RuntimeConfig(Base):
