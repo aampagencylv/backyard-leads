@@ -342,7 +342,8 @@ async def voice_recording(request: Request):
 
 class LogCallRequest(BaseModel):
     call_sid: str
-    contact_id: int
+    contact_id: Optional[int] = None  # null when calling a company main line w/o primary contact
+    company_id: Optional[int] = None  # required when contact_id is null
     duration_seconds: int = 0
     direction: str = "outbound"  # outbound | inbound
     outcome: Optional[str] = None  # connected, voicemail, no_answer, ...
@@ -355,10 +356,17 @@ async def log_call(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Create an Activity row when the dialer modal closes."""
-    contact = (await db.execute(select(Contact).where(Contact.id == req.contact_id))).scalar_one_or_none()
-    if not contact:
-        raise HTTPException(status_code=404, detail="Contact not found")
+    """Create an Activity row when the dialer modal closes.
+    Requires at least one of contact_id / company_id."""
+    contact = None
+    company_id = req.company_id
+    if req.contact_id:
+        contact = (await db.execute(select(Contact).where(Contact.id == req.contact_id))).scalar_one_or_none()
+        if not contact:
+            raise HTTPException(status_code=404, detail="Contact not found")
+        company_id = contact.company_id
+    elif not company_id:
+        raise HTTPException(status_code=400, detail="Either contact_id or company_id is required")
 
     # Don't double-create — the Twilio status webhook may have made a stub
     existing = (await db.execute(
@@ -376,7 +384,8 @@ async def log_call(
     }.get(req.outcome or "", "Call logged")
 
     if existing:
-        existing.contact_id = contact.id
+        if contact:
+            existing.contact_id = contact.id
         existing.user_id = user.id
         existing.content = summary
         existing.call_duration_seconds = req.duration_seconds or existing.call_duration_seconds
@@ -388,8 +397,8 @@ async def log_call(
         return _activity_to_dict(existing)
 
     activity = Activity(
-        company_id=contact.company_id,
-        contact_id=contact.id,
+        company_id=company_id,
+        contact_id=(contact.id if contact else None),
         user_id=user.id,
         activity_type="call",
         content=summary,

@@ -1182,7 +1182,7 @@
                         </div>
                     </div>
                     <div class="company-card-meta">
-                        ${c.phone ? `<span>📞 ${escapeHtml(c.phone)}</span>` : ''}
+                        ${c.phone ? `<span><a class="call-link" onclick="event.stopPropagation();callCompany(${c.id}, '${escapeHtml(c.phone)}')">${escapeHtml(c.phone)}</a></span>` : ''}
                         ${c.website ? `<span>🌐 <a href="${escapeHtml(c.website)}" target="_blank" rel="noreferrer">${escapeHtml(c.website.replace(/^https?:\/\//,'').slice(0,40))}</a></span>` : ''}
                         ${c.city ? `<span>📍 ${escapeHtml(c.city)}, ${escapeHtml(c.state || '')}</span>` : ''}
                     </div>
@@ -1395,7 +1395,7 @@
                         <div style="font-size:13px;color:#666;margin-top:4px">
                             ${d.website ? `<a href="${escapeHtml(d.website)}" target="_blank">${escapeHtml(d.website.replace(/^https?:\/\//,''))}</a> · ` : ''}
                             ${escapeHtml(d.city || '')}${d.state ? ', ' + escapeHtml(d.state) : ''}
-                            ${d.phone ? ' · ' + escapeHtml(d.phone) : ''}
+                            ${d.phone ? ` · <a class="call-link" onclick="callCompany(${d.id}, '${escapeHtml(d.phone)}')">${escapeHtml(d.phone)}</a>` : ''}
                             ${d.employee_count ? ` · ${d.employee_count} employees` : ''}
                             ${d.linkedin_url ? ` · <a href="${escapeHtml(d.linkedin_url)}" target="_blank" style="color:#0077B5">LinkedIn</a>` : ''}
                         </div>
@@ -1433,7 +1433,7 @@
                                     </div>
                                     ${c.title ? `<div style="font-size:11px;color:#888">${escapeHtml(c.title)}</div>` : ''}
                                     ${c.email ? `<div style="font-size:11px;color:var(--bmp-orange)">${escapeHtml(c.email)}</div>` : '<div style="font-size:11px;color:#ccc">no email</div>'}
-                                    ${c.phone ? `<div style="font-size:11px;color:#888">${escapeHtml(c.phone)}</div>` : ''}
+                                    ${c.phone ? `<div style="font-size:11px"><a class="call-link" onclick="event.stopPropagation();callContact(${c.id})">${escapeHtml(c.phone)}</a></div>` : ''}
                                     ${c.emails.length > 0 ? `<div style="font-size:10px;color:var(--bmp-green);margin-top:2px">${c.emails.filter(e=>e.is_sent).length}/${c.emails.length} steps sent</div>` : ''}
                                 </div>
                             `).join('')}
@@ -3075,6 +3075,35 @@
             if (c) startCall(c);
         }
 
+        // Click on a COMPANY's main phone — finds the primary contact (so the
+        // call logs to a real person on the timeline). If no primary contact
+        // exists, dials the company phone with no contact attribution.
+        async function callCompany(companyId, companyPhone) {
+            const detail = await api(`/api/companies/${companyId}/full`);
+            if (!detail) return;
+            const primary = (detail.contacts || []).find(c => c.is_primary && (c.phone || c.email));
+            if (primary && primary.phone) {
+                primary.company_id = detail.id;
+                primary.company_name = detail.name;
+                startCall(primary);
+                return;
+            }
+            // No primary contact with phone — dial the company main number directly
+            const stub = {
+                id: null,
+                first_name: '', last_name: '',
+                name: detail.name + ' (main line)',
+                title: '',
+                phone: companyPhone || detail.phone,
+                company_phone: companyPhone || detail.phone,
+                company_id: detail.id,
+                company_name: detail.name,
+                email: '',
+            };
+            if (!stub.phone) { toast('No phone number on this company'); return; }
+            startCall(stub);
+        }
+
         // ----- Dialer modal -----
         function openDialerModal(contact, toNumber) {
             const initials = ((contact.first_name||'')[0]||'') + ((contact.last_name||'')[0]||'');
@@ -3194,7 +3223,8 @@
                     method: 'POST',
                     body: JSON.stringify({
                         call_sid: ctx.sid,
-                        contact_id: ctx.contact.id,
+                        contact_id: ctx.contact.id || null,
+                        company_id: ctx.contact.company_id || null,
                         duration_seconds: duration,
                         direction: 'outbound',
                         outcome: outcome || (duration > 0 ? 'connected' : 'no_answer'),
