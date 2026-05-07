@@ -1718,8 +1718,7 @@
             if (countEl) countEl.textContent = `${(data || []).length} contacts`;
             const panel = document.getElementById('contacts-panel');
             if (!data || data.length === 0) {
-                panel.innerHTML = '<p style="color:#666">No contacts match your filters.</p>
-                <div id="contacts-batch-bar" style="display:none"></div>';
+                panel.innerHTML = '<p style="color:#666">No contacts match your filters.</p>';
                 return;
             }
             panel.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
