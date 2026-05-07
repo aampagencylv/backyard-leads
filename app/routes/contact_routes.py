@@ -37,6 +37,7 @@ router = APIRouter(prefix="/api", tags=["contacts"])
 async def list_all_contacts(
     company_status: Optional[str] = None,
     has_email: Optional[bool] = None,
+    has_phone: Optional[bool] = None,  # NEW: power-dialer filter
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -62,6 +63,11 @@ async def list_all_contacts(
         query = query.where(Contact.email.isnot(None), Contact.email != "")
     elif has_email is False:
         query = query.where((Contact.email.is_(None)) | (Contact.email == ""))
+
+    if has_phone is True:
+        query = query.where(Contact.phone.isnot(None), Contact.phone != "")
+    elif has_phone is False:
+        query = query.where((Contact.phone.is_(None)) | (Contact.phone == ""))
 
     rows = (await db.execute(query)).all()
     return [

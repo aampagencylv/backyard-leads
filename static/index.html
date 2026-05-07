@@ -401,6 +401,20 @@
                     <div id="pipeline-bars"></div>
                 </div>
 
+                <!-- Call Activity (last N days) -->
+                <div class="panel">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                        <h3 style="margin:0">Call Activity</h3>
+                        <select id="calls-range" onchange="loadCallActivity()" style="padding:4px 8px;border:1px solid #ddd;border-radius:6px;font-size:12px">
+                            <option value="1">Today</option>
+                            <option value="7" selected>Last 7 days</option>
+                            <option value="14">Last 14 days</option>
+                            <option value="30">Last 30 days</option>
+                        </select>
+                    </div>
+                    <div id="call-activity-stats"></div>
+                </div>
+
                 <!-- Zone 5: Activity feed -->
                 <div class="panel">
                     <h3>Activity Feed</h3>
@@ -485,10 +499,13 @@
             <div id="page-contacts" class="hidden">
                 <div class="page-header">
                     <h1>Contacts</h1>
-                    <div style="display:flex;gap:8px;flex-wrap:wrap">
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
                         <button class="btn btn-secondary btn-sm" onclick="loadContacts('all')">All</button>
                         <button class="btn btn-secondary btn-sm" onclick="loadContacts('with_email')">With Email</button>
                         <button class="btn btn-secondary btn-sm" onclick="loadContacts('no_email')">Missing Email</button>
+                        <button class="btn btn-secondary btn-sm" onclick="loadContacts('with_phone')">With Phone</button>
+                        <span style="border-left:1px solid #ddd;height:20px;margin:0 4px"></span>
+                        <button class="btn btn-primary btn-sm" onclick="startPowerDialer()" title="Dial through this filtered list, one after another">🎧 Power Dial</button>
                     </div>
                 </div>
                 <div class="panel" id="contacts-panel"></div>
@@ -1062,6 +1079,139 @@
                     <div class="timeline-meta">${escapeHtml(a.user_name || 'System')} · ${fmtRelative(a.created_at)}</div>
                 </div>
             `).join('') : '<p style="font-size:12px;color:#888">No activity yet.</p>';
+
+            // Call activity stats
+            loadCallActivity();
+        }
+
+        // ============ Call Activity panel ============
+        async function loadCallActivity() {
+            const days = parseInt(document.getElementById('calls-range').value || '7', 10);
+            const data = await api(`/api/dashboard/calls?days=${days}`);
+            const el = document.getElementById('call-activity-stats');
+            if (!el) return;
+            if (!data) { el.innerHTML = '<p style="color:#888">Failed to load.</p>'; return; }
+            const s = data.summary;
+            const isAdmin = currentUser && currentUser.role === 'admin';
+
+            const fmtTalk = (sec) => {
+                if (!sec) return '0m';
+                const h = Math.floor(sec / 3600);
+                const m = Math.round((sec % 3600) / 60);
+                return h ? `${h}h ${m}m` : `${m}m`;
+            };
+            const pct = (n) => `${(n * 100).toFixed(1)}%`;
+
+            // Tile row
+            const tiles = `
+                <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px">
+                    <div style="background:#f9faf9;border-radius:8px;padding:10px 12px;text-align:center">
+                        <div style="font-size:20px;font-weight:700;color:var(--bmp-green)">${s.total_calls}</div>
+                        <div style="font-size:10px;color:#888;text-transform:uppercase">Total Calls</div>
+                    </div>
+                    <div style="background:#f9faf9;border-radius:8px;padding:10px 12px;text-align:center">
+                        <div style="font-size:20px;font-weight:700;color:var(--bmp-green)">${s.connected}</div>
+                        <div style="font-size:10px;color:#888;text-transform:uppercase">Connected</div>
+                    </div>
+                    <div style="background:#f9faf9;border-radius:8px;padding:10px 12px;text-align:center">
+                        <div style="font-size:20px;font-weight:700;color:var(--bmp-orange)">${pct(s.connect_rate)}</div>
+                        <div style="font-size:10px;color:#888;text-transform:uppercase">Connect Rate</div>
+                    </div>
+                    <div style="background:#f9faf9;border-radius:8px;padding:10px 12px;text-align:center">
+                        <div style="font-size:20px;font-weight:700;color:var(--bmp-green)">${fmtTalk(s.talk_seconds)}</div>
+                        <div style="font-size:10px;color:#888;text-transform:uppercase">Talk Time</div>
+                    </div>
+                    <div style="background:#f9faf9;border-radius:8px;padding:10px 12px;text-align:center">
+                        <div style="font-size:20px;font-weight:700;color:var(--bmp-green)">${fmtTalk(s.avg_talk_seconds)}</div>
+                        <div style="font-size:10px;color:#888;text-transform:uppercase">Avg Connected</div>
+                    </div>
+                </div>
+            `;
+
+            // By-day mini bar chart
+            const days_arr = data.by_day;
+            const maxCalls = Math.max(...days_arr.map(d => d.calls), 1);
+            const dayBars = days_arr.length ? `
+                <div style="margin-bottom:14px">
+                    <div style="font-size:11px;font-weight:600;color:#888;text-transform:uppercase;margin-bottom:6px">Calls by day</div>
+                    <div style="display:flex;align-items:flex-end;gap:4px;height:60px">
+                        ${days_arr.map(d => `
+                            <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px" title="${escapeHtml(d.date)}: ${d.calls} call${d.calls === 1 ? '' : 's'} (${d.connected} connected)">
+                                <div style="font-size:9px;color:#999">${d.calls || ''}</div>
+                                <div style="width:100%;height:${Math.max(2, (d.calls / maxCalls) * 50)}px;background:linear-gradient(180deg, var(--bmp-orange) 0%, var(--bmp-green) 100%);border-radius:3px 3px 0 0"></div>
+                                <div style="font-size:9px;color:#999">${d.date.slice(5)}</div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            ` : '';
+
+            // Outcome funnel
+            const outcomes = data.by_outcome || {};
+            const outcomeOrder = ['connected', 'voicemail', 'no_answer', 'busy', 'wrong_number', 'gatekeeper', 'declined', 'failed', 'unknown'];
+            const outcomesPresent = outcomeOrder.filter(o => outcomes[o]);
+            const outcomeBars = outcomesPresent.length ? `
+                <div style="margin-bottom:14px">
+                    <div style="font-size:11px;font-weight:600;color:#888;text-transform:uppercase;margin-bottom:6px">Outcome breakdown</div>
+                    ${outcomesPresent.map(o => {
+                        const count = outcomes[o];
+                        const pctw = (count / s.total_calls) * 100;
+                        const palette = {
+                            connected: 'var(--bmp-green)',
+                            voicemail: '#3498db',
+                            no_answer: '#95a5a6',
+                            busy: '#e67e22',
+                            wrong_number: '#c0392b',
+                            gatekeeper: '#9b59b6',
+                            declined: '#7f8c8d',
+                            failed: '#c0392b',
+                            unknown: '#bdc3c7',
+                        };
+                        return `
+                            <div style="display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:3px">
+                                <div style="width:90px;text-transform:capitalize">${o.replace('_', ' ')}</div>
+                                <div style="flex:1;background:#eee;border-radius:3px;height:14px;position:relative">
+                                    <div style="background:${palette[o] || '#999'};height:100%;width:${pctw}%;border-radius:3px"></div>
+                                </div>
+                                <div style="width:50px;text-align:right;font-weight:600">${count}</div>
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            ` : '';
+
+            // By-rep table (admin only)
+            const repsTable = (isAdmin && data.by_rep && data.by_rep.length) ? `
+                <div>
+                    <div style="font-size:11px;font-weight:600;color:#888;text-transform:uppercase;margin-bottom:6px">By rep</div>
+                    <table style="width:100%;border-collapse:collapse;font-size:12px">
+                        <thead><tr style="border-bottom:1px solid #eee;color:#888">
+                            <th style="text-align:left;padding:4px">Rep</th>
+                            <th style="text-align:right;padding:4px">Calls</th>
+                            <th style="text-align:right;padding:4px">Connected</th>
+                            <th style="text-align:right;padding:4px">Connect%</th>
+                            <th style="text-align:right;padding:4px">Talk</th>
+                        </tr></thead>
+                        <tbody>
+                            ${data.by_rep.map(r => `
+                                <tr style="border-bottom:1px solid #f5f5f5">
+                                    <td style="padding:4px">${escapeHtml(r.name || '(unknown)')}</td>
+                                    <td style="text-align:right;padding:4px">${r.calls}</td>
+                                    <td style="text-align:right;padding:4px">${r.connected}</td>
+                                    <td style="text-align:right;padding:4px">${r.calls ? ((r.connected / r.calls) * 100).toFixed(0) : 0}%</td>
+                                    <td style="text-align:right;padding:4px">${fmtTalk(r.talk_seconds)}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            ` : '';
+
+            if (s.total_calls === 0) {
+                el.innerHTML = '<p style="color:#888;font-size:13px">No calls in the selected window.</p>';
+                return;
+            }
+            el.innerHTML = tiles + dayBars + outcomeBars + repsTable;
         }
 
         // ============ Companies ============
@@ -1099,11 +1249,14 @@
         }
 
         // ============ Contacts ============
+        let _lastContactsList = [];
         async function loadContacts(mode) {
             let path = '/api/contacts';
             if (mode === 'with_email') path += '?has_email=true';
             else if (mode === 'no_email') path += '?has_email=false';
+            else if (mode === 'with_phone') path += '?has_phone=true';
             const data = await api(path);
+            _lastContactsList = data || [];
             const panel = document.getElementById('contacts-panel');
             if (!data || data.length === 0) {
                 panel.innerHTML = '<p style="color:#666">No contacts yet. Pursue companies to auto-create contacts via Netrows/Hunter.</p>';
@@ -3477,6 +3630,168 @@
                 console.error('bridge-call failed:', e);
                 setDialerStatus('ended', 'Bridge call failed: ' + (e.message || e));
             }
+        }
+
+        // ============================================================
+        // Power Dialer (Phase 5)
+        //
+        // Walks through a queue of contacts, calling each in turn. After
+        // each Save & Close on the dialer modal, auto-advances to the next
+        // contact. Skip / End Session controls available throughout.
+        // ============================================================
+        const powerDialer = {
+            active: false,
+            queue: [],   // contact summary objects
+            index: 0,    // current position
+            stats: { dialed: 0, connected: 0, voicemail: 0, no_answer: 0, skipped: 0 },
+        };
+
+        function startPowerDialer() {
+            const all = _lastContactsList || [];
+            const callable = all.filter(c => c.phone && !c.unsubscribed_at);
+            if (callable.length === 0) {
+                toast('No callable contacts in this list (need a phone number).');
+                return;
+            }
+            // Show a confirmation modal with the queue size
+            const root = document.getElementById('modal-root');
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:440px">
+                        <h2>Start Power Dial</h2>
+                        <p style="font-size:13px;color:#555">Queueing <strong>${callable.length} contact${callable.length === 1 ? '' : 's'}</strong> from the current Contacts filter. The dialer will advance automatically after each call.</p>
+                        <ul style="font-size:12px;color:#666;margin:8px 0 12px 18px">
+                            <li>Skip a contact at any time</li>
+                            <li>End the session early to stop</li>
+                            <li>Calls log to each contact's timeline as usual</li>
+                        </ul>
+                        <div class="modal-actions" style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">
+                            <button class="btn btn-secondary" onclick="document.getElementById('modal-root').innerHTML=''">Cancel</button>
+                            <button class="btn btn-primary" onclick="confirmStartPowerDialer()">Start Dialing →</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function confirmStartPowerDialer() {
+            const all = _lastContactsList || [];
+            const callable = all.filter(c => c.phone && !c.unsubscribed_at);
+            powerDialer.active = true;
+            powerDialer.queue = callable;
+            powerDialer.index = 0;
+            powerDialer.stats = { dialed: 0, connected: 0, voicemail: 0, no_answer: 0, skipped: 0 };
+            document.getElementById('modal-root').innerHTML = '';
+            powerDialerNext();
+        }
+
+        function powerDialerNext() {
+            if (!powerDialer.active) return;
+            if (powerDialer.index >= powerDialer.queue.length) {
+                showPowerDialerSummary();
+                return;
+            }
+            const contact = powerDialer.queue[powerDialer.index];
+            powerDialer.stats.dialed += 1;
+
+            // Wrap startCall — but the dialer modal is going to render INSIDE
+            // a power-dialer wrapper that adds queue progress + Skip / End buttons
+            startCall(contact).then(() => {
+                // After modal opens, decorate it with queue controls
+                setTimeout(decorateModalForPowerDialer, 50);
+            });
+        }
+
+        function decorateModalForPowerDialer() {
+            const dialer = document.querySelector('.dialer');
+            if (!dialer) return;
+            // Already decorated?
+            if (dialer.querySelector('.power-dialer-strip')) return;
+            const total = powerDialer.queue.length;
+            const i = powerDialer.index;
+            const strip = document.createElement('div');
+            strip.className = 'power-dialer-strip';
+            strip.style.cssText = 'background:#1B5E20;color:white;border-radius:8px;padding:8px 12px;font-size:12px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center';
+            strip.innerHTML = `
+                <div>🎧 <strong>Power Dial</strong> · ${i + 1} of ${total}</div>
+                <div style="display:flex;gap:6px">
+                    <button class="btn btn-secondary btn-xs" onclick="powerDialerSkip()" style="background:#fff;color:#333">Skip ⏭</button>
+                    <button class="btn btn-secondary btn-xs" onclick="powerDialerEnd()" style="background:#fff5f0;color:#c0392b">End Session</button>
+                </div>
+            `;
+            // Insert at the very top of the dialer card
+            dialer.insertBefore(strip, dialer.firstChild);
+
+            // Hook Save & Close to advance the queue
+            const saveBtn = dialer.querySelector('.modal-actions .btn-primary');
+            if (saveBtn) {
+                saveBtn.textContent = 'Save & Next →';
+                const orig = saveBtn.onclick || (() => finishDialer());
+                saveBtn.onclick = async (e) => {
+                    e.preventDefault();
+                    const outcome = (document.getElementById('dialer-outcome') || {}).value || '';
+                    if (outcome === 'connected') powerDialer.stats.connected += 1;
+                    if (outcome === 'voicemail') powerDialer.stats.voicemail += 1;
+                    if (outcome === 'no_answer') powerDialer.stats.no_answer += 1;
+                    await finishDialer();
+                    powerDialer.index += 1;
+                    setTimeout(powerDialerNext, 400);
+                };
+            }
+        }
+
+        function powerDialerSkip() {
+            if (!powerDialer.active) return;
+            powerDialer.stats.skipped += 1;
+            powerDialer.index += 1;
+            // Hangup if a call is in progress
+            if (dialerState.call) {
+                try { dialerState.call.disconnect(); } catch (e) { /* noop */ }
+            }
+            closeDialerModal();
+            setTimeout(powerDialerNext, 200);
+        }
+
+        function powerDialerEnd() {
+            powerDialer.active = false;
+            if (dialerState.call) {
+                try { dialerState.call.disconnect(); } catch (e) { /* noop */ }
+            }
+            closeDialerModal();
+            showPowerDialerSummary();
+        }
+
+        function showPowerDialerSummary() {
+            const s = powerDialer.stats;
+            const root = document.getElementById('modal-root');
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:420px">
+                        <h2>🎧 Session Complete</h2>
+                        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0">
+                            <div style="background:#f9faf9;border-radius:8px;padding:10px;text-align:center">
+                                <div style="font-size:22px;font-weight:700;color:var(--bmp-green)">${s.dialed}</div>
+                                <div style="font-size:10px;color:#888">Dialed</div>
+                            </div>
+                            <div style="background:#f9faf9;border-radius:8px;padding:10px;text-align:center">
+                                <div style="font-size:22px;font-weight:700;color:var(--bmp-green)">${s.connected}</div>
+                                <div style="font-size:10px;color:#888">Connected</div>
+                            </div>
+                            <div style="background:#f9faf9;border-radius:8px;padding:10px;text-align:center">
+                                <div style="font-size:22px;font-weight:700;color:#3498db">${s.voicemail}</div>
+                                <div style="font-size:10px;color:#888">Voicemails</div>
+                            </div>
+                        </div>
+                        <p style="font-size:13px;color:#666">Connect rate: <strong>${s.dialed ? ((s.connected / s.dialed) * 100).toFixed(0) : 0}%</strong>${s.skipped ? ` · ${s.skipped} skipped` : ''}</p>
+                        <div class="modal-actions" style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">
+                            <button class="btn btn-primary" onclick="document.getElementById('modal-root').innerHTML=''">Done</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            powerDialer.active = false;
+            powerDialer.queue = [];
+            powerDialer.index = 0;
         }
 
         // Globally callable from any phone-link click

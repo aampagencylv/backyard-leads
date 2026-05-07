@@ -281,3 +281,111 @@ async def activity_feed(
         }
         for a, cname, ufirst, ulast in rows
     ]
+
+
+# ============================================================
+# Call activity reporting
+# ============================================================
+
+@router.get("/dashboard/calls")
+async def dashboard_calls(
+    days: int = 7,
+    user_id: Optional[int] = None,  # admin can scope to a specific rep; null = all (admin) or self (rep)
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Per-rep call activity for the last N days.
+    Reps see only their own data; admins see everyone (or scope to one rep).
+    """
+    days = max(1, min(days, 90))
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+    # Authorization scope
+    if user.role != "admin":
+        scope_user_ids = [user.id]
+    elif user_id is not None:
+        scope_user_ids = [user_id]
+    else:
+        scope_user_ids = None  # all reps
+
+    query = select(Activity).where(
+        Activity.activity_type.in_(("call", "voicemail")),
+        Activity.created_at >= cutoff,
+    )
+    if scope_user_ids:
+        query = query.where(Activity.user_id.in_(scope_user_ids))
+
+    rows = (await db.execute(query)).scalars().all()
+
+    # Aggregate
+    total = len(rows)
+    outbound = sum(1 for a in rows if a.call_direction == "outbound")
+    inbound = sum(1 for a in rows if a.call_direction == "inbound")
+    by_outcome = {}
+    talk_seconds = 0
+    by_day: dict[str, dict] = {}
+    by_rep: dict[int, dict] = {}
+
+    for a in rows:
+        oc = a.call_outcome or "unknown"
+        by_outcome[oc] = by_outcome.get(oc, 0) + 1
+
+        if a.call_duration_seconds:
+            talk_seconds += a.call_duration_seconds
+
+        # Day buckets (UTC)
+        day = (a.created_at.date().isoformat() if a.created_at else "unknown")
+        d = by_day.setdefault(day, {"date": day, "calls": 0, "connected": 0, "talk_seconds": 0})
+        d["calls"] += 1
+        if a.call_outcome == "connected":
+            d["connected"] += 1
+        d["talk_seconds"] += a.call_duration_seconds or 0
+
+        if a.user_id:
+            r = by_rep.setdefault(a.user_id, {
+                "user_id": a.user_id, "name": "", "calls": 0, "connected": 0,
+                "voicemail": 0, "no_answer": 0, "talk_seconds": 0,
+            })
+            r["calls"] += 1
+            if a.call_outcome == "connected":
+                r["connected"] += 1
+            elif a.call_outcome == "voicemail":
+                r["voicemail"] += 1
+            elif a.call_outcome == "no_answer":
+                r["no_answer"] += 1
+            r["talk_seconds"] += a.call_duration_seconds or 0
+
+    # Resolve rep names
+    if by_rep:
+        u_rows = (await db.execute(select(User).where(User.id.in_(by_rep.keys())))).scalars().all()
+        for u in u_rows:
+            if u.id in by_rep:
+                by_rep[u.id]["name"] = u.full_name or u.email
+
+    connected = by_outcome.get("connected", 0)
+    connect_rate = round(connected / total, 4) if total else 0.0
+    avg_talk = round(talk_seconds / max(connected, 1)) if connected else 0  # avg of CONNECTED calls only
+
+    # Sort outputs
+    by_day_sorted = sorted(by_day.values(), key=lambda d: d["date"])
+    by_rep_sorted = sorted(by_rep.values(), key=lambda r: -r["calls"])
+
+    return {
+        "days": days,
+        "summary": {
+            "total_calls": total,
+            "outbound": outbound,
+            "inbound": inbound,
+            "connected": connected,
+            "connect_rate": connect_rate,
+            "voicemail": by_outcome.get("voicemail", 0),
+            "no_answer": by_outcome.get("no_answer", 0),
+            "talk_seconds": talk_seconds,
+            "talk_hours": round(talk_seconds / 3600, 2),
+            "avg_talk_seconds": avg_talk,  # avg of connected calls
+        },
+        "by_outcome": by_outcome,
+        "by_day": by_day_sorted,
+        "by_rep": by_rep_sorted,
+    }
