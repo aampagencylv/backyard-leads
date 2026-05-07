@@ -17,7 +17,7 @@ from sqlalchemy import select
 from pydantic import BaseModel
 
 from app.database import get_db, async_session
-from app.models import User, Contact, Company, Activity
+from app.models import User, Contact, Company, Activity, GeneratedEmail
 from app.auth import get_current_user
 from app.runtime_config import get_twilio_credentials
 from urllib.parse import quote
@@ -39,6 +39,13 @@ from app.services.twilio_voice import (
     TwilioError,
 )
 from app.services.call_transcription import transcribe_and_summarize_in_background
+from app.services.twilio_sms import (
+    send_sms,
+    configure_sms_webhook,
+    check_send_window,
+    is_stop_keyword,
+    is_start_keyword,
+)
 from app.config import settings
 
 router = APIRouter(prefix="/api/twilio", tags=["twilio"])
@@ -103,6 +110,15 @@ async def numbers_buy(
             voice_url=f"{public}/api/twilio/voice/inbound",
             status_callback=f"{public}/api/twilio/voice/status",
         )
+        # Set the SMS inbound webhook too so texts route somewhere
+        if n and n.sid:
+            try:
+                await configure_sms_webhook(
+                    creds, n.sid,
+                    sms_url=f"{public}/api/twilio/sms/inbound",
+                )
+            except TwilioError:
+                pass  # SMS webhook is best-effort; voice path already worked
     except TwilioError as e:
         raise HTTPException(status_code=502, detail=str(e))
     return number_to_dict(n)
@@ -217,6 +233,14 @@ async def assign_twilio_number(
                     voice_url=f"{public}/api/twilio/voice/inbound",
                     status_callback=f"{public}/api/twilio/voice/status",
                 )
+                # SMS inbound webhook too — best effort
+                try:
+                    await configure_sms_webhook(
+                        creds, match.sid,
+                        sms_url=f"{public}/api/twilio/sms/inbound",
+                    )
+                except TwilioError:
+                    pass
         except TwilioError:
             pass  # number is still assigned in our DB even if Twilio webhook setup fails
 
@@ -828,3 +852,233 @@ def _activity_to_dict(a: Activity) -> dict:
         "recording_url": a.recording_url,
         "created_at": a.created_at.isoformat() if a.created_at else None,
     }
+
+
+# ============================================================
+# SMS — outbound + inbound + TCPA opt-out
+# ============================================================
+
+class SendSmsRequest(BaseModel):
+    contact_id: int
+    body: str
+    bypass_send_window: bool = False  # admins-only override (e.g. urgent reply)
+
+
+@router.post("/sms/send")
+async def sms_send(
+    req: SendSmsRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Send a one-off SMS to a contact. Logs to the timeline as
+    type='sms_sent'. Refuses if contact has opted out (do_not_text=True)
+    or if the send window check fails (and the user isn't an admin who
+    explicitly bypassed it)."""
+    contact = (await db.execute(select(Contact).where(Contact.id == req.contact_id))).scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    if not contact.phone:
+        raise HTTPException(status_code=400, detail="Contact has no phone number")
+    if contact.do_not_text:
+        raise HTTPException(status_code=400, detail="This contact has opted out of SMS (replied STOP).")
+    if not user.twilio_phone_number:
+        raise HTTPException(status_code=400, detail="No Twilio number assigned to you. Ask an admin.")
+
+    # TCPA send-window check (8am-9pm contact-local) — admins can override
+    window = check_send_window(contact.phone)
+    if not window.allowed and not (req.bypass_send_window and user.role == "admin"):
+        raise HTTPException(status_code=400, detail=window.reason + " Use the bypass option if this is a reply to a recent inbound message.")
+
+    creds = await get_twilio_credentials(db)
+    if not creds.is_minimally_configured:
+        raise HTTPException(status_code=400, detail="Twilio not configured")
+
+    public = settings.public_url.rstrip('/')
+    status_callback = f"{public}/api/twilio/sms/status"
+
+    result = await send_sms(
+        creds,
+        to_number=contact.phone,
+        from_number=user.twilio_phone_number,
+        body=req.body,
+        status_callback=status_callback,
+    )
+    if not result.success:
+        raise HTTPException(status_code=502, detail=f"Twilio rejected: {result.error}")
+
+    activity = Activity(
+        company_id=contact.company_id,
+        contact_id=contact.id,
+        user_id=user.id,
+        activity_type="sms_sent",
+        content=f"SMS to {contact.full_name or contact.phone}: {req.body}",
+        metadata_json=json.dumps({
+            "message_sid": result.message_sid,
+            "from": user.twilio_phone_number,
+            "to": contact.phone,
+        }),
+    )
+    db.add(activity)
+    await db.commit()
+    await db.refresh(activity)
+    return {
+        "success": True,
+        "message_sid": result.message_sid,
+        "activity": _activity_to_dict(activity),
+    }
+
+
+@router.post("/sms/inbound")
+async def sms_inbound(request: Request):
+    """
+    Twilio webhook for incoming SMS.
+    1. Match the From number to a known Contact (any rep)
+    2. Log as Activity type='sms_received'
+    3. Auto-handle STOP keywords → set do_not_text + log opt-out
+    4. Auto-handle START keywords → clear do_not_text
+    5. Auto-pause active email sequence (parallel to email reply behavior)
+    Returns TwiML; on STOP we send a short confirmation to the sender.
+    """
+    form = await request.form()
+    from_number = (form.get("From") or "").strip()
+    to_number = (form.get("To") or "").strip()
+    body = (form.get("Body") or "").strip()
+    message_sid = form.get("MessageSid") or form.get("SmsSid") or ""
+
+    if not from_number:
+        return Response(content="<Response/>", media_type="application/xml")
+
+    async with async_session() as db:
+        contact = (await db.execute(
+            select(Contact).where(Contact.phone == from_number)
+        )).scalar_one_or_none()
+
+        # Find which rep owns the called number (so the activity attributes correctly)
+        rep = None
+        if to_number:
+            rep = (await db.execute(
+                select(User).where(User.twilio_phone_number == to_number)
+            )).scalar_one_or_none()
+
+        if not contact:
+            # Unknown sender — log to nothing for now (could create a placeholder
+            # Company + Contact in a future enhancement). Do still honor STOP.
+            return Response(content="<Response/>", media_type="application/xml")
+
+        # STOP: set do_not_text + log + reply with a confirmation
+        if is_stop_keyword(body):
+            contact.do_not_text = True
+            contact.do_not_text_at = datetime.now(timezone.utc)
+            db.add(Activity(
+                company_id=contact.company_id, contact_id=contact.id,
+                user_id=rep.id if rep else None,
+                activity_type="sms_opt_out",
+                content=f"SMS opt-out (STOP) from {contact.full_name or from_number}",
+                metadata_json=json.dumps({"message_sid": message_sid, "body": body}),
+            ))
+            # Auto-pause any active email sequence too — strong signal they want to be left alone
+            pending = (await db.execute(
+                select(GeneratedEmail).where(
+                    GeneratedEmail.contact_id == contact.id,
+                    GeneratedEmail.is_sent == False,
+                    GeneratedEmail.paused_at.is_(None),
+                )
+            )).scalars().all()
+            now = datetime.now(timezone.utc)
+            for e in pending:
+                e.paused_at = now
+            await db.commit()
+            return Response(
+                content="<Response><Message>You're unsubscribed. Reply START to resume.</Message></Response>",
+                media_type="application/xml",
+            )
+
+        # START: clear opt-out
+        if is_start_keyword(body) and contact.do_not_text:
+            contact.do_not_text = False
+            contact.do_not_text_at = None
+            db.add(Activity(
+                company_id=contact.company_id, contact_id=contact.id,
+                user_id=rep.id if rep else None,
+                activity_type="sms_opt_in",
+                content=f"SMS opt-in restored (START) from {contact.full_name or from_number}",
+            ))
+            await db.commit()
+            return Response(
+                content="<Response><Message>You're back in. We'll only send what's actually useful.</Message></Response>",
+                media_type="application/xml",
+            )
+
+        # Regular incoming message — log + auto-pause email sequence (replied)
+        db.add(Activity(
+            company_id=contact.company_id,
+            contact_id=contact.id,
+            user_id=rep.id if rep else None,
+            activity_type="sms_received",
+            content=f"SMS from {contact.full_name or from_number}: {body}",
+            metadata_json=json.dumps({
+                "message_sid": message_sid,
+                "from": from_number,
+                "to": to_number,
+                "body": body,
+            }),
+        ))
+
+        # Auto-pause email sequence on inbound SMS (matches email-reply behavior)
+        pending = (await db.execute(
+            select(GeneratedEmail).where(
+                GeneratedEmail.contact_id == contact.id,
+                GeneratedEmail.is_sent == False,
+                GeneratedEmail.paused_at.is_(None),
+            )
+        )).scalars().all()
+        now = datetime.now(timezone.utc)
+        for e in pending:
+            e.paused_at = now
+        if pending:
+            db.add(Activity(
+                company_id=contact.company_id, contact_id=contact.id,
+                user_id=rep.id if rep else None,
+                activity_type="sequence_paused",
+                content=f"Email sequence auto-paused — contact replied via SMS ({len(pending)} emails)",
+            ))
+
+        # Mark the company as 'replied' if the engagement justifies it
+        company = (await db.execute(select(Company).where(Company.id == contact.company_id))).scalar_one_or_none()
+        if company and company.status in ("sequencing", "contacted"):
+            company.status = "replied"
+
+        await db.commit()
+
+    return Response(content="<Response/>", media_type="application/xml")
+
+
+@router.post("/sms/status")
+async def sms_status(request: Request):
+    """Twilio delivery-status callback. Updates the Activity if delivery
+    fails so the rep knows."""
+    form = await request.form()
+    message_sid = form.get("MessageSid", "")
+    msg_status = form.get("MessageStatus", "")
+    error_code = form.get("ErrorCode", "")
+    if not message_sid:
+        return Response(content="", media_type="application/xml")
+
+    if msg_status in ("failed", "undelivered"):
+        async with async_session() as db:
+            # Find the matching sms_sent Activity by message_sid in metadata
+            rows = (await db.execute(
+                select(Activity).where(
+                    Activity.activity_type == "sms_sent",
+                    Activity.metadata_json.like(f'%"{message_sid}"%'),
+                )
+            )).scalars().all()
+            for a in rows:
+                meta = json.loads(a.metadata_json) if a.metadata_json else {}
+                meta["delivery_status"] = msg_status
+                if error_code:
+                    meta["error_code"] = error_code
+                a.metadata_json = json.dumps(meta)
+                a.content = a.content + f" [DELIVERY {msg_status.upper()}]"
+            await db.commit()
+    return Response(content="", media_type="application/xml")

@@ -96,6 +96,20 @@ async def set_deepgram_api_key(db: AsyncSession, value: str) -> RuntimeConfig:
     return rc
 
 
+async def get_blooio_api_key(db: AsyncSession) -> str:
+    rc = await _get_or_create(db)
+    return (rc.blooio_api_key or "").strip()
+
+
+async def set_blooio_api_key(db: AsyncSession, value: str) -> RuntimeConfig:
+    rc = await _get_or_create(db)
+    rc.blooio_api_key = value.strip() or None
+    rc.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(rc)
+    return rc
+
+
 def mask_key(value: str | None) -> str:
     """Show only last 4 chars: 'pk_live_...c82a'"""
     if not value:

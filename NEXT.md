@@ -250,14 +250,39 @@ ALTER TABLE activities ADD COLUMN call_summary TEXT;            -- AI-generated
   to the dialer. Auto-advances to next contact when call ends; one-click
   log + dial next.
 
-#### Phase 6 — SMS (last; ~1 day)
-- Outbound SMS via Twilio Programmable Messaging.
-- "Step type: SMS" is already modeled in sequences — just needs send/receive plumbing.
-- Inbound SMS webhook → auto-log to timeline, auto-pause active sequence.
-- TCPA compliance: opt-in tracking, STOP keyword auto-honored, send-window
-  enforcement (8am-9pm local time only).
-- Use case: re-engagement after email signals stall ("Hey Bret, did you
-  see my note last week?").
+#### Phase 6 — Messaging — PIVOTED to Blooio iMessage [SHIPPED 2026-05-06]
+- **Outbound iMessage via Blooio** (`POST /api/blooio/send`). Sends from
+  BMP's dedicated 305 number. Falls back to RCS / SMS automatically when
+  the recipient isn't on iMessage — no parallel paths to maintain.
+- **Why Blooio over Twilio SMS**: 3-4× higher response rates for B2B cold
+  outreach in iPhone-heavy markets, and skips the A2P 10DLC compliance
+  burden entirely (no brand registration, no campaign approval, no
+  unregistered-traffic surcharge).
+- **GHL coexistence**: the same Blooio account also runs an unrelated GHL
+  integration. Inbound webhook handler filters by "is the From number a
+  known BMP Contact?" — unknown senders return 200 OK and are silently
+  ignored, so the GHL integration sees its own traffic untouched. The
+  webhook self-registration endpoint (`POST /api/blooio/webhook/setup`,
+  admin-only) is idempotent and never modifies other webhooks on the
+  account.
+- **Inbound handling** (matches email-reply behavior):
+  - `message.received` → log Activity `imessage_received`, auto-pause the
+    contact's email sequence, bump company status to `replied`
+  - STOP keyword → set `Contact.do_not_text=True`, log `sms_opt_out`
+  - START keyword → restore opt-in, log `sms_opt_in`
+  - `message.delivered` / `message.read` / `message.failed` → update the
+    matching `imessage_sent` Activity's metadata
+- **Twilio SMS code is dormant, not deleted** — `app/services/twilio_sms.py`
+  + the `/api/twilio/sms/*` endpoints stay in tree as a future fallback
+  channel if we ever need a Blooio-independent path. STOP/START keyword
+  helpers live there and are imported by Blooio's inbound handler.
+- **Sequence integration**: "Step type: SMS" sequence step now sends via
+  Blooio (when wired up by the sequence-engine task — currently still
+  email-only).
+- TCPA compliance: STOP keyword auto-honored. Send-window enforcement
+  (8am-9pm local time) is built but currently bypassed for human-initiated
+  sends from the composer; will be re-enabled when sequences trigger
+  auto-sends.
 
 #### Compliance / risk
 - **2-party consent recording disclosure** (Phase 3). Required in NV, CA,
@@ -282,7 +307,12 @@ POST /api/twilio/voice/twiml            (TwiML for outbound dial)
 POST /api/twilio/voice/status           (status callbacks)
 POST /api/twilio/voice/recording        (recording-complete)
 POST /api/twilio/voice/inbound          (inbound call routing)
-POST /api/twilio/sms/inbound            (Phase 6)
+POST /api/twilio/sms/inbound            (Phase 6 — DORMANT)
+GET  /api/blooio/test                   (Phase 6 — connection test)
+POST /api/blooio/send                   (Phase 6 — outbound iMessage)
+GET  /api/blooio/capability             (Phase 6 — Enterprise plan only)
+POST /api/blooio/inbound                (Phase 6 — Blooio webhook receiver)
+POST /api/blooio/webhook/setup          (Phase 6 — admin: register webhook)
 POST /api/contacts/{id}/call            (initiate from UI)
 GET  /api/twilio/numbers                (admin: list available numbers)
 POST /api/twilio/numbers/buy            (admin: purchase a number)

@@ -649,6 +649,20 @@
                             <div id="deepgram-key-current" style="font-size:11px;color:#888;margin-top:4px"></div>
                         </div>
                     </div>
+
+                    <div style="margin-top:24px;padding-top:16px;border-top:1px solid #eee">
+                        <h4 style="font-size:14px;margin-bottom:6px">Blooio <span id="blooio-key-status" style="font-size:11px;font-weight:400;color:#888"></span></h4>
+                        <p style="font-size:12px;color:#888;margin-bottom:8px">iMessage messaging via Blooio. Sends from BMP's dedicated number to any iPhone. Higher response rates than SMS for B2B cold outreach. <a href="https://docs.blooio.com/" target="_blank" rel="noreferrer">Blooio docs</a></p>
+                        <div class="form-group">
+                            <div style="display:flex;gap:6px">
+                                <input type="password" id="settings-blooio-key" placeholder="Bearer token from console.blooio.com" autocomplete="off" style="flex:1">
+                                <button class="btn btn-secondary btn-sm" onclick="saveBlooioKey()">Save</button>
+                                <button class="btn btn-secondary btn-sm" onclick="testBlooioConnection()" title="Verify the key works + show your assigned number">🔌 Test</button>
+                                <button class="btn btn-secondary btn-sm hidden" id="blooio-register-webhook-btn" onclick="setupBlooioWebhook()" title="One-click register the inbound webhook with Blooio (admin only)">📥 Register Webhook</button>
+                            </div>
+                            <div id="blooio-key-current" style="font-size:11px;color:#888;margin-top:4px"></div>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Twilio Numbers (admin only) -->
@@ -1891,7 +1905,9 @@
                                 ${c.title ? escapeHtml(c.title) + ' · ' : ''}
                                 ${c.email ? `<a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a>` : '<em>no email</em>'}
                                 ${c.phone ? ` · <a class="call-link" onclick="event.stopPropagation();callContact(${c.id})">${escapeHtml(c.phone)}</a>` : ''}
-                                ${c.unsubscribed_at ? ' · <span style="color:#c0392b">UNSUBSCRIBED</span>' : ''}
+                                ${c.phone && !c.do_not_text ? ` · <a class="sms-link" onclick="event.stopPropagation();openSmsComposer(${c.id})" style="color:#0b93f6;cursor:pointer;text-decoration:none;border-bottom:1px dotted #0b93f6" title="iMessage via Blooio">💬 Message</a>` : ''}
+                                ${c.unsubscribed_at ? ' · <span style="color:#c0392b">UNSUBSCRIBED (email)</span>' : ''}
+                                ${c.do_not_text ? ' · <span style="color:#c0392b">OPTED OUT (messaging)</span>' : ''}
                                 ${c.email_status === 'bounced' ? ' · <span style="color:#c0392b">BOUNCED</span>' : ''}
                             </div>
                         </div>
@@ -2078,6 +2094,8 @@
                 task_created: '✅', task_completed: '✓', deal_created: '💰', deal_update: '💼',
                 contact_added: '👤', sequence_created: '📨', sequence_paused: '⏸️',
                 sequence_resumed: '▶️', unsubscribed: '🚪',
+                imessage_sent: '💬', imessage_received: '💬', imessage_read: '👁️',
+                sms_sent: '📱', sms_received: '📱', sms_opt_out: '🛑', sms_opt_in: '✅',
             };
             return items.map(a => {
                 _callPanels[a.id] = a;  // stash for later expand
@@ -3159,6 +3177,33 @@
                     : `No key. Call recordings will not be transcribed until you add one.`;
             }
 
+            // Blooio
+            const bl = (cfg.blooio || {});
+            const blStatus = document.getElementById('blooio-key-status');
+            const blCurrent = document.getElementById('blooio-key-current');
+            const blInput = document.getElementById('settings-blooio-key');
+            const blRegisterBtn = document.getElementById('blooio-register-webhook-btn');
+            if (blInput) blInput.value = '';
+            if (blStatus) {
+                if (bl.set) {
+                    blStatus.textContent = `· ${bl.masked}`;
+                    blStatus.style.color = 'var(--bmp-green)';
+                } else {
+                    blStatus.textContent = '· not set';
+                    blStatus.style.color = '#c0392b';
+                }
+            }
+            if (blCurrent) {
+                blCurrent.textContent = bl.set
+                    ? `Active. iMessage will be sent from BMP's dedicated Blooio number.`
+                    : `No key. The Message button will be disabled until you add one.`;
+            }
+            if (blRegisterBtn) {
+                const isAdmin = currentUser && currentUser.role === 'admin';
+                if (isAdmin && bl.set) blRegisterBtn.classList.remove('hidden');
+                else blRegisterBtn.classList.add('hidden');
+            }
+
             // Show admin-only Twilio Numbers panel + load it if configured
             const numbersPanel = document.getElementById('twilio-numbers-panel');
             if (numbersPanel) {
@@ -3308,6 +3353,46 @@
                 body: JSON.stringify({ deepgram_api_key: v }),
             });
             if (data) { toast('Deepgram key saved'); loadRuntimeConfig(); }
+        }
+
+        async function saveBlooioKey() {
+            const v = (document.getElementById('settings-blooio-key').value || '').trim();
+            if (!v) { toast('Paste a Blooio key first'); return; }
+            const data = await api('/api/runtime-config', {
+                method: 'PATCH',
+                body: JSON.stringify({ blooio_api_key: v }),
+            });
+            if (data) { toast('Blooio key saved'); loadRuntimeConfig(); }
+        }
+
+        async function testBlooioConnection() {
+            const r = await fetch('/api/blooio/test', { headers: { 'Authorization': 'Bearer ' + localStorage.getItem('bmp_token') } });
+            if (r.ok) {
+                const data = await r.json();
+                const num = data.primary_number || (data.numbers && data.numbers[0]) || '(no number assigned)';
+                toast(`✓ Blooio connected. Sending from ${num}.`);
+            } else {
+                let msg = `Status ${r.status}`;
+                try { msg = (await r.json()).detail || msg; } catch (e) {}
+                toast('Blooio test failed: ' + msg);
+            }
+        }
+
+        async function setupBlooioWebhook() {
+            if (!confirm('Register the inbound webhook with Blooio?\n\nThis is idempotent — if it\'s already registered, nothing changes. Other webhooks (e.g. your GHL integration) are left untouched.')) return;
+            const r = await fetch('/api/blooio/webhook/setup', {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + localStorage.getItem('bmp_token') },
+            });
+            if (r.ok) {
+                const data = await r.json();
+                if (data.already_registered) toast('✓ Webhook already registered — left in place.');
+                else toast('✓ Webhook registered with Blooio.');
+            } else {
+                let msg = `Status ${r.status}`;
+                try { msg = (await r.json()).detail || msg; } catch (e) {}
+                toast('Webhook setup failed: ' + msg);
+            }
         }
 
         // ============ Twilio Numbers (admin) ============
@@ -3792,6 +3877,90 @@
             powerDialer.active = false;
             powerDialer.queue = [];
             powerDialer.index = 0;
+        }
+
+        // ============================================================
+        // iMessage Composer (via Blooio)
+        // openSmsComposer / sendSms names kept for compatibility with existing
+        // call sites. Both endpoints below now route through Blooio (iMessage),
+        // not Twilio SMS. The dormant Twilio SMS path stays for a future fallback.
+        // ============================================================
+        async function openSmsComposer(contactId) {
+            const c = await api(`/api/contacts/${contactId}`);
+            if (!c) return;
+            if (c.do_not_text) {
+                toast('This contact has opted out (replied STOP). Cannot message them.');
+                return;
+            }
+            if (!c.phone) {
+                toast('Contact has no phone number');
+                return;
+            }
+            const root = document.getElementById('modal-root');
+            const initials = ((c.first_name||'')[0]||'') + ((c.last_name||'')[0]||'');
+            const suggestions = [
+                {label: 'Quick intro after email', body: `Hi ${c.first_name || 'there'} — Steve from Backyard Marketing Pros, just sent you a note about ${c.company_name || 'your business'}. Free to chat for 5 min this week?`},
+                {label: 'Follow-up bump', body: `Hey ${c.first_name || 'there'}, did the email I sent get buried? Happy to resend or jump on a quick call.`},
+                {label: 'Calendar nudge', body: `Hey ${c.first_name || 'there'}, when's a good time to talk this week? I have ${ {Mon:'Mon',Tue:'Tue',Wed:'Wed',Thu:'Thu',Fri:'Fri'}[new Date().toLocaleDateString('en-US',{weekday:'short'})] || 'this week'} open.`},
+            ];
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:480px">
+                        <div style="display:flex;gap:12px;align-items:center;margin-bottom:12px">
+                            <div class="avatar" style="width:40px;height:40px;border-radius:50%;background:#0b93f6;color:white;display:flex;align-items:center;justify-content:center;font-weight:700">${escapeHtml((initials || (c.email||'?')[0] || '?').toUpperCase())}</div>
+                            <div style="flex:1">
+                                <div style="font-weight:600">${escapeHtml(c.name || c.email || '(unnamed)')}</div>
+                                <div style="font-size:11px;color:#888">${escapeHtml(c.phone)} · iMessage via Blooio</div>
+                            </div>
+                        </div>
+
+                        <div style="font-size:11px;color:#888;text-transform:uppercase;font-weight:600;margin-bottom:4px">Suggested templates</div>
+                        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+                            ${suggestions.map((s,i) => `
+                                <button class="btn btn-secondary btn-xs" onclick="document.getElementById('sms-body').value=${JSON.stringify(s.body).replace(/'/g,"\\'")}; updateSmsCount();">${escapeHtml(s.label)}</button>
+                            `).join('')}
+                        </div>
+
+                        <textarea id="sms-body" oninput="updateSmsCount()" placeholder="Type your message..." style="width:100%;min-height:100px;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;font-family:inherit"></textarea>
+                        <div id="sms-count" style="font-size:11px;color:#888;text-align:right;margin-top:4px">0 chars</div>
+
+                        <div style="font-size:11px;color:#888;background:#eef6ff;border-radius:6px;padding:8px 10px;margin:8px 0">
+                            ⓘ Sent as iMessage from BMP's dedicated Blooio number. Falls back to RCS / SMS automatically
+                            if the recipient isn't on iMessage. STOP replies auto-opt the contact out and pause the
+                            email sequence.
+                        </div>
+
+                        <div class="modal-actions" style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">
+                            <button class="btn btn-secondary" onclick="document.getElementById('modal-root').innerHTML=''">Cancel</button>
+                            <button class="btn btn-primary" onclick="sendSms(${c.id})">Send iMessage</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function updateSmsCount() {
+            const body = (document.getElementById('sms-body').value || '');
+            const el = document.getElementById('sms-count');
+            if (!el) return;
+            el.textContent = `${body.length} chars`;
+            el.style.color = body.length > 800 ? '#c0392b' : '#888';
+        }
+
+        async function sendSms(contactId) {
+            const body = (document.getElementById('sms-body').value || '').trim();
+            if (!body) { toast('Type a message first'); return; }
+            const data = await api('/api/blooio/send', {
+                method: 'POST',
+                body: JSON.stringify({ contact_id: contactId, text: body }),
+            });
+            if (data && data.success) {
+                const ch = data.channel ? ` (${data.channel})` : '';
+                toast(`Message sent${ch} — check the timeline`);
+                document.getElementById('modal-root').innerHTML = '';
+                const c = await api(`/api/contacts/${contactId}`);
+                if (c && c.company_id) openCompanyDetail(c.company_id);
+            }
         }
 
         // Globally callable from any phone-link click

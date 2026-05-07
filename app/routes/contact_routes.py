@@ -88,6 +88,8 @@ async def list_all_contacts(
             "email_status": c.email_status,
             "has_sequence": ecount > 0,
             "unsubscribed_at": c.unsubscribed_at.isoformat() if c.unsubscribed_at else None,
+            "do_not_text": bool(c.do_not_text),
+            "do_not_text_at": c.do_not_text_at.isoformat() if c.do_not_text_at else None,
         }
         for c, cname, cstatus, cphone, ecount in rows
     ]
@@ -357,6 +359,8 @@ def _contact_summary(c: Contact) -> dict:
         "is_primary": c.is_primary,
         "email_status": c.email_status,
         "unsubscribed_at": c.unsubscribed_at.isoformat() if c.unsubscribed_at else None,
+            "do_not_text": bool(c.do_not_text),
+            "do_not_text_at": c.do_not_text_at.isoformat() if c.do_not_text_at else None,
         "recent_posts": json.loads(c.recent_posts_json) if c.recent_posts_json else [],
         "posts_fetched_at": c.posts_fetched_at.isoformat() if c.posts_fetched_at else None,
         "created_at": c.created_at.isoformat() if c.created_at else None,

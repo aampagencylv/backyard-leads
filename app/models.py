@@ -155,6 +155,11 @@ class Contact(Base):
     unsubscribed_at = Column(DateTime, nullable=True)
     unsubscribe_token = Column(String(64), index=True, nullable=True)
 
+    # SMS opt-out — TCPA compliance: when a contact replies STOP/UNSUBSCRIBE
+    # to one of our texts, we set do_not_text=True and refuse all future SMS.
+    do_not_text = Column(Boolean, default=False, nullable=False)
+    do_not_text_at = Column(DateTime, nullable=True)
+
     # Personalization context cache (Netrows /people/posts)
     recent_posts_json = Column(Text, nullable=True)  # JSON array of {text, posted_at, url, likes}
     posts_fetched_at = Column(DateTime, nullable=True)
@@ -283,6 +288,11 @@ class RuntimeConfig(Base):
     # Deepgram — telephony-grade transcription (Whisper alt; better on phone audio,
     # native speaker diarization for talk-to-listen ratio coaching).
     deepgram_api_key = Column(Text, nullable=True)
+
+    # Blooio — iMessage automation (and optionally SMS via your own Twilio creds).
+    # Used as the primary "Message" channel; iMessage gets 3-4× higher response
+    # rates than SMS for B2B cold outreach in iPhone-heavy markets.
+    blooio_api_key = Column(Text, nullable=True)
 
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
