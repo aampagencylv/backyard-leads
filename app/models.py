@@ -536,6 +536,10 @@ class AuditReportModel(Base):
     overall_grade = Column(String(2), default="")
     findings_json = Column(Text, nullable=True)  # JSON array of top findings
 
+    # Competitor comparison
+    competitor_html = Column(Text, nullable=True)
+    competitor_generated_at = Column(DateTime, nullable=True)
+
     # Tracking
     view_count = Column(Integer, default=0)
     last_viewed_at = Column(DateTime, nullable=True)

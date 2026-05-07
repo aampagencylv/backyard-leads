@@ -26,6 +26,16 @@ async def migrate():
             """))
             print("migrate_audit_reports: created audit_reports table")
 
+        # Add competitor report columns
+        cols = await conn.execute(text("PRAGMA table_info(audit_reports)"))
+        col_names = [r[1] for r in cols.fetchall()]
+        if "competitor_html" not in col_names:
+            await conn.execute(text("ALTER TABLE audit_reports ADD COLUMN competitor_html TEXT"))
+            print("migrate_audit_reports: added competitor_html")
+        if "competitor_generated_at" not in col_names:
+            await conn.execute(text("ALTER TABLE audit_reports ADD COLUMN competitor_generated_at DATETIME"))
+            print("migrate_audit_reports: added competitor_generated_at")
+
 
 if __name__ == "__main__":
     asyncio.run(migrate())
