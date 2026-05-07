@@ -3902,9 +3902,10 @@
                             email sequence.
                         </div>
 
+                        <div id="sms-error" style="display:none;font-size:12px;color:#c0392b;background:#fdecec;border-radius:6px;padding:8px 10px;margin-top:8px"></div>
                         <div class="modal-actions" style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">
-                            <button class="btn btn-secondary" onclick="document.getElementById('modal-root').innerHTML=''">Cancel</button>
-                            <button class="btn btn-primary" onclick="sendSms(${c.id})">Send iMessage</button>
+                            <button class="btn btn-secondary" id="sms-cancel-btn" onclick="document.getElementById('modal-root').innerHTML=''">Cancel</button>
+                            <button class="btn btn-primary" id="sms-send-btn" onclick="sendSms(${c.id})">Send iMessage</button>
                         </div>
                     </div>
                 </div>
@@ -3921,18 +3922,61 @@
 
         async function sendSms(contactId) {
             const body = (document.getElementById('sms-body').value || '').trim();
-            if (!body) { toast('Type a message first'); return; }
-            const data = await api('/api/blooio/send', {
-                method: 'POST',
-                body: JSON.stringify({ contact_id: contactId, text: body }),
-            });
-            if (data && data.success) {
-                const ch = data.channel ? ` (${data.channel})` : '';
-                toast(`Message sent${ch} — check the timeline`);
-                document.getElementById('modal-root').innerHTML = '';
-                const c = await api(`/api/contacts/${contactId}`);
-                if (c && c.company_id) openCompanyDetail(c.company_id);
+            const errEl = document.getElementById('sms-error');
+            const sendBtn = document.getElementById('sms-send-btn');
+            const cancelBtn = document.getElementById('sms-cancel-btn');
+            if (errEl) errEl.style.display = 'none';
+            if (!body) {
+                if (errEl) { errEl.textContent = 'Type a message first.'; errEl.style.display = 'block'; }
+                else toast('Type a message first');
+                return;
             }
+            // Lock the modal during the request — prevents double-sends and tells the user something is happening
+            if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Sending…'; }
+            if (cancelBtn) cancelBtn.disabled = true;
+
+            // Inline-error variant of api() — keeps the modal open + shows the error in-place on failure
+            // instead of toasting and silently leaving the user wondering whether the message went out.
+            let data = null;
+            try {
+                const res = await fetch('/api/blooio/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                    body: JSON.stringify({ contact_id: contactId, text: body }),
+                });
+                if (res.status === 401) { logout(); return; }
+                let json = null;
+                try { json = await res.json(); } catch (e) {}
+                if (!res.ok) {
+                    const detail = (json && json.detail) || `HTTP ${res.status}`;
+                    if (errEl) { errEl.textContent = `Send failed — ${detail}`; errEl.style.display = 'block'; }
+                    else toast(`Send failed: ${detail}`);
+                    return;
+                }
+                data = json;
+            } catch (e) {
+                if (errEl) { errEl.textContent = `Network error — ${e.message}`; errEl.style.display = 'block'; }
+                else toast(`Network error: ${e.message}`);
+                return;
+            } finally {
+                if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Send iMessage'; }
+                if (cancelBtn) cancelBtn.disabled = false;
+            }
+
+            // Success path — close modal, toast, refresh whatever view is visible
+            const ch = (data && data.channel) ? ` (${data.channel})` : '';
+            toast(`✓ Message sent${ch} — logged to timeline`);
+            document.getElementById('modal-root').innerHTML = '';
+
+            // Refresh in place if we're on the company detail page — matches the post-call-log pattern
+            // at the bottom of the dialer flow. If the user is on a list page, don't navigate them away.
+            try {
+                const contact = await api(`/api/contacts/${contactId}`);
+                const page = document.getElementById('page-company-detail');
+                if (contact && contact.company_id && page && !page.classList.contains('hidden')) {
+                    openCompanyDetail(contact.company_id);
+                }
+            } catch (e) { /* refresh is best-effort */ }
         }
 
         // Globally callable from any phone-link click
