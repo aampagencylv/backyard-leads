@@ -81,6 +81,26 @@ async def send_imessage(
     if not (req.text or "").strip():
         raise HTTPException(status_code=400, detail="Message text is empty")
 
+    # Lazy phone-type lookup — cached on Contact so we only pay Twilio's
+    # $0.005 once per number. Refuses landlines (won't receive iMessage/SMS);
+    # mobile/voip/unknown are allowed and Blooio routes through the right channel.
+    if not contact.phone_type or contact.phone_type in ("error", None):
+        from app.runtime_config import get_twilio_credentials
+        from app.services.twilio_voice import lookup_phone_type
+        creds = await get_twilio_credentials(db)
+        if creds.is_minimally_configured:
+            r = await lookup_phone_type(creds, contact.phone)
+            contact.phone_type = r.type
+            contact.phone_carrier = r.carrier
+            contact.phone_type_checked_at = datetime.now(timezone.utc)
+            await db.commit()
+            await db.refresh(contact)
+    if contact.phone_type == "landline":
+        raise HTTPException(
+            status_code=400,
+            detail=f"This number ({contact.phone}) is a landline" + (f" on {contact.phone_carrier}" if contact.phone_carrier else "") + " — can't receive iMessage. Send an email or call instead.",
+        )
+
     api_key = await get_blooio_api_key(db)
     if not api_key:
         raise HTTPException(status_code=400, detail="Blooio not configured. Add an API key in Settings.")
@@ -116,6 +136,130 @@ async def send_imessage(
             "content": activity.content,
             "created_at": activity.created_at.isoformat() if activity.created_at else None,
         },
+    }
+
+
+# ============================================================
+# AI-generated iMessage draft (composer's ✨ Generate button)
+# ============================================================
+
+class GenerateMessageRequest(BaseModel):
+    contact_id: int
+    intent: str = "intro"  # intro / follow_up / after_email
+
+
+@router.post("/generate-message")
+async def generate_message(
+    req: GenerateMessageRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Use Claude to draft a personalized iMessage for the composer.
+    Pulls the contact's first name + company + recent LinkedIn posts +
+    detected site problems and runs them through the iMessage system prompt
+    (short, casual, one specific personalization beat, soft CTA, no signature).
+    Caller fills the textarea with the returned body — user can edit/send."""
+    contact = (await db.execute(select(Contact).where(Contact.id == req.contact_id))).scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    company = (await db.execute(select(Company).where(Company.id == contact.company_id))).scalar_one_or_none()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found for contact")
+
+    # Pull problems off the company (already cached from prior site scans)
+    problems = []
+    if company.problems_found:
+        try:
+            problems = json.loads(company.problems_found)
+        except (TypeError, ValueError):
+            problems = []
+
+    # Pull recent posts off the contact (Netrows /people/posts cache)
+    recent_posts = []
+    if contact.recent_posts_json:
+        try:
+            recent_posts = json.loads(contact.recent_posts_json)
+        except (TypeError, ValueError):
+            recent_posts = []
+
+    from app.services.email_generator import generate_imessage
+    from app.config import settings as app_settings
+    if not app_settings.anthropic_api_key:
+        raise HTTPException(status_code=400, detail="Anthropic API key not configured")
+
+    try:
+        result = await generate_imessage(
+            business_name=company.name or "your business",
+            business_type=company.business_type or company.industry or "backyard professional",
+            contact_name=contact.full_name,
+            problems=problems,
+            recent_posts=recent_posts,
+            location=(company.city or "") + (", " + company.state if company.state else "") or None,
+            intent=req.intent,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Claude error: {e}")
+
+    return {
+        "body": result.get("body", ""),
+        "char_count": result.get("char_count", 0),
+        "context_used": {
+            "first_name": (contact.first_name or "").strip() or None,
+            "company": company.name,
+            "problems_count": len(problems),
+            "recent_posts_count": len(recent_posts),
+        },
+    }
+
+
+# ============================================================
+# Phone-type lookup (Twilio Lookup v2) — cached on the contact
+# ============================================================
+
+@router.post("/lookup-phone-type/{contact_id}")
+async def lookup_contact_phone_type(
+    contact_id: int,
+    force: bool = False,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Look up whether the contact's phone is mobile / landline / voip and
+    cache the result on Contact. Pass ?force=true to re-check even if cached.
+
+    Used by the contact card's 🔎 Check button and called automatically by
+    /send when the cache is empty."""
+    contact = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    if not contact.phone:
+        raise HTTPException(status_code=400, detail="Contact has no phone number")
+
+    if not force and contact.phone_type and contact.phone_type not in ("error",):
+        return {
+            "phone_type": contact.phone_type,
+            "carrier": contact.phone_carrier,
+            "checked_at": contact.phone_type_checked_at.isoformat() if contact.phone_type_checked_at else None,
+            "from_cache": True,
+        }
+
+    from app.runtime_config import get_twilio_credentials
+    from app.services.twilio_voice import lookup_phone_type
+    creds = await get_twilio_credentials(db)
+    if not creds.is_minimally_configured:
+        raise HTTPException(status_code=400, detail="Twilio not configured (Lookup needs account SID + auth token)")
+
+    r = await lookup_phone_type(creds, contact.phone)
+    contact.phone_type = r.type
+    contact.phone_carrier = r.carrier
+    contact.phone_type_checked_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(contact)
+    return {
+        "phone_type": contact.phone_type,
+        "carrier": contact.phone_carrier,
+        "checked_at": contact.phone_type_checked_at.isoformat(),
+        "error": r.error,
+        "from_cache": False,
     }
 
 

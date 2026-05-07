@@ -160,6 +160,13 @@ class Contact(Base):
     do_not_text = Column(Boolean, default=False, nullable=False)
     do_not_text_at = Column(DateTime, nullable=True)
 
+    # Phone-type cache from Twilio Lookup v2 — populated lazily on first send attempt.
+    # Values: 'mobile' (iMessage/SMS works), 'landline' (refuse send), 'voip',
+    # 'unknown' (lookup not yet attempted), 'error' (lookup failed; treat as unknown).
+    phone_type = Column(String(20), nullable=True)
+    phone_type_checked_at = Column(DateTime, nullable=True)
+    phone_carrier = Column(String(80), nullable=True)  # e.g. "Verizon Wireless"
+
     # Personalization context cache (Netrows /people/posts)
     recent_posts_json = Column(Text, nullable=True)  # JSON array of {text, posted_at, url, likes}
     posts_fetched_at = Column(DateTime, nullable=True)

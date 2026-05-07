@@ -15,10 +15,12 @@ releasing Twilio phone numbers via the Twilio REST API.
 from __future__ import annotations
 from dataclasses import dataclass, asdict
 from typing import Optional
+from urllib.parse import quote
 import httpx
 
 
 TWILIO_BASE = "https://api.twilio.com/2010-04-01"
+TWILIO_LOOKUPS_BASE = "https://lookups.twilio.com/v2"
 
 
 @dataclass
@@ -162,6 +164,69 @@ async def release_number(creds: TwilioCredentials, phone_sid: str) -> None:
 
 def number_to_dict(n: TwilioNumber) -> dict:
     return asdict(n)
+
+
+# ============================================================
+# Phone-type lookup (Twilio Lookup v2)
+# ============================================================
+
+@dataclass
+class PhoneTypeResult:
+    type: str  # 'mobile' | 'landline' | 'voip' | 'unknown' | 'error'
+    carrier: Optional[str] = None
+    error: Optional[str] = None
+
+
+async def lookup_phone_type(creds: TwilioCredentials, phone: str) -> PhoneTypeResult:
+    """
+    GET /v2/PhoneNumbers/{e164}?Fields=line_type_intelligence
+
+    Twilio Lookup v2 with line_type_intelligence returns the carrier type:
+      - 'mobile': iMessage/SMS works
+      - 'landline': can't receive SMS — refuse to send
+      - 'voip': SMS may or may not work depending on the provider; treat as
+        mobile for now and let Blooio fall back to RCS/SMS, which will fail
+        cleanly if the VoIP carrier blocks it
+      - 'fixedVoip' / 'nonFixedVoip': map to 'voip'
+      - 'tollFree' / 'unknown' / etc: treat as 'unknown'
+
+    Cost: $0.005 per lookup. We cache the result on Contact.phone_type so
+    we only pay once per number.
+    """
+    e164 = normalize_phone_e164(phone)
+    if not e164:
+        return PhoneTypeResult(type="error", error=f"Invalid phone: {phone}")
+    if not creds.is_minimally_configured:
+        return PhoneTypeResult(type="error", error="Twilio not configured")
+
+    url = f"{TWILIO_LOOKUPS_BASE}/PhoneNumbers/{quote(e164, safe='')}"
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            r = await client.get(url, params={"Fields": "line_type_intelligence"}, auth=_auth(creds))
+        except httpx.HTTPError as e:
+            return PhoneTypeResult(type="error", error=f"Network error: {e}")
+
+    if r.status_code == 404:
+        return PhoneTypeResult(type="unknown", error="Number not found by Twilio Lookup")
+    if r.status_code != 200:
+        return PhoneTypeResult(type="error", error=f"{r.status_code}: {r.text[:200]}")
+
+    body = r.json() or {}
+    lti = body.get("line_type_intelligence") or {}
+    raw_type = (lti.get("type") or "").lower()
+    carrier_name = lti.get("carrier_name") or None
+
+    # Normalize Twilio's vocabulary down to our four buckets
+    if raw_type == "mobile":
+        norm = "mobile"
+    elif raw_type == "landline":
+        norm = "landline"
+    elif raw_type in ("fixedvoip", "nonfixedvoip", "voip"):
+        norm = "voip"
+    else:
+        norm = "unknown"
+
+    return PhoneTypeResult(type=norm, carrier=carrier_name)
 
 
 def normalize_phone_e164(raw: str | None, default_country: str = "1") -> str:

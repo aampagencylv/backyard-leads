@@ -793,6 +793,31 @@
             return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
         }
 
+        // Render the phone-type badge on contact cards. Empty string when we
+        // haven't checked yet — keeps the UI quiet until we have real data.
+        function renderPhoneTypeBadge(c) {
+            const t = c && c.phone_type;
+            if (!t || t === 'unknown' || t === 'error') return '';
+            if (t === 'mobile') return ' <span style="font-size:9px;background:#e8f5e9;color:#1b5e20;padding:1px 5px;border-radius:3px;font-weight:600" title="Twilio Lookup confirmed mobile">📱</span>';
+            if (t === 'landline') return ' <span style="font-size:9px;background:#fdecec;color:#c0392b;padding:1px 5px;border-radius:3px;font-weight:600" title="Landline — can\'t receive iMessage/SMS">☎ landline</span>';
+            if (t === 'voip') return ' <span style="font-size:9px;background:#fff8e1;color:#7a5a00;padding:1px 5px;border-radius:3px;font-weight:600" title="VoIP — iMessage may or may not work">VoIP</span>';
+            return '';
+        }
+
+        async function checkPhoneType(contactId, force = false) {
+            const data = await api(`/api/blooio/lookup-phone-type/${contactId}${force ? '?force=true' : ''}`, { method: 'POST' });
+            if (!data) return;
+            const carrier = data.carrier ? ` (${data.carrier})` : '';
+            const cached = data.from_cache ? ' [cached]' : '';
+            toast(`Phone type: ${data.phone_type}${carrier}${cached}`);
+            // Refresh the company detail in place so the badge updates
+            const page = document.getElementById('page-company-detail');
+            if (page && !page.classList.contains('hidden')) {
+                const c = await api(`/api/contacts/${contactId}`);
+                if (c && c.company_id) openCompanyDetail(c.company_id);
+            }
+        }
+
         async function api(path, options = {}) {
             try {
                 const res = await fetch(path, {
@@ -1668,7 +1693,7 @@
                                     </div>
                                     ${c.title ? `<div style="font-size:11px;color:#888">${escapeHtml(c.title)}</div>` : ''}
                                     ${c.email ? `<div style="font-size:11px;color:var(--bmp-orange)">${escapeHtml(c.email)}</div>` : '<div style="font-size:11px;color:#ccc">no email</div>'}
-                                    ${c.phone ? `<div style="font-size:11px"><a class="call-link" onclick="event.stopPropagation();callContact(${c.id})">${escapeHtml(c.phone)}</a>${!c.do_not_text ? ` · <a class="sms-link" onclick="event.stopPropagation();openSmsComposer(${c.id})" style="color:#0b93f6;cursor:pointer;text-decoration:none;border-bottom:1px dotted #0b93f6" title="iMessage via Blooio">💬 Message</a>` : ` · <span style="color:#c0392b">opted out</span>`}</div>` : ''}
+                                    ${c.phone ? `<div style="font-size:11px"><a class="call-link" onclick="event.stopPropagation();callContact(${c.id})">${escapeHtml(c.phone)}</a>${renderPhoneTypeBadge(c)}${c.do_not_text ? ` · <span style="color:#c0392b">opted out</span>` : (c.phone_type === 'landline' ? '' : ` · <a class="sms-link" onclick="event.stopPropagation();openSmsComposer(${c.id})" style="color:#0b93f6;cursor:pointer;text-decoration:none;border-bottom:1px dotted #0b93f6" title="iMessage via Blooio">💬 Message</a>`)}</div>` : ''}
                                     ${c.emails.length > 0 ? `<div style="font-size:10px;color:var(--bmp-green);margin-top:2px">${c.emails.filter(e=>e.is_sent).length}/${c.emails.length} steps sent</div>` : ''}
                                 </div>
                             `).join('')}
@@ -1903,8 +1928,8 @@
                             <div class="contact-card-meta">
                                 ${c.title ? escapeHtml(c.title) + ' · ' : ''}
                                 ${c.email ? `<a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a>` : '<em>no email</em>'}
-                                ${c.phone ? ` · <a class="call-link" onclick="event.stopPropagation();callContact(${c.id})">${escapeHtml(c.phone)}</a>` : ''}
-                                ${c.phone && !c.do_not_text ? ` · <a class="sms-link" onclick="event.stopPropagation();openSmsComposer(${c.id})" style="color:#0b93f6;cursor:pointer;text-decoration:none;border-bottom:1px dotted #0b93f6" title="iMessage via Blooio">💬 Message</a>` : ''}
+                                ${c.phone ? ` · <a class="call-link" onclick="event.stopPropagation();callContact(${c.id})">${escapeHtml(c.phone)}</a>${renderPhoneTypeBadge(c)}` : ''}
+                                ${c.phone && !c.do_not_text && c.phone_type !== 'landline' ? ` · <a class="sms-link" onclick="event.stopPropagation();openSmsComposer(${c.id})" style="color:#0b93f6;cursor:pointer;text-decoration:none;border-bottom:1px dotted #0b93f6" title="iMessage via Blooio">💬 Message</a>` : ''}
                                 ${c.unsubscribed_at ? ' · <span style="color:#c0392b">UNSUBSCRIBED (email)</span>' : ''}
                                 ${c.do_not_text ? ' · <span style="color:#c0392b">OPTED OUT (messaging)</span>' : ''}
                                 ${c.email_status === 'bounced' ? ' · <span style="color:#c0392b">BOUNCED</span>' : ''}
@@ -1912,6 +1937,7 @@
                         </div>
                         <div class="contact-actions" style="display:flex;flex-wrap:wrap;gap:4px">
                             <button class="btn btn-secondary btn-xs" onclick="editContact(${c.id})">Edit</button>
+                            ${c.phone && (!c.phone_type || c.phone_type === 'unknown' || c.phone_type === 'error') ? `<button class="btn btn-secondary btn-xs" onclick="checkPhoneType(${c.id})" title="Look up via Twilio whether this is mobile / landline / VoIP">🔎 Check Phone</button>` : ''}
                             ${!c.email ? `<button class="btn btn-secondary btn-xs" onclick="setContactEmail(${c.id})">Set Email</button>` : ''}
                             ${(!c.email && (c.linkedin_url || (c.first_name && c.last_name))) ? `<button class="btn btn-secondary btn-xs" onclick="lookupContactEmail(${c.id})">Lookup Email</button>` : ''}
                             ${c.linkedin_url ? `<button class="btn btn-secondary btn-xs" onclick="refreshContactPosts(${c.id})">Posts</button>` : ''}
@@ -3882,11 +3908,14 @@
                             <div class="avatar" style="width:40px;height:40px;border-radius:50%;background:#0b93f6;color:white;display:flex;align-items:center;justify-content:center;font-weight:700">${escapeHtml((initials || (c.email||'?')[0] || '?').toUpperCase())}</div>
                             <div style="flex:1">
                                 <div style="font-weight:600">${escapeHtml(c.name || c.email || '(unnamed)')}</div>
-                                <div style="font-size:11px;color:#888">${escapeHtml(c.phone)} · iMessage via Blooio</div>
+                                <div style="font-size:11px;color:#888">${escapeHtml(c.phone)}${c.phone_type ? ` · ${escapeHtml(c.phone_type)}${c.phone_carrier ? ' (' + escapeHtml(c.phone_carrier) + ')' : ''}` : ''} · iMessage via Blooio</div>
                             </div>
                         </div>
 
-                        <div style="font-size:11px;color:#888;text-transform:uppercase;font-weight:600;margin-bottom:4px">Suggested templates</div>
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                            <div style="font-size:11px;color:#888;text-transform:uppercase;font-weight:600">Suggested templates</div>
+                            <button class="btn btn-primary btn-xs" id="sms-generate-btn" onclick="generateImessage(${c.id})" title="AI-personalize using contact name + company + recent posts">✨ Generate</button>
+                        </div>
                         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
                             ${suggestions.map((s,i) => `
                                 <button class="btn btn-secondary btn-xs" onclick="document.getElementById('sms-body').value=${JSON.stringify(s.body).replace(/'/g,"\\'")}; updateSmsCount();">${escapeHtml(s.label)}</button>
@@ -3918,6 +3947,31 @@
             if (!el) return;
             el.textContent = `${body.length} chars`;
             el.style.color = body.length > 800 ? '#c0392b' : '#888';
+        }
+
+        async function generateImessage(contactId) {
+            const btn = document.getElementById('sms-generate-btn');
+            const ta = document.getElementById('sms-body');
+            const errEl = document.getElementById('sms-error');
+            if (errEl) errEl.style.display = 'none';
+            // Pick intent from existing context: if the contact has any prior email_sent
+            // activities, treat it as 'after_email'; otherwise 'intro'. Quick heuristic —
+            // user can always edit the result.
+            const intent = (ta && ta.value.trim()) ? 'follow_up' : 'after_email';
+            if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
+            try {
+                const data = await api('/api/blooio/generate-message', {
+                    method: 'POST',
+                    body: JSON.stringify({ contact_id: contactId, intent }),
+                });
+                if (data && data.body) {
+                    if (ta) { ta.value = data.body; updateSmsCount(); ta.focus(); }
+                    const ctx = data.context_used || {};
+                    toast(`✨ Drafted (${data.char_count} chars) using ${ctx.recent_posts_count || 0} recent posts + ${ctx.problems_count || 0} problems`);
+                }
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = '✨ Generate'; }
+            }
         }
 
         async function sendSms(contactId) {

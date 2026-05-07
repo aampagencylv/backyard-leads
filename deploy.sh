@@ -41,6 +41,7 @@ ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_deepgram_key
 ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_dial_modes
 ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_sms_optout
 ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_blooio_key
+ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_phone_type
 ExecStart=/opt/backyard-leads/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=5

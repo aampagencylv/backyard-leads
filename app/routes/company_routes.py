@@ -401,6 +401,9 @@ async def get_company_full(
             "unsubscribed_at": c.unsubscribed_at.isoformat() if c.unsubscribed_at else None,
             "do_not_text": bool(c.do_not_text),
             "do_not_text_at": c.do_not_text_at.isoformat() if c.do_not_text_at else None,
+            "phone_type": c.phone_type,
+            "phone_carrier": c.phone_carrier,
+            "phone_type_checked_at": c.phone_type_checked_at.isoformat() if c.phone_type_checked_at else None,
             "emails": [_email_to_dict(e) for e in emails],
         })
 

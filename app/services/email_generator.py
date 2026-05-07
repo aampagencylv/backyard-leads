@@ -253,3 +253,131 @@ Return as JSON: {{"subject": "LinkedIn message: {first_name or business_name}", 
         return {"subject": result["subject"], "body": result["body"]}
     except (json.JSONDecodeError, KeyError):
         return {"subject": f"LinkedIn: {first_name or business_name}", "body": text}
+
+
+IMESSAGE_SYSTEM_PROMPT = """You are writing a personalized iMessage for a BDR at Backyard Marketing Pros.
+We help backyard professionals (pool builders, landscapers, deck builders, outdoor kitchen
+builders) grow their business through marketing.
+
+This is a TEXT MESSAGE, not an email. The recipient is going to read it on their phone in a
+group of texts from their family, employees, and customers. It needs to feel like a real
+person texting, not marketing copy.
+
+CRITICAL RULES:
+
+1. UNDER 240 CHARACTERS. Hard cap. Shorter is better — 100-180 chars is the sweet spot.
+
+2. First name only. "Hey John" or "Hi John" — never the last name, never "Mr. Smith".
+   If no name is known, just open with the message body, no greeting.
+
+3. ONE specific personalization beat. Reference something concrete: a recent LinkedIn post
+   they wrote, a specific problem on their site, a Google review they replied to. Don't say
+   "I checked out your site" — that's everyone. Be specific in a way that proves you read
+   their actual stuff.
+
+4. ONE soft ask. "Worth a 5-min call?" or "Want me to send you what I found?" Never "schedule
+   a demo" or "book a call" — too formal for a text.
+
+5. NO signature, NO sign-off, NO "Best", NO "- Steve". Texts don't have signatures. The fact
+   that it's coming from BMP's number is the signature.
+
+6. NO emojis unless they're genuinely natural to the line. One 👀 or 🤔 max if it fits.
+
+7. Casual punctuation. Lowercase is fine. Em dashes / commas are fine. Avoid semicolons —
+   nobody texts with semicolons.
+
+NEVER use:
+- "I hope this finds you well" (it's a text, this makes no sense)
+- "I'd love to" / "I'd be happy to" (too formal)
+- "Are you the right person?"
+- "I came across your business"
+- Marketing words: "synergy", "leverage", "optimize", "solutions", "ROI", "scale"
+
+TONE: Like a friend who works in marketing who noticed something while scrolling and
+sent a quick text. Curious, specific, low-pressure.
+"""
+
+
+async def generate_imessage(
+    business_name: str,
+    business_type: str,
+    contact_name: Optional[str] = None,
+    problems: Optional[list] = None,
+    recent_posts: Optional[list] = None,
+    location: Optional[str] = None,
+    intent: str = "intro",  # 'intro', 'follow_up', 'after_email'
+) -> dict:
+    """
+    Generate a personalized iMessage. Returns {'body': str} — no subject because
+    iMessages have no subject line.
+
+    intent semantics:
+      - 'intro': cold first-touch via iMessage (rare; usually after a call/email)
+      - 'follow_up': nudge after an earlier message went unanswered
+      - 'after_email': a "did my email get buried?" follow-up
+    """
+    first_name = _extract_first_name(contact_name)
+
+    # Build personalization context — favor recent posts (LinkedIn), then fall back to problems
+    context_lines: list[str] = []
+    if recent_posts:
+        for p in recent_posts[:2]:
+            txt = (p.get("text") or "").strip()
+            if txt:
+                context_lines.append(f"- Recent post: {txt[:280]}")
+    if problems:
+        severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+        sorted_problems = sorted(problems, key=lambda p: severity_order.get(p.get("severity", "low"), 3))
+        for p in sorted_problems[:1]:
+            title = p.get("title") or p.get("issue") or ""
+            evidence = p.get("evidence") or p.get("description") or ""
+            if title:
+                context_lines.append(f"- Site problem: {title}{' — ' + evidence[:200] if evidence else ''}")
+    context_block = "\n".join(context_lines) if context_lines else "(no specific personalization context — fall back to a curious general nudge)"
+
+    intent_hint = {
+        "intro": "First-touch via text. Be curious, not pitchy. Reference one specific thing about their business.",
+        "follow_up": "They haven't responded yet. Keep it light. One short line. Don't restate the original ask.",
+        "after_email": "You sent an email recently — this is the bump. Acknowledge that in a casual way (\"did the email I sent get buried?\" energy).",
+    }.get(intent, "First-touch via text.")
+
+    user_prompt = f"""Write an iMessage (TEXT MESSAGE) for this prospect:
+
+Business: {business_name}
+Type: {business_type}
+Location: {location or "Unknown"}
+Contact first name: {first_name or "(unknown — no greeting)"}
+Intent: {intent} — {intent_hint}
+
+Personalization context:
+{context_block}
+
+Return as JSON: {{"body": "the text message, under 240 chars, no signature"}}
+"""
+
+    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    response = await client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=300,
+        system=IMESSAGE_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_prompt}],
+    )
+
+    text = response.content[0].text
+    try:
+        if "```json" in text:
+            text = text.split("```json")[1].split("```")[0]
+        elif "```" in text:
+            text = text.split("```")[1].split("```")[0]
+        result = json.loads(text)
+        body = (result.get("body") or "").strip()
+        # Strip any signature the model snuck in despite instructions
+        for sign_off in ["Best,", "Thanks,", "Cheers,", "- ", "—Steve", "— Steve",
+                         "Backyard Marketing", "BMP"]:
+            lines = body.split("\n")
+            while lines and lines[-1].strip().startswith(sign_off):
+                lines.pop()
+            body = "\n".join(lines).rstrip()
+        return {"body": body, "char_count": len(body)}
+    except (json.JSONDecodeError, KeyError):
+        return {"body": text.strip(), "char_count": len(text.strip())}
