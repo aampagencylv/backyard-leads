@@ -47,6 +47,7 @@ ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_messaging_di
 ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_blooio_signing_secret
 ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_tracking_links
 ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_page_views
+ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_pageview_events
 ExecStart=/opt/backyard-leads/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=5

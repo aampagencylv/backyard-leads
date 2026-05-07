@@ -375,6 +375,17 @@ class PageView(Base):
     ip = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
 
+    # Event type:
+    #   'pageview'        — default; just loaded a page
+    #   'form_submit'     — form submission (HIGH signal — instant hot lead)
+    #   'outbound_click'  — clicked a link to a different domain (Calendly, etc.)
+    #   'tel_click'       — tapped a tel: link (mobile call intent)
+    #   'mailto_click'    — clicked a mailto: link
+    #   'custom'          — element with data-bmp-event="name" attribute clicked
+    event_type = Column(String(30), default="pageview", nullable=False)
+    event_label = Column(String(200), nullable=True)  # form id, link target, custom event name
+    event_value = Column(Text, nullable=True)         # destination URL, form action, etc.
+
 
 class Tag(Base):
     __tablename__ = "tags"

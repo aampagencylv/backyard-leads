@@ -95,34 +95,81 @@ async def track_click(token: str, request: Request):
 _TRACK_SNIPPET = """\
 (function(){
 var API='__API__';
+function getToken(){
+  var m=document.cookie.match(/(?:^|;\\s*)bmp_visitor=([^;]+)/);
+  return m?m[1]:null;
+}
+function send(eventType,label,value){
+  try{
+    var t=getToken();
+    if(!t) return;
+    var payload=JSON.stringify({
+      visitor_token:t,
+      url:location.href,
+      title:(document.title||'').slice(0,500),
+      referrer:document.referrer||'',
+      event_type:eventType||'pageview',
+      event_label:(label||'').toString().slice(0,200),
+      event_value:(value||'').toString().slice(0,2000)
+    });
+    if(navigator.sendBeacon){
+      navigator.sendBeacon(API+'/api/track/pageview', new Blob([payload],{type:'application/json'}));
+    } else {
+      fetch(API+'/api/track/pageview',{method:'POST',body:payload,headers:{'Content-Type':'application/json'},keepalive:true}).catch(function(){});
+    }
+  }catch(e){/* swallow */}
+}
 try{
+  // 1. First-touch from a tracked email click — drop cookie + scrub bmp_id
   var p=new URLSearchParams(location.search);
   var id=p.get('bmp_id');
-  // First-touch from a tracked email click — drop the cookie on this domain
-  // so subsequent page views attribute back to the contact.
   if(id){
     document.cookie='bmp_visitor='+id+';path=/;max-age=31536000;SameSite=Lax';
-    // Strip ?bmp_id from the URL bar without reloading (cosmetic)
     if(window.history && history.replaceState){
-      var url=new URL(location.href); url.searchParams.delete('bmp_id');
-      history.replaceState({},'',url.toString());
+      var u=new URL(location.href); u.searchParams.delete('bmp_id');
+      history.replaceState({},'',u.toString());
     }
   }
-  var m=document.cookie.match(/(?:^|;\\s*)bmp_visitor=([^;]+)/);
-  if(!m) return;  // no tracked visitor on this device — nothing to log
-  var payload=JSON.stringify({
-    visitor_token:m[1],
-    url:location.href,
-    title:(document.title||'').slice(0,500),
-    referrer:document.referrer||''
-  });
-  // sendBeacon is fire-and-forget; ideal for analytics — survives page unload
-  if(navigator.sendBeacon){
-    navigator.sendBeacon(API+'/api/track/pageview', new Blob([payload],{type:'application/json'}));
-  } else {
-    fetch(API+'/api/track/pageview',{method:'POST',body:payload,headers:{'Content-Type':'application/json'},keepalive:true}).catch(function(){});
-  }
-}catch(e){/* swallow — never break the host page */}
+  // 2. Pageview on load
+  send('pageview','','');
+
+  // 3. Form submissions — capture phase so we don't block the form
+  document.addEventListener('submit',function(e){
+    try{
+      var f=e.target; if(!f||f.tagName!=='FORM') return;
+      var label=f.id||f.getAttribute('name')||f.getAttribute('data-bmp-event')||'form';
+      send('form_submit',label,(f.action||location.href));
+    }catch(_){}
+  },true);
+
+  // 4. Outbound + tel + mailto + custom button clicks — single delegated listener
+  document.addEventListener('click',function(e){
+    try{
+      // Walk up to find the closest <a> or [data-bmp-event]
+      var el=e.target;
+      while(el && el!==document.body){
+        if(el.dataset && el.dataset.bmpEvent){
+          send('custom', el.dataset.bmpEvent, (el.href||el.textContent||'').slice(0,200));
+          return;
+        }
+        if(el.tagName==='A' && el.href){
+          var href=el.href;
+          if(href.indexOf('tel:')===0){ send('tel_click', href.slice(4), href); return; }
+          if(href.indexOf('mailto:')===0){ send('mailto_click', href.slice(7), href); return; }
+          // Outbound = different hostname than current page
+          try{
+            var u=new URL(href);
+            if(u.hostname && u.hostname!==location.hostname){
+              send('outbound_click', u.hostname, href);
+              return;
+            }
+          }catch(_){}
+        }
+        el=el.parentElement;
+      }
+    }catch(_){}
+  },true);
+}catch(e){/* never break the host page */}
 })();
 """
 
@@ -143,20 +190,20 @@ async def track_snippet():
     )
 
 
-class PageViewBeacon(BaseModel):
-    visitor_token: str
-    url: str
-    title: str | None = None
-    referrer: str | None = None
-
-
 @router.post("/api/track/pageview")
 async def track_pageview(req: Request):
-    """Beacon receiver. CORS-open (no auth — public). Body is JSON sent
-    via navigator.sendBeacon from the snippet on bymp.com. We log a row
-    + maybe surface a "Hot Lead" Activity if this contact has crossed
-    the 3-pages-in-30-min threshold (Phase 3 logic, gated lightly here)."""
-    # Parse manually — sendBeacon sets content-type to whatever Blob() got
+    """Beacon receiver. CORS-open (no auth — public). Same endpoint handles
+    pageviews AND actions (form submit, outbound click, tel/mailto tap, custom
+    button click) via the event_type field on the payload.
+
+    Hot-lead tiering:
+      - HIGH-INTENT actions (form_submit, tel_click, mailto_click) → instant
+        hot-lead Activity, deduped to one per 24 hr per contact
+      - 3+ pageviews in 30 min → "active on site" hot-lead, deduped per session
+      - outbound_click + custom events → logged but don't auto-fire hot-lead
+        (BDR can scan the timeline; spamming on every Calendly link click would
+        be noisy)
+    """
     try:
         raw = await req.body()
         data = json.loads(raw or b"{}")
@@ -168,13 +215,21 @@ async def track_pageview(req: Request):
     if not visitor_token or not url:
         return JSONResponse({"ok": False}, status_code=400, headers={"Access-Control-Allow-Origin": "*"})
 
+    event_type  = (data.get("event_type")  or "pageview").strip()[:30].lower()
+    event_label = (data.get("event_label") or "").strip()[:200] or None
+    event_value = (data.get("event_value") or "").strip()[:2000] or None
     title = (data.get("title") or "").strip()[:500] or None
     referrer = (data.get("referrer") or "").strip()[:1000] or None
     ua = (req.headers.get("user-agent") or "")[:300] or None
     ip = (req.headers.get("x-forwarded-for") or "").split(",")[0].strip() or (req.client.host if req.client else None)
 
+    HIGH_INTENT = {"form_submit", "tel_click", "mailto_click"}
+    # Whitelist to prevent garbage event_type values from filling the index
+    KNOWN_EVENTS = {"pageview", "form_submit", "outbound_click", "tel_click", "mailto_click", "custom"}
+    if event_type not in KNOWN_EVENTS:
+        event_type = "custom"
+
     async with async_session() as db:
-        # Resolve contact + company from the original TrackingLink row
         link = (await db.execute(select(TrackingLink).where(TrackingLink.token == visitor_token))).scalar_one_or_none()
         contact_id = link.contact_id if link else None
         company_id = link.company_id if link else None
@@ -185,36 +240,71 @@ async def track_pageview(req: Request):
             company_id=company_id,
             url=url, page_title=title, referrer=referrer,
             user_agent=ua, ip=ip,
+            event_type=event_type, event_label=event_label, event_value=event_value,
         )
         db.add(pv)
-
-        # Phase 3 inline: hot-lead detection — 3+ pages in last 30 min from
-        # this same visitor → log a "hot lead" Activity once per session
         await db.flush()
+
         if contact_id:
-            since = datetime.now(timezone.utc) - timedelta(minutes=30)
-            recent_count = (await db.execute(
-                select(func.count(PageView.id)).where(
-                    PageView.visitor_token == visitor_token,
-                    PageView.created_at >= since,
-                )
-            )).scalar_one()
-            if recent_count == 3:  # exactly 3 — fire once when threshold crossed
-                # Avoid spamming: only one hot_lead activity per 30-min session
-                last_hot = (await db.execute(
+            now = datetime.now(timezone.utc)
+
+            # HIGH-INTENT actions → instant hot lead, deduped per 24 hr
+            if event_type in HIGH_INTENT:
+                since_24h = now - timedelta(hours=24)
+                recent_high = (await db.execute(
                     select(Activity).where(
                         Activity.contact_id == contact_id,
                         Activity.activity_type == "hot_lead",
-                        Activity.created_at >= since,
+                        Activity.content.like("%[high-intent]%"),
+                        Activity.created_at >= since_24h,
                     ).limit(1)
                 )).scalar_one_or_none()
-                if not last_hot:
+                if not recent_high:
+                    nice_event = {
+                        "form_submit":   f"submitted a form ({event_label or 'unnamed'})",
+                        "tel_click":     f"tapped a phone link ({event_label or 'unknown number'})",
+                        "mailto_click":  f"clicked an email link ({event_label or 'unknown'})",
+                    }.get(event_type, event_type)
                     db.add(Activity(
                         company_id=company_id, contact_id=contact_id,
                         activity_type="hot_lead",
-                        content=f"🔥 Active on site — {recent_count} pages in last 30 min",
-                        metadata_json=json.dumps({"current_page": url, "visitor_token": visitor_token}),
+                        content=f"🔥 [high-intent] {nice_event} — on {url}",
+                        metadata_json=json.dumps({
+                            "event_type": event_type,
+                            "event_label": event_label,
+                            "event_value": event_value,
+                            "page_url": url,
+                            "visitor_token": visitor_token,
+                        }),
                     ))
+
+            # PAGEVIEW threshold → "active on site", deduped per 30-min session
+            elif event_type == "pageview":
+                since = now - timedelta(minutes=30)
+                recent_pv_count = (await db.execute(
+                    select(func.count(PageView.id)).where(
+                        PageView.visitor_token == visitor_token,
+                        PageView.event_type == "pageview",
+                        PageView.created_at >= since,
+                    )
+                )).scalar_one()
+                if recent_pv_count == 3:
+                    last_hot = (await db.execute(
+                        select(Activity).where(
+                            Activity.contact_id == contact_id,
+                            Activity.activity_type == "hot_lead",
+                            Activity.content.like("%pages in last%"),
+                            Activity.created_at >= since,
+                        ).limit(1)
+                    )).scalar_one_or_none()
+                    if not last_hot:
+                        db.add(Activity(
+                            company_id=company_id, contact_id=contact_id,
+                            activity_type="hot_lead",
+                            content=f"🔥 Active on site — {recent_pv_count} pages in last 30 min",
+                            metadata_json=json.dumps({"current_page": url, "visitor_token": visitor_token}),
+                        ))
+
         await db.commit()
     return JSONResponse({"ok": True}, headers={"Access-Control-Allow-Origin": "*"})
 
