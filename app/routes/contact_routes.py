@@ -298,11 +298,12 @@ async def batch_contact_action(
     user: User = Depends(get_current_user),
 ):
     """Batch actions on contacts: delete."""
+    from app.scoping import check_contact_access
     count = 0
     if req.action == "delete":
         for cid in req.contact_ids:
             contact = (await db.execute(select(Contact).where(Contact.id == cid))).scalar_one_or_none()
-            if contact:
+            if contact and await check_contact_access(contact, user, db):
                 await db.delete(contact)
                 count += 1
         await db.commit()

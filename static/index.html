@@ -1724,6 +1724,7 @@
             panel.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
                 <thead>
                     <tr style="text-align:left;border-bottom:1px solid #e0e0e0">
+                        <th style="padding:8px;width:32px"><input type="checkbox" id="contacts-select-all" onchange="toggleAllContacts(this.checked)" style="width:16px;height:16px;cursor:pointer" title="Select all"></th>
                         <th style="padding:8px">Name</th>
                         <th style="padding:8px">Email</th>
                         <th style="padding:8px">Phone</th>
@@ -1735,6 +1736,7 @@
                 <tbody>
                     ${data.map(c => `
                         <tr style="border-bottom:1px solid #f5f5f5;cursor:pointer" onclick="openCompanyDetail(${c.company_id})">
+                            <td style="padding:8px" onclick="event.stopPropagation()"><input type="checkbox" class="contact-checkbox" data-contact-id="${c.id}" ${_contactSel.has(c.id) ? 'checked' : ''} onchange="toggleContactSelection(${c.id}, this.checked)" style="width:16px;height:16px;cursor:pointer"></td>
                             <td style="padding:8px">
                                 ${escapeHtml(c.name) || '—'}
                                 ${c.linkedin_url ? `<a href="${escapeHtml(c.linkedin_url)}" target="_blank" onclick="event.stopPropagation()" style="color:#0077B5;text-decoration:none;font-size:11px;margin-left:4px" title="LinkedIn Profile">in</a>` : ''}
@@ -1763,6 +1765,78 @@
                     `).join('')}
                 </tbody>
             </table>`;
+            _renderContactActionBar();
+        }
+
+        function toggleContactSelection(id, checked) {
+            if (checked) _contactSel.add(id);
+            else _contactSel.delete(id);
+            const selectAll = document.getElementById('contacts-select-all');
+            if (selectAll) {
+                const boxes = document.querySelectorAll('.contact-checkbox');
+                selectAll.checked = boxes.length > 0 && _contactSel.size === boxes.length;
+            }
+            _renderContactActionBar();
+        }
+
+        function toggleAllContacts(checked) {
+            document.querySelectorAll('.contact-checkbox').forEach(cb => {
+                const id = parseInt(cb.dataset.contactId, 10);
+                cb.checked = checked;
+                if (checked) _contactSel.add(id);
+                else _contactSel.delete(id);
+            });
+            _renderContactActionBar();
+        }
+
+        function _renderContactActionBar() {
+            let bar = document.getElementById('contact-action-bar');
+            if (!bar) {
+                bar = document.createElement('div');
+                bar.id = 'contact-action-bar';
+                bar.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#2c3e50;color:white;padding:12px 18px;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.2);z-index:1000;display:none;align-items:center;gap:12px;font-size:14px';
+                document.body.appendChild(bar);
+            }
+            if (_contactSel.size === 0) {
+                bar.style.display = 'none';
+                return;
+            }
+            bar.style.display = 'flex';
+            bar.innerHTML = `
+                <span><strong>${_contactSel.size}</strong> contact${_contactSel.size > 1 ? 's' : ''} selected</span>
+                <button class="btn btn-sm" onclick="batchContactsToDialer()" style="background:var(--bmp-green);color:white;font-weight:600">📞 Power Dialer</button>
+                <button class="btn btn-sm" onclick="batchDeleteContacts()" style="background:#c0392b;color:white;font-weight:600">🗑 Delete</button>
+                <button class="btn btn-sm" onclick="clearContactSelection()" style="background:transparent;color:white;border:1px solid white">Clear</button>
+            `;
+        }
+
+        function clearContactSelection() {
+            _contactSel.clear();
+            document.querySelectorAll('.contact-checkbox').forEach(cb => { cb.checked = false; });
+            const selectAll = document.getElementById('contacts-select-all');
+            if (selectAll) selectAll.checked = false;
+            _renderContactActionBar();
+        }
+
+        async function batchDeleteContacts() {
+            if (!confirm(`Delete ${_contactSel.size} contact${_contactSel.size > 1 ? 's' : ''}? This cannot be undone.`)) return;
+            const data = await api('/api/contacts/batch', {
+                method: 'POST',
+                body: JSON.stringify({ contact_ids: Array.from(_contactSel), action: 'delete' }),
+            });
+            if (data) {
+                toast(`Deleted ${data.count} contact${data.count !== 1 ? 's' : ''}`);
+                _contactSel.clear();
+                loadContacts(_lastContactMode);
+            }
+        }
+
+        function batchContactsToDialer() {
+            const contacts = (_lastContactsList || []).filter(c => _contactSel.has(c.id) && c.phone);
+            if (contacts.length === 0) { toast('None of the selected contacts have phone numbers'); return; }
+            const queue = contacts.map(c => ({ id: c.id, name: c.name || '(no name)', phone: c.phone, company_name: c.company_name, company_id: c.company_id }));
+            clearContactSelection();
+            startPowerDialer(queue);
         }
 
         // ============ Contact actions from Contacts page ============
@@ -1842,6 +1916,7 @@
 
         // Tracks which company IDs are selected for merge across re-renders
         const _mergeSel = new Set();
+        const _contactSel = new Set();
 
         function renderCompanies(companies, containerId) {
             const container = document.getElementById(containerId);
@@ -4667,8 +4742,10 @@
             stats: { dialed: 0, connected: 0, voicemail: 0, no_answer: 0, skipped: 0 },
         };
 
-        function startPowerDialer() {
-            const all = _lastContactsList || [];
+        let _powerDialerCustomQueue = null;
+        function startPowerDialer(customQueue) {
+            _powerDialerCustomQueue = customQueue || null;
+            const all = customQueue || _lastContactsList || [];
             const callable = all.filter(c => c.phone && !c.unsubscribed_at);
             if (callable.length === 0) {
                 toast('No callable contacts in this list (need a phone number).');
@@ -4680,7 +4757,7 @@
                 <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
                     <div class="modal-card" onclick="event.stopPropagation()" style="max-width:440px">
                         <h2>Start Power Dial</h2>
-                        <p style="font-size:13px;color:#555">Queueing <strong>${callable.length} contact${callable.length === 1 ? '' : 's'}</strong> from the current Contacts filter. The dialer will advance automatically after each call.</p>
+                        <p style="font-size:13px;color:#555">Queueing <strong>${callable.length} contact${callable.length === 1 ? '' : 's'}</strong>${customQueue ? ' from your selection' : ' from the current Contacts filter'}. The dialer will advance automatically after each call.</p>
                         <ul style="font-size:12px;color:#666;margin:8px 0 12px 18px">
                             <li>Skip a contact at any time</li>
                             <li>End the session early to stop</li>
@@ -4696,8 +4773,9 @@
         }
 
         function confirmStartPowerDialer() {
-            const all = _lastContactsList || [];
+            const all = _powerDialerCustomQueue || _lastContactsList || [];
             const callable = all.filter(c => c.phone && !c.unsubscribed_at);
+            _powerDialerCustomQueue = null;
             powerDialer.active = true;
             powerDialer.queue = callable;
             powerDialer.index = 0;
