@@ -164,6 +164,34 @@ def number_to_dict(n: TwilioNumber) -> dict:
     return asdict(n)
 
 
+def normalize_phone_e164(raw: str | None, default_country: str = "1") -> str:
+    """
+    Normalize a phone number to E.164 format that Twilio can dial.
+    Accepts inputs like:
+        '480-338-3369'      → '+14803383369'
+        '(480) 338-3369'    → '+14803383369'
+        '+1 (480) 338 3369' → '+14803383369'
+        '14803383369'       → '+14803383369'
+        '4803383369'        → '+14803383369'  (assumes default_country='1' for US)
+    Returns '' for invalid input.
+    """
+    if not raw:
+        return ""
+    # Keep digits + leading '+' only
+    s = "".join(ch for ch in raw if ch.isdigit() or ch == "+")
+    if not s:
+        return ""
+    if s.startswith("+"):
+        return s
+    # No country code prefix — assume default
+    if len(s) == 10:
+        return f"+{default_country}{s}"
+    if len(s) == 11 and s.startswith(default_country):
+        return f"+{s}"
+    # Anything else, just prepend '+' and hope it's valid
+    return f"+{s}"
+
+
 # ============================================================
 # Phase 2: Voice SDK access tokens + outbound TwiML
 # ============================================================

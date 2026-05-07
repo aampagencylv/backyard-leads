@@ -20,12 +20,15 @@ from app.database import get_db, async_session
 from app.models import User, Contact, Company, Activity
 from app.auth import get_current_user
 from app.runtime_config import get_twilio_credentials
+from urllib.parse import quote
+
 from app.services.twilio_voice import (
     search_available_numbers,
     buy_number,
     list_owned_numbers,
     release_number,
     number_to_dict,
+    normalize_phone_e164,
     generate_access_token,
     build_outbound_twiml,
     build_bridge_twiml,
@@ -273,11 +276,12 @@ async def voice_twiml(request: Request):
     """
     form = await request.form()
     from_identity_raw = form.get("From", "")  # e.g. "client:bmp_user_3"
-    to_number = form.get("To", "").strip()
+    to_raw = form.get("To", "").strip()
 
+    to_number = normalize_phone_e164(to_raw)
     if not to_number:
         return Response(
-            content="<Response><Say>Missing destination number.</Say></Response>",
+            content=f"<Response><Say>Invalid destination number: {to_raw}</Say></Response>",
             media_type="application/xml",
         )
 
@@ -288,7 +292,7 @@ async def voice_twiml(request: Request):
         async with async_session() as db:
             u = (await db.execute(select(User).where(User.twilio_identity == identity))).scalar_one_or_none()
             if u and u.twilio_phone_number:
-                caller_id = u.twilio_phone_number
+                caller_id = normalize_phone_e164(u.twilio_phone_number)
 
     if not caller_id:
         return Response(
@@ -409,23 +413,32 @@ async def bridge_call(
     if not creds.is_minimally_configured:
         raise HTTPException(status_code=400, detail="Twilio not configured")
 
-    # The TwiML for the bridged call needs to know:
-    #  - what number to dial (the prospect)
-    #  - what caller ID to show (rep's assigned Twilio number)
-    # We pass these as query params on the TwiML URL.
+    # Normalize all phone numbers to E.164 BEFORE handing to Twilio.
+    # The user might have entered a contact phone like "480-338-3369".
+    to_e164 = normalize_phone_e164(req.to_number)
+    if not to_e164:
+        raise HTTPException(status_code=400, detail=f"Invalid prospect phone: {req.to_number}")
+    rep_caller = normalize_phone_e164(user.twilio_phone_number)
+    rep_personal = normalize_phone_e164(user.personal_phone_number)
+    if not rep_caller or not rep_personal:
+        raise HTTPException(status_code=400, detail="Your assigned Twilio number or personal phone is not in E.164 format. Update them in Settings.")
+
+    # Build the bridge-twiml URL. URL-encode every value so the '+' in
+    # E.164 numbers survives the round-trip (in query strings, raw '+'
+    # decodes to a space).
     public = settings.public_url.rstrip('/')
     twiml_url = (
         f"{public}/api/twilio/voice/bridge-twiml"
-        f"?to={req.to_number}"
-        f"&caller_id={user.twilio_phone_number}"
+        f"?to={quote(to_e164, safe='')}"
+        f"&caller_id={quote(rep_caller, safe='')}"
     )
     status_url = f"{public}/api/twilio/voice/status"
 
     try:
         parent_sid = await initiate_bridge_call(
             creds,
-            rep_personal_phone=user.personal_phone_number,
-            rep_caller_id=user.twilio_phone_number,
+            rep_personal_phone=rep_personal,
+            rep_caller_id=rep_caller,
             bridge_twiml_url=twiml_url,
             status_callback_url=status_url,
         )
@@ -457,11 +470,13 @@ async def bridge_call(
 async def bridge_twiml(request: Request):
     """TwiML returned when the rep's personal phone answers our bridge call."""
     qp = dict(request.query_params)
-    to_number = qp.get("to", "")
-    caller_id = qp.get("caller_id", "")
+    # Re-normalize defensively — even if the upstream encoded properly, we
+    # want the dial to work for any stray legacy URL.
+    to_number = normalize_phone_e164(qp.get("to", ""))
+    caller_id = normalize_phone_e164(qp.get("caller_id", ""))
     if not (to_number and caller_id):
         return Response(
-            content="<Response><Say>Bridge call configuration missing.</Say></Response>",
+            content=f"<Response><Say>Bridge call configuration is missing the prospect number or caller ID.</Say></Response>",
             media_type="application/xml",
         )
     recording_callback = f"{settings.public_url.rstrip('/')}/api/twilio/voice/recording"
