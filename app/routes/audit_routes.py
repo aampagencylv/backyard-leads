@@ -55,7 +55,7 @@ async def generate_audit_report(
     )
 
     token = existing.token if existing else secrets.token_urlsafe(16)
-    public_url = settings.public_url.rstrip("/").replace("prospector.", "audit.")
+    public_url = settings.public_url.rstrip("/")
     html = render_report_html(report, token, public_url)
 
     if existing:
@@ -274,7 +274,7 @@ async def get_company_audit(
         return {"exists": False}
 
     import json
-    public_url = settings.public_url.rstrip("/").replace("prospector.", "audit.")
+    public_url = settings.public_url.rstrip("/")
 
     return {
         "exists": True,

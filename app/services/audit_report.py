@@ -374,11 +374,13 @@ def render_report_html(report: AuditReport, token: str, public_url: str = "") ->
 </head>
 <body>
     <div class="container">
-        <div class="header">
-            <img src="https://backyardmarketingpros.com/wp-content/uploads/2024/09/BMP_Logo_Color_Horiz-White-1024x269.png" alt="Backyard Marketing Pros">
-            <h1>AI Findability Report</h1>
-            <p>{_esc(report.company_name)} &middot; {_esc(report.city)}{', ' + _esc(report.state) if report.state else ''}</p>
-            <p style="margin-top:4px;font-size:12px">Generated {report.generated_at}</p>
+        <div style="border-radius:12px;overflow:hidden;margin-bottom:24px;box-shadow:0 4px 16px rgba(0,0,0,0.1)">
+            <img src="/static/report-banner.jpg" alt="Backyard Marketing Pros" style="width:100%;display:block">
+            <div style="background:linear-gradient(135deg, #0D3B13 0%, #1B5E20 100%);color:white;padding:32px 40px">
+                <h1 style="font-size:28px;margin-bottom:8px">AI Findability Report</h1>
+                <p style="color:rgba(255,255,255,0.8);font-size:16px;margin-bottom:4px">{_esc(report.company_name)} &middot; {_esc(report.city)}{', ' + _esc(report.state) if report.state else ''}</p>
+                <p style="color:rgba(255,255,255,0.5);font-size:12px">Generated {report.generated_at}</p>
+            </div>
         </div>
 
         <!-- Scores -->
