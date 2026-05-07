@@ -318,6 +318,7 @@
                 <a data-page="pipeline" onclick="showPage('pipeline')">Pipeline <span id="nav-pipeline-count" class="nav-badge"></span></a>
                 <a data-page="tasks" onclick="showPage('tasks')">Tasks <span id="nav-tasks-count" class="nav-badge"></span></a>
                 <a data-page="autopilot" onclick="showPage('autopilot')" style="margin-top:12px;border-top:1px solid rgba(255,255,255,0.1);padding-top:12px">Auto Pilot</a>
+                <a href="#" onclick="event.preventDefault();openStandaloneDialer()" style="color:var(--bmp-orange)">Dial a Number</a>
                 <a data-page="settings" onclick="showPage('settings')">Settings</a>
             </nav>
             <div class="sidebar-user">
@@ -1318,7 +1319,7 @@
             if (!el) return;
             if (!data) { el.innerHTML = '<p style="color:#888">Failed to load.</p>'; return; }
             const s = data.summary;
-            const isAdmin = currentUser && currentUser.role === 'admin';
+            const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.role === 'super_admin');
 
             const fmtTalk = (sec) => {
                 if (!sec) return '0m';
@@ -3816,7 +3817,7 @@
             // Show admin-only Twilio Numbers panel + load it if configured
             const numbersPanel = document.getElementById('twilio-numbers-panel');
             if (numbersPanel) {
-                const isAdmin = currentUser && currentUser.role === 'admin';
+                const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.role === 'super_admin');
                 if (isAdmin && t.minimally_configured) {
                     numbersPanel.classList.remove('hidden');
                     loadTwilioOwnedNumbers();
@@ -4786,6 +4787,36 @@
         }
 
         // ----- Dialer modal -----
+        function openStandaloneDialer() {
+            const root = document.getElementById('modal-root');
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:360px">
+                        <h2 style="text-align:center">Dial a Number</h2>
+                        <div class="form-group">
+                            <input type="tel" id="standalone-dial-number" placeholder="(555) 123-4567" style="font-size:20px;text-align:center;padding:12px;letter-spacing:1px">
+                        </div>
+                        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0">
+                            ${[1,2,3,4,5,6,7,8,9,'*',0,'#'].map(n => `
+                                <button onclick="document.getElementById('standalone-dial-number').value += '${n}'" style="padding:14px;font-size:18px;border:1px solid #ddd;border-radius:8px;background:white;cursor:pointer">${n}</button>
+                            `).join('')}
+                        </div>
+                        <button class="btn btn-success" style="width:100%;padding:14px;font-size:16px" onclick="dialStandaloneNumber()">Call</button>
+                        <p style="font-size:11px;color:#888;text-align:center;margin-top:8px">This call will not be linked to a contact unless you assign it after.</p>
+                    </div>
+                </div>
+            `;
+            setTimeout(() => document.getElementById('standalone-dial-number')?.focus(), 100);
+        }
+
+        async function dialStandaloneNumber() {
+            const number = document.getElementById('standalone-dial-number').value.trim();
+            if (!number) { toast('Enter a phone number'); return; }
+            document.getElementById('modal-root').innerHTML = '';
+            const stub = { id: null, company_id: null, full_name: number, phone: number, title: '', email: '' };
+            openDialerModal(stub, number, 'browser');
+        }
+
         function openDialerModal(contact, toNumber, mode) {
             const initials = ((contact.first_name||'')[0]||'') + ((contact.last_name||'')[0]||'');
             const isBridge = mode === 'bridge';

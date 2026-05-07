@@ -326,7 +326,7 @@ async def dashboard_calls(
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
     # Authorization scope
-    if user.role != "admin":
+    if user.role not in ("admin", "super_admin"):
         scope_user_ids = [user.id]
     elif user_id is not None:
         scope_user_ids = [user_id]
