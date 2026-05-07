@@ -1144,6 +1144,11 @@ async def merge_companies(
     unchanged (B no longer exists)."""
     from sqlalchemy import text as sql_text
 
+    # Admin-only — destructive operation that deletes Company rows + re-points
+    # every child table. A sales_rep accidentally clicking through this could
+    # destroy data; require admin to gate it.
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
     if req.keep_id in req.merge_from_ids:
         raise HTTPException(status_code=400, detail="keep_id can't also appear in merge_from_ids")
     if not req.merge_from_ids:

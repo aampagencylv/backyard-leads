@@ -440,6 +440,31 @@ Track when a prospect clicks through from an email to backyardmarketingpros.com,
 - [ ] **UI** to add/remove monitored profiles (LinkedIn or X) per Contact + per Company
 - [ ] **Auto-task** when a monitored prospect changes role/company → "Follow up with X — they just became CMO"
 
+### 🔥 NEXT SESSION (2026-05-07 plan, locked with Steve)
+- [ ] **Missive Phase 1** — webhook receiver at `/api/missive/webhook`. Inbound email from Missive → match to a contact → log to timeline + auto-pause sequence. Highest ROI of the new builds because Missive replies are currently invisible to the engine.
+- [ ] **Google OAuth** — for two reasons:
+  - Send email from the user's Gmail account (replaces Resend for those who want native Gmail send)
+  - Read calendar availability (precondition for the scheduling tool below)
+  - Probably wire `Sign in with Google` for user auth too while we're in there
+- [ ] **Manual "Send this step now" button** in the sequence panel — currently the engine fires steps when their `scheduled_send_at` passes, and there's a "Send Next in Sequence" button for the next-due step; Steve wants a per-step Send Now action that fires THIS step immediately regardless of order, so a BDR can push out a follow-up the moment they want to.
+- [ ] **Calendly/iClosed-style scheduling tool**, integrated with Google Calendar:
+  - Reads BDR availability from Google Calendar
+  - Configurable buffer / meeting length / windows per user
+  - Public booking page (e.g. `/book/{user-slug}`) with branded layout
+  - Auto-creates the event on both calendars + emails confirmation
+  - Should embeddable in emails (link), appear in the contact card actions, and be the destination of post-call sequence "calendar nudge" steps
+  - This replaces iClosed for our team
+
+### Security + code-cleanup followups (from end-of-session audit, 2026-05-06)
+- [x] Merge Company endpoint admin-gated (was open to all roles — fixed in same session)
+- [ ] **`Set-Cookie` flags on /t/{token} redirect** — currently `secure=False, httponly=False`. The cookie is set on prospector.* and isn't actually read by anything (the bymp.com snippet sets its OWN cookie via `document.cookie='bmp_visitor='+id`). Either remove the prospector cookie entirely OR flip it to `secure=True, httponly=True` for defense-in-depth.
+- [ ] **CORS posture** — `app/main.py` currently uses `allow_origins=["*"]` with `allow_credentials=True`. Browsers reject `*` + credentials per spec, so the credentials line is effectively dead, but it's a smell. Restrict to `https://prospector.backyardmarketingpros.com` + `https://backyardmarketingpros.com` and keep credentials off — we use Bearer tokens in localStorage, not cookies, so credentialed CORS is unnecessary.
+- [ ] **Rate limiting on /api/track/pageview** — public, unauth'd, no rate cap. Mitigation in place: unknown `visitor_token`s create dangling rows that don't surface anywhere, but a malicious actor could fill the page_views table. Add a simple per-IP token-bucket (slowapi or homebrew). Low priority.
+- [ ] **Notifications endpoint scope** — `/api/notifications/recent` returns ALL hot-lead / reply activities to every authed user. For the BMP team this is intentional (full visibility) but should eventually filter by `Company.assigned_to == user.email` for larger teams.
+- [ ] **Split company_routes.py** — 1241 lines and growing. Move merge + enrich + pursue + reviews into separate modules under `app/routes/companies/`.
+- [ ] **HEAD method on /track.js** — currently 405; harmless (browsers GET, not HEAD), but link-checkers / monitoring tools will alert.
+- [ ] **Dormant Twilio SMS code** in `app/services/twilio_sms.py` + `/api/twilio/sms/*` endpoints. Kept on purpose (might re-enable as a fallback channel) but worth re-evaluating in a few months — if we never need it, delete.
+
 ### Compliance / hygiene
 - [ ] **Send caps per domain per day** (deliverability protection — limit ~50/sender/day)
 - [ ] **Lost-reason capture** on closed_lost deals (dropdown: not interested / wrong fit / went w/ competitor / no budget / no response / other)
