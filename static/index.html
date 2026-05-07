@@ -483,6 +483,9 @@
                 </div>
                 <!-- Filters -->
                 <div style="display:flex;gap:12px;margin-bottom:16px;align-items:center;flex-wrap:wrap">
+                    <select id="company-rep-filter" onchange="loadCompanies(_lastCompaniesFilter)" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px;display:none">
+                        <option value="">All Reps</option>
+                    </select>
                     <input type="text" id="company-city-filter" placeholder="Filter by city..." oninput="filterCompaniesLocal()" style="padding:6px 12px;border:1px solid #ddd;border-radius:6px;font-size:13px;width:180px">
                     <select id="company-sort-filter" onchange="filterCompaniesLocal()" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px">
                         <option value="reviews">Most Reviews</option>
@@ -505,8 +508,27 @@
                         <button class="btn btn-secondary btn-sm" onclick="loadContacts('no_email')">Missing Email</button>
                         <button class="btn btn-secondary btn-sm" onclick="loadContacts('with_phone')">With Phone</button>
                         <span style="border-left:1px solid #ddd;height:20px;margin:0 4px"></span>
-                        <button class="btn btn-primary btn-sm" onclick="startPowerDialer()" title="Dial through this filtered list, one after another">🎧 Power Dial</button>
+                        <button class="btn btn-primary btn-sm" onclick="startPowerDialer()" title="Dial through this filtered list, one after another">Power Dial</button>
                     </div>
+                </div>
+                <div style="display:flex;gap:12px;margin-bottom:12px;align-items:center;flex-wrap:wrap">
+                    <input type="text" id="contacts-search" placeholder="Search name, email, company..." oninput="debouncedContactSearch()" style="padding:6px 12px;border:1px solid #ddd;border-radius:6px;font-size:13px;width:220px">
+                    <select id="contacts-rep-filter" onchange="loadContacts(_lastContactMode)" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px;display:none">
+                        <option value="">All Reps</option>
+                    </select>
+                    <select id="contacts-email-status" onchange="loadContacts(_lastContactMode)" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px">
+                        <option value="">Any Status</option>
+                        <option value="valid">Valid Email</option>
+                        <option value="invalid">Invalid</option>
+                        <option value="bounced">Bounced</option>
+                        <option value="unknown">Unknown</option>
+                    </select>
+                    <select id="contacts-sequence-filter" onchange="loadContacts(_lastContactMode)" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px">
+                        <option value="">Any Sequence</option>
+                        <option value="yes">Has Sequence</option>
+                        <option value="no">No Sequence</option>
+                    </select>
+                    <span id="contacts-count" style="font-size:12px;color:#888"></span>
                 </div>
                 <div class="panel" id="contacts-panel"></div>
             </div>
@@ -987,6 +1009,7 @@
                     loadDashboard();
                     refreshNavBadges();
                     startNotificationPoller();
+                    if (user.role === 'admin') initAdminRepFilters();
                 }
             } catch(e) { logout(); }
         }
@@ -1421,6 +1444,11 @@
             let path = '/api/companies/';
             if (filter === 'active') path += '?lifecycle=active';
             else if (filter && filter !== 'all') path += `?status=${filter}`;
+
+            // Admin rep filter
+            const repId = document.getElementById('company-rep-filter')?.value;
+            if (repId) path += (path.includes('?') ? '&' : '?') + `rep_id=${repId}`;
+
             const data = await api(path);
             _lastCompaniesData = data || [];
             filterCompaniesLocal();
@@ -1448,16 +1476,46 @@
 
         // ============ Contacts ============
         let _lastContactsList = [];
+        let _lastContactMode = 'all';
+        let _contactSearchTimeout = null;
+
+        function debouncedContactSearch() {
+            clearTimeout(_contactSearchTimeout);
+            _contactSearchTimeout = setTimeout(() => loadContacts(_lastContactMode), 300);
+        }
+
         async function loadContacts(mode) {
-            let path = '/api/contacts';
-            if (mode === 'with_email') path += '?has_email=true';
-            else if (mode === 'no_email') path += '?has_email=false';
-            else if (mode === 'with_phone') path += '?has_phone=true';
+            _lastContactMode = mode || 'all';
+            let params = [];
+            if (mode === 'with_email') params.push('has_email=true');
+            else if (mode === 'no_email') params.push('has_email=false');
+            else if (mode === 'with_phone') params.push('has_phone=true');
+
+            // Search
+            const search = document.getElementById('contacts-search')?.value?.trim();
+            if (search) params.push(`search=${encodeURIComponent(search)}`);
+
+            // Rep filter (admin only)
+            const repId = document.getElementById('contacts-rep-filter')?.value;
+            if (repId) params.push(`rep_id=${repId}`);
+
+            // Email status
+            const emailStatus = document.getElementById('contacts-email-status')?.value;
+            if (emailStatus) params.push(`email_status=${emailStatus}`);
+
+            // Sequence filter
+            const seqFilter = document.getElementById('contacts-sequence-filter')?.value;
+            if (seqFilter === 'yes') params.push('has_sequence=true');
+            else if (seqFilter === 'no') params.push('has_sequence=false');
+
+            let path = '/api/contacts' + (params.length ? '?' + params.join('&') : '');
             const data = await api(path);
             _lastContactsList = data || [];
+            const countEl = document.getElementById('contacts-count');
+            if (countEl) countEl.textContent = `${(data || []).length} contacts`;
             const panel = document.getElementById('contacts-panel');
             if (!data || data.length === 0) {
-                panel.innerHTML = '<p style="color:#666">No contacts yet. Pursue companies to auto-create contacts via Netrows/Hunter.</p>';
+                panel.innerHTML = '<p style="color:#666">No contacts match your filters.</p>';
                 return;
             }
             panel.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
@@ -3436,6 +3494,19 @@
 
         // ============ Team Management ============
 
+        async function initAdminRepFilters() {
+            const users = await api('/api/crm/users') || [];
+            const options = users.map(u => `<option value="${u.id}">${escapeHtml(u.name)}</option>`).join('');
+
+            ['company-rep-filter', 'contacts-rep-filter'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    el.innerHTML = '<option value="">All Reps</option>' + options;
+                    el.style.display = '';
+                }
+            });
+        }
+
         async function loadTeamMembers() {
             const users = await api('/api/auth/users');
             if (!users) return;
@@ -3465,6 +3536,7 @@
                             </td>
                             <td style="padding:8px">
                                 <button class="btn btn-secondary btn-xs" onclick="resetUserPassword(${u.id}, '${escapeHtml(u.email)}')">Reset PW</button>
+                                <button class="btn btn-secondary btn-xs" onclick="showReassignModal(${u.id}, '${escapeHtml(u.name)}')">Reassign</button>
                             </td>
                         </tr>
                     `).join('')}
@@ -3533,6 +3605,44 @@
             });
             if (data) {
                 toast(data.message || 'User invited!');
+                document.getElementById('modal-root').innerHTML = '';
+                loadTeamMembers();
+            }
+        }
+
+        async function showReassignModal(fromUserId, fromUserName) {
+            const users = await api('/api/auth/users') || [];
+            const others = users.filter(u => u.id !== fromUserId && u.is_active);
+            const root = document.getElementById('modal-root');
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:420px">
+                        <h2>Reassign ${escapeHtml(fromUserName)}'s Accounts</h2>
+                        <p style="font-size:13px;color:#666;margin-bottom:16px">Move all companies, open deals, and open tasks from ${escapeHtml(fromUserName)} to another team member.</p>
+                        <div class="form-group">
+                            <label>Transfer to:</label>
+                            <select id="reassign-to" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px">
+                                ${others.map(u => `<option value="${u.id}">${escapeHtml(u.name)} (${u.role})</option>`).join('')}
+                            </select>
+                        </div>
+                        <div class="modal-actions" style="display:flex;gap:8px;margin-top:16px">
+                            <button class="btn btn-secondary" onclick="document.getElementById('modal-root').innerHTML=''">Cancel</button>
+                            <button class="btn btn-primary" onclick="submitReassign(${fromUserId})">Reassign All</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function submitReassign(fromUserId) {
+            const toUserId = parseInt(document.getElementById('reassign-to').value);
+            if (!toUserId) return;
+            const data = await api('/api/auth/users/reassign', {
+                method: 'POST',
+                body: JSON.stringify({ from_user_id: fromUserId, to_user_id: toUserId }),
+            });
+            if (data) {
+                toast(`Reassigned: ${data.companies_moved} companies, ${data.deals_moved} deals, ${data.tasks_moved} tasks from ${data.from} to ${data.to}`);
                 document.getElementById('modal-root').innerHTML = '';
                 loadTeamMembers();
             }
