@@ -325,6 +325,11 @@ class RuntimeConfig(Base):
     # Empty = use the in-code default.
     messaging_direction = Column(Text, nullable=True)
 
+    # Blooio webhook signing secret (whsec_…) — used to HMAC-verify inbound
+    # webhook payloads. Without this, our /api/blooio/inbound endpoint
+    # accepts any request that knows the URL.
+    blooio_signing_secret = Column(Text, nullable=True)
+
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
 

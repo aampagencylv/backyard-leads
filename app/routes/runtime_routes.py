@@ -17,6 +17,7 @@ from app.runtime_config import (
     set_twilio_credentials,
     set_deepgram_api_key,
     set_blooio_api_key,
+    set_blooio_signing_secret,
     set_messaging_direction,
     DEFAULT_MESSAGING_DIRECTION,
     mask_key,
@@ -34,6 +35,7 @@ class UpdateRuntimeConfigRequest(BaseModel):
     twilio_twiml_app_sid: Optional[str] = None
     deepgram_api_key: Optional[str] = None
     blooio_api_key: Optional[str] = None
+    blooio_signing_secret: Optional[str] = None
     messaging_direction: Optional[str] = None
 
 
@@ -73,6 +75,8 @@ def _payload(rc, settings_obj) -> dict:
         "blooio": {
             "set": bool((rc.blooio_api_key or "").strip()),
             "masked": mask_key(rc.blooio_api_key),
+            "signing_secret_set": bool((rc.blooio_signing_secret or "").strip()),
+            "signing_secret_masked": mask_key(rc.blooio_signing_secret),
         },
         "messaging": {
             "direction": (rc.messaging_direction or "").strip(),
@@ -126,6 +130,8 @@ async def update_runtime_config(
         await set_deepgram_api_key(db, req.deepgram_api_key)
     if req.blooio_api_key is not None:
         await set_blooio_api_key(db, req.blooio_api_key)
+    if req.blooio_signing_secret is not None:
+        await set_blooio_signing_secret(db, req.blooio_signing_secret)
     if req.messaging_direction is not None:
         await set_messaging_direction(db, req.messaging_direction)
 

@@ -250,6 +250,40 @@ async def _handle_create_task(db: AsyncSession, step: GeneratedEmail, contact: C
 
 
 # ============================================================
+# TCPA send-window deferral (iMessage only — emails not regulated)
+# ============================================================
+
+def _maybe_defer_for_send_window(step: GeneratedEmail, contact: Contact, now: datetime) -> bool:
+    """If we're outside the contact-local 8am-9pm window, push scheduled_send_at
+    forward to the next 8am local time and return True. The engine will pick the
+    step up automatically on its next tick after that deadline.
+
+    Returns False (proceed with send) if we're inside the window or if we can't
+    infer a timezone (no phone, etc.)."""
+    if not contact.phone:
+        return False
+    from app.services.twilio_sms import check_send_window
+    check = check_send_window(contact.phone, now_utc=now)
+    if check.allowed:
+        return False
+    # Outside window — compute next 8am in the contact's local time
+    local = check.contact_local_now or now
+    # If we're past 9pm: next 8am is tomorrow. If we're before 8am: today's 8am.
+    if local.hour >= 21:
+        target_local = local.replace(hour=8, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    else:
+        target_local = local.replace(hour=8, minute=0, second=0, microsecond=0)
+    # Convert back to UTC for storage
+    target_utc = target_local.astimezone(timezone.utc)
+    step.scheduled_send_at = target_utc
+    logger.info(
+        f"[TCPA] iMessage step #{step.id} deferred to {target_utc.isoformat()} "
+        f"(outside contact's 8am-9pm window: {check.reason})"
+    )
+    return True
+
+
+# ============================================================
 # Engine tick — find pending steps and execute
 # ============================================================
 
@@ -324,14 +358,21 @@ async def process_pending_steps(db: AsyncSession, max_per_tick: int = 50) -> dic
                     counters["errors"] += 1
                     logger.warning(f"Email step #{step.id} failed: {msg}")
             elif step.step_type == "imessage":
-                ok, msg = await _handle_imessage(db, step, contact, company)
-                if ok:
-                    step.is_sent = True
-                    step.sent_at = now
-                    counters["sent"] += 1
+                # TCPA: don't fire iMessages outside 8am-9pm contact-local time.
+                # Defer to next 8am local instead of skipping or erroring.
+                deferred = _maybe_defer_for_send_window(step, contact, now)
+                if deferred:
+                    counters.setdefault("deferred", 0)
+                    counters["deferred"] += 1
                 else:
-                    counters["errors"] += 1
-                    logger.warning(f"iMessage step #{step.id} failed: {msg}")
+                    ok, msg = await _handle_imessage(db, step, contact, company)
+                    if ok:
+                        step.is_sent = True
+                        step.sent_at = now
+                        counters["sent"] += 1
+                    else:
+                        counters["errors"] += 1
+                        logger.warning(f"iMessage step #{step.id} failed: {msg}")
             elif step.step_type in ("call", "linkedin"):
                 ok, msg = await _handle_create_task(db, step, contact, company, step.step_type)
                 if ok:

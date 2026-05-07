@@ -661,6 +661,15 @@
                             </div>
                             <div id="blooio-key-current" style="font-size:11px;color:#888;margin-top:4px"></div>
                         </div>
+                        <div class="form-group" style="margin-top:10px">
+                            <label style="font-size:12px;font-weight:600;color:#555">Webhook Signing Secret <span id="blooio-signing-secret-status" style="font-weight:400;color:#888"></span></label>
+                            <p style="font-size:11px;color:#888;margin:2px 0 6px">HMAC verifies inbound webhooks. Get this from Blooio dashboard → Webhooks (shown once when you create a webhook). Without it, anyone who knows the URL can forge fake replies.</p>
+                            <div style="display:flex;gap:6px">
+                                <input type="password" id="settings-blooio-signing-secret" placeholder="whsec_..." autocomplete="off" style="flex:1">
+                                <button class="btn btn-secondary btn-sm" onclick="saveBlooioSigningSecret()">Save</button>
+                            </div>
+                            <div id="blooio-signing-secret-current" style="font-size:11px;color:#888;margin-top:4px"></div>
+                        </div>
                     </div>
                 </div>
 
@@ -3357,6 +3366,24 @@
                     ? `Active. iMessage will be sent from BMP's dedicated Blooio number.`
                     : `No key. The Message button will be disabled until you add one.`;
             }
+            const blSigStatus = document.getElementById('blooio-signing-secret-status');
+            const blSigCurrent = document.getElementById('blooio-signing-secret-current');
+            const blSigInput = document.getElementById('settings-blooio-signing-secret');
+            if (blSigInput) blSigInput.value = '';
+            if (blSigStatus) {
+                if (bl.signing_secret_set) {
+                    blSigStatus.textContent = `· ${bl.signing_secret_masked}`;
+                    blSigStatus.style.color = 'var(--bmp-green)';
+                } else {
+                    blSigStatus.textContent = '· not set';
+                    blSigStatus.style.color = '#c0392b';
+                }
+            }
+            if (blSigCurrent) {
+                blSigCurrent.textContent = bl.signing_secret_set
+                    ? `HMAC verification active. Forged inbound webhooks are rejected with 401.`
+                    : `Inbound webhooks accepted without verification — anyone who knows the URL can post.`;
+            }
             // Messaging direction (org-wide tone/strategic angle)
             const msg = (cfg.messaging || {});
             const msgStatus = document.getElementById('messaging-direction-status');
@@ -3572,6 +3599,16 @@
                 body: JSON.stringify({ blooio_api_key: v }),
             });
             if (data) { toast('Blooio key saved'); loadRuntimeConfig(); }
+        }
+
+        async function saveBlooioSigningSecret() {
+            const v = (document.getElementById('settings-blooio-signing-secret').value || '').trim();
+            if (!v) { toast('Paste the whsec_… secret first'); return; }
+            const data = await api('/api/runtime-config', {
+                method: 'PATCH',
+                body: JSON.stringify({ blooio_signing_secret: v }),
+            });
+            if (data) { toast('Signing secret saved — inbound webhooks now HMAC-verified'); loadRuntimeConfig(); }
         }
 
         async function testBlooioConnection() {

@@ -9,10 +9,48 @@ fallback channel; for now Blooio handles all "Message" actions.
 from __future__ import annotations
 from typing import Optional
 from datetime import datetime, timezone
+import hmac
+import hashlib
 import json
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
+
+
+def _verify_blooio_signature(secret: str, header_value: str, raw_body: bytes, tolerance_seconds: int = 300) -> bool:
+    """Stripe-style HMAC verification.
+
+    Header format: 't=<unix-seconds>,v1=<hex-sha256>'
+    Signed payload: '{timestamp}.{raw_body}'
+    Algorithm:      HMAC-SHA256
+    Tolerance:      reject anything older than 5 minutes to block replay attacks
+
+    Uses hmac.compare_digest for timing-safe comparison so an attacker can't
+    learn the secret one byte at a time.
+    """
+    if not secret or not header_value:
+        return False
+    parts = {}
+    for chunk in header_value.split(","):
+        if "=" in chunk:
+            k, _, v = chunk.partition("=")
+            parts[k.strip()] = v.strip()
+    ts = parts.get("t", "")
+    sig = parts.get("v1", "")
+    if not ts or not sig:
+        return False
+    # Reject expired signatures (replay protection)
+    try:
+        ts_int = int(ts)
+    except ValueError:
+        return False
+    if abs(int(time.time()) - ts_int) > tolerance_seconds:
+        return False
+    # The payload Blooio signs is "{timestamp}.{raw_body}"
+    signed_payload = f"{ts}.".encode("utf-8") + raw_body
+    expected = hmac.new(secret.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, sig)
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
@@ -377,6 +415,12 @@ async def inbound(request: Request):
     Blooio webhook receiver. Handles message.received, message.delivered,
     message.failed, message.read.
 
+    HMAC verification: if a signing secret is configured in Settings, every
+    request must carry a valid X-Blooio-Signature header (Stripe-style format
+    't=<unix>,v1=<hmac-sha256-hex>'). The signed payload is '{timestamp}.{raw_body}'.
+    Without a configured secret we accept any payload — fine for local testing
+    but you should always have a secret in prod.
+
     On message.received:
       - Match the From number to a known Contact
       - Log Activity type='imessage_received'
@@ -384,8 +428,20 @@ async def inbound(request: Request):
       - Auto-pause the contact's email sequence (matches email-reply behavior)
       - Bump company status to 'replied'
     """
+    raw_body = await request.body()
+
+    # HMAC check (best-effort: if no secret configured, skip)
+    async with async_session() as _vdb:
+        from app.runtime_config import get_blooio_signing_secret
+        secret = await get_blooio_signing_secret(_vdb)
+    if secret:
+        if not _verify_blooio_signature(secret, request.headers.get("X-Blooio-Signature", ""), raw_body):
+            # Don't echo why — attackers shouldn't learn whether it's the timestamp
+            # or the signature that's wrong. Just refuse.
+            return Response(status_code=401)
+
     try:
-        body = await request.json()
+        body = json.loads(raw_body) if raw_body else {}
     except Exception:
         return Response(status_code=200)
 

@@ -33,7 +33,9 @@ CRITICAL RULES:
 6. The CTA should be soft and specific: "Want me to send you a quick breakdown?" or
    "Happy to show you what we did for [similar business]" — never "book a call" or "schedule a demo".
 
-7. Subject lines: under 40 chars, lowercase feel, no clickbait, no emojis.
+7. Subject lines: under 40 chars, natural sentence case (capitalize the first word
+   and proper nouns; lowercase everything else). No clickbait, no emojis, no
+   ALL CAPS, no Title Case With Every Word Capitalized — that screams marketing.
 
 NEVER use:
 - "I hope this email finds you well"

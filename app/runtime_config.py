@@ -110,6 +110,20 @@ async def set_blooio_api_key(db: AsyncSession, value: str) -> RuntimeConfig:
     return rc
 
 
+async def get_blooio_signing_secret(db: AsyncSession) -> str:
+    rc = await _get_or_create(db)
+    return (rc.blooio_signing_secret or "").strip()
+
+
+async def set_blooio_signing_secret(db: AsyncSession, value: str) -> RuntimeConfig:
+    rc = await _get_or_create(db)
+    rc.blooio_signing_secret = value.strip() or None
+    rc.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(rc)
+    return rc
+
+
 # ============================================================
 # Messaging tone / strategic direction (prepended to AI prompts)
 # ============================================================
