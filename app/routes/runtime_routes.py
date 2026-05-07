@@ -112,7 +112,10 @@ async def update_runtime_config(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Update API keys. Pass empty string to clear; null/missing leaves unchanged."""
+    """Update API keys. Super admin only."""
+    if user.role != "super_admin":
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Only super admins can modify API keys")
     if req.netrows_api_key is not None:
         await set_netrows_api_key(db, req.netrows_api_key)
 

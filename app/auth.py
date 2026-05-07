@@ -57,15 +57,22 @@ async def get_current_user(
     return user
 
 
+async def require_super_admin(user: User = Depends(get_current_user)) -> User:
+    """Only super_admin can access — API keys, runtime config, billing."""
+    if user.role != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin access required")
+    return user
+
+
 async def require_admin(user: User = Depends(get_current_user)) -> User:
-    """Only admins can access this endpoint."""
-    if user.role != "admin":
+    """Admins and super_admins can access — user management, campaigns, global view."""
+    if user.role not in ("admin", "super_admin"):
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
 
 
 async def require_sales_rep(user: User = Depends(get_current_user)) -> User:
-    """Sales reps and admins can access. Read-only users cannot."""
+    """Sales reps, admins, and super_admins can access. Read-only cannot."""
     if user.role == "read_only":
         raise HTTPException(status_code=403, detail="Read-only accounts cannot perform this action")
     return user

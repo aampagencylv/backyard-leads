@@ -18,7 +18,7 @@ from app.models import User, Company, Contact, Deal, Task
 
 def scope_companies(query, user: User, rep_id: Optional[int] = None):
     """Scope company queries. Reps see only their companies. Admins see all."""
-    if user.role == "admin":
+    if user.role in ("admin", "super_admin"):
         if rep_id:
             return query.where(Company.assigned_to == rep_id)
         return query
@@ -27,7 +27,7 @@ def scope_companies(query, user: User, rep_id: Optional[int] = None):
 
 def scope_contacts(query, user: User, rep_id: Optional[int] = None):
     """Scope contact queries via company ownership."""
-    if user.role == "admin":
+    if user.role in ("admin", "super_admin"):
         if rep_id:
             return query.where(Company.assigned_to == rep_id)
         return query
@@ -36,7 +36,7 @@ def scope_contacts(query, user: User, rep_id: Optional[int] = None):
 
 def scope_deals(query, user: User, rep_id: Optional[int] = None):
     """Scope deal queries. Reps see only their deals."""
-    if user.role == "admin":
+    if user.role in ("admin", "super_admin"):
         if rep_id:
             return query.where(Deal.assigned_to == rep_id)
         return query
@@ -45,7 +45,7 @@ def scope_deals(query, user: User, rep_id: Optional[int] = None):
 
 def scope_tasks(query, user: User, rep_id: Optional[int] = None):
     """Scope task queries. Reps see only their tasks."""
-    if user.role == "admin":
+    if user.role in ("admin", "super_admin"):
         if rep_id:
             return query.where(Task.user_id == rep_id)
         return query

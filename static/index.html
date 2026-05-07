@@ -1009,7 +1009,7 @@
                     loadDashboard();
                     refreshNavBadges();
                     startNotificationPoller();
-                    if (user.role === 'admin') initAdminRepFilters();
+                    if (user.role === 'admin' || user.role === 'super_admin') initAdminRepFilters();
                 }
             } catch(e) { logout(); }
         }
@@ -1103,7 +1103,7 @@
             if (perm === 'granted') {
                 toast('✓ Browser notifications enabled — you\'ll get popups for hot leads + replies');
                 try { new Notification('BMP Prospector notifications enabled', { body: 'You\'ll get a popup here when a prospect goes hot, replies, or texts back.', icon: '/favicon.ico' }); } catch (e) {}
-                loadRuntimeConfig();
+                if (currentUser && currentUser.role === 'super_admin') loadRuntimeConfig();
             } else if (perm === 'denied') {
                 toast('Permission denied. To enable: click the lock icon in the address bar → Notifications → Allow.');
             }
@@ -3432,13 +3432,19 @@
             document.getElementById('settings-reply-to').textContent = data.reply_to;
             document.getElementById('signature-preview').innerHTML = data.signature_html || '';
 
-            // Show team management for admins
-            if (currentUser && currentUser.role === 'admin') {
+            // Show team management for admins + super_admins
+            if (currentUser && (currentUser.role === 'admin' || currentUser.role === 'super_admin')) {
                 document.getElementById('team-management-section').classList.remove('hidden');
                 loadTeamMembers();
             }
 
-            loadRuntimeConfig();
+            // Show API keys section only for super_admins
+            const apiKeysSection = document.getElementById('api-keys-section');
+            if (apiKeysSection) {
+                apiKeysSection.style.display = (currentUser && currentUser.role === 'super_admin') ? '' : 'none';
+            }
+
+            if (currentUser && currentUser.role === 'super_admin') loadRuntimeConfig();
         }
 
         async function changePassword() {
@@ -3525,7 +3531,7 @@
                             <td style="padding:8px">${escapeHtml(u.email)}</td>
                             <td style="padding:8px">
                                 <select onchange="updateUserRole(${u.id}, this.value)" style="padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px">
-                                    ${['admin','sales_rep','read_only'].map(r => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${r.replace('_',' ')}</option>`).join('')}
+                                    ${['super_admin','admin','sales_rep','read_only'].map(r => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${r.replace('_',' ')}</option>`).join('')}
                                 </select>
                             </td>
                             <td style="padding:8px">

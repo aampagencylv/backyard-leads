@@ -134,7 +134,7 @@ async def update_user_role(
     user: User = Depends(require_admin),
 ):
     """Change a user's role (admin only)."""
-    if req.role not in ("admin", "sales_rep", "read_only"):
+    if req.role not in ("super_admin", "admin", "sales_rep", "read_only"):
         raise HTTPException(status_code=400, detail="Invalid role")
 
     result = await db.execute(select(User).where(User.id == user_id))
@@ -174,7 +174,7 @@ async def invite_user(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    if req.role not in ("admin", "sales_rep", "read_only"):
+    if req.role not in ("super_admin", "admin", "sales_rep", "read_only"):
         raise HTTPException(status_code=400, detail="Invalid role")
 
     # Generate a temporary password
@@ -264,7 +264,7 @@ async def update_user(
         target.last_name = req.last_name
     if req.nickname is not None:
         target.nickname = req.nickname
-    if req.role is not None and req.role in ("admin", "sales_rep", "read_only"):
+    if req.role is not None and req.role in ("super_admin", "admin", "sales_rep", "read_only"):
         target.role = req.role
     if req.sending_enabled is not None:
         target.sending_enabled = req.sending_enabled

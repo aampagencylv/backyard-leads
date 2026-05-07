@@ -29,7 +29,7 @@ class User(Base):
     scheduling_url = Column(String(255), nullable=False, default="")
 
     sending_enabled = Column(Boolean, default=False)
-    role = Column(String(20), nullable=False, default="sales_rep")  # admin, sales_rep, read_only
+    role = Column(String(20), nullable=False, default="sales_rep")  # super_admin, admin, sales_rep, read_only
 
     # Twilio Voice — per-rep phone number + SDK identity
     twilio_phone_number = Column(String(40), nullable=True)  # E.164 format, e.g. +17025551234
