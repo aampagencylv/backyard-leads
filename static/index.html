@@ -829,6 +829,26 @@
             return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
         }
 
+        // Relative datetime for the timeline. "today 11:42 PM", "yesterday 9:15 AM",
+        // or "May 6 · 11:42 PM" for older entries. Time-of-day matters for hot-lead
+        // intelligence (a site visit at midnight reads very differently than 9am).
+        function fmtDateTime(iso) {
+            if (!iso) return '';
+            const d = new Date(iso);
+            const now = new Date();
+            const isSameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+            const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
+            const isYesterday = d.getFullYear() === yesterday.getFullYear() && d.getMonth() === yesterday.getMonth() && d.getDate() === yesterday.getDate();
+            const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+            if (isSameDay) return `today ${time}`;
+            if (isYesterday) return `yesterday ${time}`;
+            const datePart = d.toLocaleDateString('en-US', {
+                month: 'short', day: 'numeric',
+                year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric',
+            });
+            return `${datePart} · ${time}`;
+        }
+
         // Render the phone-type badge on contact cards. Empty string when we
         // haven't checked yet — keeps the UI quiet until we have real data.
         function renderPhoneTypeBadge(c) {
@@ -2254,7 +2274,7 @@
                 _callPanels[a.id] = a;  // stash for later expand
                 const baseRow = `
                     <div><span class="timeline-icon">${icons[a.type] || '•'}</span>${escapeHtml(a.content)}</div>
-                    <div class="timeline-meta">${escapeHtml(a.user_name || 'System')} · ${fmtDate(a.created_at)}</div>
+                    <div class="timeline-meta">${escapeHtml(a.user_name || 'System')} · ${fmtDateTime(a.created_at)}</div>
                 `;
                 if (a.type !== 'call' && a.type !== 'voicemail') {
                     return `<div class="timeline-item">${baseRow}</div>`;
