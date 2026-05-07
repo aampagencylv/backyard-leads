@@ -5,6 +5,7 @@ All endpoints require role='admin'. Phase 2 (click-to-call) and beyond
 add the dialer + webhook routes.
 """
 from __future__ import annotations
+import asyncio
 from typing import Optional, List
 from datetime import datetime, timezone
 import json
@@ -29,6 +30,7 @@ from app.services.twilio_voice import (
     build_outbound_twiml,
     TwilioError,
 )
+from app.services.call_transcription import transcribe_and_summarize_in_background
 from app.config import settings
 
 router = APIRouter(prefix="/api/twilio", tags=["twilio"])
@@ -318,22 +320,92 @@ async def voice_status(request: Request):
 
 @router.post("/voice/recording")
 async def voice_recording(request: Request):
-    """Recording-complete webhook. Saves URL onto the matching Activity."""
+    """Recording-complete webhook. Saves URL onto the matching Activity and
+    spawns an async task to transcribe + summarize via Deepgram + Claude.
+    """
     form = await request.form()
     call_sid = form.get("CallSid")
     recording_url = form.get("RecordingUrl")
     if not (call_sid and recording_url):
         return Response(content="", media_type="application/xml")
 
+    # Twilio gives us the .wav URL by default; .mp3 is smaller (~10x) and
+    # all we need for transcription. Append .mp3 if the URL doesn't have an ext.
+    if not recording_url.lower().endswith((".mp3", ".wav")):
+        recording_url = recording_url + ".mp3"
+
     async with async_session() as db:
         act = (await db.execute(
             select(Activity).where(Activity.twilio_call_sid == call_sid)
         )).scalar_one_or_none()
+        activity_id: Optional[int] = None
         if act:
             act.recording_url = recording_url
             await db.commit()
-    # Phase 3 will kick off transcription here.
+            activity_id = act.id
+
+    # Fire-and-forget transcription pipeline. Don't block the webhook ack.
+    if activity_id is not None:
+        asyncio.create_task(transcribe_and_summarize_in_background(activity_id))
+
     return Response(content="", media_type="application/xml")
+
+
+@router.get("/recording/{activity_id}")
+async def proxy_recording(
+    activity_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Proxy a Twilio recording through our auth — Twilio recording URLs
+    require basic auth with the Account SID + Auth Token, which we can't
+    safely embed in a browser <audio> tag. Browser hits this endpoint
+    with our normal session auth; we re-fetch from Twilio with basic auth
+    and stream the bytes back.
+    """
+    act = (await db.execute(select(Activity).where(Activity.id == activity_id))).scalar_one_or_none()
+    if not act or not act.recording_url:
+        raise HTTPException(status_code=404, detail="No recording on this activity")
+
+    creds = await get_twilio_credentials(db)
+    if not creds.is_minimally_configured:
+        raise HTTPException(status_code=400, detail="Twilio not configured")
+
+    # Stream from Twilio → user
+    import httpx as _httpx
+    async def stream():
+        async with _httpx.AsyncClient(timeout=60) as client:
+            async with client.stream("GET", act.recording_url, auth=(creds.account_sid, creds.auth_token)) as r:
+                async for chunk in r.aiter_bytes(chunk_size=64 * 1024):
+                    yield chunk
+
+    from fastapi.responses import StreamingResponse
+    media_type = "audio/mpeg" if act.recording_url.lower().endswith(".mp3") else "audio/wav"
+    return StreamingResponse(stream(), media_type=media_type)
+
+
+@router.post("/voice/transcribe-now/{activity_id}")
+async def transcribe_now(
+    activity_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Manual re-trigger for the transcription pipeline.
+    Useful when the webhook was missed, the Deepgram key wasn't set yet, or
+    we want to re-summarize after editing the prompt.
+    """
+    act = (await db.execute(select(Activity).where(Activity.id == activity_id))).scalar_one_or_none()
+    if not act:
+        raise HTTPException(status_code=404, detail="Activity not found")
+    if not act.recording_url:
+        raise HTTPException(status_code=400, detail="No recording URL on this activity yet")
+    # Clear the previous transcript so the pipeline rebuilds it
+    act.transcript = None
+    act.call_summary = None
+    await db.commit()
+    asyncio.create_task(transcribe_and_summarize_in_background(activity_id))
+    return {"queued": True, "activity_id": activity_id}
 
 
 # ============================================================

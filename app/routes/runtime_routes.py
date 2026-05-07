@@ -15,6 +15,7 @@ from app.runtime_config import (
     _get_or_create,
     set_netrows_api_key,
     set_twilio_credentials,
+    set_deepgram_api_key,
     mask_key,
 )
 
@@ -28,6 +29,7 @@ class UpdateRuntimeConfigRequest(BaseModel):
     twilio_api_key_sid: Optional[str] = None
     twilio_api_key_secret: Optional[str] = None
     twilio_twiml_app_sid: Optional[str] = None
+    deepgram_api_key: Optional[str] = None
 
 
 def _payload(rc, settings_obj) -> dict:
@@ -58,6 +60,10 @@ def _payload(rc, settings_obj) -> dict:
                                     (rc.twilio_api_key_sid or "").strip(),
                                     (rc.twilio_api_key_secret or "").strip(),
                                     (rc.twilio_twiml_app_sid or "").strip()]),
+        },
+        "deepgram": {
+            "set": bool((rc.deepgram_api_key or "").strip()),
+            "masked": mask_key(rc.deepgram_api_key),
         },
     }
 
@@ -91,6 +97,9 @@ async def update_runtime_config(
     }
     if any(v is not None for v in twilio_changes.values()):
         await set_twilio_credentials(db, **twilio_changes)
+
+    if req.deepgram_api_key is not None:
+        await set_deepgram_api_key(db, req.deepgram_api_key)
 
     from app.config import settings
     rc = await _get_or_create(db)

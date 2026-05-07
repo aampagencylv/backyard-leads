@@ -274,6 +274,10 @@ class RuntimeConfig(Base):
     twilio_api_key_secret = Column(Text, nullable=True)
     twilio_twiml_app_sid = Column(Text, nullable=True)
 
+    # Deepgram — telephony-grade transcription (Whisper alt; better on phone audio,
+    # native speaker diarization for talk-to-listen ratio coaching).
+    deepgram_api_key = Column(Text, nullable=True)
+
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
 

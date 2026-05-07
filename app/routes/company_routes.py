@@ -493,6 +493,14 @@ async def get_company_full(
                 "user_name": user_names.get(a.user_id),
                 "metadata": json.loads(a.metadata_json) if a.metadata_json else None,
                 "created_at": a.created_at.isoformat() if a.created_at else None,
+                # Call-specific fields (only meaningful when type='call' or 'voicemail')
+                "twilio_call_sid": a.twilio_call_sid,
+                "call_duration_seconds": a.call_duration_seconds,
+                "call_direction": a.call_direction,
+                "call_outcome": a.call_outcome,
+                "recording_url": a.recording_url,
+                "transcript": a.transcript,
+                "call_summary": a.call_summary,
             }
             for a in activities
         ],

@@ -620,6 +620,18 @@
                             </div>
                         </div>
                     </div>
+
+                    <div style="margin-top:24px;padding-top:16px;border-top:1px solid #eee">
+                        <h4 style="font-size:14px;margin-bottom:6px">Deepgram <span id="deepgram-key-status" style="font-size:11px;font-weight:400;color:#888"></span></h4>
+                        <p style="font-size:12px;color:#888;margin-bottom:8px">Telephony-grade transcription for recorded calls. Sign up at <a href="https://console.deepgram.com/" target="_blank" rel="noreferrer">console.deepgram.com</a> ($200 free credit, then $0.0043/min).</p>
+                        <div class="form-group">
+                            <div style="display:flex;gap:6px">
+                                <input type="password" id="settings-deepgram-key" placeholder="40-char hex string" autocomplete="off" style="flex:1">
+                                <button class="btn btn-secondary btn-sm" onclick="saveDeepgramKey()">Save</button>
+                            </div>
+                            <div id="deepgram-key-current" style="font-size:11px;color:#888;margin-top:4px"></div>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Twilio Numbers (admin only) -->
@@ -1850,19 +1862,113 @@
         function renderTimeline(items) {
             if (!items.length) return '<p style="font-size:12px;color:#888">No activity yet.</p>';
             const icons = {
-                note: '📝', call: '📞', meeting: '🤝', email_sent: '📧', email_opened: '👀',
+                note: '📝', call: '📞', voicemail: '📢', meeting: '🤝', email_sent: '📧', email_opened: '👀',
                 email_clicked: '🖱️', email_bounced: '⚠️', email_complained: '🚫',
                 email_replied: '↩️', status_change: '🔄', enriched: '🧪', linkedin_message: '💼',
                 task_created: '✅', task_completed: '✓', deal_created: '💰', deal_update: '💼',
                 contact_added: '👤', sequence_created: '📨', sequence_paused: '⏸️',
                 sequence_resumed: '▶️', unsubscribed: '🚪',
             };
-            return items.map(a => `
-                <div class="timeline-item">
+            return items.map(a => {
+                _callPanels[a.id] = a;  // stash for later expand
+                const baseRow = `
                     <div><span class="timeline-icon">${icons[a.type] || '•'}</span>${escapeHtml(a.content)}</div>
                     <div class="timeline-meta">${escapeHtml(a.user_name || 'System')} · ${fmtDate(a.created_at)}</div>
-                </div>
-            `).join('');
+                `;
+                if (a.type !== 'call' && a.type !== 'voicemail') {
+                    return `<div class="timeline-item">${baseRow}</div>`;
+                }
+                // Call-specific row with controls
+                const dur = a.call_duration_seconds
+                    ? `${Math.floor(a.call_duration_seconds/60)}:${String(a.call_duration_seconds%60).padStart(2,'0')}`
+                    : '';
+                const outcomeBadge = a.call_outcome
+                    ? `<span style="font-size:10px;background:#f5f5f5;color:#555;padding:1px 6px;border-radius:3px;margin-left:6px">${escapeHtml(a.call_outcome)}</span>`
+                    : '';
+                const direction = a.call_direction === 'inbound' ? '⬅️ inbound' : '➡️ outbound';
+                const buttons = [];
+                if (a.recording_url) buttons.push(`<button class="btn btn-secondary btn-xs" onclick="toggleCallExpand(${a.id},'audio')">▶️ Play</button>`);
+                if (a.recording_url && !a.transcript) buttons.push(`<button class="btn btn-secondary btn-xs" onclick="retranscribeCall(${a.id})">🔄 Transcribe</button>`);
+                if (a.transcript) buttons.push(`<button class="btn btn-secondary btn-xs" onclick="toggleCallExpand(${a.id},'transcript')">📄 Transcript</button>`);
+                if (a.call_summary) buttons.push(`<button class="btn btn-secondary btn-xs" onclick="toggleCallExpand(${a.id},'summary')">✨ Takeaways</button>`);
+                return `
+                    <div class="timeline-item">
+                        ${baseRow}
+                        <div class="timeline-meta" style="margin-top:4px">${direction}${dur ? ' · ' + dur : ''}${outcomeBadge}</div>
+                        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${buttons.join('')}</div>
+                        <div id="call-expand-${a.id}" style="display:none;margin-top:8px"></div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // Stash the latest timeline item per activity id so we don't re-fetch when expanding
+        const _callPanels = {};
+        function _stashCallActivity(a) { _callPanels[a.id] = a; }
+
+        async function toggleCallExpand(activityId, view) {
+            const panel = document.getElementById('call-expand-' + activityId);
+            if (!panel) return;
+            // If already showing this view, collapse
+            if (panel.dataset.view === view && panel.style.display !== 'none') {
+                panel.style.display = 'none';
+                panel.dataset.view = '';
+                return;
+            }
+            panel.dataset.view = view;
+            panel.style.display = 'block';
+            const a = _callPanels[activityId] || {};
+            if (view === 'audio') {
+                panel.innerHTML = `<audio controls preload="none" style="width:100%" src="/api/twilio/recording/${activityId}"></audio>`;
+            } else if (view === 'transcript') {
+                if (!a.transcript) { panel.innerHTML = '<p style="font-size:12px;color:#888">Transcript not ready yet.</p>'; return; }
+                panel.innerHTML = `<div style="background:#f9faf9;border-radius:6px;padding:10px 12px;font-size:12px;line-height:1.55;white-space:pre-wrap;max-height:340px;overflow-y:auto">${renderMarkdownLite(a.transcript)}</div>`;
+            } else if (view === 'summary') {
+                if (!a.call_summary) { panel.innerHTML = '<p style="font-size:12px;color:#888">Takeaways not ready yet.</p>'; return; }
+                panel.innerHTML = `<div style="background:#fff5f0;border-left:3px solid var(--bmp-orange);border-radius:6px;padding:12px;font-size:12px;line-height:1.55;max-height:420px;overflow-y:auto">${renderMarkdownLite(a.call_summary)}</div>`;
+            }
+        }
+
+        async function retranscribeCall(activityId) {
+            toast('Queuing transcription…');
+            const data = await api(`/api/twilio/voice/transcribe-now/${activityId}`, { method: 'POST' });
+            if (data && data.queued) {
+                toast('Transcription started — check back in a few seconds');
+            }
+        }
+
+        // Tiny Markdown renderer (bold, italics, headers, lists) — avoids pulling in marked.js
+        function renderMarkdownLite(md) {
+            const lines = (md || '').split('\n');
+            const out = [];
+            let inList = false;
+            for (const raw of lines) {
+                const line = raw.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                if (/^### /.test(line)) {
+                    if (inList) { out.push('</ul>'); inList = false; }
+                    out.push(`<h4 style="font-size:13px;font-weight:600;color:var(--bmp-green);margin:8px 0 4px">${line.slice(4)}</h4>`);
+                } else if (/^## /.test(line)) {
+                    if (inList) { out.push('</ul>'); inList = false; }
+                    out.push(`<h3 style="font-size:14px;font-weight:600;margin:8px 0 4px">${line.slice(3)}</h3>`);
+                } else if (/^[\*\-] /.test(line)) {
+                    if (!inList) { out.push('<ul style="margin:4px 0 4px 18px;padding:0">'); inList = true; }
+                    out.push(`<li>${formatInline(line.slice(2))}</li>`);
+                } else if (/^\s*$/.test(line)) {
+                    if (inList) { out.push('</ul>'); inList = false; }
+                    out.push('');
+                } else {
+                    if (inList) { out.push('</ul>'); inList = false; }
+                    out.push(`<div>${formatInline(line)}</div>`);
+                }
+            }
+            if (inList) out.push('</ul>');
+            return out.join('\n');
+        }
+        function formatInline(s) {
+            return s
+                .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*(.+?)\*/g, '<em>$1</em>')
+                .replace(/`([^`]+)`/g, '<code>$1</code>');
         }
 
         async function loadCompanyTasks(companyId) {
@@ -2805,6 +2911,27 @@
                 }
             }
 
+            // Deepgram
+            const dg = t.deepgram = (cfg.deepgram || {});
+            const dgStatus = document.getElementById('deepgram-key-status');
+            const dgCurrent = document.getElementById('deepgram-key-current');
+            const dgInput = document.getElementById('settings-deepgram-key');
+            if (dgInput) dgInput.value = '';
+            if (dgStatus) {
+                if (dg.set) {
+                    dgStatus.textContent = `· ${dg.masked}`;
+                    dgStatus.style.color = 'var(--bmp-green)';
+                } else {
+                    dgStatus.textContent = '· not set';
+                    dgStatus.style.color = '#c0392b';
+                }
+            }
+            if (dgCurrent) {
+                dgCurrent.textContent = dg.set
+                    ? `Active. Calls will be transcribed automatically when recording is ready.`
+                    : `No key. Call recordings will not be transcribed until you add one.`;
+            }
+
             // Show admin-only Twilio Numbers panel + load it if configured
             const numbersPanel = document.getElementById('twilio-numbers-panel');
             if (numbersPanel) {
@@ -2829,6 +2956,16 @@
                 body: JSON.stringify({ [field]: trimmed }),
             });
             if (data) { toast(`${field} saved`); loadRuntimeConfig(); }
+        }
+
+        async function saveDeepgramKey() {
+            const v = (document.getElementById('settings-deepgram-key').value || '').trim();
+            if (!v) { toast('Paste a Deepgram key first'); return; }
+            const data = await api('/api/runtime-config', {
+                method: 'PATCH',
+                body: JSON.stringify({ deepgram_api_key: v }),
+            });
+            if (data) { toast('Deepgram key saved'); loadRuntimeConfig(); }
         }
 
         // ============ Twilio Numbers (admin) ============
