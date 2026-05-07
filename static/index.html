@@ -2246,12 +2246,21 @@
                                 <button class="btn btn-secondary btn-xs" onclick="addDeal(${d.id})">+</button>
                             </div>
                             ${d.deals.length ? d.deals.map(deal => `
-                                <div style="padding:6px 8px;background:#f8f9fa;border-radius:6px;margin-bottom:4px;font-size:12px">
+                                <div style="padding:6px 8px;background:${deal.is_snoozed ? '#f0f0f0' : '#f8f9fa'};border-radius:6px;margin-bottom:4px;font-size:12px;${deal.is_snoozed ? 'opacity:0.7' : ''}">
                                     <div style="display:flex;justify-content:space-between">
                                         <strong>${escapeHtml(deal.package_label || deal.name)}</strong>
-                                        <span>${deal.value ? '$' + Number(deal.value).toLocaleString() + '/mo' : ''}</span>
+                                        <span>${deal.value ? '$' + Number(deal.value).toLocaleString() + '/mo' : '$0'}</span>
                                     </div>
-                                    <div style="color:#888">${deal.stage} · ${deal.probability}%${deal.contract_months ? ` · ${deal.contract_months}mo` : ''}</div>
+                                    <div style="color:#888">
+                                        ${deal.is_snoozed ? 'Snoozed until ' + fmtDate(deal.snoozed_until) : deal.stage.replace('_',' ') + ' · ' + deal.probability + '%'}
+                                        ${deal.contract_months ? ' · ' + deal.contract_months + 'mo' : ''}
+                                    </div>
+                                    ${deal.snooze_reason ? `<div style="font-size:11px;color:#888;font-style:italic">"${escapeHtml(deal.snooze_reason)}"</div>` : ''}
+                                    <div style="display:flex;gap:4px;margin-top:4px">
+                                        ${!deal.is_snoozed ? `<button class="btn btn-secondary btn-xs" onclick="showSnoozeModal(${deal.id})">Snooze</button>` : ''}
+                                        ${deal.is_snoozed ? `<button class="btn btn-success btn-xs" onclick="wakeDeal(${deal.id})">Wake Up</button>` : ''}
+                                        <button class="btn btn-secondary btn-xs" onclick="editDeal(${deal.id})">Edit</button>
+                                    </div>
                                 </div>
                             `).join('') : '<p style="font-size:12px;color:#888">No deals</p>'}
                         </div>
@@ -3346,6 +3355,78 @@
             toast('Deal created.');
             openCompanyDetail(companyId);
             refreshNavBadges();
+        }
+
+        function showSnoozeModal(dealId) {
+            const root = document.getElementById('modal-root');
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:420px">
+                        <h2>Snooze Deal</h2>
+                        <p style="font-size:13px;color:#666;margin-bottom:16px">Pause outreach and set a follow-up date. The deal will auto-reactivate with a task for the assigned rep.</p>
+                        <div class="form-group">
+                            <label>Follow up in:</label>
+                            <div style="display:flex;gap:8px;margin-top:4px">
+                                <button class="btn btn-secondary btn-sm" onclick="document.getElementById('snooze-date').value=getDateOffset(30)">30 days</button>
+                                <button class="btn btn-secondary btn-sm" onclick="document.getElementById('snooze-date').value=getDateOffset(60)">60 days</button>
+                                <button class="btn btn-secondary btn-sm" onclick="document.getElementById('snooze-date').value=getDateOffset(90)">90 days</button>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Or pick a date:</label>
+                            <input type="date" id="snooze-date" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px">
+                        </div>
+                        <div class="form-group">
+                            <label>Reason (what did they say?)</label>
+                            <textarea id="snooze-reason" rows="3" placeholder="Customer said call back in September after busy season..." style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px"></textarea>
+                        </div>
+                        <div style="margin:8px 0">
+                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+                                <input type="checkbox" id="snooze-pause-seq" checked> Pause active sequences
+                            </label>
+                        </div>
+                        <div class="modal-actions" style="display:flex;gap:8px;margin-top:16px">
+                            <button class="btn btn-secondary" onclick="document.getElementById('modal-root').innerHTML=''">Cancel</button>
+                            <button class="btn btn-primary" onclick="submitSnooze(${dealId})">Snooze</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function getDateOffset(days) {
+            const d = new Date();
+            d.setDate(d.getDate() + days);
+            return d.toISOString().split('T')[0];
+        }
+
+        async function submitSnooze(dealId) {
+            const date = document.getElementById('snooze-date').value;
+            const reason = document.getElementById('snooze-reason').value.trim();
+            const pauseSeq = document.getElementById('snooze-pause-seq').checked;
+            if (!date) { toast('Pick a follow-up date'); return; }
+
+            const data = await api(`/api/deals/${dealId}/snooze`, {
+                method: 'POST',
+                body: JSON.stringify({
+                    until_date: date,
+                    reason: reason,
+                    pause_sequence: pauseSeq,
+                }),
+            });
+            if (data) {
+                toast(`Snoozed until ${new Date(data.snoozed_until).toLocaleDateString()}`);
+                document.getElementById('modal-root').innerHTML = '';
+                _refreshCurrentCompany();
+            }
+        }
+
+        async function wakeDeal(dealId) {
+            const data = await api(`/api/deals/${dealId}/wake`, { method: 'POST' });
+            if (data) {
+                toast(`Deal reactivated — ${data.stage}`);
+                _refreshCurrentCompany();
+            }
         }
 
         async function editDeal(dealId) {

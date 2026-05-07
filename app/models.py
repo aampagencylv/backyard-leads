@@ -198,9 +198,14 @@ class Deal(Base):
     closed_at = Column(DateTime, nullable=True)
     lost_reason = Column(String(255), nullable=True)
 
+    # Snooze / reactivation
+    snoozed_until = Column(DateTime, nullable=True)
+    snooze_reason = Column(Text, nullable=True)
+    stage_before_snooze = Column(String(50), nullable=True)  # restore to this stage on wake
+
     # BMP Package system
-    package = Column(String(50), nullable=True)  # foundation, essential, growth, scale
-    contract_months = Column(Integer, default=6)  # 6 or 12
+    package = Column(String(50), nullable=True)
+    contract_months = Column(Integer, default=6)
 
     assigned_to = Column(Integer, ForeignKey("users.id"), nullable=True)
 

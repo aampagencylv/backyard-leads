@@ -28,7 +28,7 @@ STAGE_PROBABILITY = {
     "closed_lost": 0,
 }
 
-PIPELINE_STAGES = ["in_sequence", "prospecting", "qualified", "proposal", "negotiation", "closed_won", "closed_lost"]
+PIPELINE_STAGES = ["in_sequence", "prospecting", "qualified", "proposal", "negotiation", "closed_won", "closed_lost", "snoozed"]
 
 # BMP Packages
 BMP_PACKAGES = {
@@ -391,6 +391,10 @@ def _deal_to_dict(d: Deal) -> dict:
         "closed_at": d.closed_at.isoformat() if d.closed_at else None,
         "lost_reason": d.lost_reason,
         "assigned_to": d.assigned_to,
+        "snoozed_until": d.snoozed_until.isoformat() if d.snoozed_until else None,
+        "snooze_reason": d.snooze_reason,
+        "stage_before_snooze": d.stage_before_snooze,
+        "is_snoozed": d.stage == "snoozed",
         "created_at": d.created_at.isoformat() if d.created_at else None,
         "updated_at": d.updated_at.isoformat() if d.updated_at else None,
     }
@@ -403,3 +407,112 @@ def _parse_date(s: Optional[str]) -> Optional[datetime]:
         return datetime.fromisoformat(s.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+# ============================================================
+# Snooze / Reactivation
+# ============================================================
+
+class SnoozeDealRequest(BaseModel):
+    days: Optional[int] = None  # 30, 60, 90
+    until_date: Optional[str] = None  # ISO date
+    reason: str = ""
+    pause_sequence: bool = True
+    auto_task_on_wake: bool = True
+    auto_new_sequence: bool = False
+
+
+@router.post("/deals/{deal_id}/snooze")
+async def snooze_deal(
+    deal_id: int,
+    req: SnoozeDealRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Snooze a deal — pause sequence, set wake date, log reason."""
+    deal = (await db.execute(select(Deal).where(Deal.id == deal_id))).scalar_one_or_none()
+    if not deal:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Deal not found")
+
+    # Calculate wake date
+    if req.until_date:
+        wake = _parse_date(req.until_date)
+    elif req.days:
+        wake = datetime.now(timezone.utc) + timedelta(days=req.days)
+    else:
+        wake = datetime.now(timezone.utc) + timedelta(days=30)
+
+    # Save current stage so we can restore on wake
+    deal.stage_before_snooze = deal.stage
+    deal.snoozed_until = wake
+    deal.snooze_reason = req.reason
+    deal.stage = "snoozed"
+    deal.probability = 0
+
+    # Pause active sequences for all contacts at this company
+    if req.pause_sequence:
+        from app.models import GeneratedEmail, Contact
+        contacts = (await db.execute(
+            select(Contact.id).where(Contact.company_id == deal.company_id)
+        )).scalars().all()
+        if contacts:
+            from sqlalchemy import update
+            await db.execute(
+                update(GeneratedEmail)
+                .where(
+                    GeneratedEmail.contact_id.in_(contacts),
+                    GeneratedEmail.is_sent == False,
+                    GeneratedEmail.paused_at.is_(None),
+                )
+                .values(paused_at=datetime.now(timezone.utc))
+            )
+
+    # Log
+    db.add(Activity(
+        company_id=deal.company_id, user_id=user.id, deal_id=deal.id,
+        activity_type="deal_snoozed",
+        content=f"Snoozed until {wake.strftime('%b %d, %Y')}: {req.reason}" if req.reason else f"Snoozed until {wake.strftime('%b %d, %Y')}",
+    ))
+
+    await db.commit()
+
+    return {
+        "id": deal.id,
+        "stage": deal.stage,
+        "snoozed_until": deal.snoozed_until.isoformat() if deal.snoozed_until else None,
+        "snooze_reason": deal.snooze_reason,
+        "stage_before_snooze": deal.stage_before_snooze,
+    }
+
+
+@router.post("/deals/{deal_id}/wake")
+async def wake_deal(
+    deal_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Manually wake a snoozed deal before its scheduled date."""
+    deal = (await db.execute(select(Deal).where(Deal.id == deal_id))).scalar_one_or_none()
+    if not deal:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Deal not found")
+
+    restore_stage = deal.stage_before_snooze or "prospecting"
+    deal.stage = restore_stage
+    deal.probability = STAGE_PROBABILITY.get(restore_stage, 10)
+    deal.snoozed_until = None
+    deal.stage_before_snooze = None
+
+    # Re-assign package value if it was zeroed
+    if deal.value == 0 and deal.package:
+        deal.value = package_monthly_value(deal.package)
+
+    db.add(Activity(
+        company_id=deal.company_id, user_id=user.id, deal_id=deal.id,
+        activity_type="deal_woken",
+        content=f"Deal reactivated — restored to {restore_stage}",
+    ))
+
+    await db.commit()
+    return _deal_to_dict(deal)

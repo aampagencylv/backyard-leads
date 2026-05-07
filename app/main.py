@@ -32,9 +32,9 @@ log = logging.getLogger("bmp")
 
 
 async def _sequence_engine_loop():
-    """Background tick: run the sequence engine every 60s. Catches its own
-    exceptions so a transient DB error doesn't kill the loop."""
+    """Background tick: run the sequence engine every 60s + check snoozed deals."""
     from app.services.sequence_engine import process_pending_steps
+    tick_count = 0
     while True:
         try:
             async with async_session() as db:
@@ -43,7 +43,69 @@ async def _sequence_engine_loop():
                 log.info(f"sequence_engine tick: {counters}")
         except Exception as e:
             log.exception(f"sequence_engine tick failed: {e}")
+
+        # Check snoozed deals every 10 minutes (every 10th tick)
+        tick_count += 1
+        if tick_count % 10 == 0:
+            try:
+                await _wake_snoozed_deals()
+            except Exception as e:
+                log.exception(f"snooze wake check failed: {e}")
+
         await asyncio.sleep(60)
+
+
+async def _wake_snoozed_deals():
+    """Auto-wake deals whose snooze date has passed. Creates follow-up tasks."""
+    from datetime import datetime, timezone
+    from sqlalchemy import select
+    from app.models import Deal, Activity, Task, Company
+
+    async with async_session() as db:
+        now = datetime.now(timezone.utc)
+        deals = (await db.execute(
+            select(Deal).where(
+                Deal.stage == "snoozed",
+                Deal.snoozed_until.isnot(None),
+                Deal.snoozed_until <= now,
+            )
+        )).scalars().all()
+
+        for deal in deals:
+            restore = deal.stage_before_snooze or "prospecting"
+            from app.routes.deal_routes import STAGE_PROBABILITY, package_monthly_value
+            deal.stage = restore
+            deal.probability = STAGE_PROBABILITY.get(restore, 10)
+            if deal.value == 0 and deal.package:
+                deal.value = package_monthly_value(deal.package)
+
+            reason = deal.snooze_reason or "Scheduled follow-up"
+            deal.snoozed_until = None
+            deal.stage_before_snooze = None
+            deal.snooze_reason = None
+
+            company = (await db.execute(select(Company).where(Company.id == deal.company_id))).scalar_one_or_none()
+            company_name = company.name if company else "Unknown"
+
+            # Create follow-up task
+            if deal.assigned_to:
+                db.add(Task(
+                    company_id=deal.company_id,
+                    user_id=deal.assigned_to,
+                    description=f"FOLLOW UP: {company_name} — snoozed reason: {reason}",
+                    due_date=now,
+                ))
+
+            db.add(Activity(
+                company_id=deal.company_id, deal_id=deal.id,
+                activity_type="deal_woken",
+                content=f"Deal auto-reactivated from snooze — restored to {restore}. Reason was: {reason}",
+            ))
+
+            log.info(f"Woke snoozed deal {deal.id} for {company_name}")
+
+        if deals:
+            await db.commit()
 
 
 @asynccontextmanager
