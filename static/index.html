@@ -1718,7 +1718,8 @@
             if (countEl) countEl.textContent = `${(data || []).length} contacts`;
             const panel = document.getElementById('contacts-panel');
             if (!data || data.length === 0) {
-                panel.innerHTML = '<p style="color:#666">No contacts match your filters.</p>';
+                panel.innerHTML = '<p style="color:#666">No contacts match your filters.</p>
+                <div id="contacts-batch-bar" style="display:none"></div>';
                 return;
             }
             panel.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
@@ -1876,7 +1877,7 @@
                     ${c.enrichment_summary ? `<p style="font-size:13px;color:#555;margin:8px 0">${escapeHtml(c.enrichment_summary)}</p>` : ''}
                     <div class="company-actions">
                         ${c.status === 'new' && !c.enriched && c.website ? `<button class="btn btn-secondary btn-sm" onclick="enrichCompany(${c.id})">Analyze Website</button>` : ''}
-                        ${c.status === 'new' && c.enriched ? `<button class="btn btn-success btn-sm" onclick="pursueCompanies([${c.id}])">Pursue</button>` : ''}
+                        ${c.status === 'new' ? `<button class="btn btn-success btn-sm" onclick="pursueCompanies([${c.id}])">Add to Pipeline</button>` : ''}
                         ${c.status !== 'qualified' && c.status !== 'not_interested' ? `<button class="btn btn-success btn-xs" onclick="quickQualify(${c.id},'qualified')">Qualify</button>` : ''}
                         ${c.status !== 'not_interested' ? `<button class="btn btn-secondary btn-xs" onclick="quickQualify(${c.id},'not_interested')">Unqualify</button>` : ''}
                         <button class="btn btn-secondary btn-sm" onclick="openCompanyDetail(${c.id})">Open</button>
@@ -2008,7 +2009,7 @@
                 body: JSON.stringify({ company_ids: ids }),
             });
             if (data) {
-                toast(`Pursued ${data.pursued} company(ies). Check Pipeline.`);
+                toast(`Added ${data.pursued} company(ies) to pipeline. Enriching + generating sequences + running audits...`);
                 loadCompanies('all');
                 refreshNavBadges();
             }

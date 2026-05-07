@@ -277,6 +277,29 @@ async def delete_contact(
     return {"deleted": True}
 
 
+class BatchContactAction(BaseModel):
+    contact_ids: list
+    action: str  # delete
+
+
+@router.post("/contacts/batch")
+async def batch_contact_action(
+    req: BatchContactAction,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Batch actions on contacts: delete."""
+    count = 0
+    if req.action == "delete":
+        for cid in req.contact_ids:
+            contact = (await db.execute(select(Contact).where(Contact.id == cid))).scalar_one_or_none()
+            if contact:
+                await db.delete(contact)
+                count += 1
+        await db.commit()
+    return {"action": req.action, "count": count}
+
+
 # ============================================================
 # Per-contact sequence generation
 # ============================================================
@@ -365,6 +388,27 @@ async def generate_contact_sequence(
     company.email_generated = True
     if company.status == "new":
         company.status = "sequencing"
+
+    # Auto-add company to pipeline if no deal exists
+    from app.models import Deal
+    existing_deal = (await db.execute(
+        select(Deal).where(Deal.company_id == company.id)
+    )).scalar_one_or_none()
+    if not existing_deal:
+        from app.routes.deal_routes import recommend_package
+        pkg = recommend_package(company.employee_count)
+        deal = Deal(
+            company_id=company.id,
+            name=f"{company.name} — Initial Deal",
+            value=0,
+            package=pkg,
+            contract_months=6,
+            stage="in_sequence",
+            probability=0,
+            assigned_to=company.assigned_to or user.id,
+        )
+        db.add(deal)
+
     await db.commit()
 
     return {"contact_id": contact.id, "emails_created": created}

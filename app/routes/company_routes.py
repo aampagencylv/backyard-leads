@@ -977,6 +977,72 @@ async def pursue_companies(
             db.add(Activity(company_id=company.id, user_id=user.id, activity_type="sequence_created",
                             content=f"Sequence created for {primary.full_name or primary.email or 'primary contact'} ({emails_created} emails)",
                             metadata_json=json.dumps({"contact_id": primary.id, "emails": emails_created})))
+
+            # Auto-generate AI Findability Audit
+            audit_url = None
+            try:
+                from app.services.audit_report import generate_audit, render_report_html
+                from app.models import AuditReportModel
+                import secrets as _secrets
+
+                existing_audit = (await db.execute(
+                    select(AuditReportModel).where(AuditReportModel.company_id == company.id)
+                )).scalar_one_or_none()
+
+                if not existing_audit and company.website:
+                    audit = await generate_audit(
+                        website=company.website,
+                        company_name=company.name,
+                        city=company.city or "",
+                        state=company.state or "",
+                        business_type=company.business_type or "",
+                        rating=company.rating or 0,
+                        review_count=company.review_count or 0,
+                    )
+                    token = _secrets.token_urlsafe(16)
+                    public_url = settings.public_url.rstrip("/")
+                    html = render_report_html(audit, token, public_url)
+                    audit_report = AuditReportModel(
+                        company_id=company.id,
+                        token=token,
+                        html_content=html,
+                        ai_findability_score=audit.ai_findability_score,
+                        content_citability_score=audit.content_citability_score,
+                        local_seo_score=audit.local_seo_score,
+                        overall_grade=audit.overall_grade,
+                        findings_json=json.dumps([{
+                            "type": f.get("type", ""), "severity": f.get("severity", "medium"),
+                            "detail": f.get("detail", ""), "angle": f.get("angle", ""),
+                        } for f in audit.top_findings]),
+                    )
+                    db.add(audit_report)
+                    audit_url = f"{public_url}/report/{token}"
+                    outcome["steps"].append("audit_generated")
+                elif existing_audit:
+                    public_url = settings.public_url.rstrip("/")
+                    audit_url = f"{public_url}/report/{existing_audit.token}"
+            except Exception:
+                pass  # Audit failure shouldn't block the pipeline
+
+            # Inject audit link into email 2 or 3 of the sequence
+            if audit_url:
+                try:
+                    seq_emails = (await db.execute(
+                        select(GeneratedEmail).where(
+                            GeneratedEmail.contact_id == primary.id,
+                            GeneratedEmail.step_type == "email",
+                            GeneratedEmail.is_sent == False,
+                        ).order_by(GeneratedEmail.sequence_order)
+                    )).scalars().all()
+                    # Target the 2nd or 3rd email step
+                    email_steps = [e for e in seq_emails if e.step_type == "email"]
+                    target = email_steps[1] if len(email_steps) > 1 else (email_steps[0] if email_steps else None)
+                    if target:
+                        audit_line = f"\n\nI actually ran an analysis on {company.name}'s online presence — thought you might find it interesting: {audit_url}"
+                        target.body = target.body.rstrip() + audit_line
+                except Exception:
+                    pass
+
             await db.commit()
             outcome["steps"].append(f"sequence_created ({emails_created} emails)")
             outcome["steps"].append("deal_created")
