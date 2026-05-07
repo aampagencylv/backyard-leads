@@ -125,11 +125,170 @@ Sidebar:  Missive iframe → prospector.backyardmarketingpros.com/missive-sideba
 ```
 Missive API docs: missiveapp.com/help/api
 
-### Twilio Integration (future)
-- Call from platform (click-to-call on contact card)
-- Text messaging as a sequence step type (already modeled)
-- Call recording + transcription → auto-log to timeline
-- SMS sequence steps auto-send via Twilio
+### 🔥 Twilio — full HubSpot Calling replacement [IN PROGRESS]
+
+**Locked decisions (2026-05-06):**
+- Per-rep numbers (better caller ID, ~$1.15/mo each)
+- Admin UI to buy + assign + release numbers
+- Inbound voicemail when rep offline → same pipeline as calls
+- **Whisper + Claude for transcripts and call takeaways** (4.5× cheaper than
+  Twilio Voice Intelligence; we control the prompt so "call takeaways" /
+  coaching suggestions are exactly what we want)
+- Browser-only dialer in Phase 1; native mobile app deferred
+- Power dialer (Phase 5) human-initiated only (TCPA)
+- HubSpot stays parallel during ~3-week transition
+
+**Voice Intelligence vs Whisper+Claude rationale:** The only thing VI does
+that Whisper can't is real-time live coaching DURING the call (e.g. "ask
+a question, you've been monologuing for 90 sec"). For post-call review
+with AI takeaways, custom Claude prompts beat VI's pre-built operators
+on flexibility AND cost. If real-time live coaching becomes important
+later, we can layer VI on top.
+
+**Goal:** retire HubSpot Sales Hub for calling. Team dials from inside our
+CRM, every call lands on the contact's timeline with recording, transcript,
+and AI summary, and inbound calls route to the right rep automatically.
+SMS is folded in last — calls are the primary unlock.
+
+**Why now:** HubSpot Sales Hub Pro is ~$100/seat/mo. Twilio direct is
+~$10/seat/mo all-in. At 5 reps that's $450/mo saved AND we keep all the
+data inside our own CRM instead of HubSpot's silo.
+
+**Pricing math (Twilio direct):**
+- Voice: $0.013/min outbound, $0.0085/min inbound
+- Phone numbers: $1.15/mo each (per rep)
+- Recordings: $0.0025/min stored
+- Transcription: $0.05/min (Twilio Voice Intelligence) OR ~$0.006/min via
+  Whisper (post-call upload). Whisper is 10× cheaper but lags real-time.
+- For 500 calls/mo @ 3 min avg = ~$25 talk + $5/rep numbers + $4 recording =
+  **≈ $40/mo for 5 reps**, vs $500 on HubSpot.
+
+**Architecture:**
+```
+Browser (BDR)  ←→  Twilio Voice SDK (WebRTC)  ←→  Twilio Voice
+                                                       ↓
+                                                 Recording + Transcript
+                                                       ↓
+                                              Webhook → /api/twilio/voice/*
+                                                       ↓
+                                       Activity row + Recording URL +
+                                       AI Summary on contact timeline
+```
+
+#### Phase 1 — Foundation (½ day)
+- Twilio account + first phone number for testing
+- Buy `+1-702-XXX` Vegas-area-code numbers per rep (better connect rate)
+- Add to config: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_API_KEY`,
+  `TWILIO_API_SECRET`, `TWILIO_TWIML_APP_SID`. Stored in `runtime_config`
+  table so the team rotates from Settings UI without SSH.
+- Each rep's `User` model gets `twilio_phone_number` (their assigned caller
+  ID) + `twilio_identity` (used for SDK auth). Migration:
+  `migrate_twilio_fields.py`.
+
+#### Phase 2 — Click-to-call (the core HubSpot replacement, ~2 days)
+**Browser dialer:** Twilio Voice JavaScript SDK, no phone hardware needed.
+- New `Dialer` modal — appears when BDR clicks any phone number on a
+  Contact card or in the Companies list.
+- Modal shows: contact photo / name / title / company, recent activity
+  (last 3 timeline entries), sequence status, deal stage + value.
+- Live controls: Mute · Hold · Hangup · Transfer · Keypad (DTMF).
+- During call: textarea for live notes, outcome dropdown
+  (connected · voicemail · no answer · wrong number · gatekeeper · declined).
+- After call: auto-saves Activity (`activity_type='call'`, content = notes,
+  metadata = {duration, outcome, recording_url, direction}).
+
+**Endpoints:**
+- `POST /api/twilio/voice/token` → returns ephemeral SDK access token
+  scoped to the BDR's Twilio identity (5-min TTL, refreshed on demand).
+- `POST /api/twilio/voice/twiml` → TwiML endpoint Twilio hits when SDK
+  initiates a call; returns `<Dial callerId="..." record="record-from-answer">`.
+- `POST /api/twilio/voice/status` → status callback receiver (ringing,
+  in-progress, completed). Logs duration + direction.
+- `POST /api/twilio/voice/recording` → recording-complete webhook. Stores
+  URL on the Activity, kicks off transcription job.
+
+**Schema additions:**
+```sql
+ALTER TABLE activities ADD COLUMN twilio_call_sid VARCHAR(50);
+ALTER TABLE activities ADD COLUMN call_duration_seconds INTEGER;
+ALTER TABLE activities ADD COLUMN call_direction VARCHAR(20);  -- inbound/outbound
+ALTER TABLE activities ADD COLUMN call_outcome VARCHAR(40);    -- connected/voicemail/etc
+ALTER TABLE activities ADD COLUMN recording_url VARCHAR(500);
+ALTER TABLE activities ADD COLUMN transcript TEXT;
+ALTER TABLE activities ADD COLUMN call_summary TEXT;            -- AI-generated
+```
+
+#### Phase 3 — Recording + transcription + AI summary (1 day)
+- Record everything by default (`record="record-from-answer-dual"` for
+  separate channels per side — better transcription).
+- 2-party consent compliance: TwiML plays a brief disclosure before
+  connecting ("This call may be recorded for quality and training")
+  — required in Nevada, California, and 11 other states.
+- Post-call worker downloads recording, sends to Whisper for transcript
+  (cheaper than Twilio Voice Intelligence, 10× difference).
+- Anthropic Claude (Sonnet 4) summarizes: outcome, next steps, sentiment,
+  any commitments or objections. Saved on the Activity.
+- Timeline entry shows: "📞 15 min call with Bret @ Cacti Landscapes
+  — connected · scheduled demo for Tue 2pm" with [▶ Play] + [📄 Transcript]
+  + [✨ Summary] buttons.
+
+#### Phase 4 — Inbound routing (1 day)
+- Each rep's number forwards to their Twilio identity (their browser).
+- When offline, Twilio sends to voicemail with custom greeting.
+- Voicemail recording → same pipeline as outbound (transcript + summary).
+- Inbound call lookup: if `From` number matches a known Contact, the
+  Dialer modal pops on the rep's screen WITH the contact's CRM record
+  pre-loaded. (HubSpot has this; we should match it.)
+- Unknown caller → modal shows the number with "Add as new contact" CTA.
+
+#### Phase 5 — Reporting + power dialer (1-2 days)
+- **Calls per rep per day** (chart on dashboard)
+- **Connect rate** = connected / dialed (industry benchmark: 5-15% cold)
+- **Average talk time**
+- **Outcome funnel**: dialed → connected → demo-booked → closed
+- **Power dialer mode**: feed a saved view (e.g. "Stale deals · stage=qualified")
+  to the dialer. Auto-advances to next contact when call ends; one-click
+  log + dial next.
+
+#### Phase 6 — SMS (last; ~1 day)
+- Outbound SMS via Twilio Programmable Messaging.
+- "Step type: SMS" is already modeled in sequences — just needs send/receive plumbing.
+- Inbound SMS webhook → auto-log to timeline, auto-pause active sequence.
+- TCPA compliance: opt-in tracking, STOP keyword auto-honored, send-window
+  enforcement (8am-9pm local time only).
+- Use case: re-engagement after email signals stall ("Hey Bret, did you
+  see my note last week?").
+
+#### Compliance / risk
+- **2-party consent recording disclosure** (Phase 3). Required in NV, CA,
+  FL, IL, MD, MA, MT, NH, PA, WA, CT, DE.
+- **DNC list check** before dialing (Twilio has a National DNC API).
+- **Call hours** respect (8am-9pm local time of the dialed number; we
+  already store contact timezone via Google Maps).
+- **TCPA** for any auto-dialer behavior — Phase 5 power dialer must be
+  human-initiated, not auto-fire.
+
+#### Migration path off HubSpot
+1. Phase 1+2 ship → invite one rep to dual-tool for a week (HubSpot for
+   inbound, Twilio for outbound)
+2. Phase 4 ships → port HubSpot inbound number to Twilio
+3. Phase 5 reporting parity → shut off HubSpot Sales Hub seats
+4. Estimated 3-4 weeks total to complete switchover
+
+#### Endpoint summary
+```
+POST /api/twilio/voice/token            (BDR's browser fetches token)
+POST /api/twilio/voice/twiml            (TwiML for outbound dial)
+POST /api/twilio/voice/status           (status callbacks)
+POST /api/twilio/voice/recording        (recording-complete)
+POST /api/twilio/voice/inbound          (inbound call routing)
+POST /api/twilio/sms/inbound            (Phase 6)
+POST /api/contacts/{id}/call            (initiate from UI)
+GET  /api/twilio/numbers                (admin: list available numbers)
+POST /api/twilio/numbers/buy            (admin: purchase a number)
+PATCH /api/users/{id}/twilio            (admin: assign number to rep)
+GET  /api/dashboard/calls               (per-rep daily call stats)
+```
 
 ### 🔥 Website Visitor Tracking (email-to-site intelligence)
 
