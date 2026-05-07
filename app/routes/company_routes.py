@@ -952,6 +952,15 @@ async def pursue_companies(
                             contact_name=primary.full_name or None,
                         )
 
+                    # Set skip conditions and auto_execute based on step type
+                    skip_map = {
+                        "email": ["no_email", "opted_out"],
+                        "imessage": ["no_phone", "opted_out", "landline"],
+                        "linkedin": ["no_linkedin"],
+                        "call": ["no_phone"],
+                    }
+                    auto_map = {"email": True, "imessage": True, "linkedin": False, "call": False, "custom": False}
+
                     gen_step = GeneratedEmail(
                         contact_id=primary.id,
                         company_id=company.id,
@@ -963,6 +972,8 @@ async def pursue_companies(
                         send_delay_days=step["delay_days"],
                         scheduled_send_at=now + timedelta(days=step["delay_days"]),
                         problems_referenced=json.dumps(problems[:2]),
+                        skip_if_json=json.dumps(skip_map.get(stype, [])),
+                        auto_execute=auto_map.get(stype, False),
                     )
                     db.add(gen_step)
                     await db.flush()
