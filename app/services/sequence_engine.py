@@ -117,17 +117,26 @@ async def _handle_email(db: AsyncSession, step: GeneratedEmail, contact: Contact
         return False, "No sending-enabled user available"
 
     sender = get_sender_info(sender_user.first_name, sender_user.full_name)
+    # Wrap any URLs in the body + signature through /t/{token} for click tracking
+    from app.services.tracking import wrap_html_links
+    tracked_body = await wrap_html_links(
+        db, step.body, contact_id=contact.id, company_id=company.id, email_id=step.id, label="body_link",
+    )
+    sig_html = render_signature(sender_user)
+    tracked_signature = await wrap_html_links(
+        db, sig_html, contact_id=contact.id, company_id=company.id, email_id=step.id, label="signature_link",
+    )
     result = await send_email(
         to_email=contact.email,
         subject=step.subject,
-        body=step.body,
+        body=tracked_body,
         from_name=sender["from_name"],
         from_firstname=sender["from_firstname"],
         reply_to_email=sender["reply_to"],
         company_id=company.id,
         contact_id=contact.id,
         email_id=step.id,
-        signature_html=render_signature(sender_user),
+        signature_html=tracked_signature,
         unsubscribe_token=contact.unsubscribe_token,
     )
     if not result.get("success"):

@@ -22,6 +22,7 @@ from app.routes import (
     twilio_routes,
     blooio_routes,
     sequence_routes,
+    tracking_routes,
 )
 
 
@@ -87,6 +88,7 @@ app.include_router(campaign_routes.router)
 app.include_router(twilio_routes.router)
 app.include_router(blooio_routes.router)
 app.include_router(sequence_routes.router)
+app.include_router(tracking_routes.router)
 
 # Serve static frontend
 app.mount("/static", StaticFiles(directory="static"), name="static")

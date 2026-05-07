@@ -334,6 +334,26 @@ class RuntimeConfig(Base):
                         onupdate=lambda: datetime.now(timezone.utc))
 
 
+class TrackingLink(Base):
+    """One-shot URL wrapper for tracking email click-throughs (and later,
+    site visits via the bmp_visitor cookie). Each <a href> in an outgoing
+    email is rewritten to /t/{token} which 302s to destination_url after
+    logging the click + dropping the visitor cookie."""
+    __tablename__ = "tracking_links"
+
+    id = Column(Integer, primary_key=True, index=True)
+    token = Column(String(32), unique=True, index=True, nullable=False)
+    contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=True, index=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=True, index=True)
+    email_id = Column(Integer, ForeignKey("generated_emails.id"), nullable=True)
+    destination_url = Column(Text, nullable=False)
+    label = Column(String(40), nullable=True)  # 'signature_website', 'signature_calendar', 'body_link', etc.
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    first_clicked_at = Column(DateTime, nullable=True)
+    last_clicked_at = Column(DateTime, nullable=True)
+    click_count = Column(Integer, default=0, nullable=False)
+
+
 class Tag(Base):
     __tablename__ = "tags"
 

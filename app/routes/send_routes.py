@@ -62,17 +62,25 @@ async def send_single_email(
         raise HTTPException(status_code=403, detail="Sending is disabled for your account. Enable it in Settings.")
 
     sender = get_sender_info(user.first_name, user.full_name)
+    from app.services.tracking import wrap_html_links
+    tracked_body = await wrap_html_links(
+        db, email.body, contact_id=contact.id, company_id=company.id, email_id=email.id, label="body_link",
+    )
+    sig_html = render_signature(user)
+    tracked_signature = await wrap_html_links(
+        db, sig_html, contact_id=contact.id, company_id=company.id, email_id=email.id, label="signature_link",
+    )
     result = await send_email(
         to_email=contact.email,
         subject=email.subject,
-        body=email.body,
+        body=tracked_body,
         from_name=sender["from_name"],
         from_firstname=sender["from_firstname"],
         reply_to_email=sender["reply_to"],
         company_id=company.id,
         contact_id=contact.id,
         email_id=email.id,
-        signature_html=render_signature(user),
+        signature_html=tracked_signature,
         unsubscribe_token=contact.unsubscribe_token,
     )
 
@@ -130,17 +138,25 @@ async def send_next_in_sequence(
         raise HTTPException(status_code=403, detail="Sending is disabled for your account.")
 
     sender = get_sender_info(user.first_name, user.full_name)
+    from app.services.tracking import wrap_html_links
+    tracked_body = await wrap_html_links(
+        db, email.body, contact_id=contact.id, company_id=company.id, email_id=email.id, label="body_link",
+    )
+    sig_html = render_signature(user)
+    tracked_signature = await wrap_html_links(
+        db, sig_html, contact_id=contact.id, company_id=company.id, email_id=email.id, label="signature_link",
+    )
     result = await send_email(
         to_email=contact.email,
         subject=email.subject,
-        body=email.body,
+        body=tracked_body,
         from_name=sender["from_name"],
         from_firstname=sender["from_firstname"],
         reply_to_email=sender["reply_to"],
         company_id=company.id,
         contact_id=contact.id,
         email_id=email.id,
-        signature_html=render_signature(user),
+        signature_html=tracked_signature,
         unsubscribe_token=contact.unsubscribe_token,
     )
 
