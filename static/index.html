@@ -434,6 +434,14 @@
                     <div id="bdr-activity-content"></div>
                 </div>
 
+                <!-- Recent Calls widget -->
+                <div class="panel">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                        <h3 style="margin:0">Recent Calls</h3>
+                    </div>
+                    <div id="recent-calls-widget"></div>
+                </div>
+
                 <!-- Zone 5: Activity feed -->
                 <div class="panel">
                     <h3>Activity Feed</h3>
@@ -1330,7 +1338,110 @@
                 if (bdrPanel) bdrPanel.style.display = '';
                 loadBDRActivity();
             }
+
+            // Recent calls
+            loadRecentCalls();
         }
+
+        async function loadRecentCalls() {
+            const data = await api('/api/dashboard/recent-calls?limit=10');
+            const el = document.getElementById('recent-calls-widget');
+            if (!el || !data) return;
+
+            const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.role === 'super_admin');
+
+            if (!data.length) {
+                el.innerHTML = '<p style="color:#888;font-size:13px">No calls yet.</p>';
+                return;
+            }
+
+            const fmtDur = (s) => {
+                if (!s) return '0:00';
+                return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+            };
+
+            const stars = (rating, actId) => {
+                if (!isAdmin) {
+                    return rating ? '★'.repeat(rating) + '☆'.repeat(5-rating) : '<span style="color:#ccc">Not rated</span>';
+                }
+                return [1,2,3,4,5].map(n =>
+                    `<span onclick="rateCall(${actId},${n})" style="cursor:pointer;font-size:16px;color:${n <= (rating||0) ? '#f39c12' : '#ddd'}">${n <= (rating||0) ? '★' : '☆'}</span>`
+                ).join('');
+            };
+
+            el.innerHTML = data.map(c => `
+                <div style="padding:10px;margin-bottom:8px;background:#f8f9fa;border-radius:8px;border-left:3px solid ${c.call_outcome === 'connected' ? 'var(--bmp-green)' : c.call_outcome === 'voicemail' ? '#3498db' : '#ddd'}">
+                    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+                        <div style="flex:1;min-width:0">
+                            <div style="font-size:13px;font-weight:500">${escapeHtml(c.content || 'Call')}</div>
+                            <div style="font-size:11px;color:#888;margin-top:2px">
+                                ${escapeHtml(c.rep_name)} · ${escapeHtml(c.company_name || '')} · ${fmtDur(c.call_duration_seconds)}
+                                ${c.call_outcome ? ` · <span style="text-transform:capitalize">${escapeHtml(c.call_outcome)}</span>` : ''}
+                                · ${fmtRelative(c.created_at)}
+                            </div>
+                        </div>
+                        <div style="display:flex;gap:4px;flex-shrink:0">
+                            ${c.recording_url ? `<button class="btn btn-secondary btn-xs" onclick="toggleCallExpand(${c.id},'audio')">▶️</button>` : ''}
+                            ${c.has_transcript ? `<button class="btn btn-secondary btn-xs" onclick="toggleCallExpand(${c.id},'transcript')">📄</button>` : ''}
+                            ${c.has_summary ? `<button class="btn btn-secondary btn-xs" onclick="toggleCallExpand(${c.id},'summary')">✨</button>` : ''}
+                        </div>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
+                        <div style="font-size:13px">${stars(c.call_rating, c.id)}</div>
+                        ${isAdmin ? `<button class="btn btn-secondary btn-xs" onclick="showCallFeedback(${c.id}, ${c.call_rating || 0}, '${escapeHtml(c.call_feedback || '')}')">Feedback</button>` : ''}
+                    </div>
+                    ${c.call_feedback ? `<div style="margin-top:4px;padding:6px 8px;background:#FFF8F0;border-radius:4px;font-size:12px;color:#555"><strong style="color:var(--bmp-orange)">Feedback:</strong> ${escapeHtml(c.call_feedback)}</div>` : ''}
+                    ${c.has_summary && c.call_summary ? `<div style="margin-top:4px;font-size:11px;color:#666;max-height:60px;overflow:hidden">${escapeHtml(c.call_summary.split('\\n')[0] || '').slice(0, 150)}...</div>` : ''}
+                    <div id="call-expand-${c.id}" style="margin-top:4px"></div>
+                </div>
+            `).join('');
+        }
+
+        async function rateCall(activityId, rating) {
+            await api(`/api/dashboard/rate-call/${activityId}`, {
+                method: 'POST',
+                body: JSON.stringify({ rating }),
+            });
+            toast(`Rated ${rating} star${rating > 1 ? 's' : ''}`);
+            loadRecentCalls();
+        }
+
+        function showCallFeedback(activityId, currentRating, currentFeedback) {
+            const root = document.getElementById('modal-root');
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:480px">
+                        <h2>Rate & Review Call</h2>
+                        <div class="form-group">
+                            <label>Rating</label>
+                            <div id="feedback-stars" style="font-size:28px;cursor:pointer">
+                                ${[1,2,3,4,5].map(n => `<span onclick="document.getElementById('feedback-rating').value=${n};document.querySelectorAll('#feedback-stars span').forEach((s,i)=>s.style.color=i<${n}?'#f39c12':'#ddd')" style="color:${n <= currentRating ? '#f39c12' : '#ddd'}">★</span>`).join('')}
+                            </div>
+                            <input type="hidden" id="feedback-rating" value="${currentRating || 3}">
+                        </div>
+                        <div class="form-group">
+                            <label>Feedback for the BDR</label>
+                            <textarea id="feedback-text" rows="4" placeholder="What did they do well? What could they improve? Be specific and constructive..." style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px">${currentFeedback || ''}</textarea>
+                        </div>
+                        <div class="modal-actions" style="display:flex;gap:8px;margin-top:16px">
+                            <button class="btn btn-secondary" onclick="document.getElementById('modal-root').innerHTML=''">Cancel</button>
+                            <button class="btn btn-primary" onclick="submitCallFeedback(${activityId})">Save Review</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function submitCallFeedback(activityId) {
+            const rating = parseInt(document.getElementById('feedback-rating').value) || 3;
+            const feedback = document.getElementById('feedback-text').value.trim();
+            await api(`/api/dashboard/rate-call/${activityId}`, {
+                method: 'POST',
+                body: JSON.stringify({ rating, feedback: feedback || null }),
+            });
+            toast('Review saved');
+            document.getElementById('modal-root').innerHTML = '';
+            loadRecentCalls();
 
         // ============ Call Activity panel ============
         async function loadBDRActivity() {

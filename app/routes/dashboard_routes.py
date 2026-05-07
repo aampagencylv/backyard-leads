@@ -526,3 +526,105 @@ async def bdr_activity_report(
         "totals": totals,
         "reps": sorted_reps,
     }
+
+
+# ============================================================
+# Recent Calls widget — for dashboard call review
+# ============================================================
+
+@router.get("/dashboard/recent-calls")
+async def recent_calls(
+    limit: int = 20,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Recent calls with recordings, transcripts, ratings. Scoped by role."""
+    query = (
+        select(Activity, Company.name.label("company_name"),
+               User.first_name.label("rep_first"), User.last_name.label("rep_last"))
+        .outerjoin(Company, Activity.company_id == Company.id)
+        .outerjoin(User, Activity.user_id == User.id)
+        .where(Activity.activity_type.in_(("call", "voicemail")))
+        .order_by(Activity.created_at.desc())
+        .limit(min(limit, 50))
+    )
+
+    # Scope: reps see only their calls
+    if user.role not in ("admin", "super_admin"):
+        query = query.where(Activity.user_id == user.id)
+
+    rows = (await db.execute(query)).all()
+
+    return [
+        {
+            "id": a.id,
+            "company_id": a.company_id,
+            "company_name": cname,
+            "contact_id": a.contact_id,
+            "rep_name": f"{rfirst or ''} {rlast or ''}".strip(),
+            "user_id": a.user_id,
+            "content": a.content,
+            "call_direction": a.call_direction,
+            "call_outcome": a.call_outcome,
+            "call_duration_seconds": a.call_duration_seconds,
+            "recording_url": bool(a.recording_url),
+            "has_transcript": bool(a.transcript),
+            "has_summary": bool(a.call_summary),
+            "call_summary": a.call_summary,
+            "call_rating": a.call_rating,
+            "call_feedback": a.call_feedback,
+            "rated_by": a.rated_by,
+            "rated_at": a.rated_at.isoformat() if a.rated_at else None,
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+        }
+        for a, cname, rfirst, rlast in rows
+    ]
+
+
+# ============================================================
+# Rate a call — admin feedback on BDR performance
+# ============================================================
+
+from pydantic import BaseModel as _BaseModel
+
+class RateCallRequest(_BaseModel):
+    rating: int  # 1-5
+    feedback: Optional[str] = None
+
+
+@router.post("/dashboard/rate-call/{activity_id}")
+async def rate_call(
+    activity_id: int,
+    req: RateCallRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Rate a call 1-5 stars with optional written feedback."""
+    if user.role not in ("admin", "super_admin"):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Only admins can rate calls")
+
+    if req.rating < 1 or req.rating > 5:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Rating must be 1-5")
+
+    activity = (await db.execute(
+        select(Activity).where(Activity.id == activity_id)
+    )).scalar_one_or_none()
+
+    if not activity:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Call not found")
+
+    activity.call_rating = req.rating
+    activity.call_feedback = req.feedback
+    activity.rated_by = user.id
+    activity.rated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    return {
+        "id": activity.id,
+        "call_rating": activity.call_rating,
+        "call_feedback": activity.call_feedback,
+        "rated_by": user.id,
+    }

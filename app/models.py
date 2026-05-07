@@ -285,6 +285,12 @@ class Activity(Base):
     transcript = Column(Text, nullable=True)
     call_summary = Column(Text, nullable=True)  # AI-generated takeaways
 
+    # Call review / coaching feedback (admin rates BDR calls)
+    call_rating = Column(Integer, nullable=True)  # 1-5 stars
+    call_feedback = Column(Text, nullable=True)  # Admin written feedback
+    rated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    rated_at = Column(DateTime, nullable=True)
+
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     company = relationship("Company", back_populates="activities")
