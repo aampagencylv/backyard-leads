@@ -585,6 +585,344 @@ When prospect clicks "See Your Competitive Comparison" in the audit report:
 
 ---
 
+## 🚀 SaaS Platform Plan — Multi-Tenant Commercial Version
+
+> This is the plan for forking the Backyard Marketing Pros CRM into a sellable SaaS product.
+> Steve plans to work on this separately while continuing to build BMP-specific features.
+
+### The Big Picture
+
+Turn the BMP Prospector into a white-label B2B sales platform that any agency or sales team can use.
+You (AAMP Agency) are the platform operator. Customers sign up, get their own isolated workspace,
+and pay you monthly based on usage.
+
+### Git Strategy — Fork + Upstream Sync
+
+```
+backyard-leads (main repo — BMP-specific)
+    │
+    └── fork → prospector-saas (the commercial product)
+              │
+              ├── shared core (CRM, pipeline, sequences, enrichment, audit engine)
+              └── saas layer (multi-org, billing, onboarding, white-label)
+```
+
+**How to set this up:**
+
+1. Create new repo: `aampagencylv/prospector-saas`
+2. Fork from `backyard-leads` (or push a copy)
+3. In `prospector-saas`, add `backyard-leads` as an upstream remote:
+   ```bash
+   git remote add upstream https://github.com/aampagencylv/backyard-leads.git
+   ```
+4. To pull BMP improvements into the SaaS version:
+   ```bash
+   git fetch upstream
+   git merge upstream/main  # resolve conflicts if any
+   ```
+5. SaaS-specific code lives in new files/modules — minimize touching shared files
+   to reduce merge conflicts
+
+**Key principle:** BMP repo stays the "reference implementation." New CRM features go there first,
+get tested with your team, then get pulled into the SaaS repo. SaaS-only features (billing,
+onboarding, white-label) only exist in the SaaS repo.
+
+---
+
+### Architecture: What Changes for Multi-Tenant
+
+**Current (single-tenant):**
+```
+One database (SQLite) → One org → Multiple users → Shared API keys
+```
+
+**SaaS (multi-tenant):**
+```
+One platform database (Postgres) → Many orgs → Each org has users, companies, contacts, deals
+                                              → Each org has their own API keys
+                                              → Platform admin (you) oversees all orgs
+```
+
+#### Database Changes
+
+**Option A — Schema-per-tenant (recommended for <100 customers):**
+- Each org gets its own SQLite file or Postgres schema
+- Complete data isolation — one customer can never see another's data
+- Easy backup/restore per customer
+- Simple to reason about
+
+**Option B — Shared tables with org_id (recommended for scale):**
+- Single database, every table gets an `org_id` column
+- Every query scoped by `WHERE org_id = current_org_id`
+- More efficient at scale but harder to guarantee isolation
+- Requires careful scoping on EVERY endpoint
+
+**Recommendation:** Start with Option A (separate databases per org). It's simpler,
+completely secure, and you can migrate to Option B later if you hit 100+ customers.
+
+#### New Models Needed
+
+```python
+class Organization(Base):
+    """A customer account on the platform."""
+    id: int
+    name: str                    # "Smith's Pool Marketing"
+    slug: str                    # "smiths-pool-marketing" (URL-friendly)
+    owner_email: str
+    plan: str                    # "starter", "growth", "enterprise"
+    status: str                  # "active", "trial", "suspended", "cancelled"
+    trial_ends_at: datetime
+    
+    # White-label
+    logo_url: str
+    primary_color: str
+    company_name: str            # Shows in emails, reports
+    send_domain: str             # Their Resend domain
+    
+    # Usage tracking
+    companies_count: int
+    contacts_count: int
+    emails_sent_this_month: int
+    enrichments_this_month: int
+    audits_this_month: int
+    api_calls_this_month: int
+    
+    # Billing
+    stripe_customer_id: str
+    stripe_subscription_id: str
+    monthly_price_cents: int
+    
+    # API Keys (org-level, not platform-level)
+    # You (AAMP) provide Netrows/DataForSEO/Resend as platform services
+    # Customer can optionally bring their own keys for some services
+    google_maps_api_key: str     # Customer provides (their Google account)
+    anthropic_api_key: str       # You provide (baked into platform pricing)
+    
+    created_at: datetime
+
+class PlatformAdmin(Base):
+    """Super-admin who can see/manage all orgs. That's you."""
+    id: int
+    email: str
+    hashed_password: str
+```
+
+---
+
+### Pricing Model
+
+| Plan | Price | Included | Overage |
+|------|-------|----------|---------|
+| Starter | $149/mo | 3 users, 500 companies, 2k emails, 100 enrichments, 50 audits | $0.10/enrichment, $0.02/email |
+| Growth | $299/mo | 10 users, 2k companies, 10k emails, 500 enrichments, 200 audits | Same overage rates |
+| Enterprise | $599+/mo | Unlimited users, custom limits, dedicated support, white-label | Negotiated |
+
+**Your cost structure per customer:**
+- Netrows: ~$0.10-0.20/enrichment (you pay, baked into price)
+- DataForSEO: ~$0.05/audit (you pay)
+- Resend: ~$0.001/email (negligible)
+- Anthropic: ~$0.01/sequence generated (you pay)
+- Hosting: ~$5-10/customer on shared infrastructure
+
+**Margin at Starter tier:** Customer pays $149, your cost ~$15-25/mo = ~80% gross margin
+
+---
+
+### What You Build (in order)
+
+#### Phase 1 — Multi-org foundation (1 week)
+- [ ] Fork repo, set up `prospector-saas`
+- [ ] Switch from SQLite to Postgres
+- [ ] Organization model + org-scoped queries
+- [ ] Platform admin dashboard (list orgs, login-as, usage stats)
+- [ ] Org signup flow (name, email, password → creates org + first admin user)
+- [ ] Org-level settings (logo, colors, send domain, API keys)
+- [ ] Move all existing BMP data into org #1
+
+#### Phase 2 — Billing + usage tracking (3-4 days)
+- [ ] Stripe integration (checkout, subscription management, webhooks)
+- [ ] Usage metering (count enrichments, emails, audits per org per month)
+- [ ] Usage limits enforcement (soft limit = warning, hard limit = block)
+- [ ] Billing dashboard for customers (current plan, usage, invoices)
+- [ ] Trial mode (14 days free, then requires payment)
+
+#### Phase 3 — Onboarding flow (2-3 days)
+- [ ] Landing page / marketing site (separate from the app)
+- [ ] Signup → org creation → onboarding wizard
+- [ ] Wizard steps: company info, logo upload, connect Resend domain, invite team
+- [ ] First-run experience: "Search for your first leads"
+- [ ] Email templates for onboarding drip (welcome, tips, trial ending)
+
+#### Phase 4 — White-label (2-3 days)
+- [ ] Org-level branding: logo, colors, company name
+- [ ] Audit reports use org's branding (not BMP)
+- [ ] Email signatures use org's info
+- [ ] Custom domain support (CNAME → their app.theircompany.com)
+- [ ] Competitor comparison pages branded per org
+
+#### Phase 5 — Platform admin dashboard (2 days)
+- [ ] List all orgs with status, plan, usage, MRR
+- [ ] Login-as (impersonate any org for support)
+- [ ] Usage analytics across all orgs
+- [ ] Revenue dashboard (total MRR, churn, growth)
+- [ ] Org health alerts (approaching limits, payment failed, inactive)
+
+#### Phase 6 — Hardening for production (ongoing)
+- [ ] Rate limiting per org
+- [ ] Error monitoring (Sentry or similar)
+- [ ] Automated backups per org
+- [ ] SOC2-adjacent security practices
+- [ ] Terms of service, privacy policy
+- [ ] GDPR data export/delete per org
+
+---
+
+### Infrastructure for SaaS
+
+**Current (BMP):** Single VPS, SQLite, nginx
+
+**SaaS needs:**
+- **Postgres** (managed — Supabase, Railway, or AWS RDS)
+- **Redis** (for rate limiting, caching, background job queues)
+- **Object storage** (S3 or similar — for call recordings, report PDFs, logos)
+- **CDN** (CloudFront or Cloudflare — for static assets, report hosting)
+- **Deployment** (Railway, Fly.io, or AWS ECS — auto-scaling)
+- **Monitoring** (Sentry for errors, Datadog or Grafana for metrics)
+- **Email** (Resend — you're already on it, just need org-level domains)
+
+**Cost estimate for infrastructure:**
+- Postgres: $15-30/mo (managed)
+- Redis: $10/mo
+- Hosting: $20-50/mo (Railway or Fly.io)
+- S3: ~$5/mo
+- Total: ~$50-100/mo fixed cost (covers many orgs)
+
+---
+
+### What NOT to Change in the BMP Repo
+
+Keep building BMP-specific features in the main repo:
+- iClosed integration (specific to BMP's sales process)
+- BMP branding/logo
+- BMP-specific sequence templates
+- Your API keys and .env
+
+The SaaS fork makes these configurable per-org instead of hardcoded.
+
+---
+
+### First Steps Tonight
+
+1. **Create the fork:**
+   ```bash
+   # On GitHub: create aampagencylv/prospector-saas
+   # Then locally:
+   git clone https://github.com/aampagencylv/prospector-saas.git
+   cd prospector-saas
+   git remote add upstream https://github.com/aampagencylv/backyard-leads.git
+   ```
+
+2. **Create a SAAS.md** in the new repo with this plan
+
+3. **Start with the database migration** — SQLite → Postgres is the foundation.
+   Everything else builds on top of that.
+
+4. **Don't break BMP** — keep building features in backyard-leads. Only pull
+   into the SaaS repo when they're stable.
+
+---
+
+## 🧭 Guided Onboarding Walkthrough (10-Step Product Tour)
+
+> Like HubSpot, Monday.com, Canva — a step-by-step guided tour that walks new users through
+> the entire platform the first time they log in. They just keep hitting "Next" and it highlights
+> each feature in context.
+
+### How It Works
+
+When a new user logs in for the first time (or an admin resets their tour), a modal overlay
+walks them through the platform one step at a time. Each step:
+- Highlights a specific UI element (spotlight/tooltip style)
+- Explains what it does and why they'd use it
+- Has a "Next" button to advance and a "Skip Tour" to bail out
+- Progress bar shows "Step 3 of 10"
+
+### The 10 Steps
+
+| Step | Screen | Highlight | What They Learn |
+|------|--------|-----------|-----------------|
+| 1 | Dashboard | KPI strip | "This is your command center — MRR, active deals, emails sent, response rate at a glance" |
+| 2 | Companies | Search bar + filters | "Search Google Maps for prospects by industry and location. Filter by review count to find established businesses" |
+| 3 | Companies | "Add to Pipeline" button | "Found a prospect? Hit this button to enrich their data, find contacts, generate an audit report, and create a deal — all in one click" |
+| 4 | Company Detail | Three-column layout | "Left panel: company info and enrichment data. Center: contacts and email sequences. Right: timeline of all activity" |
+| 5 | Company Detail | Sequence panel | "Each contact gets a multi-channel sequence — emails, LinkedIn, iMessage, calls. Steps auto-send on schedule or you can send manually" |
+| 6 | Pipeline | Kanban board | "Drag deals between stages. Cards show value, company, and days in stage. Click any card to jump to the company" |
+| 7 | Pipeline | Deal card actions | "Snooze deals that aren't ready yet — they'll wake up automatically and create a follow-up task" |
+| 8 | Contacts | Contact list + filters | "All your contacts across companies. Filter by email status, phone type, or sequence state. Click to see their full profile" |
+| 9 | Audit Reports | Sample report | "AI Findability Audits are your lead magnet. Every prospect gets one — share the link in emails and messages. The competitor comparison is gated behind a discovery call booking" |
+| 10 | Dashboard | Activity feed + calls | "Track everything your team does. Call recordings get AI transcription and coaching summaries. Your manager can review and rate calls" |
+
+### Technical Implementation
+
+**Option A — Lightweight (build it ourselves):**
+- Store `onboarding_step` (int, 0-10) on the User model. 0 = not started, 10 = complete.
+- Pure JS overlay system in index.html — no library needed
+- Each step is a positioned tooltip with a spotlight mask (CSS `box-shadow` trick)
+- "Next" button increments the step, saves to API, shows the next tooltip
+- "Skip Tour" sets step to 10
+- Admin can reset a user's tour via user management
+
+```javascript
+// Core concept
+const TOUR_STEPS = [
+    { target: '#kpi-strip', title: 'Your Dashboard', text: '...', position: 'bottom' },
+    { target: '#company-search', title: 'Find Prospects', text: '...', position: 'bottom' },
+    // ... etc
+];
+
+function showTourStep(stepIndex) {
+    const step = TOUR_STEPS[stepIndex];
+    const el = document.querySelector(step.target);
+    // Position tooltip near element, add spotlight overlay
+    // "Next" calls showTourStep(stepIndex + 1)
+    // Save progress: fetch('/api/users/me/onboarding', { method: 'PATCH', body: { step: stepIndex } })
+}
+```
+
+**Option B — Use a library:**
+- [Shepherd.js](https://github.com/shepherd-pro/shepherd) — MIT, 12KB, exactly this use case
+- [Intro.js](https://introjs.com/) — popular but commercial license for SaaS
+- [Driver.js](https://driverjs.com/) — MIT, lightweight, good spotlight effect
+
+**Recommendation:** Start with Option A (pure JS) since we're already vanilla JS. It's maybe
+100 lines of code and zero dependencies. If it gets complex, swap in Shepherd.js later.
+
+### What Needs to Happen
+
+1. Add `onboarding_step` column to User model (default 0)
+2. Add `PATCH /api/users/me/onboarding` endpoint to save progress
+3. Build the overlay/tooltip system in index.html
+4. Write copy for each of the 10 steps
+5. On login, if `onboarding_step < 10`, auto-start the tour
+6. Add "Restart Tour" button in user settings/profile
+
+### For SaaS Version
+
+The same tour system works for SaaS customers, but the steps would be slightly different:
+- Step 1 becomes "Welcome to [OrgName]" with their branding
+- Add a step for "Invite your team" (not needed for BMP since admin adds users)
+- Add a step for "Connect your email domain" (Resend setup)
+- The 10 steps become configurable per-org if they want to customize for their team
+
+### Why This Matters
+
+- BDRs going live tomorrow won't need hand-holding — the platform teaches itself
+- Reduces support burden as you scale the team
+- Critical for SaaS — you can't personally onboard every customer
+- Increases activation rate (users who complete onboarding stick around)
+
+---
+
 ## 🔴 Closed / decided
 - Apollo evaluated → keeping integration code but it's effectively dead for SMB; Netrows replaces it
 - Coresignal evaluated → rejected (LinkedIn-derived, same blind spot as Apollo)
