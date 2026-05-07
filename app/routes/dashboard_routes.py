@@ -43,6 +43,16 @@ def _decay_weight(age_days: float) -> float:
     return 0.5 ** (age_days / ENGAGEMENT_DECAY_HALFLIFE_DAYS)
 
 
+def _aware(dt):
+    """SQLite drops tzinfo on round-trip — column DateTime values come back
+    naive even though we wrote them as tz-aware UTC. This helper coerces a
+    naive value back to UTC-aware so it can be compared/subtracted with
+    tz-aware now()."""
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
 @router.get("/dashboard")
 async def get_dashboard(
     db: AsyncSession = Depends(get_db),
@@ -76,11 +86,11 @@ async def get_dashboard(
     # Won this month
     won_mtd_value = sum(
         (d.value or 0) for d in deals_open_or_done
-        if d.stage == "closed_won" and d.closed_at and d.closed_at >= month_start
+        if d.stage == "closed_won" and d.closed_at and _aware(d.closed_at) >= month_start
     )
     won_mtd_count = sum(
         1 for d in deals_open_or_done
-        if d.stage == "closed_won" and d.closed_at and d.closed_at >= month_start
+        if d.stage == "closed_won" and d.closed_at and _aware(d.closed_at) >= month_start
     )
 
     # ---------- Engagement events for hot-lead scoring ----------
@@ -95,7 +105,7 @@ async def get_dashboard(
     company_score: dict[int, float] = defaultdict(float)
     company_signals: dict[int, list[dict]] = defaultdict(list)
     for a in eng_rows:
-        age = (now - a.created_at).total_seconds() / 86400 if a.created_at else 0
+        age = (now - _aware(a.created_at)).total_seconds() / 86400 if a.created_at else 0
         weight = ENGAGEMENT_WEIGHTS.get(a.activity_type, 0)
         company_score[a.company_id] += weight * _decay_weight(age)
         if len(company_signals[a.company_id]) < 3:  # keep top 3 most recent signals
@@ -200,7 +210,7 @@ async def get_dashboard(
             "probability": d.probability,
             "company_id": d.company_id,
             "company_name": cname,
-            "days_stuck": (now - d.updated_at).days if d.updated_at else 0,
+            "days_stuck": (now - _aware(d.updated_at)).days if d.updated_at else 0,
         }
         for d, cname in stuck_rows
     ]
