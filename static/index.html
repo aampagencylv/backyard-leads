@@ -1668,7 +1668,7 @@
                                     </div>
                                     ${c.title ? `<div style="font-size:11px;color:#888">${escapeHtml(c.title)}</div>` : ''}
                                     ${c.email ? `<div style="font-size:11px;color:var(--bmp-orange)">${escapeHtml(c.email)}</div>` : '<div style="font-size:11px;color:#ccc">no email</div>'}
-                                    ${c.phone ? `<div style="font-size:11px"><a class="call-link" onclick="event.stopPropagation();callContact(${c.id})">${escapeHtml(c.phone)}</a></div>` : ''}
+                                    ${c.phone ? `<div style="font-size:11px"><a class="call-link" onclick="event.stopPropagation();callContact(${c.id})">${escapeHtml(c.phone)}</a>${!c.do_not_text ? ` · <a class="sms-link" onclick="event.stopPropagation();openSmsComposer(${c.id})" style="color:#0b93f6;cursor:pointer;text-decoration:none;border-bottom:1px dotted #0b93f6" title="iMessage via Blooio">💬 Message</a>` : ` · <span style="color:#c0392b">opted out</span>`}</div>` : ''}
                                     ${c.emails.length > 0 ? `<div style="font-size:10px;color:var(--bmp-green);margin-top:2px">${c.emails.filter(e=>e.is_sent).length}/${c.emails.length} steps sent</div>` : ''}
                                 </div>
                             `).join('')}
