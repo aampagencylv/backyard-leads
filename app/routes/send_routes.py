@@ -132,6 +132,8 @@ async def send_next_in_sequence(
         return {"message": "All emails in sequence have been sent (or sequence is paused)", "complete": True}
 
     company = (await db.execute(select(Company).where(Company.id == email.company_id))).scalar_one_or_none()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found for this email")
     if not settings.resend_api_key:
         raise HTTPException(status_code=500, detail="Resend API key not configured")
     if not user.sending_enabled:

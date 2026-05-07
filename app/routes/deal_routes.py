@@ -3,7 +3,7 @@ Deal-level routes: CRUD on Deals + kanban-style pipeline view + forecast.
 """
 from __future__ import annotations
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -158,6 +158,9 @@ async def get_deal(
     deal = (await db.execute(select(Deal).where(Deal.id == deal_id))).scalar_one_or_none()
     if not deal:
         raise HTTPException(status_code=404, detail="Deal not found")
+    from app.scoping import check_deal_access
+    if not check_deal_access(deal, user):
+        raise HTTPException(status_code=404, detail="Deal not found")
     return _deal_to_dict(deal)
 
 
@@ -170,6 +173,9 @@ async def update_deal(
 ):
     deal = (await db.execute(select(Deal).where(Deal.id == deal_id))).scalar_one_or_none()
     if not deal:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    from app.scoping import check_deal_access
+    if not check_deal_access(deal, user):
         raise HTTPException(status_code=404, detail="Deal not found")
 
     changes = []
@@ -224,6 +230,9 @@ async def delete_deal(
 ):
     deal = (await db.execute(select(Deal).where(Deal.id == deal_id))).scalar_one_or_none()
     if not deal:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    from app.scoping import check_deal_access
+    if not check_deal_access(deal, user):
         raise HTTPException(status_code=404, detail="Deal not found")
     cid = deal.company_id
     await db.delete(deal)
@@ -433,6 +442,9 @@ async def snooze_deal(
     deal = (await db.execute(select(Deal).where(Deal.id == deal_id))).scalar_one_or_none()
     if not deal:
         from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Deal not found")
+    from app.scoping import check_deal_access
+    if not check_deal_access(deal, user):
         raise HTTPException(status_code=404, detail="Deal not found")
 
     # Calculate wake date

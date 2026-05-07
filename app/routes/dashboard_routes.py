@@ -284,13 +284,16 @@ async def activity_feed(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    rows = (await db.execute(
+    from app.scoping import scope_companies
+    q = (
         select(Activity, Company.name, User.first_name, User.last_name)
         .join(Company, Activity.company_id == Company.id)
         .outerjoin(User, Activity.user_id == User.id)
         .order_by(Activity.created_at.desc())
         .limit(min(limit, 200))
-    )).all()
+    )
+    q = scope_companies(q, user)
+    rows = (await db.execute(q)).all()
     return [
         {
             "id": a.id,

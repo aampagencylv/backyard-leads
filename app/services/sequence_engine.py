@@ -109,23 +109,31 @@ async def _handle_email(db: AsyncSession, step: GeneratedEmail, contact: Contact
     # Pick a "sender" — fall back to the company's assigned user, else the company's owner
     sender_user: Optional[User] = None
     if company.assigned_to:
-        sender_user = (await db.execute(select(User).where(User.email == company.assigned_to))).scalar_one_or_none()
+        sender_user = (await db.execute(select(User).where(User.id == company.assigned_to))).scalar_one_or_none()
     if not sender_user:
-        # Fallback: any admin user
-        sender_user = (await db.execute(select(User).where(User.role == "admin"))).scalars().first()
+        # Fallback: any admin user with sending enabled
+        sender_user = (await db.execute(
+            select(User).where(User.role.in_(("admin", "super_admin")), User.sending_enabled == True)
+        )).scalars().first()
     if not sender_user or not sender_user.sending_enabled:
         return False, "No sending-enabled user available"
 
     sender = get_sender_info(sender_user.first_name, sender_user.full_name)
     # Wrap any URLs in the body + signature through /t/{token} for click tracking
     from app.services.tracking import wrap_html_links
-    tracked_body = await wrap_html_links(
-        db, step.body, contact_id=contact.id, company_id=company.id, email_id=step.id, label="body_link",
-    )
+    try:
+        tracked_body = await wrap_html_links(
+            db, step.body, contact_id=contact.id, company_id=company.id, email_id=step.id, label="body_link",
+        )
+    except Exception:
+        tracked_body = step.body  # Fall back to untracked body
     sig_html = render_signature(sender_user)
-    tracked_signature = await wrap_html_links(
-        db, sig_html, contact_id=contact.id, company_id=company.id, email_id=step.id, label="signature_link",
-    )
+    try:
+        tracked_signature = await wrap_html_links(
+            db, sig_html, contact_id=contact.id, company_id=company.id, email_id=step.id, label="signature_link",
+        )
+    except Exception:
+        tracked_signature = sig_html  # Fall back to untracked signature
     result = await send_email(
         to_email=contact.email,
         subject=step.subject,
@@ -196,7 +204,10 @@ async def _handle_imessage(db: AsyncSession, step: GeneratedEmail, contact: Cont
         # Persist the generated text on the step for audit
         step.body = text_body
 
-    result = await blooio_send(api_key, contact.phone, text_body)
+    try:
+        result = await blooio_send(api_key, contact.phone, text_body)
+    except Exception as e:
+        return False, f"Blooio error: {e}"
     if not result.success:
         return False, f"Blooio rejected: {result.error}"
 

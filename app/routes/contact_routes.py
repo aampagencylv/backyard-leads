@@ -224,6 +224,9 @@ async def get_contact(
     contact = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
+    from app.scoping import check_contact_access
+    if not await check_contact_access(contact, user, db):
+        raise HTTPException(status_code=404, detail="Contact not found")
     return _contact_summary(contact)
 
 
@@ -236,6 +239,9 @@ async def update_contact(
 ):
     contact = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()
     if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    from app.scoping import check_contact_access
+    if not await check_contact_access(contact, user, db):
         raise HTTPException(status_code=404, detail="Contact not found")
 
     for f in ("first_name", "last_name", "title", "email", "phone", "linkedin_url"):
@@ -268,6 +274,9 @@ async def delete_contact(
 ):
     contact = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()
     if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    from app.scoping import check_contact_access
+    if not await check_contact_access(contact, user, db):
         raise HTTPException(status_code=404, detail="Contact not found")
     company_id = contact.company_id
     await db.delete(contact)

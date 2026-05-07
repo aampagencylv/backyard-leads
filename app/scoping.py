@@ -50,3 +50,28 @@ def scope_tasks(query, user: User, rep_id: Optional[int] = None):
             return query.where(Task.user_id == rep_id)
         return query
     return query.where(Task.user_id == user.id)
+
+
+def check_company_access(company: Company, user: User) -> bool:
+    """Return True if user can access this company."""
+    if user.role in ("admin", "super_admin"):
+        return True
+    return company.assigned_to == user.id
+
+
+def check_deal_access(deal: Deal, user: User) -> bool:
+    """Return True if user can access this deal."""
+    if user.role in ("admin", "super_admin"):
+        return True
+    return deal.assigned_to == user.id
+
+
+async def check_contact_access(contact: Contact, user: User, db) -> bool:
+    """Return True if user can access this contact (via company ownership)."""
+    if user.role in ("admin", "super_admin"):
+        return True
+    from sqlalchemy import select as _sel
+    company = (await db.execute(_sel(Company).where(Company.id == contact.company_id))).scalar_one_or_none()
+    if not company:
+        return False
+    return company.assigned_to == user.id

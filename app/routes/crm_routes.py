@@ -35,6 +35,14 @@ async def get_timeline(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    # Verify company ownership
+    from app.scoping import check_company_access
+    company = (await db.execute(select(Company).where(Company.id == company_id))).scalar_one_or_none()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    if not check_company_access(company, user):
+        raise HTTPException(status_code=404, detail="Company not found")
+
     result = await db.execute(
         select(Activity).where(Activity.company_id == company_id).order_by(Activity.created_at.desc())
     )

@@ -374,6 +374,9 @@ async def get_company_full(
     company = result.scalar_one_or_none()
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
+    from app.scoping import check_company_access
+    if not check_company_access(company, user):
+        raise HTTPException(status_code=404, detail="Company not found")
 
     # Contacts with their emails
     contacts_result = await db.execute(
@@ -602,11 +605,17 @@ async def enrich_company(
     company = result.scalar_one_or_none()
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
+    from app.scoping import check_company_access
+    if not check_company_access(company, user):
+        raise HTTPException(status_code=404, detail="Company not found")
     if not company.website:
         raise HTTPException(status_code=400, detail="Company has no website to analyze")
 
     # Website analysis
-    analysis = await analyze_website(company.website)
+    try:
+        analysis = await analyze_website(company.website)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Website analysis failed: {str(e)[:200]}")
     analysis_dict = analysis_to_dict(analysis)
     company.enriched = True
     company.has_blog = analysis.has_blog
@@ -889,7 +898,7 @@ async def pursue_companies(
 
             # Get LinkedIn URL and audit URL for injecting into steps
             contact_linkedin = primary.linkedin_url or ""
-            # audit_url set earlier in the pursue flow
+            audit_url = None  # populated after audit generation; sequence emails reference it later via update
 
             for step in SEQUENCE_SCHEDULE:
                 try:
