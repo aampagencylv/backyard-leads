@@ -537,6 +537,65 @@
                         </div>
                         <div id="netrows-key-current" style="font-size:11px;color:#888;margin-top:4px"></div>
                     </div>
+
+                    <div style="margin-top:24px;padding-top:16px;border-top:1px solid #eee">
+                        <h4 style="font-size:14px;margin-bottom:6px">Twilio Voice
+                            <span id="twilio-overall-status" style="font-size:11px;font-weight:400;color:#888;margin-left:6px"></span>
+                        </h4>
+                        <p style="font-size:12px;color:#888;margin-bottom:12px">Required for in-app calling. Find your credentials at <a href="https://console.twilio.com/" target="_blank" rel="noreferrer">console.twilio.com</a>.</p>
+
+                        <div class="form-group">
+                            <label style="font-size:12px">Account SID <span id="twilio-account-sid-status" style="font-size:11px;font-weight:400;color:#888"></span></label>
+                            <div style="display:flex;gap:6px">
+                                <input type="password" id="settings-twilio-account-sid" placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="off" style="flex:1">
+                                <button class="btn btn-secondary btn-sm" onclick="saveTwilioField('twilio_account_sid')">Save</button>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label style="font-size:12px">Auth Token <span id="twilio-auth-token-status" style="font-size:11px;font-weight:400;color:#888"></span></label>
+                            <div style="display:flex;gap:6px">
+                                <input type="password" id="settings-twilio-auth-token" placeholder="32-char hex" autocomplete="off" style="flex:1">
+                                <button class="btn btn-secondary btn-sm" onclick="saveTwilioField('twilio_auth_token')">Save</button>
+                            </div>
+                        </div>
+
+                        <div style="font-size:11px;color:#888;margin:8px 0">The fields below are needed for browser-based dialing (Phase 2). Skip for now if you're just buying numbers.</div>
+
+                        <div class="form-group">
+                            <label style="font-size:12px">API Key SID <span id="twilio-api-key-sid-status" style="font-size:11px;font-weight:400;color:#888"></span></label>
+                            <div style="display:flex;gap:6px">
+                                <input type="password" id="settings-twilio-api-key-sid" placeholder="SKxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="off" style="flex:1">
+                                <button class="btn btn-secondary btn-sm" onclick="saveTwilioField('twilio_api_key_sid')">Save</button>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label style="font-size:12px">API Key Secret <span id="twilio-api-key-secret-status" style="font-size:11px;font-weight:400;color:#888"></span></label>
+                            <div style="display:flex;gap:6px">
+                                <input type="password" id="settings-twilio-api-key-secret" placeholder="(API Key Secret shown only once when created)" autocomplete="off" style="flex:1">
+                                <button class="btn btn-secondary btn-sm" onclick="saveTwilioField('twilio_api_key_secret')">Save</button>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label style="font-size:12px">TwiML App SID <span id="twilio-twiml-app-sid-status" style="font-size:11px;font-weight:400;color:#888"></span></label>
+                            <div style="display:flex;gap:6px">
+                                <input type="password" id="settings-twilio-twiml-app-sid" placeholder="APxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="off" style="flex:1">
+                                <button class="btn btn-secondary btn-sm" onclick="saveTwilioField('twilio_twiml_app_sid')">Save</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Twilio Numbers (admin only) -->
+                <div id="twilio-numbers-panel" class="search-box hidden" style="max-width:600px;margin-top:16px">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                        <h3 style="margin:0">Twilio Phone Numbers</h3>
+                        <button class="btn btn-secondary btn-sm" onclick="openBuyNumberModal()">+ Buy Number</button>
+                    </div>
+                    <p style="font-size:13px;color:#666;margin-bottom:12px">Numbers cost $1.15/mo each. Assign one to each rep for personalized caller ID + better connect rates. Admin-only.</p>
+                    <div id="twilio-owned-numbers"></div>
                 </div>
 
                 <div class="search-box" style="max-width:600px;margin-top:16px">
@@ -2650,6 +2709,8 @@
         async function loadRuntimeConfig() {
             const cfg = await api('/api/runtime-config');
             if (!cfg) return;
+
+            // Netrows
             const n = cfg.netrows || {};
             const status = document.getElementById('netrows-key-status');
             const current = document.getElementById('netrows-key-current');
@@ -2663,6 +2724,205 @@
                 status.textContent = '(not set)';
                 status.style.color = '#c0392b';
                 current.textContent = 'No key configured. Netrows enrichment will be skipped until you add a key.';
+            }
+
+            // Twilio per-field status
+            const t = cfg.twilio || {};
+            const fields = [
+                ['twilio_account_sid',    'twilio-account-sid-status',    'settings-twilio-account-sid'],
+                ['twilio_auth_token',     'twilio-auth-token-status',     'settings-twilio-auth-token'],
+                ['twilio_api_key_sid',    'twilio-api-key-sid-status',    'settings-twilio-api-key-sid'],
+                ['twilio_api_key_secret', 'twilio-api-key-secret-status', 'settings-twilio-api-key-secret'],
+                ['twilio_twiml_app_sid',  'twilio-twiml-app-sid-status',  'settings-twilio-twiml-app-sid'],
+            ];
+            const labelMap = {
+                twilio_account_sid: 'account_sid',
+                twilio_auth_token: 'auth_token',
+                twilio_api_key_sid: 'api_key_sid',
+                twilio_api_key_secret: 'api_key_secret',
+                twilio_twiml_app_sid: 'twiml_app_sid',
+            };
+            for (const [field, statusId, inputId] of fields) {
+                const f = t[labelMap[field]] || {};
+                const sEl = document.getElementById(statusId);
+                const iEl = document.getElementById(inputId);
+                if (iEl) iEl.value = '';
+                if (sEl) {
+                    if (f.set) {
+                        sEl.textContent = `· ${f.masked}`;
+                        sEl.style.color = 'var(--bmp-green)';
+                    } else {
+                        sEl.textContent = '· not set';
+                        sEl.style.color = '#c0392b';
+                    }
+                }
+            }
+            const overall = document.getElementById('twilio-overall-status');
+            if (overall) {
+                if (t.voice_sdk_ready) {
+                    overall.textContent = '✓ ready for browser dialing';
+                    overall.style.color = 'var(--bmp-green)';
+                } else if (t.minimally_configured) {
+                    overall.textContent = '✓ ready for number management';
+                    overall.style.color = 'var(--bmp-orange)';
+                } else {
+                    overall.textContent = 'not configured';
+                    overall.style.color = '#c0392b';
+                }
+            }
+
+            // Show admin-only Twilio Numbers panel + load it if configured
+            const numbersPanel = document.getElementById('twilio-numbers-panel');
+            if (numbersPanel) {
+                const isAdmin = currentUser && currentUser.role === 'admin';
+                if (isAdmin && t.minimally_configured) {
+                    numbersPanel.classList.remove('hidden');
+                    loadTwilioOwnedNumbers();
+                } else {
+                    numbersPanel.classList.add('hidden');
+                }
+            }
+        }
+
+        async function saveTwilioField(field) {
+            const inputId = 'settings-' + field.replace(/_/g, '-');
+            const val = (document.getElementById(inputId) || {}).value;
+            if (val === undefined) return;
+            const trimmed = val.trim();
+            if (!trimmed) { toast('Paste a value first'); return; }
+            const data = await api('/api/runtime-config', {
+                method: 'PATCH',
+                body: JSON.stringify({ [field]: trimmed }),
+            });
+            if (data) { toast(`${field} saved`); loadRuntimeConfig(); }
+        }
+
+        // ============ Twilio Numbers (admin) ============
+        async function loadTwilioOwnedNumbers() {
+            const data = await api('/api/twilio/numbers/owned');
+            const el = document.getElementById('twilio-owned-numbers');
+            if (!el) return;
+            if (!data) {
+                el.innerHTML = '<p style="font-size:12px;color:#c0392b">Failed to load numbers — check credentials above.</p>';
+                return;
+            }
+            if (data.length === 0) {
+                el.innerHTML = '<p style="font-size:12px;color:#888">No numbers yet. Click "+ Buy Number" to get started.</p>';
+                return;
+            }
+            // Pull team list for the assignment dropdown
+            const users = await api('/api/auth/users') || [];
+            const userOptions = '<option value="">— Unassigned —</option>' +
+                users.map(u => `<option value="${escapeHtml(u.email)}">${escapeHtml(u.full_name || u.email)}</option>`).join('');
+
+            el.innerHTML = data.map(n => {
+                const assigned = n.assigned_to;
+                return `
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:6px">
+                    <div>
+                        <div style="font-family:monospace;font-weight:600">${escapeHtml(n.phone_number)}</div>
+                        <div style="font-size:11px;color:#888">${escapeHtml(n.friendly_name || '')}</div>
+                    </div>
+                    <div style="display:flex;gap:8px;align-items:center">
+                        <select onchange="assignTwilioNumber('${escapeHtml(n.phone_number)}', this.value)" style="padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px">
+                            ${userOptions.replace(`value="${assigned ? escapeHtml(assigned.email) : ''}"`,
+                                                  `value="${assigned ? escapeHtml(assigned.email) : ''}" selected`)}
+                        </select>
+                        <button class="btn btn-secondary btn-sm" style="background:#fde8e8;color:#c0392b" onclick="releaseTwilioNumber('${escapeHtml(n.sid)}', '${escapeHtml(n.phone_number)}')">Release</button>
+                    </div>
+                </div>
+                `;
+            }).join('');
+        }
+
+        async function openBuyNumberModal() {
+            const root = document.getElementById('modal-root');
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:520px">
+                        <h2>Buy a Twilio Number</h2>
+                        <p style="font-size:13px;color:#666;margin-bottom:12px">$1.15/mo per number. 702 = Las Vegas, 480 = Phoenix, 281 = Houston, 305 = Miami.</p>
+                        <div class="form-group">
+                            <label>Area Code</label>
+                            <input type="text" id="buy-area-code" placeholder="702" maxlength="3" style="font-family:monospace">
+                        </div>
+                        <button class="btn btn-secondary btn-sm" onclick="searchAvailableNumbers()">Search</button>
+                        <div id="buy-search-results" style="margin-top:12px"></div>
+                        <div class="modal-actions" style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">
+                            <button class="btn btn-secondary" onclick="document.getElementById('modal-root').innerHTML=''">Close</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function searchAvailableNumbers() {
+            const ac = (document.getElementById('buy-area-code').value || '').trim();
+            if (!ac || ac.length !== 3) { toast('Enter a 3-digit area code'); return; }
+            const resultsEl = document.getElementById('buy-search-results');
+            resultsEl.innerHTML = '<p style="font-size:12px;color:#888">Searching...</p>';
+            const data = await api(`/api/twilio/numbers/available?area_code=${ac}&limit=10`);
+            if (!data) return;
+            if (data.length === 0) {
+                resultsEl.innerHTML = '<p style="font-size:12px;color:#c0392b">No numbers available for that area code.</p>';
+                return;
+            }
+            resultsEl.innerHTML = data.map(n => `
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:8px;border:1px solid #e5e7eb;border-radius:6px;margin-bottom:4px;font-size:13px">
+                    <div>
+                        <div style="font-family:monospace;font-weight:600">${escapeHtml(n.phone_number)}</div>
+                        <div style="font-size:11px;color:#888">${escapeHtml(n.locality || '')}, ${escapeHtml(n.region || '')}</div>
+                    </div>
+                    <button class="btn btn-primary btn-sm" onclick="confirmBuyNumber('${escapeHtml(n.phone_number)}')">Buy</button>
+                </div>
+            `).join('');
+        }
+
+        async function confirmBuyNumber(phoneNumber) {
+            if (!confirm(`Buy ${phoneNumber} for $1.15/mo?`)) return;
+            toast('Provisioning number...');
+            const data = await api('/api/twilio/numbers/buy', {
+                method: 'POST',
+                body: JSON.stringify({ phone_number: phoneNumber }),
+            });
+            if (data) {
+                toast(`Bought ${phoneNumber}!`);
+                document.getElementById('modal-root').innerHTML = '';
+                loadTwilioOwnedNumbers();
+            }
+        }
+
+        async function assignTwilioNumber(phoneNumber, userEmail) {
+            // userEmail from the <select>; map to user_id by lookup
+            const users = await api('/api/auth/users') || [];
+            const target = users.find(u => u.email === userEmail);
+            // First clear any user currently holding this number
+            const prevHolder = users.find(u => u.twilio_phone_number === phoneNumber && u.email !== userEmail);
+            if (prevHolder) {
+                await api(`/api/twilio/users/${prevHolder.id}/twilio`, {
+                    method: 'PATCH',
+                    body: JSON.stringify({ phone_number: null }),
+                });
+            }
+            if (target) {
+                const data = await api(`/api/twilio/users/${target.id}/twilio`, {
+                    method: 'PATCH',
+                    body: JSON.stringify({ phone_number: phoneNumber }),
+                });
+                if (data) toast(`Assigned ${phoneNumber} to ${target.full_name || target.email}`);
+            } else {
+                // Empty selection — unassign whoever holds it
+                if (prevHolder) toast(`Unassigned ${phoneNumber}`);
+            }
+            loadTwilioOwnedNumbers();
+        }
+
+        async function releaseTwilioNumber(sid, phoneNumber) {
+            if (!confirm(`Release ${phoneNumber} back to Twilio? This stops the $1.15/mo charge but the number will become unavailable to you.`)) return;
+            const data = await api(`/api/twilio/numbers/${sid}`, { method: 'DELETE' });
+            if (data) {
+                toast(`Released ${phoneNumber}`);
+                loadTwilioOwnedNumbers();
             }
         }
 

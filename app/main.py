@@ -17,6 +17,7 @@ from app.routes import (
     unsubscribe_routes,
     view_routes,
     campaign_routes,
+    twilio_routes,
 )
 
 
@@ -53,6 +54,7 @@ app.include_router(runtime_routes.router)
 app.include_router(unsubscribe_routes.router)
 app.include_router(view_routes.router)
 app.include_router(campaign_routes.router)
+app.include_router(twilio_routes.router)
 
 # Serve static frontend
 app.mount("/static", StaticFiles(directory="static"), name="static")

@@ -30,6 +30,11 @@ class User(Base):
 
     sending_enabled = Column(Boolean, default=False)
     role = Column(String(20), nullable=False, default="sales_rep")  # admin, sales_rep, read_only
+
+    # Twilio Voice — per-rep phone number + SDK identity
+    twilio_phone_number = Column(String(40), nullable=True)  # E.164 format, e.g. +17025551234
+    twilio_identity = Column(String(80), nullable=True)      # SDK identity, e.g. "bmp_user_3"
+
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     searches = relationship("Search", back_populates="user")
@@ -248,6 +253,15 @@ class RuntimeConfig(Base):
 
     id = Column(Integer, primary_key=True, default=1)
     netrows_api_key = Column(Text, nullable=True)
+
+    # Twilio credentials — Account SID + Auth Token are required;
+    # API Key/Secret + TwiML App SID are needed once we move to SDK-based dialing
+    twilio_account_sid = Column(Text, nullable=True)
+    twilio_auth_token = Column(Text, nullable=True)
+    twilio_api_key_sid = Column(Text, nullable=True)
+    twilio_api_key_secret = Column(Text, nullable=True)
+    twilio_twiml_app_sid = Column(Text, nullable=True)
+
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
 

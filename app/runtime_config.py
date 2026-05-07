@@ -17,6 +17,7 @@ from sqlalchemy import select
 
 from app.models import RuntimeConfig
 from app.config import settings
+from app.services.twilio_voice import TwilioCredentials
 
 
 async def _get_or_create(db: AsyncSession) -> RuntimeConfig:
@@ -37,6 +38,44 @@ async def get_netrows_api_key(db: AsyncSession) -> str:
 async def set_netrows_api_key(db: AsyncSession, value: str) -> RuntimeConfig:
     rc = await _get_or_create(db)
     rc.netrows_api_key = value.strip() or None
+    rc.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(rc)
+    return rc
+
+
+async def get_twilio_credentials(db: AsyncSession) -> TwilioCredentials:
+    """Pull Twilio creds from runtime_config; field-level env fallback."""
+    rc = await _get_or_create(db)
+    return TwilioCredentials(
+        account_sid=(rc.twilio_account_sid or "").strip() or "",
+        auth_token=(rc.twilio_auth_token or "").strip() or "",
+        api_key_sid=(rc.twilio_api_key_sid or "").strip() or None,
+        api_key_secret=(rc.twilio_api_key_secret or "").strip() or None,
+        twiml_app_sid=(rc.twilio_twiml_app_sid or "").strip() or None,
+    )
+
+
+async def set_twilio_credentials(
+    db: AsyncSession,
+    *,
+    account_sid: str | None = None,
+    auth_token: str | None = None,
+    api_key_sid: str | None = None,
+    api_key_secret: str | None = None,
+    twiml_app_sid: str | None = None,
+) -> RuntimeConfig:
+    rc = await _get_or_create(db)
+    if account_sid is not None:
+        rc.twilio_account_sid = account_sid.strip() or None
+    if auth_token is not None:
+        rc.twilio_auth_token = auth_token.strip() or None
+    if api_key_sid is not None:
+        rc.twilio_api_key_sid = api_key_sid.strip() or None
+    if api_key_secret is not None:
+        rc.twilio_api_key_secret = api_key_secret.strip() or None
+    if twiml_app_sid is not None:
+        rc.twilio_twiml_app_sid = twiml_app_sid.strip() or None
     rc.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(rc)
