@@ -512,7 +512,49 @@ async def get_company_full(
             for a in activities
         ],
         "created_at": company.created_at.isoformat() if company.created_at else None,
+        "talking_points": _get_talking_points(company, problems),
     }
+
+
+def _get_talking_points(company, problems):
+    """Generate BDR talking points from enrichment data."""
+    try:
+        from app.services.talking_points import generate_talking_points
+
+        # Check if we have an audit report for richer data
+        serp_competitors = []
+        total_kw = 0
+        ref_domains = 0
+        domain_rank = 0
+        has_llms = False
+        has_faq = False
+
+        # Extract from problems
+        for p in problems:
+            ptype = (p.get("type", "") or "").lower()
+            if "llms" in ptype:
+                has_llms = False
+            if "faq" in ptype:
+                has_faq = False
+
+        # Check SEO findings for positive signals
+        for p in problems:
+            if "llms" in (p.get("type", "") or "").lower() and "found" in (p.get("detail", "") or "").lower():
+                has_llms = True
+            if "faq" in (p.get("type", "") or "").lower() and "found" in (p.get("detail", "") or "").lower():
+                has_faq = True
+
+        return generate_talking_points(
+            company_name=company.name,
+            problems=problems,
+            review_count=company.review_count or 0,
+            rating=company.rating or 0,
+            employee_count=company.employee_count or 0,
+            has_llms_txt=has_llms,
+            has_faq_schema=has_faq,
+        )
+    except Exception:
+        return []
 
 
 # ============================================================

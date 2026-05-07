@@ -420,6 +420,20 @@
                     <div id="call-activity-stats"></div>
                 </div>
 
+                <!-- BDR Activity Report (admin only) -->
+                <div class="panel" id="bdr-activity-panel" style="display:none">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                        <h3 style="margin:0">BDR Activity Report</h3>
+                        <select id="bdr-activity-range" onchange="loadBDRActivity()" style="padding:4px 8px;border:1px solid #ddd;border-radius:6px;font-size:12px">
+                            <option value="1">Today</option>
+                            <option value="7" selected>Last 7 days</option>
+                            <option value="14">Last 14 days</option>
+                            <option value="30">Last 30 days</option>
+                        </select>
+                    </div>
+                    <div id="bdr-activity-content"></div>
+                </div>
+
                 <!-- Zone 5: Activity feed -->
                 <div class="panel">
                     <h3>Activity Feed</h3>
@@ -1309,9 +1323,80 @@
 
             // Call activity stats
             loadCallActivity();
+
+            // BDR Activity Report (admin only)
+            if (currentUser && (currentUser.role === 'admin' || currentUser.role === 'super_admin')) {
+                const bdrPanel = document.getElementById('bdr-activity-panel');
+                if (bdrPanel) bdrPanel.style.display = '';
+                loadBDRActivity();
+            }
         }
 
         // ============ Call Activity panel ============
+        async function loadBDRActivity() {
+            const days = parseInt(document.getElementById('bdr-activity-range')?.value || '7', 10);
+            const data = await api(`/api/dashboard/bdr-activity?days=${days}`);
+            const el = document.getElementById('bdr-activity-content');
+            if (!el || !data) return;
+
+            if (!data.reps || !data.reps.length) {
+                el.innerHTML = '<p style="color:#888;font-size:13px">No activity in this period.</p>';
+                return;
+            }
+
+            const t = data.totals;
+            el.innerHTML = `
+                <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:14px">
+                    <div style="background:#f9faf9;border-radius:6px;padding:8px;text-align:center">
+                        <div style="font-size:18px;font-weight:700;color:var(--bmp-green)">${t.calls_made}</div>
+                        <div style="font-size:10px;color:#888">Calls</div>
+                    </div>
+                    <div style="background:#f9faf9;border-radius:6px;padding:8px;text-align:center">
+                        <div style="font-size:18px;font-weight:700;color:var(--bmp-green)">${t.emails_sent}</div>
+                        <div style="font-size:10px;color:#888">Emails Sent</div>
+                    </div>
+                    <div style="background:#f9faf9;border-radius:6px;padding:8px;text-align:center">
+                        <div style="font-size:18px;font-weight:700;color:var(--bmp-green)">${t.sequences_started}</div>
+                        <div style="font-size:10px;color:#888">Sequences</div>
+                    </div>
+                    <div style="background:#f9faf9;border-radius:6px;padding:8px;text-align:center">
+                        <div style="font-size:18px;font-weight:700;color:var(--bmp-green)">${t.tasks_completed}</div>
+                        <div style="font-size:10px;color:#888">Tasks Done</div>
+                    </div>
+                    <div style="background:#f9faf9;border-radius:6px;padding:8px;text-align:center">
+                        <div style="font-size:18px;font-weight:700;color:var(--bmp-orange)">${t.deals_created}</div>
+                        <div style="font-size:10px;color:#888">Deals Created</div>
+                    </div>
+                </div>
+                <table style="width:100%;border-collapse:collapse;font-size:12px">
+                    <thead><tr style="border-bottom:1px solid #eee;color:#888;font-size:11px">
+                        <th style="text-align:left;padding:6px">Rep</th>
+                        <th style="text-align:right;padding:6px">Calls</th>
+                        <th style="text-align:right;padding:6px">Connect%</th>
+                        <th style="text-align:right;padding:6px">Emails</th>
+                        <th style="text-align:right;padding:6px">Sequences</th>
+                        <th style="text-align:right;padding:6px">Tasks</th>
+                        <th style="text-align:right;padding:6px">Notes</th>
+                        <th style="text-align:right;padding:6px">Talk Min</th>
+                    </tr></thead>
+                    <tbody>
+                        ${data.reps.map(r => `
+                            <tr style="border-bottom:1px solid #f5f5f5">
+                                <td style="padding:6px;font-weight:500">${escapeHtml(r.name)}</td>
+                                <td style="text-align:right;padding:6px">${r.calls_made}</td>
+                                <td style="text-align:right;padding:6px">${r.connect_rate}%</td>
+                                <td style="text-align:right;padding:6px">${r.emails_sent}</td>
+                                <td style="text-align:right;padding:6px">${r.sequences_started}</td>
+                                <td style="text-align:right;padding:6px">${r.tasks_completed}</td>
+                                <td style="text-align:right;padding:6px">${r.notes_added}</td>
+                                <td style="text-align:right;padding:6px">${r.talk_minutes}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+        }
+
         async function loadCallActivity() {
             const days = parseInt(document.getElementById('calls-range').value || '7', 10);
             const data = await api(`/api/dashboard/calls?days=${days}`);
@@ -2111,6 +2196,19 @@
                                 `}
                             </div>
                         </div>
+
+                        ${d.talking_points && d.talking_points.length ? `
+                        <div class="panel">
+                            <h3 style="font-size:14px;color:var(--bmp-orange)">Talking Points</h3>
+                            <p style="font-size:10px;color:#999;margin-bottom:8px">What to say when you reach out:</p>
+                            ${d.talking_points.map(tp => `
+                                <div style="margin-bottom:10px;padding:8px;background:${tp.severity === 'high' ? '#FFF8F0' : '#f8f9fa'};border-radius:6px;border-left:3px solid ${tp.severity === 'high' ? 'var(--bmp-orange)' : tp.severity === 'medium' ? '#f39c12' : '#ddd'}">
+                                    <div style="font-size:11px;font-weight:600;color:${tp.severity === 'high' ? 'var(--bmp-orange)' : '#555'};text-transform:uppercase;margin-bottom:3px">${escapeHtml(tp.topic)}</div>
+                                    <div style="font-size:12px;color:#444;line-height:1.5">${escapeHtml(tp.point)}</div>
+                                </div>
+                            `).join('')}
+                        </div>
+                        ` : ''}
 
                         <div class="panel">
                             <h3 style="font-size:14px">Tags</h3>

@@ -413,3 +413,116 @@ async def dashboard_calls(
         "by_day": by_day_sorted,
         "by_rep": by_rep_sorted,
     }
+
+
+# ============================================================
+# BDR Activity Report — comprehensive view of what each rep is doing
+# ============================================================
+
+@router.get("/dashboard/bdr-activity")
+async def bdr_activity_report(
+    days: int = 7,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Admin-only comprehensive BDR activity report. Shows all actions per rep."""
+    if user.role not in ("admin", "super_admin"):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, min(days, 90)))
+
+    # Get all activities in the window
+    activities = (await db.execute(
+        select(Activity).where(Activity.created_at >= cutoff)
+    )).scalars().all()
+
+    # Get all users
+    users = (await db.execute(select(User).where(User.is_active == True))).scalars().all()
+    user_map = {u.id: u for u in users}
+
+    # Build per-rep stats
+    reps = {}
+    for u in users:
+        if u.role in ("sales_rep", "admin", "super_admin"):
+            reps[u.id] = {
+                "user_id": u.id,
+                "name": u.full_name,
+                "role": u.role,
+                "calls_made": 0,
+                "calls_connected": 0,
+                "emails_sent": 0,
+                "sequences_started": 0,
+                "notes_added": 0,
+                "tasks_completed": 0,
+                "companies_enriched": 0,
+                "deals_created": 0,
+                "deals_won": 0,
+                "talk_minutes": 0,
+                "last_activity": None,
+            }
+
+    for a in activities:
+        if a.user_id not in reps:
+            continue
+        r = reps[a.user_id]
+
+        if a.activity_type in ("call", "voicemail"):
+            r["calls_made"] += 1
+            if a.call_outcome == "connected":
+                r["calls_connected"] += 1
+            if a.call_duration_seconds:
+                r["talk_minutes"] += a.call_duration_seconds / 60
+
+        elif a.activity_type == "email_sent":
+            r["emails_sent"] += 1
+
+        elif a.activity_type == "sequence_created":
+            r["sequences_started"] += 1
+
+        elif a.activity_type in ("note", "meeting", "linkedin_message"):
+            r["notes_added"] += 1
+
+        elif a.activity_type == "task_completed":
+            r["tasks_completed"] += 1
+
+        elif a.activity_type == "enriched":
+            r["companies_enriched"] += 1
+
+        elif a.activity_type == "deal_created":
+            r["deals_created"] += 1
+
+        elif a.activity_type == "deal_update" and "closed_won" in (a.content or ""):
+            r["deals_won"] += 1
+
+        if not r["last_activity"] or (a.created_at and a.created_at.isoformat() > r["last_activity"]):
+            r["last_activity"] = a.created_at.isoformat() if a.created_at else None
+
+    # Round talk minutes
+    for r in reps.values():
+        r["talk_minutes"] = round(r["talk_minutes"], 1)
+        r["connect_rate"] = round(r["calls_connected"] / max(r["calls_made"], 1) * 100, 1)
+
+    # Sort by total activity
+    sorted_reps = sorted(reps.values(), key=lambda r: -(
+        r["calls_made"] + r["emails_sent"] + r["sequences_started"] + r["notes_added"]
+    ))
+
+    # Team totals
+    totals = {
+        "calls_made": sum(r["calls_made"] for r in reps.values()),
+        "calls_connected": sum(r["calls_connected"] for r in reps.values()),
+        "emails_sent": sum(r["emails_sent"] for r in reps.values()),
+        "sequences_started": sum(r["sequences_started"] for r in reps.values()),
+        "notes_added": sum(r["notes_added"] for r in reps.values()),
+        "tasks_completed": sum(r["tasks_completed"] for r in reps.values()),
+        "companies_enriched": sum(r["companies_enriched"] for r in reps.values()),
+        "deals_created": sum(r["deals_created"] for r in reps.values()),
+        "talk_minutes": round(sum(r["talk_minutes"] for r in reps.values()), 1),
+    }
+
+    return {
+        "days": days,
+        "totals": totals,
+        "reps": sorted_reps,
+    }
