@@ -446,7 +446,8 @@ Track when a prospect clicks through from an email to backyardmarketingpros.com,
   - Send email from the user's Gmail account (replaces Resend for those who want native Gmail send)
   - Read calendar availability (precondition for the scheduling tool below)
   - Probably wire `Sign in with Google` for user auth too while we're in there
-- [ ] **Manual "Send this step now" button** in the sequence panel — currently the engine fires steps when their `scheduled_send_at` passes, and there's a "Send Next in Sequence" button for the next-due step; Steve wants a per-step Send Now action that fires THIS step immediately regardless of order, so a BDR can push out a follow-up the moment they want to.
+- [ ] **Ad-hoc email composer (one-off send, outside any sequence)** — Steve confirmed (2026-05-07): for the case where a BDR talks to a prospect on the phone and needs to fire a custom follow-up that doesn't fit any existing sequence step. Should include light formatting (bold/italic/links/lists — not a full WYSIWYG, just the essentials). Likely a 📧 button on the contact card next to the call/message links → opens a composer modal pre-filled with To / signature / suggested templates, with a rich-text body. Sends through the same Resend path the sequence engine uses; logs an `email_sent` Activity to the timeline. Should also auto-wrap URLs through `/t/{token}` (Phase 1 click tracking) so we know if they read it.
+- [ ] **"Pause / Resume / Send next" controls on existing sequences are already there**; only the new ad-hoc composer is needed for the one-off case.
 - [ ] **Calendly/iClosed-style scheduling tool**, integrated with Google Calendar:
   - Reads BDR availability from Google Calendar
   - Configurable buffer / meeting length / windows per user
@@ -470,6 +471,7 @@ Track when a prospect clicks through from an email to backyardmarketingpros.com,
 - [ ] **Lost-reason capture** on closed_lost deals (dropdown: not interested / wrong fit / went w/ competitor / no budget / no response / other)
 - [ ] **Bounce auto-handling** is partially wired; ensure UI shows BOUNCED contacts clearly and prompts for alternate email
 - [ ] **Dedupe Company creation by website domain** — Steve hit a real case (2026-05-07): two `AAMP Agency` rows existed in the DB with the same website (`https://aamp.agency`), one from manual Add Company and one from a Find Leads/pursue flow. Resulted in split data (contacts on one, sequences on the other, tracker pageviews on a third combination). Fix: at company creation time, normalize the website to a domain and look up an existing Company by `website ILIKE` or by the normalized domain — if a match exists, return that one instead of inserting a duplicate. Same for the "Add Contact" flow if it auto-creates a company.
+- [ ] **Merge UX gap**: Companies list defaults to hiding `status=new` (raw scrape) rows, so a duplicate where one row is in `new` and another is in `sequencing` can't be merged from the UI — checkboxes only render on the Companies list. Either (a) make duplicates always visible in a "Possible duplicates" panel, or (b) add a "Merge into existing company..." action on the company-detail page that lets you pick another company by name/search. Steve hit this with the AAMP duplicate (2026-05-07); manually merged via API call.
 
 ### UX polish
 - [ ] **Mobile PWA** polish — currently desktop-first
