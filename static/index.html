@@ -657,8 +657,7 @@
                             <div style="display:flex;gap:6px">
                                 <input type="password" id="settings-blooio-key" placeholder="Bearer token from console.blooio.com" autocomplete="off" style="flex:1">
                                 <button class="btn btn-secondary btn-sm" onclick="saveBlooioKey()">Save</button>
-                                <button class="btn btn-secondary btn-sm" onclick="testBlooioConnection()" title="Verify the key works + show your assigned number">🔌 Test</button>
-                                <button class="btn btn-secondary btn-sm hidden" id="blooio-register-webhook-btn" onclick="setupBlooioWebhook()" title="One-click register the inbound webhook with Blooio (admin only)">📥 Register Webhook</button>
+                                <button class="btn btn-secondary btn-sm" onclick="testBlooioConnection()" title="Verify the key works + show your org name and key tag">🔌 Test</button>
                             </div>
                             <div id="blooio-key-current" style="font-size:11px;color:#888;margin-top:4px"></div>
                         </div>
@@ -3182,7 +3181,6 @@
             const blStatus = document.getElementById('blooio-key-status');
             const blCurrent = document.getElementById('blooio-key-current');
             const blInput = document.getElementById('settings-blooio-key');
-            const blRegisterBtn = document.getElementById('blooio-register-webhook-btn');
             if (blInput) blInput.value = '';
             if (blStatus) {
                 if (bl.set) {
@@ -3198,12 +3196,6 @@
                     ? `Active. iMessage will be sent from BMP's dedicated Blooio number.`
                     : `No key. The Message button will be disabled until you add one.`;
             }
-            if (blRegisterBtn) {
-                const isAdmin = currentUser && currentUser.role === 'admin';
-                if (isAdmin && bl.set) blRegisterBtn.classList.remove('hidden');
-                else blRegisterBtn.classList.add('hidden');
-            }
-
             // Show admin-only Twilio Numbers panel + load it if configured
             const numbersPanel = document.getElementById('twilio-numbers-panel');
             if (numbersPanel) {
@@ -3368,17 +3360,10 @@
         async function testBlooioConnection() {
             const data = await api('/api/blooio/test');
             if (data && data.success) {
-                const num = data.primary_number || (data.numbers && data.numbers[0]) || '(no number assigned)';
-                toast(`✓ Blooio connected. Sending from ${num}.`);
-            }
-        }
-
-        async function setupBlooioWebhook() {
-            if (!confirm('Register the inbound webhook with Blooio?\n\nThis is idempotent — if it\'s already registered, nothing changes. Other webhooks (e.g. your GHL integration) are left untouched.')) return;
-            const data = await api('/api/blooio/webhook/setup', { method: 'POST' });
-            if (data) {
-                if (data.already_registered) toast('✓ Webhook already registered — left in place.');
-                else toast('✓ Webhook registered with Blooio.');
+                const tag = data.key_tag ? ` · key tag: ${data.key_tag}` : '';
+                const org = data.organization_name || '(no org name)';
+                const num = data.primary_number ? ` · from ${data.primary_number}` : '';
+                toast(`✓ Blooio connected — ${org}${tag}${num}`);
             }
         }
 

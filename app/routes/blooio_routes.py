@@ -48,7 +48,10 @@ async def test(
         raise HTTPException(status_code=502, detail=result.error)
     return {
         "success": True,
-        "numbers": result.numbers,
+        "organization_name": result.organization_name,
+        "organization_id": result.organization_id,
+        "key_tag": result.key_tag,
+        "numbers": result.numbers or [],
         "primary_number": result.primary_number,
     }
 

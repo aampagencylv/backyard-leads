@@ -50,33 +50,57 @@ def _headers(api_key: str) -> dict:
 
 @dataclass
 class BlooioAccount:
-    numbers: List[str]
+    organization_name: Optional[str] = None
+    organization_id: Optional[str] = None
+    key_tag: Optional[str] = None  # metadata.name on the key — Blooio dashboard label (e.g. "BYMP" vs "GHL")
+    numbers: List[str] = None
     primary_number: Optional[str] = None
     error: Optional[str] = None
 
 
 async def test_connection(api_key: str) -> BlooioAccount:
-    """GET /me/numbers — verifies key auth + returns the dedicated number(s)."""
+    """GET /me — verifies key auth + returns org info + key tag.
+
+    /me is the canonical "who am I" call. /me/numbers exists too but on
+    most plans returns an empty list (numbers are visible in the Blooio
+    dashboard, not via API), so we don't surface a primary number from
+    there — the org name + key tag are the meaningful confirmation.
+    """
     if not api_key:
         return BlooioAccount(numbers=[], error="No API key configured")
     async with httpx.AsyncClient(timeout=15) as client:
         try:
-            r = await client.get(f"{BLOOIO_BASE}/me/numbers", headers=_headers(api_key))
+            r = await client.get(f"{BLOOIO_BASE}/me", headers=_headers(api_key))
         except httpx.HTTPError as e:
             return BlooioAccount(numbers=[], error=f"Network error: {e}")
     if r.status_code != 200:
         return BlooioAccount(numbers=[], error=f"{r.status_code}: {r.text[:200]}")
     body = r.json() or {}
-    raw_numbers = body.get("numbers") or body.get("data") or []
+    org = body.get("organization") or {}
+    meta = body.get("metadata") or {}
+    # Best-effort number lookup — empty for most plans, harmless when it is
     nums: List[str] = []
-    for item in raw_numbers if isinstance(raw_numbers, list) else []:
-        if isinstance(item, str):
-            nums.append(item)
-        elif isinstance(item, dict):
-            n = item.get("number") or item.get("phone_number") or item.get("e164")
-            if n:
-                nums.append(n)
-    return BlooioAccount(numbers=nums, primary_number=nums[0] if nums else None)
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r2 = await client.get(f"{BLOOIO_BASE}/me/numbers", headers=_headers(api_key))
+        if r2.status_code == 200:
+            raw = (r2.json() or {}).get("numbers") or []
+            for item in raw if isinstance(raw, list) else []:
+                if isinstance(item, str):
+                    nums.append(item)
+                elif isinstance(item, dict):
+                    n = item.get("number") or item.get("phone_number") or item.get("e164")
+                    if n:
+                        nums.append(n)
+    except httpx.HTTPError:
+        pass
+    return BlooioAccount(
+        organization_name=org.get("name"),
+        organization_id=org.get("organization_id") or body.get("organization_id"),
+        key_tag=meta.get("name"),
+        numbers=nums,
+        primary_number=nums[0] if nums else None,
+    )
 
 
 # ============================================================
