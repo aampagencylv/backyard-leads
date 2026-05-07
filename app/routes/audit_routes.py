@@ -237,8 +237,9 @@ async def request_competitor_comparison(
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Competitive Comparison — {company.name if company else 'Report'}</title>
 <style>
-    body {{ font-family: -apple-system, sans-serif; background: #f5f7f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; }}
-    .card {{ background: white; border-radius: 16px; padding: 48px; max-width: 500px; text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,0.1); }}
+    * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+    body {{ font-family: -apple-system, sans-serif; background: #f5f7f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; width: 100%; }}
+    .card {{ background: white; border-radius: 16px; padding: 48px; max-width: 500px; width: 90%; margin: 0 auto; text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,0.1); }}
     .card img {{ width: 200px; margin-bottom: 24px; }}
     .card h1 {{ color: #1B5E20; font-size: 24px; margin-bottom: 12px; }}
     .card p {{ color: #666; font-size: 14px; line-height: 1.6; }}

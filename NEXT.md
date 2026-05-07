@@ -423,6 +423,15 @@ Track when a prospect clicks through from an email to backyardmarketingpros.com,
 
 ---
 
+### Automated Competitor Comparison Report
+When prospect clicks "See Your Competitive Comparison" in the audit report:
+1. System automatically runs audits on the top 3 SERP competitors (we already have them from DataForSEO)
+2. Generates a branded comparison report: side-by-side scores (AI Findability, Citability, Local SEO, Domain Authority, Keywords)
+3. Shows what competitors do better (FAQ schema, llms.txt, more backlinks, etc.)
+4. Hosted at /report/{token}/competitors as a follow-up to the original audit
+5. BDR gets notified when it's ready and sends the link
+6. Could auto-send via email sequence if configured
+
 ### Other high-value items
 - [ ] **Dashboard MRR/ARR cards** — wire forecast API to dashboard KPI strip
 - [ ] **Saved views UI** — dropdown on Companies + Pipeline pages (API ready)
