@@ -688,6 +688,14 @@
                     </div>
                 </div>
 
+                <!-- Notifications -->
+                <div class="search-box" style="max-width:600px;margin-top:16px">
+                    <h3 style="margin:0 0 6px">Notifications <span id="notif-status" style="font-size:11px;font-weight:400;color:#888"></span></h3>
+                    <p style="font-size:12px;color:#888;margin-bottom:8px">Toast popups always fire when this tab is open. Enable native browser notifications to also get popups when the tab is in the background — like Slack or Mercury.</p>
+                    <p style="font-size:11px;color:#888;margin-bottom:10px"><strong>You'll be notified for:</strong> 🔥 Hot Leads · 💬 iMessage replies · ✉️ Email replies. (Not: pageviews, opens, clicks — those just go to the timeline.)</p>
+                    <button class="btn btn-primary btn-sm" onclick="enableBrowserNotifications()">🔔 Enable Browser Notifications</button>
+                </div>
+
                 <!-- Website Visitor Tracking (Phase 2 snippet to embed on bymp.com) -->
                 <div class="search-box" style="max-width:600px;margin-top:16px">
                     <h3 style="margin:0 0 6px">Website Visitor Tracking <span style="font-size:11px;font-weight:400;color:var(--bmp-green)">· active</span></h3>
@@ -978,8 +986,104 @@
                     document.getElementById('user-name').textContent = user.name;
                     loadDashboard();
                     refreshNavBadges();
+                    startNotificationPoller();
                 }
             } catch(e) { logout(); }
+        }
+
+        // ============ Realtime-ish notifications ============
+        // Poll /api/notifications/recent every 30s (60s when tab hidden) and on
+        // tab refocus. Surfaces hot leads, iMessage replies, and email replies
+        // as toasts + native browser notifications (if user opted in).
+        let _notifLastSeen = null;  // server-side ISO timestamp (uses server clock, not local)
+        let _notifInterval = null;
+        let _notifSeenIds = new Set();  // dedup across polls
+
+        function startNotificationPoller() {
+            // Initialize last-seen to "now-ish" so we don't fire historical
+            // notifications on first login. Server returns server_now in every
+            // response which we use thereafter.
+            _notifLastSeen = new Date().toISOString();
+            stopNotificationPoller();
+            const tick = () => { if (!document.hidden) pollNotifications(); };
+            _notifInterval = setInterval(tick, 30_000);
+            // Faster recheck on tab refocus — most likely time the user sees a fresh notif
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden) pollNotifications();
+            });
+            // Slow polling when tab is hidden to be a good citizen
+            window.addEventListener('focus', () => pollNotifications());
+        }
+        function stopNotificationPoller() {
+            if (_notifInterval) { clearInterval(_notifInterval); _notifInterval = null; }
+        }
+
+        async function pollNotifications() {
+            if (!currentUser || !_notifLastSeen) return;
+            const data = await api(`/api/notifications/recent?since=${encodeURIComponent(_notifLastSeen)}`);
+            if (!data || !data.items) return;
+            // Always advance to the server's clock, even if no items (avoids drift)
+            if (data.server_now) _notifLastSeen = data.server_now;
+            // Items come newest-first; surface oldest-first so order makes sense in toasts
+            const fresh = data.items.filter(n => !_notifSeenIds.has(n.id)).reverse();
+            for (const n of fresh) {
+                _notifSeenIds.add(n.id);
+                showLiveNotification(n);
+            }
+            // Cap dedup set so it doesn't grow forever
+            if (_notifSeenIds.size > 500) {
+                _notifSeenIds = new Set(Array.from(_notifSeenIds).slice(-200));
+            }
+        }
+
+        function showLiveNotification(n) {
+            const labelMap = {
+                hot_lead:           '🔥 Hot Lead',
+                imessage_received:  '💬 New iMessage',
+                email_replied:      '✉️ Email Reply',
+            };
+            const tag = labelMap[n.type] || 'Notification';
+            const who = n.contact_name || n.company_name || 'a contact';
+            const title = `${tag} — ${who}`;
+            const body = n.content || '';
+
+            // 1. In-tab toast — always
+            toast(`${title}: ${body}`);
+
+            // 2. Native browser notification — only if user opted in
+            if ('Notification' in window && Notification.permission === 'granted') {
+                try {
+                    const notif = new Notification(title, {
+                        body: body.slice(0, 240),
+                        icon: '/favicon.ico',
+                        tag: `bmp-${n.id}`,  // de-duplicates on the OS side if same id is posted twice
+                    });
+                    notif.onclick = () => {
+                        window.focus();
+                        if (n.company_id) openCompanyDetail(n.company_id);
+                        notif.close();
+                    };
+                } catch (e) { /* non-fatal */ }
+            }
+        }
+
+        async function enableBrowserNotifications() {
+            if (!('Notification' in window)) {
+                toast('This browser does not support notifications');
+                return;
+            }
+            if (Notification.permission === 'granted') {
+                toast('✓ Browser notifications already enabled');
+                return;
+            }
+            const perm = await Notification.requestPermission();
+            if (perm === 'granted') {
+                toast('✓ Browser notifications enabled — you\'ll get popups for hot leads + replies');
+                try { new Notification('BMP Prospector notifications enabled', { body: 'You\'ll get a popup here when a prospect goes hot, replies, or texts back.', icon: '/favicon.ico' }); } catch (e) {}
+                loadRuntimeConfig();
+            } else if (perm === 'denied') {
+                toast('Permission denied. To enable: click the lock icon in the address bar → Notifications → Allow.');
+            }
         }
         async function login() {
             const email = document.getElementById('login-email').value;
@@ -3434,6 +3538,20 @@
                 msgCurrent.textContent = msg.is_custom
                     ? `Custom direction active (${(msg.direction || '').length} chars). All AI generation uses your text.`
                     : 'Default direction active. AI generation will lead with the AI findability / GEO / local SEO angle.';
+            }
+
+            // Browser-notification permission status
+            const notifStatus = document.getElementById('notif-status');
+            if (notifStatus) {
+                if (!('Notification' in window)) {
+                    notifStatus.textContent = '· browser does not support'; notifStatus.style.color = '#c0392b';
+                } else if (Notification.permission === 'granted') {
+                    notifStatus.textContent = '· browser notifications enabled ✓'; notifStatus.style.color = 'var(--bmp-green)';
+                } else if (Notification.permission === 'denied') {
+                    notifStatus.textContent = '· browser permission blocked (unblock in browser settings)'; notifStatus.style.color = '#c0392b';
+                } else {
+                    notifStatus.textContent = '· browser permission not yet granted'; notifStatus.style.color = 'var(--bmp-orange)';
+                }
             }
 
             // Show admin-only Twilio Numbers panel + load it if configured
