@@ -469,6 +469,7 @@ Track when a prospect clicks through from an email to backyardmarketingpros.com,
 - [ ] **Send caps per domain per day** (deliverability protection — limit ~50/sender/day)
 - [ ] **Lost-reason capture** on closed_lost deals (dropdown: not interested / wrong fit / went w/ competitor / no budget / no response / other)
 - [ ] **Bounce auto-handling** is partially wired; ensure UI shows BOUNCED contacts clearly and prompts for alternate email
+- [ ] **Dedupe Company creation by website domain** — Steve hit a real case (2026-05-07): two `AAMP Agency` rows existed in the DB with the same website (`https://aamp.agency`), one from manual Add Company and one from a Find Leads/pursue flow. Resulted in split data (contacts on one, sequences on the other, tracker pageviews on a third combination). Fix: at company creation time, normalize the website to a domain and look up an existing Company by `website ILIKE` or by the normalized domain — if a match exists, return that one instead of inserting a duplicate. Same for the "Add Contact" flow if it auto-creates a company.
 
 ### UX polish
 - [ ] **Mobile PWA** polish — currently desktop-first
