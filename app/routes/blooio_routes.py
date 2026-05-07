@@ -184,8 +184,10 @@ async def generate_message(
 
     from app.services.email_generator import generate_imessage
     from app.config import settings as app_settings
+    from app.runtime_config import get_messaging_direction
     if not app_settings.anthropic_api_key:
         raise HTTPException(status_code=400, detail="Anthropic API key not configured")
+    direction = await get_messaging_direction(db)
 
     try:
         result = await generate_imessage(
@@ -196,6 +198,7 @@ async def generate_message(
             recent_posts=recent_posts,
             location=(company.city or "") + (", " + company.state if company.state else "") or None,
             intent=req.intent,
+            messaging_direction=direction,
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Claude error: {e}")

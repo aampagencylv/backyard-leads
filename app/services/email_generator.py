@@ -55,6 +55,16 @@ def _extract_first_name(contact_name: Optional[str]) -> str:
     return contact_name.strip().split()[0]
 
 
+def _compose_system_prompt(base_prompt: str, messaging_direction: Optional[str]) -> str:
+    """Prepend the org's messaging direction to a channel-specific system prompt.
+    The direction sets the strategic angle (what we lead with — e.g. AI findability /
+    GEO / local SEO); the channel prompt sets the format constraints (length, tone,
+    sign-off rules). Both compose without conflicting."""
+    if not messaging_direction or not messaging_direction.strip():
+        return base_prompt
+    return f"=== STRATEGIC DIRECTION (apply across all channels) ===\n\n{messaging_direction.strip()}\n\n=== CHANNEL FORMAT RULES ===\n\n{base_prompt}"
+
+
 async def generate_cold_email(
     business_name: str,
     business_type: str,
@@ -62,6 +72,7 @@ async def generate_cold_email(
     problems: list,
     contact_name: Optional[str] = None,
     location: Optional[str] = None,
+    messaging_direction: Optional[str] = None,
 ) -> dict:
     """
     Generate a personalized cold email based on problems found.
@@ -96,7 +107,7 @@ Return as JSON: {{"subject": "...", "body": "..."}}
     response = await client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=500,
-        system=SYSTEM_PROMPT,
+        system=_compose_system_prompt(SYSTEM_PROMPT, messaging_direction),
         messages=[{"role": "user", "content": user_prompt}],
     )
 
@@ -127,6 +138,7 @@ async def generate_follow_up(
     previous_email_subject: str,
     follow_up_number: int = 1,
     contact_name: Optional[str] = None,
+    messaging_direction: Optional[str] = None,
 ) -> dict:
     """Generate a follow-up email."""
     problems_context = json.dumps(problems[:3], indent=2)
@@ -159,7 +171,7 @@ Return as JSON: {{"subject": "...", "body": "..."}}
     response = await client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=400,
-        system=SYSTEM_PROMPT,
+        system=_compose_system_prompt(SYSTEM_PROMPT, messaging_direction),
         messages=[{"role": "user", "content": user_prompt}],
     )
 
@@ -306,6 +318,7 @@ async def generate_imessage(
     recent_posts: Optional[list] = None,
     location: Optional[str] = None,
     intent: str = "intro",  # 'intro', 'follow_up', 'after_email'
+    messaging_direction: Optional[str] = None,
 ) -> dict:
     """
     Generate a personalized iMessage. Returns {'body': str} — no subject because
@@ -359,7 +372,7 @@ Return as JSON: {{"body": "the text message, under 240 chars, no signature"}}
     response = await client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=300,
-        system=IMESSAGE_SYSTEM_PROMPT,
+        system=_compose_system_prompt(IMESSAGE_SYSTEM_PROMPT, messaging_direction),
         messages=[{"role": "user", "content": user_prompt}],
     )
 
@@ -461,6 +474,7 @@ async def generate_post_call_sequence(
     transcript: str,
     summary: Optional[str] = None,
     duration_seconds: Optional[int] = None,
+    messaging_direction: Optional[str] = None,
 ) -> list[dict]:
     """Returns a list of 3 step dicts, each with: step_type, day, subject,
     body, channel-appropriate fields. Caller wraps these into GeneratedEmail
@@ -525,7 +539,7 @@ Return JSON only, no other text:
     response = await client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=2000,
-        system=POST_CALL_SYSTEM_PROMPT,
+        system=_compose_system_prompt(POST_CALL_SYSTEM_PROMPT, messaging_direction),
         messages=[{"role": "user", "content": user_prompt}],
     )
 

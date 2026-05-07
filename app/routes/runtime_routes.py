@@ -17,6 +17,8 @@ from app.runtime_config import (
     set_twilio_credentials,
     set_deepgram_api_key,
     set_blooio_api_key,
+    set_messaging_direction,
+    DEFAULT_MESSAGING_DIRECTION,
     mask_key,
 )
 
@@ -32,6 +34,7 @@ class UpdateRuntimeConfigRequest(BaseModel):
     twilio_twiml_app_sid: Optional[str] = None
     deepgram_api_key: Optional[str] = None
     blooio_api_key: Optional[str] = None
+    messaging_direction: Optional[str] = None
 
 
 def _payload(rc, settings_obj) -> dict:
@@ -71,6 +74,11 @@ def _payload(rc, settings_obj) -> dict:
             "set": bool((rc.blooio_api_key or "").strip()),
             "masked": mask_key(rc.blooio_api_key),
         },
+        "messaging": {
+            "direction": (rc.messaging_direction or "").strip(),
+            "is_custom": bool((rc.messaging_direction or "").strip()),
+            "default_preview": DEFAULT_MESSAGING_DIRECTION[:240] + "…",
+        },
     }
 
 
@@ -82,6 +90,16 @@ async def get_runtime_config(
     from app.config import settings
     rc = await _get_or_create(db)
     return _payload(rc, settings)
+
+
+@router.get("/runtime-config/messaging-default")
+async def get_messaging_default(
+    user: User = Depends(get_current_user),
+):
+    """Returns the full in-code default messaging direction text — used by
+    the Settings UI's 'Load Default' button so the user can see / edit it
+    before saving as a custom direction."""
+    return {"text": DEFAULT_MESSAGING_DIRECTION}
 
 
 @router.patch("/runtime-config")
@@ -108,6 +126,8 @@ async def update_runtime_config(
         await set_deepgram_api_key(db, req.deepgram_api_key)
     if req.blooio_api_key is not None:
         await set_blooio_api_key(db, req.blooio_api_key)
+    if req.messaging_direction is not None:
+        await set_messaging_direction(db, req.messaging_direction)
 
     from app.config import settings
     rc = await _get_or_create(db)

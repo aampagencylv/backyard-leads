@@ -664,6 +664,21 @@
                     </div>
                 </div>
 
+                <!-- Messaging Tone & Direction (org-wide AI prompt) -->
+                <div class="search-box" style="max-width:600px;margin-top:16px">
+                    <h3 style="margin:0 0 6px">Messaging Tone & Direction <span id="messaging-direction-status" style="font-size:11px;font-weight:400;color:#888"></span></h3>
+                    <p style="font-size:12px;color:#888;margin-bottom:8px">Org-wide strategic angle prepended to every AI generation (cold email, follow-ups, iMessage, post-call sequences). Default leads with AI findability / GEO / local SEO. Edit to refocus the team's voice — clear to revert to default.</p>
+                    <div class="form-group">
+                        <textarea id="settings-messaging-direction" rows="14" placeholder="Leave empty to use the default (AI findability / GEO / local SEO angle)" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:13px;font-family:'SF Mono', Menlo, monospace;line-height:1.5"></textarea>
+                        <div style="display:flex;gap:6px;margin-top:6px">
+                            <button class="btn btn-primary btn-sm" onclick="saveMessagingDirection()">Save</button>
+                            <button class="btn btn-secondary btn-sm" onclick="loadDefaultMessagingDirection()">Load Default</button>
+                            <button class="btn btn-secondary btn-sm" onclick="clearMessagingDirection()">Revert to Default</button>
+                        </div>
+                        <div id="messaging-direction-current" style="font-size:11px;color:#888;margin-top:6px"></div>
+                    </div>
+                </div>
+
                 <!-- Twilio Numbers (admin only) -->
                 <div id="twilio-numbers-panel" class="search-box hidden" style="max-width:600px;margin-top:16px">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -3342,6 +3357,25 @@
                     ? `Active. iMessage will be sent from BMP's dedicated Blooio number.`
                     : `No key. The Message button will be disabled until you add one.`;
             }
+            // Messaging direction (org-wide tone/strategic angle)
+            const msg = (cfg.messaging || {});
+            const msgStatus = document.getElementById('messaging-direction-status');
+            const msgCurrent = document.getElementById('messaging-direction-current');
+            const msgInput = document.getElementById('settings-messaging-direction');
+            if (msgInput) {
+                msgInput.value = msg.direction || '';
+                msgInput.dataset.defaultPreview = msg.default_preview || '';
+            }
+            if (msgStatus) {
+                if (msg.is_custom) { msgStatus.textContent = '· custom'; msgStatus.style.color = 'var(--bmp-orange)'; }
+                else { msgStatus.textContent = '· using default (AI findability + GEO + local SEO)'; msgStatus.style.color = 'var(--bmp-green)'; }
+            }
+            if (msgCurrent) {
+                msgCurrent.textContent = msg.is_custom
+                    ? `Custom direction active (${(msg.direction || '').length} chars). All AI generation uses your text.`
+                    : 'Default direction active. AI generation will lead with the AI findability / GEO / local SEO angle.';
+            }
+
             // Show admin-only Twilio Numbers panel + load it if configured
             const numbersPanel = document.getElementById('twilio-numbers-panel');
             if (numbersPanel) {
@@ -3352,6 +3386,43 @@
                 } else {
                     numbersPanel.classList.add('hidden');
                 }
+            }
+        }
+
+        async function saveMessagingDirection() {
+            const v = (document.getElementById('settings-messaging-direction').value || '');
+            const data = await api('/api/runtime-config', {
+                method: 'PATCH',
+                body: JSON.stringify({ messaging_direction: v }),
+            });
+            if (data) { toast(v.trim() ? 'Custom messaging direction saved' : 'Reverted to default direction'); loadRuntimeConfig(); }
+        }
+
+        async function clearMessagingDirection() {
+            if (!confirm('Revert to the default (AI findability / GEO / local SEO) direction?')) return;
+            const data = await api('/api/runtime-config', {
+                method: 'PATCH',
+                body: JSON.stringify({ messaging_direction: '' }),
+            });
+            if (data) { toast('Reverted to default direction'); loadRuntimeConfig(); }
+        }
+
+        async function loadDefaultMessagingDirection() {
+            // Fetch the full default text by saving empty (which clears) then re-reading.
+            // Simpler: just dump what the in-code default is via an admin endpoint. For
+            // now, surface the preview field plus an explanatory note — the default is
+            // always active when the textarea is empty + saved.
+            const ta = document.getElementById('settings-messaging-direction');
+            if (!ta) return;
+            const cfg = await api('/api/runtime-config');
+            if (!cfg || !cfg.messaging) return;
+            // Pull the full default by hitting a new endpoint
+            const def = await api('/api/runtime-config/messaging-default');
+            if (def && def.text) {
+                ta.value = def.text;
+                toast('Loaded default text. Edit and Save to customize, or click Revert to use the default as-is.');
+            } else {
+                toast('Could not load default text. Leave empty + click Save to use default.');
             }
         }
 

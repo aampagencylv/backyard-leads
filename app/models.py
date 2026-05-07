@@ -319,6 +319,12 @@ class RuntimeConfig(Base):
     # rates than SMS for B2B cold outreach in iPhone-heavy markets.
     blooio_api_key = Column(Text, nullable=True)
 
+    # Org-wide messaging tone / strategic direction. Prepended to every AI
+    # generation system prompt (cold email, follow-up, iMessage, post-call)
+    # so the team can steer the voice and the angle without code changes.
+    # Empty = use the in-code default.
+    messaging_direction = Column(Text, nullable=True)
+
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
 

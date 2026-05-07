@@ -166,6 +166,8 @@ async def _handle_imessage(db: AsyncSession, step: GeneratedEmail, contact: Cont
             recent_posts = []
         intent_map = {"imessage_1": "after_email", "imessage_2": "follow_up", "imessage_3": "follow_up"}
         intent = intent_map.get(step.email_type, "follow_up")
+        from app.runtime_config import get_messaging_direction
+        direction = await get_messaging_direction(db)
         try:
             gen = await generate_imessage(
                 business_name=company.name or "your business",
@@ -175,6 +177,7 @@ async def _handle_imessage(db: AsyncSession, step: GeneratedEmail, contact: Cont
                 recent_posts=recent_posts,
                 location=(company.city or "") + ((", " + company.state) if company.state else "") or None,
                 intent=intent,
+                messaging_direction=direction,
             )
             text_body = gen.get("body", "").strip()
         except Exception as e:
@@ -433,12 +436,27 @@ async def start_sequence_from_template(
 
     now = datetime.now(timezone.utc)
 
+    # Load org-wide messaging direction once and thread it through every Claude
+    # call — keeps the strategic angle (AI findability / GEO / local SEO by
+    # default) consistent across email, iMessage, and post-call follow-ups.
+    from app.runtime_config import get_messaging_direction
+    direction = await get_messaging_direction(db)
+
+    # Build problems + recent posts context once (used by both email + imessage gen)
+    try:
+        problems = json.loads(company.problems_found) if company.problems_found else []
+    except (TypeError, ValueError):
+        problems = []
+    try:
+        recent_posts = json.loads(contact.recent_posts_json) if contact.recent_posts_json else []
+    except (TypeError, ValueError):
+        recent_posts = []
+
     # Pre-generate email content for email steps so previews work immediately
     email_drafts: dict[str, dict] = {}
     if pre_generate_emails and contact.email:
         try:
             from app.services.email_generator import generate_cold_email, generate_follow_up
-            problems = json.loads(company.problems_found) if company.problems_found else []
             for tstep in template:
                 if tstep["step_type"] != "email":
                     continue
@@ -450,6 +468,7 @@ async def start_sequence_from_template(
                         problems=problems,
                         contact_name=contact.full_name,
                         location=company.city,
+                        messaging_direction=direction,
                     )
                 else:
                     # follow_up_1 → #1, follow_up_2 → #2, breakup → #3
@@ -463,10 +482,36 @@ async def start_sequence_from_template(
                         previous_email_subject=cold_subject,
                         follow_up_number=fu_num,
                         contact_name=contact.full_name,
+                        messaging_direction=direction,
                     )
                 email_drafts[tstep["label"]] = draft
         except Exception as e:
             logger.warning(f"Email pre-generation failed for contact {contact.id}: {e}")
+
+    # Pre-generate iMessage bodies too — same reason as emails: BDR can preview
+    # and edit the actual text before it fires. Each label gets a different
+    # intent so the 3 iMessages don't read identically.
+    imessage_drafts: dict[str, dict] = {}
+    if contact.phone:
+        try:
+            from app.services.email_generator import generate_imessage
+            intent_map = {"imessage_1": "after_email", "imessage_2": "follow_up", "imessage_3": "follow_up"}
+            for tstep in template:
+                if tstep["step_type"] != "imessage":
+                    continue
+                draft = await generate_imessage(
+                    business_name=company.name or "your business",
+                    business_type=company.business_type or company.industry or "backyard professional",
+                    contact_name=contact.full_name,
+                    problems=problems,
+                    recent_posts=recent_posts,
+                    location=(company.city or "") + ((", " + company.state) if company.state else "") or None,
+                    intent=intent_map.get(tstep["label"], "follow_up"),
+                    messaging_direction=direction,
+                )
+                imessage_drafts[tstep["label"]] = draft
+        except Exception as e:
+            logger.warning(f"iMessage pre-generation failed for contact {contact.id}: {e}")
 
     created = 0
     for idx, tstep in enumerate(template, start=1):
@@ -478,7 +523,8 @@ async def start_sequence_from_template(
             body = d.get("body", "AUTO:")
         elif tstep["step_type"] == "imessage":
             subject = f"iMessage step {idx}"
-            body = "AUTO:"  # generated at send-time using current context
+            d = imessage_drafts.get(tstep["label"], {})
+            body = d.get("body") or "AUTO:"  # falls back to send-time generation if pre-gen failed
         elif tstep["step_type"] == "call":
             subject = f"Call {idx}"
             body = (

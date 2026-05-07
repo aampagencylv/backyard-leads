@@ -110,6 +110,69 @@ async def set_blooio_api_key(db: AsyncSession, value: str) -> RuntimeConfig:
     return rc
 
 
+# ============================================================
+# Messaging tone / strategic direction (prepended to AI prompts)
+# ============================================================
+
+DEFAULT_MESSAGING_DIRECTION = """\
+PRIMARY ANGLE — AI findability + GEO (Generative Engine Optimization) + Local SEO.
+
+Backyard pros (pool builders, landscapers, deck builders, outdoor-kitchen
+contractors) are quietly losing leads because their site doesn't rank in
+Google's AI Overviews, ChatGPT search, Perplexity, or Gemini. When someone
+asks "best pool builder near me" the AI summarizes a few competitors — and
+if the prospect's site isn't structured for AI to cite, they vanish. This
+is the single most important shift in local search in a decade and most
+contractors haven't heard the term "GEO" yet.
+
+LEAD WITH THIS. Most outreach should hook on:
+  - "Have you checked whether ChatGPT / Perplexity recommends your business
+    when someone asks for [their service] in [their city]?"
+  - A specific finding from their site (missing schema, no FAQ, no llms.txt,
+    site speed / Core Web Vitals issues that hurt AI crawlability)
+  - The competitor angle: "Three other [pool builders] in your area are
+    showing up in AI Overviews — here's what they have that you don't"
+
+Local SEO (Google Business Profile, review velocity, citation consistency)
+is the closely-related secondary angle. AI search and local SEO converge:
+the same signals that help you rank in Maps help you get cited by AI.
+
+Tone:
+  - Specific. Reference real data. Don't say "we noticed your site has
+    issues" — say "your site is missing FAQ schema, which is the #1 thing
+    AI engines look for to extract direct answers."
+  - Curious, not pitchy. You're a friend who works in marketing flagging
+    something useful — not a salesperson hitting quota.
+  - Educator's voice. Most contractors don't know what GEO is yet; explain
+    it in plain language without talking down.
+
+Avoid:
+  - Generic "increase your leads" / "grow your business" framing — too
+    abstract for cold outreach
+  - "Synergy", "leverage", "optimize", "ROI", "scale" — corporate slop
+  - Pitching specific packages or pricing in cold touches; the goal is to
+    earn a 15-min conversation, not close a deal
+"""
+
+
+async def get_messaging_direction(db: AsyncSession) -> str:
+    """Returns the configured org-wide messaging direction, or the in-code
+    default. Used by every email_generator system prompt."""
+    rc = await _get_or_create(db)
+    val = (rc.messaging_direction or "").strip()
+    return val or DEFAULT_MESSAGING_DIRECTION
+
+
+async def set_messaging_direction(db: AsyncSession, value: str) -> RuntimeConfig:
+    """Empty string clears it back to the in-code default."""
+    rc = await _get_or_create(db)
+    rc.messaging_direction = value.strip() or None
+    rc.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(rc)
+    return rc
+
+
 def mask_key(value: str | None) -> str:
     """Show only last 4 chars: 'pk_live_...c82a'"""
     if not value:

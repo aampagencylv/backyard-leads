@@ -206,6 +206,8 @@ async def trigger_post_call_sequence(
         raise HTTPException(status_code=400, detail="A post-call sequence is already active for this contact. Pause it first if you want to restart.")
 
     from app.services.email_generator import generate_post_call_sequence
+    from app.runtime_config import get_messaging_direction
+    direction = await get_messaging_direction(db)
     try:
         steps = await generate_post_call_sequence(
             business_name=company.name,
@@ -214,6 +216,7 @@ async def trigger_post_call_sequence(
             transcript=activity.transcript,
             summary=activity.call_summary,
             duration_seconds=activity.call_duration_seconds,
+            messaging_direction=direction,
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"AI generation failed: {e}")
