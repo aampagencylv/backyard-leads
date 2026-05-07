@@ -236,15 +236,143 @@ def build_outbound_twiml(
     return str(response)
 
 
-def parse_inbound_twiml(from_number: str, dial_to_user_identity: str) -> str:
+def parse_inbound_twiml(
+    rep_identity: str,
+    rep_personal_phone: Optional[str],
+    voicemail_action_url: str,
+    timeout: int = 20,
+) -> str:
     """
-    TwiML for INBOUND calls — ring the rep's browser via their identity.
-    If they don't pick up, fall through to voicemail (Phase 4).
+    TwiML for INBOUND calls — ring the rep's browser AND optionally their
+    personal phone simultaneously (whichever picks up first wins). If no
+    answer in `timeout` seconds, fall through to voicemail.
     """
     from twilio.twiml.voice_response import VoiceResponse, Dial
 
     response = VoiceResponse()
-    dial = Dial(timeout=20, action="/api/twilio/voice/inbound-fallback")
-    dial.client(dial_to_user_identity)
+    dial = Dial(timeout=timeout, action=voicemail_action_url, method="POST")
+    if rep_identity:
+        dial.client(rep_identity)
+    if rep_personal_phone:
+        dial.number(rep_personal_phone)
     response.append(dial)
     return str(response)
+
+
+def build_voicemail_twiml(
+    company_name: str,
+    rep_first_name: Optional[str] = None,
+    recording_status_callback: Optional[str] = None,
+) -> str:
+    """TwiML that plays a greeting + records a voicemail."""
+    from twilio.twiml.voice_response import VoiceResponse
+
+    response = VoiceResponse()
+    greeting = (
+        f"You've reached {rep_first_name} at {company_name}. "
+        if rep_first_name else
+        f"Thanks for calling {company_name}. "
+    )
+    response.say(
+        greeting + "Please leave a message after the tone and we'll get back to you shortly.",
+        voice="Polly.Joanna-Neural",
+    )
+    record_kwargs = dict(
+        max_length=120,
+        play_beep=True,
+        transcribe=False,  # we run our own pipeline (Deepgram)
+        finish_on_key="#",
+    )
+    if recording_status_callback:
+        record_kwargs["recording_status_callback"] = recording_status_callback
+        record_kwargs["recording_status_callback_event"] = "completed"
+    response.record(**record_kwargs)
+    response.hangup()
+    return str(response)
+
+
+def build_bridge_twiml(
+    prospect_number: str,
+    caller_id: str,
+    record_calls: bool = True,
+    recording_status_callback: Optional[str] = None,
+    consent_disclosure: bool = True,
+) -> str:
+    """
+    TwiML used when the rep's PERSONAL phone has answered our outbound
+    bridge call. Connects them to the prospect, records both legs.
+    """
+    from twilio.twiml.voice_response import VoiceResponse, Dial
+
+    response = VoiceResponse()
+    if consent_disclosure:
+        response.say(
+            "Connecting your call now. This call may be recorded.",
+            voice="Polly.Joanna-Neural",
+        )
+    dial = Dial(caller_id=caller_id, timeout=30)
+    if record_calls:
+        dial.record = "record-from-answer-dual"
+        if recording_status_callback:
+            dial.recording_status_callback = recording_status_callback
+            dial.recording_status_callback_event = "completed"
+    dial.number(prospect_number)
+    response.append(dial)
+    return str(response)
+
+
+async def initiate_bridge_call(
+    creds: TwilioCredentials,
+    rep_personal_phone: str,
+    rep_caller_id: str,
+    bridge_twiml_url: str,
+    status_callback_url: str,
+) -> str:
+    """
+    Place an outbound call FROM Twilio TO the rep's personal phone.
+    When the rep picks up, Twilio fetches `bridge_twiml_url` to know who
+    to connect them to. Returns the parent CallSid.
+
+    The caller_id shown to the rep on their personal phone will be
+    `rep_caller_id` (their own assigned Twilio number) so they can
+    distinguish it from spam.
+    """
+    if not creds.is_minimally_configured:
+        raise TwilioError(400, "Twilio not configured")
+
+    payload = {
+        "To":   rep_personal_phone,
+        "From": rep_caller_id,
+        "Url":  bridge_twiml_url,
+        "StatusCallback": status_callback_url,
+        "StatusCallbackEvent": "initiated ringing answered completed",
+        "StatusCallbackMethod": "POST",
+    }
+    url = f"{TWILIO_BASE}/Accounts/{creds.account_sid}/Calls.json"
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.post(url, data=payload, auth=_auth(creds))
+    if r.status_code not in (200, 201):
+        raise TwilioError(r.status_code, r.text[:300])
+    return r.json().get("sid", "")
+
+
+async def configure_inbound_voice_url(
+    creds: TwilioCredentials,
+    phone_sid: str,
+    voice_url: str,
+    voice_method: str = "POST",
+    status_callback: Optional[str] = None,
+) -> None:
+    """Update an owned Twilio number's inbound voice webhook URL.
+    Called after a number is bought + assigned to a rep so inbound calls
+    actually route somewhere.
+    """
+    payload = {"VoiceUrl": voice_url, "VoiceMethod": voice_method}
+    if status_callback:
+        payload["StatusCallback"] = status_callback
+        payload["StatusCallbackMethod"] = "POST"
+    url = f"{TWILIO_BASE}/Accounts/{creds.account_sid}/IncomingPhoneNumbers/{phone_sid}.json"
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.post(url, data=payload, auth=_auth(creds))
+    if r.status_code not in (200, 201):
+        raise TwilioError(r.status_code, r.text[:300])

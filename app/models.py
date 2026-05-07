@@ -35,6 +35,12 @@ class User(Base):
     twilio_phone_number = Column(String(40), nullable=True)  # E.164 format, e.g. +17025551234
     twilio_identity = Column(String(80), nullable=True)      # SDK identity, e.g. "bmp_user_3"
 
+    # Per-rep dial preferences
+    # 'browser' = WebRTC via Twilio.Device (default; needs headset + good internet)
+    # 'bridge'  = CallRail-style: Twilio rings personal_phone_number first, bridges to prospect
+    dial_mode = Column(String(20), nullable=False, default="browser")
+    personal_phone_number = Column(String(40), nullable=True)  # E.164; required when dial_mode='bridge'
+
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     searches = relationship("Search", back_populates="user")

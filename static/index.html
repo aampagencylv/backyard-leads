@@ -644,6 +644,63 @@
                     <div id="twilio-owned-numbers"></div>
                 </div>
 
+                <!-- Calling (per-rep dial preferences) -->
+                <div class="search-box" style="max-width:600px;margin-top:16px">
+                    <h3>Calling</h3>
+                    <p style="font-size:13px;color:#666;margin-bottom:16px">How do you want to dial? Browser uses your computer's mic + speaker. Phone Bridge rings your personal phone first and then bridges you to the prospect — works anywhere, no headset needed, great for offshore reps.</p>
+
+                    <div class="form-group">
+                        <label>Dial mode</label>
+                        <div style="display:flex;gap:8px">
+                            <label style="display:flex;align-items:center;gap:6px;padding:8px 12px;border:1px solid #ddd;border-radius:6px;cursor:pointer;flex:1">
+                                <input type="radio" name="settings-dial-mode" value="browser" id="settings-dial-mode-browser">
+                                <span><strong>Browser</strong> <span style="font-size:11px;color:#888">— uses your headset</span></span>
+                            </label>
+                            <label style="display:flex;align-items:center;gap:6px;padding:8px 12px;border:1px solid #ddd;border-radius:6px;cursor:pointer;flex:1">
+                                <input type="radio" name="settings-dial-mode" value="bridge" id="settings-dial-mode-bridge">
+                                <span><strong>Phone Bridge</strong> <span style="font-size:11px;color:#888">— rings your phone</span></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Personal phone (E.164 format, e.g. +17025551234)
+                            <span style="font-size:11px;font-weight:400;color:#888"> — required for Phone Bridge mode</span>
+                        </label>
+                        <input type="text" id="settings-personal-phone" placeholder="+17025551234">
+                    </div>
+
+                    <div style="font-size:11px;color:#888;margin-bottom:8px" id="settings-twilio-caller-id"></div>
+
+                    <button class="btn btn-primary" onclick="saveCallingPrefs()">Save Calling Preferences</button>
+                </div>
+
+                <!-- Audio devices (browser mode) -->
+                <div id="audio-devices-panel" class="search-box hidden" style="max-width:600px;margin-top:16px">
+                    <h3>Audio Devices</h3>
+                    <p style="font-size:13px;color:#666;margin-bottom:16px">Select which microphone and speakers your browser uses for calls. Saved per browser. <em>Only applies to Browser dial mode.</em></p>
+
+                    <div class="form-group">
+                        <label>Microphone</label>
+                        <select id="audio-mic-select" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>Speaker</label>
+                        <select id="audio-speaker-select" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>Ringtone Device</label>
+                        <select id="audio-ringtone-select" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px"></select>
+                    </div>
+
+                    <div style="display:flex;gap:8px">
+                        <button class="btn btn-primary" onclick="saveAudioDevices()">Save Audio Settings</button>
+                        <button class="btn btn-secondary" onclick="testMic()">🎙️ Test Mic</button>
+                        <button class="btn btn-secondary" onclick="loadAudioDevices()">🔄 Refresh List</button>
+                    </div>
+                    <div id="audio-test-status" style="font-size:12px;color:#888;margin-top:8px"></div>
+                </div>
+
                 <div class="search-box" style="max-width:600px;margin-top:16px">
                     <h3>Email Sending</h3>
                     <div style="display:flex;align-items:center;gap:12px;padding:8px 0">
@@ -2680,6 +2737,23 @@
             document.getElementById('settings-nickname').value = data.nickname || '';
             document.getElementById('settings-phone-number').value = data.phone_number || '';
             document.getElementById('settings-scheduling-url').value = data.scheduling_url || '';
+            // Calling section
+            const dialMode = data.dial_mode || 'browser';
+            const dialModeRadio = document.querySelector(`input[name="settings-dial-mode"][value="${dialMode}"]`);
+            if (dialModeRadio) dialModeRadio.checked = true;
+            document.getElementById('settings-personal-phone').value = data.personal_phone_number || '';
+            const callerIdEl = document.getElementById('settings-twilio-caller-id');
+            if (callerIdEl) {
+                callerIdEl.textContent = data.twilio_phone_number
+                    ? `Your caller ID (assigned Twilio number): ${data.twilio_phone_number}`
+                    : 'No Twilio caller ID assigned. Ask an admin to assign one.';
+            }
+            // Audio devices panel: only show in browser mode
+            const audioPanel = document.getElementById('audio-devices-panel');
+            if (audioPanel) {
+                audioPanel.classList.toggle('hidden', dialMode !== 'browser');
+                if (dialMode === 'browser') loadAudioDevices();
+            }
             document.getElementById('settings-sending-enabled').checked = data.sending_enabled;
             document.getElementById('settings-send-from').textContent = data.send_from;
             document.getElementById('settings-reply-to').textContent = data.reply_to;
@@ -2958,6 +3032,121 @@
             if (data) { toast(`${field} saved`); loadRuntimeConfig(); }
         }
 
+        // ============ Calling preferences (per-rep) ============
+        async function saveCallingPrefs() {
+            const dialMode = (document.querySelector('input[name="settings-dial-mode"]:checked') || {}).value || 'browser';
+            const personalPhone = document.getElementById('settings-personal-phone').value.trim();
+            if (dialMode === 'bridge' && !personalPhone) {
+                toast('Phone Bridge mode needs a personal phone number'); return;
+            }
+            if (personalPhone && !personalPhone.startsWith('+')) {
+                toast('Phone number must be in E.164 format, e.g. +17025551234'); return;
+            }
+            const data = await api('/api/send/profile', {
+                method: 'PATCH',
+                body: JSON.stringify({
+                    dial_mode: dialMode,
+                    personal_phone_number: personalPhone,
+                }),
+            });
+            if (data) {
+                toast('Calling preferences saved');
+                loadSettings();
+            }
+        }
+
+        // ============ Audio devices (browser mode) ============
+        async function loadAudioDevices() {
+            try {
+                // Need user permission to enumerate devices with labels
+                await navigator.mediaDevices.getUserMedia({ audio: true });
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const mics = devices.filter(d => d.kind === 'audioinput');
+                const speakers = devices.filter(d => d.kind === 'audiooutput');
+
+                const fillSelect = (id, list, savedKey) => {
+                    const el = document.getElementById(id);
+                    const saved = localStorage.getItem(savedKey) || '';
+                    el.innerHTML = list.map(d =>
+                        `<option value="${escapeHtml(d.deviceId)}" ${d.deviceId === saved ? 'selected' : ''}>${escapeHtml(d.label || '(unlabeled)')}</option>`
+                    ).join('');
+                };
+                fillSelect('audio-mic-select', mics, 'bmp_audio_mic');
+                fillSelect('audio-speaker-select', speakers, 'bmp_audio_speaker');
+                fillSelect('audio-ringtone-select', speakers, 'bmp_audio_ringtone');
+            } catch (e) {
+                document.getElementById('audio-test-status').textContent =
+                    'Microphone permission was denied. Click the lock icon in the address bar to grant access.';
+            }
+        }
+
+        function saveAudioDevices() {
+            const mic = document.getElementById('audio-mic-select').value;
+            const spk = document.getElementById('audio-speaker-select').value;
+            const ring = document.getElementById('audio-ringtone-select').value;
+            if (mic) localStorage.setItem('bmp_audio_mic', mic);
+            if (spk) localStorage.setItem('bmp_audio_speaker', spk);
+            if (ring) localStorage.setItem('bmp_audio_ringtone', ring);
+            // Apply immediately if Device is initialized
+            applyAudioDevices().catch(() => {});
+            toast('Audio devices saved (active on next call)');
+        }
+
+        async function applyAudioDevices() {
+            const dev = dialerState.device;
+            if (!dev || !dev.audio) return;
+            try {
+                const mic = localStorage.getItem('bmp_audio_mic');
+                const spk = localStorage.getItem('bmp_audio_speaker');
+                const ring = localStorage.getItem('bmp_audio_ringtone');
+                if (mic) await dev.audio.setInputDevice(mic);
+                if (spk && dev.audio.speakerDevices) await dev.audio.speakerDevices.set(spk);
+                if (ring && dev.audio.ringtoneDevices) await dev.audio.ringtoneDevices.set(ring);
+            } catch (e) {
+                console.warn('applyAudioDevices failed:', e);
+            }
+        }
+
+        async function testMic() {
+            const status = document.getElementById('audio-test-status');
+            status.textContent = 'Listening for 3 seconds...';
+            try {
+                const mic = localStorage.getItem('bmp_audio_mic');
+                const constraints = mic ? { audio: { deviceId: { exact: mic } } } : { audio: true };
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                const ctx = new AudioContext();
+                const src = ctx.createMediaStreamSource(stream);
+                const analyser = ctx.createAnalyser();
+                analyser.fftSize = 256;
+                src.connect(analyser);
+                const buf = new Uint8Array(analyser.frequencyBinCount);
+                let max = 0;
+                const start = Date.now();
+                const tick = () => {
+                    analyser.getByteFrequencyData(buf);
+                    const peak = Math.max(...buf);
+                    if (peak > max) max = peak;
+                    if (Date.now() - start < 3000) {
+                        requestAnimationFrame(tick);
+                    } else {
+                        stream.getTracks().forEach(t => t.stop());
+                        ctx.close();
+                        if (max > 30) {
+                            status.textContent = `✓ Mic working — peak signal ${max}/255. Speak louder than ~30 to be heard well.`;
+                            status.style.color = 'var(--bmp-green)';
+                        } else {
+                            status.textContent = `Mic too quiet — peak signal ${max}/255. Check that the right device is selected and your mic isn't muted.`;
+                            status.style.color = '#c0392b';
+                        }
+                    }
+                };
+                tick();
+            } catch (e) {
+                status.textContent = 'Mic test failed: ' + (e.message || e);
+                status.style.color = '#c0392b';
+            }
+        }
+
         async function saveDeepgramKey() {
             const v = (document.getElementById('settings-deepgram-key').value || '').trim();
             if (!v) { toast('Paste a Deepgram key first'); return; }
@@ -3140,10 +3329,37 @@
                         console.error('Twilio Device error:', e);
                         toast('Dialer error: ' + (e.message || e.code || 'unknown'));
                     });
-                    // Inbound call handler (Phase 4)
-                    dialerState.device.on('incoming', (call) => {
-                        // For now, just auto-reject inbound — Phase 4 will pop the modal
-                        call.reject();
+                    // Inbound call handler — pop modal pre-loaded with caller's CRM record
+                    dialerState.device.on('incoming', async (call) => {
+                        const fromNumber = (call.parameters && call.parameters.From) || '';
+                        let contact = null;
+                        let companyName = '';
+                        let companyId = null;
+                        if (fromNumber) {
+                            try {
+                                const lookup = await api(`/api/twilio/inbound/lookup?phone=${encodeURIComponent(fromNumber)}`);
+                                if (lookup && lookup.contact) {
+                                    contact = lookup.contact;
+                                    companyName = (lookup.company || {}).name || '';
+                                    companyId = (lookup.company || {}).id || null;
+                                }
+                            } catch (e) { /* fall through with null contact */ }
+                        }
+                        const inboundContact = contact || {
+                            id: null,
+                            name: 'Unknown caller',
+                            email: '',
+                            title: '',
+                            phone: fromNumber,
+                            company_id: null,
+                            company_name: '',
+                        };
+                        if (contact) {
+                            inboundContact.company_id = companyId;
+                            inboundContact.company_name = companyName;
+                        }
+
+                        openInboundModal(inboundContact, fromNumber, call);
                     });
                 }
                 dialerState.tokenExpiresAt = now + (data.expires_in * 1000);
@@ -3161,15 +3377,31 @@
                 toast('No phone number on this contact'); return;
             }
             const toNumber = contact.phone || contact.company_phone;
+
+            // Branch on the rep's preferred dial mode (set in Settings → Calling)
+            const profile = currentUser || await api('/api/auth/me');
+            // /api/auth/me doesn't return dial_mode, so refresh profile if needed
+            const fullProfile = await api('/api/send/profile');
+            const dialMode = (fullProfile && fullProfile.dial_mode) || 'browser';
+
+            if (dialMode === 'bridge') {
+                return await startBridgeCall(contact, toNumber);
+            }
+            // Default: browser mode
+            return await startBrowserCall(contact, toNumber);
+        }
+
+        async function startBrowserCall(contact, toNumber) {
             const device = await ensureTwilioDevice();
             if (!device) return;
+            applyAudioDevices().catch(() => {});  // best effort
 
-            openDialerModal(contact, toNumber);
+            openDialerModal(contact, toNumber, 'browser');
 
             try {
                 const call = await device.connect({ params: { To: toNumber } });
                 dialerState.call = call;
-                dialerState.ctx = { contact, sid: null, started: false };
+                dialerState.ctx = { contact, sid: null, started: false, mode: 'browser' };
 
                 call.on('accept', (c) => {
                     dialerState.ctx.sid = c.parameters.CallSid;
@@ -3203,6 +3435,47 @@
                 console.error('connect() failed:', e);
                 toast('Could not start call: ' + (e.message || e));
                 closeDialerModal();
+            }
+        }
+
+        async function startBridgeCall(contact, toNumber) {
+            openDialerModal(contact, toNumber, 'bridge');
+            setDialerStatus('connecting', 'Calling your phone…');
+            try {
+                const result = await api('/api/twilio/voice/bridge-call', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        contact_id: contact.id || null,
+                        company_id: contact.company_id || null,
+                        to_number: toNumber,
+                    }),
+                });
+                if (!result || !result.call_sid) {
+                    setDialerStatus('ended', 'Failed to initiate bridge call');
+                    return;
+                }
+                // Bridge calls don't have browser-side events. We fake the timer
+                // and note the SID so finishDialer can log it.
+                dialerState.ctx = {
+                    contact,
+                    sid: result.call_sid,
+                    started: true,
+                    mode: 'bridge',
+                };
+                dialerState.startedAt = Date.now();
+                setDialerStatus('connecting', `Pick up your phone (${result.ringing_your_phone}) — bridging now…`);
+                // After ~30s assume the call is in progress; we won't get an
+                // 'accept' event from Twilio in this flow (browser is out of
+                // the audio path). The status callback updates the Activity.
+                setTimeout(() => {
+                    if (dialerState.ctx && dialerState.ctx.mode === 'bridge') {
+                        setDialerStatus('in-call', 'Bridged — talking on your phone');
+                        startDialerTimer();
+                    }
+                }, 1500);
+            } catch (e) {
+                console.error('bridge-call failed:', e);
+                setDialerStatus('ended', 'Bridge call failed: ' + (e.message || e));
             }
         }
 
@@ -3241,10 +3514,93 @@
             startCall(stub);
         }
 
-        // ----- Dialer modal -----
-        function openDialerModal(contact, toNumber) {
+        // ----- Inbound call modal (rings on incoming SDK call) -----
+        function openInboundModal(contact, fromNumber, call) {
             const initials = ((contact.first_name||'')[0]||'') + ((contact.last_name||'')[0]||'');
             const root = document.getElementById('modal-root');
+            const knownContact = !!contact.id;
+            root.innerHTML = `
+                <div class="modal-backdrop">
+                    <div class="dialer" onclick="event.stopPropagation()">
+                        <div class="dialer-header">
+                            <div class="avatar" style="background:var(--bmp-orange)">${escapeHtml((initials || (contact.name||'?')[0] || '?').toUpperCase())}</div>
+                            <div style="flex:1">
+                                <div class="name">${escapeHtml(contact.name || 'Unknown caller')}</div>
+                                <div class="meta">${escapeHtml(contact.title || '')}${contact.title && contact.company_name ? ' · ' : ''}${escapeHtml(contact.company_name || '')}</div>
+                            </div>
+                            <span style="font-size:10px;background:var(--bmp-orange);color:white;padding:2px 8px;border-radius:10px">📞 INCOMING</span>
+                        </div>
+                        <div class="dialer-state">
+                            <div class="number">${escapeHtml(fromNumber || 'Unknown')}</div>
+                            <div class="status connecting">Ringing…</div>
+                        </div>
+                        ${knownContact
+                            ? `<div style="background:#f4faf4;border-left:3px solid var(--bmp-green);border-radius:6px;padding:10px 12px;font-size:12px;margin:8px 0">
+                                ✓ Known contact at ${escapeHtml(contact.company_name || 'a company you track')}.
+                                <a href="#" onclick="event.preventDefault();window.open('/?company=${contact.company_id}','_blank')">Open CRM in new tab</a>
+                              </div>`
+                            : `<div style="background:#fff5f0;border-left:3px solid var(--bmp-orange);border-radius:6px;padding:10px 12px;font-size:12px;margin:8px 0">
+                                Unknown number — not in your CRM yet.
+                              </div>`
+                        }
+                        <div class="dialer-controls">
+                            <button class="dialer-btn" style="background:var(--bmp-green);color:white" onclick="acceptInboundCall()">📞 Accept</button>
+                            <button class="dialer-btn hangup" onclick="rejectInboundCall()">🚫 Reject</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            dialerState.pendingInboundCall = call;
+            dialerState.pendingInboundContact = contact;
+        }
+
+        function acceptInboundCall() {
+            const call = dialerState.pendingInboundCall;
+            const contact = dialerState.pendingInboundContact;
+            if (!call) return;
+            dialerState.call = call;
+            dialerState.ctx = { contact, sid: call.parameters.CallSid, started: false, mode: 'browser' };
+            call.accept();
+            // Re-render as the live dialer
+            openDialerModal(contact, contact.phone || '(unknown)', 'browser');
+            dialerState.startedAt = Date.now();
+            dialerState.ctx.started = true;
+            setDialerStatus('in-call', 'Connected');
+            startDialerTimer();
+            call.on('disconnect', () => {
+                setDialerStatus('ended', 'Call ended');
+                stopDialerTimer();
+                dialerState.call = null;
+            });
+        }
+
+        function rejectInboundCall() {
+            const call = dialerState.pendingInboundCall;
+            if (call) call.reject();
+            closeDialerModal();
+        }
+
+        // ----- Dialer modal -----
+        function openDialerModal(contact, toNumber, mode) {
+            const initials = ((contact.first_name||'')[0]||'') + ((contact.last_name||'')[0]||'');
+            const isBridge = mode === 'bridge';
+            const root = document.getElementById('modal-root');
+            const browserControls = `
+                <div class="dialer-controls">
+                    <button class="dialer-btn mute" id="dialer-mute" onclick="toggleMute()" title="Mute">🔇</button>
+                    <button class="dialer-btn hangup" onclick="endCall()" title="Hang up">📵</button>
+                    <button class="dialer-btn keypad" id="dialer-keypad-toggle" onclick="toggleKeypad()" title="Keypad">⌨️</button>
+                </div>
+                <div class="dialer-keypad hidden" id="dialer-keypad">
+                    ${['1','2','3','4','5','6','7','8','9','*','0','#'].map(d =>
+                        `<button onclick="sendDtmf('${d}')">${d}</button>`).join('')}
+                </div>
+            `;
+            const bridgeNote = `
+                <div style="background:#fff5f0;border:1px solid #ffe5d8;color:#a8460e;padding:10px 12px;border-radius:8px;font-size:12px;margin:8px 0">
+                    📲 <strong>Phone Bridge:</strong> Twilio is calling your phone. Pick up to be bridged with the prospect. Hangup happens on your phone — when you're done, come back here, fill in notes, and click <strong>Save &amp; Close</strong>.
+                </div>
+            `;
             root.innerHTML = `
                 <div class="modal-backdrop" id="dialer-backdrop">
                     <div class="dialer" onclick="event.stopPropagation()">
@@ -3254,22 +3610,15 @@
                                 <div class="name">${escapeHtml(contact.name || contact.email || '(unnamed)')}</div>
                                 <div class="meta">${escapeHtml(contact.title || '')}${contact.title && contact.company_name ? ' · ' : ''}${escapeHtml(contact.company_name || '')}</div>
                             </div>
+                            ${isBridge ? '<span style="font-size:10px;background:var(--bmp-orange);color:white;padding:2px 8px;border-radius:10px">BRIDGE</span>' : ''}
                         </div>
                         <div class="dialer-state">
                             <div class="number">${escapeHtml(toNumber)}</div>
                             <div class="status connecting" id="dialer-status">Connecting…</div>
                             <div class="dialer-timer" id="dialer-timer" style="display:none">00:00</div>
                         </div>
-                        <div class="dialer-controls">
-                            <button class="dialer-btn mute" id="dialer-mute" onclick="toggleMute()" title="Mute">🔇</button>
-                            <button class="dialer-btn hangup" onclick="endCall()" title="Hang up">📵</button>
-                            <button class="dialer-btn keypad" id="dialer-keypad-toggle" onclick="toggleKeypad()" title="Keypad">⌨️</button>
-                        </div>
-                        <div class="dialer-keypad hidden" id="dialer-keypad">
-                            ${['1','2','3','4','5','6','7','8','9','*','0','#'].map(d =>
-                                `<button onclick="sendDtmf('${d}')">${d}</button>`).join('')}
-                        </div>
-                        <textarea class="dialer-notes" id="dialer-notes" placeholder="Notes from the call (saved automatically when you close this dialog)…"></textarea>
+                        ${isBridge ? bridgeNote : browserControls}
+                        <textarea class="dialer-notes" id="dialer-notes" placeholder="${isBridge ? 'Notes (jot these down while you talk on your phone)…' : 'Notes from the call (saved automatically when you close this dialog)…'}"></textarea>
                         <select class="dialer-outcome" id="dialer-outcome">
                             <option value="">Outcome (pick one before you hang up)</option>
                             <option value="connected">Connected — had a real conversation</option>

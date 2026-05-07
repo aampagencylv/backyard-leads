@@ -28,6 +28,11 @@ from app.services.twilio_voice import (
     number_to_dict,
     generate_access_token,
     build_outbound_twiml,
+    build_bridge_twiml,
+    parse_inbound_twiml,
+    build_voicemail_twiml,
+    initiate_bridge_call,
+    configure_inbound_voice_url,
     TwilioError,
 )
 from app.services.call_transcription import transcribe_and_summarize_in_background
@@ -88,8 +93,13 @@ async def numbers_buy(
     """Provision a number into the Twilio account. Costs $1.15/mo per number."""
     _admin_only(user)
     creds = await _creds_or_400(db)
+    public = settings.public_url.rstrip('/')
     try:
-        n = await buy_number(creds, req.phone_number)
+        n = await buy_number(
+            creds, req.phone_number,
+            voice_url=f"{public}/api/twilio/voice/inbound",
+            status_callback=f"{public}/api/twilio/voice/status",
+        )
     except TwilioError as e:
         raise HTTPException(status_code=502, detail=str(e))
     return number_to_dict(n)
@@ -189,6 +199,24 @@ async def assign_twilio_number(
         target.twilio_identity = f"bmp_user_{target.id}"
     await db.commit()
     await db.refresh(target)
+
+    # Re-configure the assigned number's inbound webhook so calls actually
+    # route to this rep's browser/personal phone.
+    if target.twilio_phone_number:
+        try:
+            creds = await get_twilio_credentials(db)
+            owned = await list_owned_numbers(creds)
+            match = next((n for n in owned if n.phone_number == target.twilio_phone_number), None)
+            if match and match.sid:
+                public = settings.public_url.rstrip('/')
+                await configure_inbound_voice_url(
+                    creds, match.sid,
+                    voice_url=f"{public}/api/twilio/voice/inbound",
+                    status_callback=f"{public}/api/twilio/voice/status",
+                )
+        except TwilioError:
+            pass  # number is still assigned in our DB even if Twilio webhook setup fails
+
     return {
         "user_id": target.id,
         "twilio_phone_number": target.twilio_phone_number,
@@ -349,6 +377,251 @@ async def voice_recording(request: Request):
         asyncio.create_task(transcribe_and_summarize_in_background(activity_id))
 
     return Response(content="", media_type="application/xml")
+
+
+# ============================================================
+# Phone bridge mode (CallRail-style outbound)
+# ============================================================
+
+class BridgeCallRequest(BaseModel):
+    contact_id: Optional[int] = None
+    company_id: Optional[int] = None
+    to_number: str  # E.164 of the prospect
+
+
+@router.post("/voice/bridge-call")
+async def bridge_call(
+    req: BridgeCallRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Start a two-leg outbound call:
+      Twilio dials the rep's personal phone first, then bridges them to
+      the prospect once they pick up. Browser stays out of the audio path.
+    """
+    if not user.personal_phone_number:
+        raise HTTPException(status_code=400, detail="Add your personal phone number in Settings → Profile to use phone bridge mode.")
+    if not user.twilio_phone_number:
+        raise HTTPException(status_code=400, detail="No Twilio caller ID assigned to you. Ask an admin.")
+
+    creds = await get_twilio_credentials(db)
+    if not creds.is_minimally_configured:
+        raise HTTPException(status_code=400, detail="Twilio not configured")
+
+    # The TwiML for the bridged call needs to know:
+    #  - what number to dial (the prospect)
+    #  - what caller ID to show (rep's assigned Twilio number)
+    # We pass these as query params on the TwiML URL.
+    public = settings.public_url.rstrip('/')
+    twiml_url = (
+        f"{public}/api/twilio/voice/bridge-twiml"
+        f"?to={req.to_number}"
+        f"&caller_id={user.twilio_phone_number}"
+    )
+    status_url = f"{public}/api/twilio/voice/status"
+
+    try:
+        parent_sid = await initiate_bridge_call(
+            creds,
+            rep_personal_phone=user.personal_phone_number,
+            rep_caller_id=user.twilio_phone_number,
+            bridge_twiml_url=twiml_url,
+            status_callback_url=status_url,
+        )
+    except TwilioError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    # Pre-create a stub Activity so the bridge call shows up immediately
+    company_id = req.company_id
+    if req.contact_id and not company_id:
+        c = (await db.execute(select(Contact).where(Contact.id == req.contact_id))).scalar_one_or_none()
+        if c:
+            company_id = c.company_id
+    if company_id:
+        db.add(Activity(
+            company_id=company_id,
+            contact_id=req.contact_id,
+            user_id=user.id,
+            activity_type="call",
+            content="Bridge call initiated — ringing your phone",
+            twilio_call_sid=parent_sid,
+            call_direction="outbound",
+        ))
+        await db.commit()
+
+    return {"call_sid": parent_sid, "ringing_your_phone": user.personal_phone_number}
+
+
+@router.post("/voice/bridge-twiml")
+async def bridge_twiml(request: Request):
+    """TwiML returned when the rep's personal phone answers our bridge call."""
+    qp = dict(request.query_params)
+    to_number = qp.get("to", "")
+    caller_id = qp.get("caller_id", "")
+    if not (to_number and caller_id):
+        return Response(
+            content="<Response><Say>Bridge call configuration missing.</Say></Response>",
+            media_type="application/xml",
+        )
+    recording_callback = f"{settings.public_url.rstrip('/')}/api/twilio/voice/recording"
+    twiml = build_bridge_twiml(
+        prospect_number=to_number,
+        caller_id=caller_id,
+        record_calls=True,
+        recording_status_callback=recording_callback,
+        consent_disclosure=True,
+    )
+    return Response(content=twiml, media_type="application/xml")
+
+
+# ============================================================
+# Inbound routing + voicemail
+# ============================================================
+
+@router.post("/voice/inbound")
+async def voice_inbound(request: Request):
+    """
+    TwiML for INBOUND calls. Looks up which rep owns the called Twilio
+    number, rings their browser AND personal phone simultaneously.
+    Falls through to voicemail after 20s.
+    """
+    form = await request.form()
+    called_number = form.get("Called", "")
+    from_number = form.get("From", "")
+
+    rep = None
+    if called_number:
+        async with async_session() as db:
+            rep = (await db.execute(
+                select(User).where(User.twilio_phone_number == called_number)
+            )).scalar_one_or_none()
+
+    if not rep:
+        # No rep assigned to this number — go straight to voicemail
+        public = settings.public_url.rstrip('/')
+        recording_callback = f"{public}/api/twilio/voice/voicemail-recording"
+        twiml = build_voicemail_twiml(
+            company_name="Backyard Marketing Pros",
+            recording_status_callback=recording_callback,
+        )
+        return Response(content=twiml, media_type="application/xml")
+
+    public = settings.public_url.rstrip('/')
+    voicemail_url = f"{public}/api/twilio/voice/inbound-voicemail?from={from_number}&rep_id={rep.id}"
+    twiml = parse_inbound_twiml(
+        rep_identity=rep.twilio_identity or f"bmp_user_{rep.id}",
+        rep_personal_phone=rep.personal_phone_number,
+        voicemail_action_url=voicemail_url,
+        timeout=20,
+    )
+    return Response(content=twiml, media_type="application/xml")
+
+
+@router.post("/voice/inbound-voicemail")
+async def inbound_voicemail(request: Request):
+    """When the inbound <Dial> doesn't connect (no answer), play voicemail TwiML."""
+    qp = dict(request.query_params)
+    rep_id = qp.get("rep_id")
+    rep_first_name = None
+    if rep_id:
+        async with async_session() as db:
+            rep = (await db.execute(select(User).where(User.id == int(rep_id)))).scalar_one_or_none()
+            if rep:
+                rep_first_name = rep.first_name
+
+    public = settings.public_url.rstrip('/')
+    recording_callback = f"{public}/api/twilio/voice/voicemail-recording?from={qp.get('from','')}&rep_id={rep_id or ''}"
+    twiml = build_voicemail_twiml(
+        company_name="Backyard Marketing Pros",
+        rep_first_name=rep_first_name,
+        recording_status_callback=recording_callback,
+    )
+    return Response(content=twiml, media_type="application/xml")
+
+
+@router.post("/voice/voicemail-recording")
+async def voicemail_recording(request: Request):
+    """When a voicemail recording finishes, save it as an Activity."""
+    form = await request.form()
+    qp = dict(request.query_params)
+    recording_url = form.get("RecordingUrl", "")
+    call_sid = form.get("CallSid", "")
+    duration = form.get("RecordingDuration", "0")
+    from_number = qp.get("from", "")
+    rep_id = qp.get("rep_id", "")
+
+    if not recording_url:
+        return Response(content="", media_type="application/xml")
+
+    if not recording_url.lower().endswith((".mp3", ".wav")):
+        recording_url = recording_url + ".mp3"
+
+    async with async_session() as db:
+        # Try to match the From number to a known Contact for attribution
+        contact = None
+        if from_number:
+            contact = (await db.execute(
+                select(Contact).where(Contact.phone == from_number)
+            )).scalar_one_or_none()
+
+        company_id = contact.company_id if contact else None
+        if not company_id:
+            return Response(content="", media_type="application/xml")  # orphan vm — Phase 4 won't auto-create company
+
+        try:
+            duration_int = int(duration)
+        except ValueError:
+            duration_int = 0
+
+        rep_user_id = int(rep_id) if rep_id else None
+
+        activity = Activity(
+            company_id=company_id,
+            contact_id=contact.id if contact else None,
+            user_id=rep_user_id,
+            activity_type="voicemail",
+            content=f"Voicemail received from {contact.full_name or from_number}",
+            twilio_call_sid=call_sid,
+            call_direction="inbound",
+            call_duration_seconds=duration_int,
+            recording_url=recording_url,
+            call_outcome="voicemail",
+        )
+        db.add(activity)
+        await db.commit()
+        await db.refresh(activity)
+        # Kick off transcription pipeline for the voicemail
+        asyncio.create_task(transcribe_and_summarize_in_background(activity.id))
+
+    return Response(content="", media_type="application/xml")
+
+
+@router.get("/inbound/lookup")
+async def inbound_lookup(
+    phone: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """When the browser receives an inbound call via the SDK, it calls this
+    to resolve the From number to a Contact + Company so the modal pre-pops
+    with CRM context."""
+    contact = (await db.execute(
+        select(Contact).where(Contact.phone == phone)
+    )).scalar_one_or_none()
+    if not contact:
+        return {"contact": None, "company": None}
+    company = (await db.execute(select(Company).where(Company.id == contact.company_id))).scalar_one_or_none()
+    return {
+        "contact": {
+            "id": contact.id, "name": contact.full_name or contact.email,
+            "title": contact.title, "email": contact.email, "phone": contact.phone,
+            "company_id": contact.company_id,
+        },
+        "company": {
+            "id": company.id, "name": company.name, "status": company.status,
+        } if company else None,
+    }
 
 
 @router.get("/recording/{activity_id}")

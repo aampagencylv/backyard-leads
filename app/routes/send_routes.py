@@ -442,6 +442,9 @@ class UpdateProfileRequest(BaseModel):
     phone_number: Optional[str] = None
     scheduling_url: Optional[str] = None
     sending_enabled: Optional[bool] = None
+    # Phase 4: dial preferences
+    personal_phone_number: Optional[str] = None  # E.164, used for bridge mode
+    dial_mode: Optional[str] = None  # 'browser' | 'bridge'
 
 
 def _profile_payload(user: User) -> dict:
@@ -456,6 +459,10 @@ def _profile_payload(user: User) -> dict:
         "phone_number": user.phone_number or "",
         "scheduling_url": user.scheduling_url or "",
         "sending_enabled": user.sending_enabled,
+        "role": user.role,
+        "twilio_phone_number": user.twilio_phone_number,
+        "personal_phone_number": user.personal_phone_number or "",
+        "dial_mode": user.dial_mode or "browser",
         "send_from": sender["from_email"],
         "reply_to": sender["reply_to"],
         "signature_html": render_signature(user),
@@ -473,12 +480,15 @@ async def update_profile(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    for field in ("first_name", "last_name", "nickname", "phone_number", "scheduling_url"):
+    for field in ("first_name", "last_name", "nickname", "phone_number",
+                  "scheduling_url", "personal_phone_number"):
         val = getattr(req, field)
         if val is not None:
-            setattr(user, field, val.strip())
+            setattr(user, field, val.strip() or None if field == "personal_phone_number" else val.strip())
     if req.sending_enabled is not None:
         user.sending_enabled = req.sending_enabled
+    if req.dial_mode is not None and req.dial_mode in ("browser", "bridge"):
+        user.dial_mode = req.dial_mode
     await db.commit()
     await db.refresh(user)
     return _profile_payload(user)
