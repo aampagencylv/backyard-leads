@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     netrows_api_key: str = ""
     dataforseo_login: str = ""
     dataforseo_password: str = ""
+    iclosed_api_key: str = ""  # ⚠️ Expires May 2027 — rotate annually
+    iclosed_booking_url: str = "https://app.iclosed.io/e/backyardmarketingpros/discovery-call"
     resend_api_key: str = ""
     resend_webhook_secret: str = ""
     send_domain: str = "go.backyardmarketingpros.com"
