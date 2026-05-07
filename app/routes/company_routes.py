@@ -775,10 +775,11 @@ class PursueRequest(BaseModel):
 SEQUENCE_SCHEDULE = [
     {"order": 1, "type": "cold",             "step_type": "email",    "delay_days": 0,  "label": "Initial outreach"},
     {"order": 2, "type": "linkedin_connect", "step_type": "linkedin", "delay_days": 1,  "label": "LinkedIn connect"},
-    {"order": 3, "type": "follow_up_1",      "step_type": "email",    "delay_days": 3,  "label": "Follow-up #1"},
-    {"order": 4, "type": "linkedin_message", "step_type": "linkedin", "delay_days": 5,  "label": "LinkedIn message"},
-    {"order": 5, "type": "follow_up_2",      "step_type": "email",    "delay_days": 7,  "label": "Follow-up #2"},
-    {"order": 6, "type": "breakup",          "step_type": "email",    "delay_days": 14, "label": "Breakup email"},
+    {"order": 3, "type": "follow_up_1",      "step_type": "email",    "delay_days": 3,  "label": "Follow-up #1 (with audit report)"},
+    {"order": 4, "type": "imessage",         "step_type": "imessage", "delay_days": 4,  "label": "iMessage (with audit link)"},
+    {"order": 5, "type": "linkedin_message", "step_type": "linkedin", "delay_days": 5,  "label": "LinkedIn message (with audit link)"},
+    {"order": 6, "type": "follow_up_2",      "step_type": "email",    "delay_days": 7,  "label": "Follow-up #2"},
+    {"order": 7, "type": "breakup",          "step_type": "email",    "delay_days": 14, "label": "Breakup email"},
 ]
 
 
@@ -886,6 +887,10 @@ async def pursue_companies(
             first_subject = None
             emails_created = 0
 
+            # Get LinkedIn URL and audit URL for injecting into steps
+            contact_linkedin = primary.linkedin_url or ""
+            # audit_url set earlier in the pursue flow
+
             for step in SEQUENCE_SCHEDULE:
                 try:
                     stype = step.get("step_type", "email")
@@ -899,6 +904,34 @@ async def pursue_companies(
                             contact_name=primary.full_name or None,
                             message_type=msg_type,
                         )
+                        # Add LinkedIn profile link for BDR convenience
+                        if contact_linkedin:
+                            email_data["body"] = email_data["body"].rstrip() + f"\n\n---\nLinkedIn: {contact_linkedin}"
+                        # Add audit link to LinkedIn message (not connect request)
+                        if msg_type == "message" and audit_url:
+                            email_data["body"] = email_data["body"].rstrip() + f"\n\nAudit report to reference: {audit_url}"
+
+                    elif stype == "imessage":
+                        # Generate iMessage with audit link
+                        from app.services.email_generator import generate_imessage
+                        try:
+                            email_data = await generate_imessage(
+                                business_name=company.name,
+                                business_type=company.business_type or "home services",
+                                contact_name=primary.full_name or None,
+                                problems=problems,
+                                intent="after_email",
+                            )
+                            # Append audit link
+                            if audit_url:
+                                email_data["body"] = email_data["body"].rstrip() + f"\n\n{audit_url}"
+                            email_data["subject"] = email_data.get("subject", f"iMessage to {primary.full_name or 'contact'}")
+                        except Exception:
+                            email_data = {
+                                "subject": f"iMessage to {primary.full_name or 'contact'}",
+                                "body": f"Hey{(' ' + primary.first_name) if primary.first_name else ''}, I sent you an email about your online presence — here's what I found: {audit_url}" if audit_url else f"Hey{(' ' + primary.first_name) if primary.first_name else ''}, did you get my email? Would love to show you what I found about your website.",
+                            }
+
                     elif step["type"] == "cold":
                         email_data = await generate_cold_email(
                             business_name=company.name,
