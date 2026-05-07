@@ -1582,15 +1582,23 @@
             return sel.value;
         }
 
+        // Tracks which company IDs are selected for merge across re-renders
+        const _mergeSel = new Set();
+
         function renderCompanies(companies, containerId) {
             const container = document.getElementById(containerId);
             if (!companies || companies.length === 0) {
                 container.innerHTML = '<p style="color:#666;padding:20px">No companies yet. Run a search to find businesses.</p>';
+                _renderMergeBar([]);
                 return;
             }
+            // Stash the rendered companies on the container so the merge modal
+            // can read full names + cities without a re-fetch
+            container._companiesById = Object.fromEntries(companies.map(c => [c.id, c]));
             container.innerHTML = companies.map(c => `
                 <div class="company-card ${c.enriched ? 'enriched' : ''} ${c.problem_count > 0 ? 'has-problems' : ''}">
                     <div class="company-card-header">
+                        <input type="checkbox" class="merge-checkbox" data-company-id="${c.id}" ${_mergeSel.has(c.id) ? 'checked' : ''} onchange="toggleMergeSelection(${c.id}, this.checked)" style="margin-right:10px;margin-top:6px;cursor:pointer;width:16px;height:16px" title="Select to merge with other companies">
                         <div style="flex:1">
                             <h3><a href="#" onclick="openCompanyDetail(${c.id});return false" style="color:inherit;text-decoration:none;border-bottom:1px dashed #ccc">${escapeHtml(c.name)}</a></h3>
                             <span class="status-badge status-${c.status}">${c.status}</span>
@@ -1617,6 +1625,119 @@
                     </div>
                 </div>
             `).join('');
+            _renderMergeBar(companies);
+        }
+
+        function toggleMergeSelection(id, checked) {
+            if (checked) _mergeSel.add(id);
+            else _mergeSel.delete(id);
+            // Cheap re-render of just the bar — don't re-render the list (avoids losing checkbox state during re-fetch)
+            const containers = document.querySelectorAll('[id$="-companies"], #all-companies, #search-results');
+            for (const c of containers) {
+                const arr = c._companiesById ? Object.values(c._companiesById) : [];
+                if (arr.length) { _renderMergeBar(arr); return; }
+            }
+            _renderMergeBar([]);
+        }
+
+        function _renderMergeBar(visibleCompanies) {
+            let bar = document.getElementById('merge-bar');
+            if (!bar) {
+                bar = document.createElement('div');
+                bar.id = 'merge-bar';
+                bar.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--bmp-green);color:white;padding:12px 18px;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.2);z-index:1000;display:none;align-items:center;gap:12px;font-size:14px';
+                document.body.appendChild(bar);
+            }
+            if (_mergeSel.size < 2) {
+                bar.style.display = 'none';
+                return;
+            }
+            bar.style.display = 'flex';
+            bar.innerHTML = `
+                <span><strong>${_mergeSel.size}</strong> companies selected</span>
+                <button class="btn btn-secondary btn-sm" onclick="openMergeModal()" style="background:white;color:var(--bmp-green);font-weight:600">Merge →</button>
+                <button class="btn btn-secondary btn-sm" onclick="clearMergeSelection()" style="background:transparent;color:white;border:1px solid white">Clear</button>
+            `;
+        }
+
+        function clearMergeSelection() {
+            _mergeSel.clear();
+            document.querySelectorAll('.merge-checkbox').forEach(cb => { cb.checked = false; });
+            _renderMergeBar([]);
+        }
+
+        async function openMergeModal() {
+            if (_mergeSel.size < 2) return;
+            // Pull full company info — prefer the cached objects on the rendered container,
+            // fall back to API for anything not present
+            const ids = Array.from(_mergeSel);
+            const containers = document.querySelectorAll('[id$="-companies"], #all-companies, #search-results');
+            const cache = {};
+            for (const c of containers) Object.assign(cache, c._companiesById || {});
+            const companies = await Promise.all(ids.map(async id => {
+                if (cache[id]) return cache[id];
+                const full = await api(`/api/companies/${id}/full`);
+                return full ? { id: full.id, name: full.name, city: full.city, state: full.state, website: full.website, phone: full.phone, status: full.status } : { id, name: `(unknown #${id})` };
+            }));
+
+            const root = document.getElementById('modal-root');
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:600px">
+                        <h3 style="margin:0 0 8px">Merge ${companies.length} companies</h3>
+                        <p style="font-size:12px;color:#666;margin-bottom:12px">Pick the company to <strong>keep</strong>. Contacts, deals, activities, sequences, calls, page-views, and tasks from the others will be re-pointed to this company. The duplicates are then deleted.</p>
+                        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px">
+                            ${companies.map((c, i) => `
+                                <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid #ddd;border-radius:6px;cursor:pointer;background:#fafafa">
+                                    <input type="radio" name="merge-keep" value="${c.id}" ${i === 0 ? 'checked' : ''}>
+                                    <div style="flex:1">
+                                        <div style="font-weight:600">${escapeHtml(c.name || '(unnamed)')}</div>
+                                        <div style="font-size:11px;color:#888">
+                                            ${c.city ? escapeHtml(c.city) : ''}${c.state ? ', ' + escapeHtml(c.state) : ''}
+                                            ${c.website ? ' · ' + escapeHtml(c.website.replace(/^https?:\/\//,'').slice(0,40)) : ''}
+                                            ${c.phone ? ' · ' + escapeHtml(c.phone) : ''}
+                                            · status: <code>${escapeHtml(c.status || 'unknown')}</code>
+                                        </div>
+                                    </div>
+                                </label>
+                            `).join('')}
+                        </div>
+                        <div style="font-size:11px;color:#888;background:#fdf6e3;border-left:3px solid var(--bmp-orange);padding:8px 10px;border-radius:4px;margin-bottom:12px">
+                            ⚠️ This cannot be undone. Empty fields on the kept company will be backfilled from the others (e.g. linkedin_url, phone) but populated fields on the kept one are NOT overwritten.
+                        </div>
+                        <div class="modal-actions" style="display:flex;gap:8px;justify-content:flex-end">
+                            <button class="btn btn-secondary" onclick="document.getElementById('modal-root').innerHTML=''">Cancel</button>
+                            <button class="btn btn-danger" id="confirm-merge-btn" onclick="confirmMerge()">Merge</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function confirmMerge() {
+            const keepId = parseInt((document.querySelector('input[name="merge-keep"]:checked') || {}).value, 10);
+            if (!keepId) { toast('Pick a company to keep'); return; }
+            const mergeFromIds = Array.from(_mergeSel).filter(id => id !== keepId);
+            if (mergeFromIds.length === 0) { toast('No duplicates to merge'); return; }
+
+            const btn = document.getElementById('confirm-merge-btn');
+            if (btn) { btn.disabled = true; btn.textContent = 'Merging…'; }
+
+            const data = await api('/api/companies/merge', {
+                method: 'POST',
+                body: JSON.stringify({ keep_id: keepId, merge_from_ids: mergeFromIds }),
+            });
+
+            if (data) {
+                const counts = data.repoint_counts || {};
+                const moved = Object.entries(counts).filter(([_, n]) => n > 0).map(([t, n]) => `${n} ${t}`).join(', ') || 'no child rows';
+                toast(`✓ Merged ${data.merged_count} into ${escapeHtml(data.kept_name)} — re-pointed: ${moved}`);
+                document.getElementById('modal-root').innerHTML = '';
+                clearMergeSelection();
+                // Refresh whichever list is currently visible
+                if (typeof loadCompanies === 'function') loadCompanies('all');
+            }
+            if (btn) { btn.disabled = false; btn.textContent = 'Merge'; }
         }
 
         // enrichCompany is defined later as a thin wrapper around enrichContactsFromCompany;
@@ -2373,6 +2494,7 @@
                 imessage_sent: '💬', imessage_received: '💬', imessage_read: '👁️',
                 sms_sent: '📱', sms_received: '📱', sms_opt_out: '🛑', sms_opt_in: '✅',
                 hot_lead: '🔥', sequence_step_skipped: '⏭️',
+                company_merged: '🔀',
             };
             return items.map(a => {
                 _callPanels[a.id] = a;  // stash for later expand

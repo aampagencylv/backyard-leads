@@ -1102,3 +1102,140 @@ def _summarize(analysis) -> str:
     if problems:
         summary += f"Top issue: {problems[0]['detail']}"
     return summary
+
+
+# ============================================================
+# Merge companies — combine duplicates into one canonical record
+# ============================================================
+
+class MergeCompaniesRequest(BaseModel):
+    keep_id: int
+    merge_from_ids: list[int]
+
+
+# Tables that have a company_id FK we need to re-point during a merge.
+# (Static list — adding a new table requires updating this. Documented in the
+# model file: Activity, Contact, Deal, GeneratedEmail, PageView, Task,
+# TrackingLink. Plus the company_tags association.)
+_MERGE_REPOINT_TABLES = ["activities", "contacts", "deals", "generated_emails", "page_views", "tasks", "tracking_links"]
+
+
+@router.post("/merge")
+async def merge_companies(
+    req: MergeCompaniesRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Merge one or more companies into a kept company.
+
+    What happens:
+      1. All child rows on the merge-from companies are re-pointed to keep_id
+         (Activities, Contacts, Deals, GeneratedEmails, Tasks, TrackingLinks,
+         PageViews — everything with a company_id FK).
+      2. Tags from the merged-from companies are unioned onto the kept one.
+      3. Empty fields on the kept company are backfilled from the first
+         merge-from row that has a non-empty value (linkedin_url, phone,
+         address bits, problems_found, etc.). Non-empty kept fields are NOT
+         overwritten — kept wins on conflict.
+      4. The merged-from company rows are deleted.
+      5. An Activity row is logged on the kept company recording the merge.
+
+    Idempotent against re-runs: if you merge A+B → A and call again, A is
+    unchanged (B no longer exists)."""
+    from sqlalchemy import text as sql_text
+
+    if req.keep_id in req.merge_from_ids:
+        raise HTTPException(status_code=400, detail="keep_id can't also appear in merge_from_ids")
+    if not req.merge_from_ids:
+        raise HTTPException(status_code=400, detail="Pass at least one merge_from_id")
+
+    keep = (await db.execute(select(Company).where(Company.id == req.keep_id))).scalar_one_or_none()
+    if not keep:
+        raise HTTPException(status_code=404, detail="keep_id company not found")
+
+    merge_from = (await db.execute(select(Company).where(Company.id.in_(req.merge_from_ids)))).scalars().all()
+    if len(merge_from) != len(req.merge_from_ids):
+        found = {c.id for c in merge_from}
+        missing = [i for i in req.merge_from_ids if i not in found]
+        raise HTTPException(status_code=404, detail=f"Some merge_from_ids not found: {missing}")
+
+    # Backfill empty fields on the kept company from the merge-from rows.
+    # Only nullable string/text fields — booleans + counts + json blobs we
+    # leave alone; the kept row's values are authoritative.
+    backfill_fields = [
+        "website", "phone", "address", "city", "state", "zip_code",
+        "linkedin_url", "instagram_url", "facebook_url", "twitter_url",
+        "industry", "business_type", "company_description", "specialties",
+        "founded", "company_size", "google_place_id", "problems_found",
+    ]
+    backfilled = []
+    for f in backfill_fields:
+        if not hasattr(keep, f):
+            continue
+        if (getattr(keep, f) or "").strip() if isinstance(getattr(keep, f), str) else getattr(keep, f):
+            continue  # kept already has a value
+        for src in merge_from:
+            v = getattr(src, f, None)
+            if v not in (None, ""):
+                setattr(keep, f, v)
+                backfilled.append(f)
+                break
+
+    # Re-point all child tables to keep_id (raw SQL — single round-trip per table)
+    repoint_counts: dict[str, int] = {}
+    for tbl in _MERGE_REPOINT_TABLES:
+        # Use IN-clause; SQLite handles up to 999 params per statement, plenty.
+        placeholders = ",".join(f":id{i}" for i in range(len(req.merge_from_ids)))
+        params = {"keep": req.keep_id, **{f"id{i}": v for i, v in enumerate(req.merge_from_ids)}}
+        result = await db.execute(
+            sql_text(f"UPDATE {tbl} SET company_id = :keep WHERE company_id IN ({placeholders})"),
+            params,
+        )
+        repoint_counts[tbl] = result.rowcount or 0
+
+    # Union tags via the association table — same IN-clause pattern, but
+    # tags from merge-from rows that already exist on the kept company
+    # would violate the (company_id, tag_id) PK. Use INSERT OR IGNORE.
+    placeholders = ",".join(f":id{i}" for i in range(len(req.merge_from_ids)))
+    params = {"keep": req.keep_id, **{f"id{i}": v for i, v in enumerate(req.merge_from_ids)}}
+    await db.execute(
+        sql_text(f"""
+            INSERT OR IGNORE INTO company_tags (company_id, tag_id)
+            SELECT :keep, tag_id FROM company_tags WHERE company_id IN ({placeholders})
+        """),
+        params,
+    )
+    await db.execute(
+        sql_text(f"DELETE FROM company_tags WHERE company_id IN ({placeholders})"),
+        {f"id{i}": v for i, v in enumerate(req.merge_from_ids)},
+    )
+
+    # Now safe to delete the merged-from company rows
+    deleted_names = [c.name for c in merge_from]
+    for src in merge_from:
+        await db.delete(src)
+
+    # Audit trail
+    db.add(Activity(
+        company_id=keep.id,
+        user_id=user.id,
+        activity_type="company_merged",
+        content=f"Merged {len(merge_from)} duplicate(s) into this company: {', '.join(deleted_names)}",
+        metadata_json=json.dumps({
+            "merged_from_ids": req.merge_from_ids,
+            "merged_from_names": deleted_names,
+            "repoint_counts": repoint_counts,
+            "backfilled_fields": backfilled,
+        }),
+    ))
+
+    await db.commit()
+    await db.refresh(keep)
+    return {
+        "kept_id": keep.id,
+        "kept_name": keep.name,
+        "merged_count": len(merge_from),
+        "merged_names": deleted_names,
+        "repoint_counts": repoint_counts,
+        "backfilled_fields": backfilled,
+    }
