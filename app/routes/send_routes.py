@@ -514,6 +514,19 @@ async def update_profile(
 # Resend webhook — auto-pause on reply, auto-qualify on click
 # ============================================================
 
+async def _advance_deal_from_sequence(db: AsyncSession, company_id: int) -> None:
+    """When a prospect engages, move their deal from in_sequence to prospecting with package value."""
+    from app.routes.deal_routes import package_monthly_value, STAGE_PROBABILITY
+    deals = (await db.execute(
+        select(Deal).where(Deal.company_id == company_id, Deal.stage == "in_sequence")
+    )).scalars().all()
+    for deal in deals:
+        deal.stage = "prospecting"
+        deal.probability = STAGE_PROBABILITY.get("prospecting", 10)
+        if deal.package and deal.value == 0:
+            deal.value = package_monthly_value(deal.package)
+
+
 async def _create_engagement_task(
     db: AsyncSession,
     company: Company,
@@ -638,6 +651,7 @@ async def resend_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         if open_count >= 3 and company.status in ("sequencing", "contacted"):
             company.status = "qualified"
             company.enrichment_summary = summary + " [Auto-qualified: opened 3+ times]"
+            await _advance_deal_from_sequence(db, company.id)
             await _create_engagement_task(db, company, int(contact_id) if contact_id else None,
                                           reason=f"opened {open_count}× recently")
         else:
@@ -652,6 +666,7 @@ async def resend_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         if company.status in ("sequencing", "contacted"):
             company.status = "qualified"
             company.enrichment_summary = (company.enrichment_summary or "") + " [Auto-qualified: clicked link]"
+            await _advance_deal_from_sequence(db, company.id)
         if contact_id:
             db.add(Activity(company_id=company_id, contact_id=int(contact_id),
                             activity_type="email_clicked", content="Email link clicked"))

@@ -19,6 +19,7 @@ router = APIRouter(prefix="/api", tags=["deals"])
 
 # Stage probability defaults
 STAGE_PROBABILITY = {
+    "in_sequence":  0,   # No value until they engage
     "prospecting": 10,
     "qualified":   25,
     "proposal":    50,
@@ -27,7 +28,7 @@ STAGE_PROBABILITY = {
     "closed_lost": 0,
 }
 
-PIPELINE_STAGES = ["prospecting", "qualified", "proposal", "negotiation", "closed_won", "closed_lost"]
+PIPELINE_STAGES = ["in_sequence", "prospecting", "qualified", "proposal", "negotiation", "closed_won", "closed_lost"]
 
 # BMP Packages
 BMP_PACKAGES = {

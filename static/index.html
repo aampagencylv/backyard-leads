@@ -2046,7 +2046,7 @@
         }
 
         // ============ Pipeline kanban ============
-        const PIPELINE_STAGES = ['prospecting','qualified','proposal','negotiation','closed_won','closed_lost'];
+        const PIPELINE_STAGES = ['in_sequence','prospecting','qualified','proposal','negotiation','closed_won','closed_lost'];
         async function loadPipeline() {
             const data = await api('/api/pipeline');
             if (!data) return;
