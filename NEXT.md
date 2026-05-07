@@ -290,6 +290,56 @@ PATCH /api/users/{id}/twilio            (admin: assign number to rep)
 GET  /api/dashboard/calls               (per-rep daily call stats)
 ```
 
+### Sequence engine — Call steps + conditional skip logic
+**Note from Steve, mid-Twilio build:** once Twilio is fully wired
+(through Phase 6 / SMS), come back here and extend the sequence
+engine.
+
+**1. Call steps (creates a BDR task, doesn't auto-dial)**
+New `type='call'` step. When the sequence reaches it, we create a
+Task on the assigned BDR with contact info + a suggested talk-track.
+Sequence advances when the BDR completes the call (via dialer Save
+& Close OR by manually marking the Task complete).
+
+Default cadence: 2-3 call steps across a 21-day sequence. Rough
+draft below — exact spacing to be refined when we sit down to build:
+  Day 0:  Email #1   (cold)
+  Day 1:  Call #1     (warm follow-up after the email)
+  Day 3:  Email #2   (follow-up)
+  Day 5:  LinkedIn    (skip if no URL — see #2)
+  Day 7:  Call #2
+  Day 10: Email #3
+  Day 14: Call #3     (final attempt)
+  Day 21: Email #4   (breakup)
+
+**2. Conditional step skipping** — general "skip if missing" logic:
+  - LinkedIn step       → skip if `contact.linkedin_url` is null
+  - SMS step (Phase 6)  → skip if `contact.phone` is null
+  - Call step           → skip if `contact.phone` is null
+                          OR contact has a do_not_call flag set
+  - Email step          → skip if `contact.email` is null
+                          OR `contact.unsubscribed_at` is set
+                          (already partially handled)
+
+Implementation sketch:
+  - `GeneratedEmail` / sequence-step rows gain a `skip_if` column
+    (JSON array: `["no_linkedin"]`, `["no_phone"]`, etc.).
+  - Sequence executor checks contact state at runtime; if the
+    condition matches, skip and log an Activity ("Skipped LinkedIn
+    step — no URL on file") instead of failing.
+  - Generation-time logic should also decide what to include
+    initially. Cleanest: omit the LinkedIn step entirely when there's
+    no URL at sequence-creation time, so the rep doesn't see a
+    "skipped" entry on every cadence cycle.
+  - Existing LinkedIn-step-creation needs updating to apply this.
+
+**3. Multi-channel default template**
+Once #1 + #2 are in place, swap the current default sequence for
+the multi-channel one above. Keep an email-only "minimal" template
+option for low-priority contacts or follow-on outreach.
+
+---
+
 ### 🔥 Website Visitor Tracking (email-to-site intelligence)
 
 Track when a prospect clicks through from an email to backyardmarketingpros.com, then track every page they visit. Auto-alert BDRs when a prospect is actively browsing.
