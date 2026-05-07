@@ -24,6 +24,7 @@ from app.routes import (
     sequence_routes,
     tracking_routes,
     notification_routes,
+    audit_routes,
 )
 
 
@@ -91,6 +92,7 @@ app.include_router(blooio_routes.router)
 app.include_router(sequence_routes.router)
 app.include_router(tracking_routes.router)
 app.include_router(notification_routes.router)
+app.include_router(audit_routes.router)
 
 # Serve static frontend
 app.mount("/static", StaticFiles(directory="static"), name="static")

@@ -507,3 +507,25 @@ class CampaignLog(Base):
     company_id = Column(Integer, nullable=True)
     contact_id = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class AuditReportModel(Base):
+    """Stored AI Findability Audit report for a company."""
+    __tablename__ = "audit_reports"
+
+    id = Column(Integer, primary_key=True, index=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False, unique=True)
+    token = Column(String(32), unique=True, index=True, nullable=False)
+    html_content = Column(Text, nullable=False)
+
+    # Scores for quick display without parsing HTML
+    ai_findability_score = Column(Integer, default=0)
+    content_citability_score = Column(Integer, default=0)
+    local_seo_score = Column(Integer, default=0)
+    overall_grade = Column(String(2), default="")
+    findings_json = Column(Text, nullable=True)  # JSON array of top findings
+
+    # Tracking
+    view_count = Column(Integer, default=0)
+    last_viewed_at = Column(DateTime, nullable=True)
+    generated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
