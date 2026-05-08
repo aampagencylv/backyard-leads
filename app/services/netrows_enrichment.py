@@ -426,9 +426,46 @@ class CompanyEnrichment:
     website: Optional[str] = None
 
 
-async def enrich_company_by_domain(domain: str, api_key: str) -> Optional[CompanyEnrichment]:
+def _name_overlap_score(a: str, b: str) -> float:
+    """Token-overlap ratio between two company names. Returns 0-1.
+    Strips punctuation + entity suffixes (LLC, Inc, etc.) and compares
+    the remaining significant tokens via Jaccard set overlap.
+      'Smith Pools' vs 'Smith Pools, LLC'           → 1.0
+      'Proficient Patios' vs 'Proficient Audio'      → 0.25
+      'Backyard Marketing' vs 'Backyard Marketing Pros' → 0.67
     """
-    Look up company info by domain via Netrows.
+    import re as _re
+    def _tokens(s: str) -> set[str]:
+        s = (s or "").lower()
+        s = _re.sub(r"[^a-z0-9 ]", " ", s)
+        words = [w for w in s.split() if w and w not in {
+            "llc", "inc", "corp", "corporation", "company", "co", "ltd",
+            "lp", "llp", "pllc", "the", "a", "an", "and", "&", "of",
+        }]
+        return set(words)
+    ta, tb = _tokens(a), _tokens(b)
+    if not ta or not tb:
+        return 0.0
+    inter = len(ta & tb)
+    union = len(ta | tb)
+    return inter / union if union else 0.0
+
+
+async def enrich_company_by_domain(
+    domain: str,
+    api_key: str,
+    expected_name: Optional[str] = None,
+) -> Optional[CompanyEnrichment]:
+    """Look up company info by domain via Netrows.
+
+    Validation: Netrows' database occasionally maps a domain to the
+    wrong company (e.g. proficientpatios.com → "Proficient Audio Systems").
+    We reject the response when:
+      - the returned company.website is set + its domain doesn't match
+        our input domain, OR
+      - expected_name is supplied + the token-overlap score with the
+        returned name is below 0.4
+
     Step 1: /companies/by-domain (1 credit) — gets basic info + LinkedIn username
     Step 2: /companies/details (1 credit) — gets full profile if we got a username
     """
@@ -450,6 +487,33 @@ async def enrich_company_by_domain(domain: str, api_key: str) -> Optional[Compan
             if r.status_code == 200:
                 data = r.json() or {}
                 company = data.get("data") or data
+
+                # ---- Validation: website-domain match ----
+                returned_website = (company.get("website") or "").strip()
+                if returned_website:
+                    returned_domain = _clean_domain(returned_website)
+                    if returned_domain and returned_domain != domain:
+                        # Subdomain forgiveness: 'shop.acme.com' ~ 'acme.com'
+                        if not (returned_domain.endswith("." + domain) or domain.endswith("." + returned_domain)):
+                            import logging as _logging
+                            _logging.getLogger("bmp").warning(
+                                f"Netrows by-domain mismatch: input={domain} → returned website={returned_website} "
+                                f"(name={company.get('name')!r}). Rejecting to avoid corrupting company record."
+                            )
+                            return None
+
+                # ---- Validation: name similarity (when caller supplied expected_name) ----
+                returned_name = company.get("name") or ""
+                if expected_name and returned_name:
+                    score = _name_overlap_score(expected_name, returned_name)
+                    if score < 0.4:
+                        import logging as _logging
+                        _logging.getLogger("bmp").warning(
+                            f"Netrows name mismatch: expected={expected_name!r} → returned={returned_name!r} "
+                            f"(token-overlap={score:.2f}, threshold=0.4). Rejecting."
+                        )
+                        return None
+
                 result.name = company.get("name")
                 raw_ec = company.get("employeeCount") or company.get("employee_count")
                 if isinstance(raw_ec, int):

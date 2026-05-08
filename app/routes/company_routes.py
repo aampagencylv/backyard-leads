@@ -1059,7 +1059,7 @@ async def enrich_company(
     # Company enrichment — LinkedIn company profile
     if await get_netrows_api_key(db):
         try:
-            ce = await netrows_company_enrich(company.website, await get_netrows_api_key(db))
+            ce = await netrows_company_enrich(company.website, await get_netrows_api_key(db), expected_name=company.name)
             if ce:
                 if ce.employee_count:
                     company.employee_count = ce.employee_count
@@ -1643,6 +1643,43 @@ async def refresh_reviews(
         "owner_replies_count": owner_replies,
         "fetched_at": company.reviews_fetched_at.isoformat(),
     }
+
+
+@router.post("/{company_id}/clear-enrichment")
+async def clear_company_enrichment(
+    company_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Clear Netrows-derived company-level enrichment fields so the next
+    enrich call rebuilds cleanly. Used to recover from cases where
+    Netrows mapped a domain to the wrong company (e.g. proficientpatios.com
+    → 'Proficient Audio'). Doesn't touch contacts, deals, sequences, or
+    website-scrape data — just the fields that come from Netrows
+    /companies/by-domain + /companies/details + /companies/insights."""
+    company = (await db.execute(select(Company).where(Company.id == company_id))).scalar_one_or_none()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    from app.scoping import check_company_access
+    if not check_company_access(company, user):
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    cleared = []
+    for field_name in (
+        "employee_count", "company_size", "industry", "founded",
+        "company_description", "specialties", "follower_count",
+        "linkedin_url", "company_insights_json", "insights_fetched_at",
+    ):
+        if getattr(company, field_name) not in (None, "", 0):
+            setattr(company, field_name, None)
+            cleared.append(field_name)
+    db.add(Activity(
+        company_id=company.id, user_id=user.id,
+        activity_type="enrichment_cleared",
+        content=f"Cleared Netrows-derived fields ({len(cleared)}): {', '.join(cleared) or 'none'}",
+    ))
+    await db.commit()
+    return {"cleared_fields": cleared, "message": "Re-enrich now to rebuild from scratch"}
 
 
 @router.post("/{company_id}/refresh-instagram-posts")

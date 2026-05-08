@@ -509,7 +509,7 @@ async def _execute_batch(campaign_id: int, db: AsyncSession, user: User):
                 nr_key = await get_netrows_api_key(db)
                 if nr_key:
                     try:
-                        ce = await netrows_company_enrich(company.website, nr_key)
+                        ce = await netrows_company_enrich(company.website, nr_key, expected_name=company.name)
                         if ce and ce.employee_count:
                             company.employee_count = ce.employee_count
                         if ce and ce.industry:
@@ -801,7 +801,7 @@ async def _process_business_through_pipeline(
             nr_key = await get_netrows_api_key(db)
             if nr_key:
                 try:
-                    ce = await netrows_company_enrich(company.website, nr_key)
+                    ce = await netrows_company_enrich(company.website, nr_key, expected_name=company.name)
                     if ce and ce.employee_count:
                         company.employee_count = ce.employee_count
                     if ce and ce.industry:

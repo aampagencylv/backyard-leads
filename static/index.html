@@ -3031,6 +3031,7 @@
                     <div style="display:flex;gap:8px;align-items:center">
                         <span class="status-badge status-${d.status}" style="font-size:13px;padding:4px 12px">${d.status}</span>
                         ${d.website ? `<button class="btn btn-secondary btn-sm" onclick="enrichContactsFromCompany(${d.id})">${d.enriched ? 'Re-Enrich' : 'Enrich'}</button>` : ''}
+                        ${d.enriched ? `<button class="btn btn-secondary btn-sm" onclick="clearCompanyEnrichment(${d.id})" title="Clear Netrows-derived fields if they look wrong, then Re-Enrich">🧹 Clear & Re-Enrich</button>` : ''}
                         ${d.enriched ? `<button class="btn btn-primary btn-sm" onclick="generateAuditReport(${d.id})" id="audit-btn-${d.id}">AI Findability Audit</button>` : ''}
                     </div>
                 </div>
@@ -4044,6 +4045,16 @@
                 if (data.url) window.open(data.url, '_blank');
                 openCompanyDetail(companyId);
             }
+        }
+
+        async function clearCompanyEnrichment(companyId) {
+            if (!confirm('Clear all Netrows-derived enrichment fields (employees, industry, founded, description, specialties, LinkedIn) so we can re-enrich cleanly? Contacts + deals + sequences will not be touched.')) return;
+            const data = await api(`/api/companies/${companyId}/clear-enrichment`, { method: 'POST' });
+            if (!data) return;
+            toast(`Cleared ${data.cleared_fields.length} field${data.cleared_fields.length === 1 ? '' : 's'} — running fresh enrich…`);
+            await api(`/api/companies/${companyId}/enrich`, { method: 'POST' });
+            toast('Re-enrich complete');
+            openCompanyDetail(companyId);
         }
 
         async function refreshContactLinkedInProfile(contactId) {
