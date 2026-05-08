@@ -21,6 +21,13 @@ from app.config import settings
 router = APIRouter(tags=["audit"])
 
 
+def _const_eq(a: str, b: str) -> bool:
+    """Constant-time string compare. Use for webhook-secret checks so
+    timing differences don't leak the secret one byte at a time."""
+    import hmac
+    return hmac.compare_digest((a or "").encode(), (b or "").encode())
+
+
 # ============================================================
 # Generate report for a company (BDR action)
 # ============================================================
@@ -440,17 +447,32 @@ async def iclosed_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     """Receive booking-confirmed events from iClosed.
 
     Configure in iClosed settings:
-      Webhook URL:  {public_url}/api/iclosed/webhook
+      Webhook URL:  {public_url}/api/iclosed/webhook?t=<iclosed_webhook_secret>
       Events:       booking.created (or whatever iClosed names it)
 
+    Auth: shared-secret token via ?t=<secret> query param. When
+    settings.iclosed_webhook_secret is empty, no check is performed (dev
+    convenience). In prod, set ICLOSED_WEBHOOK_SECRET in .env and append
+    ?t=<value> to the webhook URL inside iClosed.
+
     Match strategy: iClosed posts the booked email + scheduled time. We
-    look up the most recent unconfirmed AuditReport whose booked_email
-    matches (set by /unlock above) OR whose company has a contact with
-    that email. First match wins.
+    look up the most recent AuditReport whose booked_email matches (set
+    by /unlock above) OR whose company has a contact with that email.
+    First match wins.
 
     Logs a 'meeting_booked' Activity, creates a BDR task with the actual
     time, advances any qualified deals, and stamps report.booked_at.
     """
+    # Shared-secret guard. Defense in depth — even if the URL leaks via
+    # browser history / referrer / accidental commit, the secret is what
+    # makes spoofed bookings non-trivial.
+    expected_secret = (settings.iclosed_webhook_secret or "").strip()
+    if expected_secret:
+        provided = (request.query_params.get("t") or "").strip()
+        if not _const_eq(provided, expected_secret):
+            from fastapi import HTTPException as _HE
+            raise _HE(status_code=401, detail="bad webhook token")
+
     import json as _json
     raw = await request.body()
     try:

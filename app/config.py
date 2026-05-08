@@ -14,6 +14,12 @@ class Settings(BaseSettings):
     dataforseo_password: str = ""
     iclosed_api_key: str = ""  # ⚠️ Expires May 2027 — rotate annually
     iclosed_booking_url: str = "https://app.iclosed.io/e/backyardmarketingpros/discovery-call"
+    # Shared-secret token appended to the iClosed webhook URL as ?t=<secret>.
+    # Without this set, the webhook is open to anyone who guesses the URL.
+    # When set, requests without ?t=<matching value> get a 401. Configure
+    # in iClosed by setting the webhook URL to:
+    #   https://prospector.backyardmarketingpros.com/api/iclosed/webhook?t=<secret>
+    iclosed_webhook_secret: str = ""
     resend_api_key: str = ""
     resend_webhook_secret: str = ""
     send_domain: str = "go.backyardmarketingpros.com"

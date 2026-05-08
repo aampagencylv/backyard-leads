@@ -339,6 +339,11 @@ def render_report_html(report: AuditReport, token: str, public_url: str = "") ->
     """
 
     compare_url = f"{public_url}/report/{token}/compare" if public_url else f"/report/{token}/compare"
+    # Direct iClosed booking link for the final CTA — same widget as the
+    # competitor-gate page, but no gating; "ready to talk" prospects can
+    # book straight from the audit without clicking through the comparison.
+    from app.config import settings as _settings
+    booking_url = _settings.iclosed_booking_url or "https://app.iclosed.io/e/backyardmarketingpros/discovery-call"
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -376,10 +381,13 @@ def render_report_html(report: AuditReport, token: str, public_url: str = "") ->
     <div class="container">
         <div style="border-radius:12px;overflow:hidden;margin-bottom:24px;box-shadow:0 4px 16px rgba(0,0,0,0.1)">
             <img src="/static/report-banner.jpg" alt="Backyard Marketing Pros" style="width:100%;display:block">
-            <div style="background:linear-gradient(135deg, #0D3B13 0%, #1B5E20 100%);color:white;padding:32px 40px">
-                <h1 style="font-size:28px;margin-bottom:8px">AI Findability Report</h1>
-                <p style="color:rgba(255,255,255,0.8);font-size:16px;margin-bottom:4px">{_esc(report.company_name)} &middot; {_esc(report.city)}{', ' + _esc(report.state) if report.state else ''}</p>
-                <p style="color:rgba(255,255,255,0.5);font-size:12px">Generated {report.generated_at}</p>
+            <div style="background:linear-gradient(135deg, #0D3B13 0%, #1B5E20 100%);color:white;padding:32px 40px;display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap">
+                <div>
+                    <h1 style="font-size:28px;margin-bottom:8px">AI Findability Report</h1>
+                    <p style="color:rgba(255,255,255,0.8);font-size:16px;margin-bottom:4px">{_esc(report.company_name)} &middot; {_esc(report.city)}{', ' + _esc(report.state) if report.state else ''}</p>
+                    <p style="color:rgba(255,255,255,0.5);font-size:12px">Generated {report.generated_at}</p>
+                </div>
+                <a href="{_esc(booking_url)}" style="display:inline-block;background:#FF723F;color:white;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.2)">📅 Schedule a Discovery Call</a>
             </div>
         </div>
 
@@ -516,14 +524,14 @@ def render_report_html(report: AuditReport, token: str, public_url: str = "") ->
             </table>
         </div>
 
-        <!-- Final CTA -->
+        <!-- Final CTA — direct iClosed booking -->
         <div class="section" style="text-align:center;padding:32px">
             <h2 style="border:none;text-align:center">Ready to get found by AI?</h2>
             <p style="font-size:14px;color:#666;margin:12px 0 20px">
                 We help {_esc(report.business_type or 'backyard')} professionals get discovered by
-                ChatGPT, Google AI, and Perplexity. Let's fix what we found.
+                ChatGPT, Google AI, and Perplexity. Pick a time below — we'll walk through what we found and the fastest fixes.
             </p>
-            <a href="https://backyardmarketingpros.com/contact" style="display:inline-block;background:#E65100;color:white;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px">Let's Talk</a>
+            <a href="{_esc(booking_url)}" style="display:inline-block;background:#E65100;color:white;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px">📅 Schedule a Discovery Call</a>
         </div>
 
         <div class="footer">

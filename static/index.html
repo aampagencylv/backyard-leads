@@ -706,7 +706,11 @@
                     <div class="form-group"><label>Last Name</label><input type="text" id="settings-last-name" placeholder="Edwards"></div>
                     <div class="form-group"><label>Nickname / Title Line</label><input type="text" id="settings-nickname" placeholder="Founder &amp; Chief Marketing Pro"></div>
                     <div class="form-group"><label>Mobile Phone</label><input type="text" id="settings-phone-number" placeholder="702-555-1234"></div>
-                    <div class="form-group"><label>Scheduling Link</label><input type="text" id="settings-scheduling-url" placeholder="https://calendly.com/your-link"></div>
+                    <div class="form-group">
+                        <label>Scheduling Link <span style="font-weight:400;color:#888;font-size:11px">(leave blank to use the BMP team iClosed link)</span></label>
+                        <input type="text" id="settings-scheduling-url" placeholder="Leave blank for default BMP iClosed link, or paste your own">
+                        <button type="button" class="btn btn-sm" style="margin-top:6px;font-size:12px;padding:4px 10px" onclick="document.getElementById('settings-scheduling-url').value='https://app.iclosed.io/e/backyardmarketingpros/discovery-call'">Use team iClosed link</button>
+                    </div>
                     <div style="background:#f5f7f5;border-radius:8px;padding:12px;margin:16px 0;font-size:13px">
                         <div><strong>Sends from:</strong> <span id="settings-send-from" style="color:var(--bmp-green)"></span></div>
                         <div><strong>Replies go to:</strong> <span id="settings-reply-to" style="color:var(--bmp-green)"></span></div>

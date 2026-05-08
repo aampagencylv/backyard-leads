@@ -16,5 +16,25 @@ async def get_db():
 
 
 async def init_db():
+    """Create new tables (idempotent) + run column-add migrations.
+
+    SQLAlchemy's create_all only creates tables that don't exist; it does
+    NOT alter existing tables to add new columns. For column-additions we
+    have idempotent migrate_*.py scripts. Most are wired into systemd
+    ExecStartPre on the VPS, but recent ones get chained here too so a
+    fresh checkout works without operator intervention. Each migration is
+    idempotent (PRAGMA table_info check before ALTER), so running them
+    twice is harmless.
+    """
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # Recent column-additions — chained here as a safety net even when
+    # the VPS systemd unit also runs them.
+    try:
+        from scripts.migrate_audit_booked import main as _m_audit_booked
+        await _m_audit_booked()
+    except Exception:
+        # Migrations log their own outcome; don't crash startup if one
+        # fails — the app should still come up so the operator can debug.
+        pass
