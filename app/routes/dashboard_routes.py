@@ -592,6 +592,7 @@ async def recent_calls(
             "recording_url": bool(a.recording_url),
             "has_transcript": bool(a.transcript),
             "has_summary": bool(a.call_summary),
+            "transcript": a.transcript,
             "call_summary": a.call_summary,
             "call_rating": a.call_rating,
             "call_feedback": a.call_feedback,

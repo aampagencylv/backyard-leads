@@ -329,6 +329,9 @@
     </style>
     <!-- Twilio Voice JS SDK v2 — for click-to-call browser dialer -->
     <script src="https://unpkg.com/@twilio/voice-sdk@2.10.2/dist/twilio.min.js" defer></script>
+    <!-- wavesurfer.js — waveform playback for call recordings (CallRail-style).
+         UMD build, ~50KB gzipped, lazy-decoded so page load is unaffected. -->
+    <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.min.js" defer></script>
 </head>
 <body>
     <!-- ===================== AUTH SCREEN ===================== -->
@@ -1759,6 +1762,10 @@
             const data = await api('/api/dashboard/recent-calls?limit=10');
             const el = document.getElementById('recent-calls-widget');
             if (!el || !data) return;
+
+            // Stash full call records so toggleCallExpand can render
+            // transcript / summary panels without an extra fetch.
+            data.forEach(c => { _callPanels[c.id] = c; });
 
             const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.role === 'super_admin');
 
@@ -3568,20 +3575,34 @@
             panel.style.display = 'block';
         }
 
+        // wavesurfer.js instances by activity id. We hold a reference so
+        // expand/collapse can destroy the previous instance and reclaim
+        // its audio decoding memory.
+        const _wavesurfers = {};
+
         async function toggleCallExpand(activityId, view) {
             const panel = document.getElementById('call-expand-' + activityId);
             if (!panel) return;
-            // If already showing this view, collapse
+            // If already showing this view, collapse + cleanup any active waveform
             if (panel.dataset.view === view && panel.style.display !== 'none') {
                 panel.style.display = 'none';
                 panel.dataset.view = '';
+                if (_wavesurfers[activityId]) {
+                    try { _wavesurfers[activityId].destroy(); } catch(e) {}
+                    delete _wavesurfers[activityId];
+                }
                 return;
+            }
+            // Switching views — destroy any waveform before re-rendering
+            if (_wavesurfers[activityId]) {
+                try { _wavesurfers[activityId].destroy(); } catch(e) {}
+                delete _wavesurfers[activityId];
             }
             panel.dataset.view = view;
             panel.style.display = 'block';
             const a = _callPanels[activityId] || {};
             if (view === 'audio') {
-                panel.innerHTML = `<audio controls preload="none" style="width:100%" src="/api/twilio/recording/${activityId}"></audio>`;
+                renderCallWaveform(activityId, panel);
             } else if (view === 'transcript') {
                 if (!a.transcript) { panel.innerHTML = '<p style="font-size:12px;color:#888">Transcript not ready yet.</p>'; return; }
                 panel.innerHTML = `<div style="background:#f9faf9;border-radius:6px;padding:10px 12px;font-size:12px;line-height:1.55;white-space:pre-wrap;max-height:340px;overflow-y:auto">${renderMarkdownLite(a.transcript)}</div>`;
@@ -3589,6 +3610,69 @@
                 if (!a.call_summary) { panel.innerHTML = '<p style="font-size:12px;color:#888">Takeaways not ready yet.</p>'; return; }
                 panel.innerHTML = `<div style="background:#fff5f0;border-left:3px solid var(--bmp-orange);border-radius:6px;padding:12px;font-size:12px;line-height:1.55;max-height:420px;overflow-y:auto">${renderMarkdownLite(a.call_summary)}</div>`;
             }
+        }
+
+        // Render a CallRail-style waveform player for a call recording.
+        // Uses wavesurfer.js (loaded defer'd in the head). If the library
+        // hasn't finished loading yet, we wait briefly and retry — by the
+        // time a user clicks Play the script is virtually always loaded.
+        function renderCallWaveform(activityId, panel, attempt = 0) {
+            if (typeof WaveSurfer === 'undefined') {
+                if (attempt < 20) {
+                    panel.innerHTML = '<p style="font-size:12px;color:#888;padding:10px">Loading audio player…</p>';
+                    setTimeout(() => renderCallWaveform(activityId, panel, attempt + 1), 100);
+                    return;
+                }
+                // Fall back to native audio element if the CDN never loads
+                panel.innerHTML = `<audio controls preload="none" style="width:100%" src="/api/twilio/recording/${activityId}"></audio>`;
+                return;
+            }
+            const playBtnId = `ws-play-${activityId}`;
+            const waveId = `ws-wave-${activityId}`;
+            const timeId = `ws-time-${activityId}`;
+            panel.innerHTML = `
+                <div style="display:flex;align-items:center;gap:10px;background:#fff;border:1px solid #e8e8e8;border-radius:8px;padding:8px 12px;margin-top:4px">
+                    <button id="${playBtnId}" type="button" style="flex-shrink:0;width:34px;height:34px;border:none;border-radius:50%;background:var(--bmp-green,#1B5E20);color:white;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;line-height:1">▶</button>
+                    <div id="${waveId}" style="flex:1;min-width:0;height:50px"></div>
+                    <div id="${timeId}" style="flex-shrink:0;font-size:11px;color:#666;font-variant-numeric:tabular-nums;min-width:80px;text-align:right">--:-- / --:--</div>
+                </div>
+            `;
+            const fmtTime = (s) => {
+                if (!isFinite(s) || s < 0) return '0:00';
+                const m = Math.floor(s / 60);
+                const sec = Math.floor(s % 60);
+                return `${m}:${String(sec).padStart(2, '0')}`;
+            };
+            const ws = WaveSurfer.create({
+                container: '#' + waveId,
+                waveColor: 'rgba(27,94,32,0.45)',
+                progressColor: '#FF723F',
+                cursorColor: 'rgba(0,0,0,0.4)',
+                cursorWidth: 1,
+                height: 50,
+                barWidth: 2,
+                barGap: 1,
+                barRadius: 1,
+                normalize: true,
+                url: `/api/twilio/recording/${activityId}`,
+            });
+            _wavesurfers[activityId] = ws;
+            const playBtn = document.getElementById(playBtnId);
+            const timeEl = document.getElementById(timeId);
+            ws.on('ready', () => {
+                if (timeEl) timeEl.textContent = `0:00 / ${fmtTime(ws.getDuration())}`;
+            });
+            ws.on('timeupdate', (t) => {
+                if (timeEl) timeEl.textContent = `${fmtTime(t)} / ${fmtTime(ws.getDuration())}`;
+            });
+            ws.on('play',   () => { if (playBtn) playBtn.textContent = '⏸'; });
+            ws.on('pause',  () => { if (playBtn) playBtn.textContent = '▶'; });
+            ws.on('finish', () => { if (playBtn) playBtn.textContent = '▶'; });
+            ws.on('error', (e) => {
+                console.error('wavesurfer error', e);
+                panel.innerHTML = `<audio controls preload="none" style="width:100%" src="/api/twilio/recording/${activityId}"></audio>`;
+            });
+            playBtn.onclick = () => ws.playPause();
         }
 
         async function retranscribeCall(activityId) {
