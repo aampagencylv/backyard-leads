@@ -95,7 +95,39 @@ async def get_me(user: User = Depends(get_current_user)):
         "scheduling_url": user.scheduling_url,
         "role": user.role,
         "sending_enabled": user.sending_enabled,
+        "onboarding_step": user.onboarding_step,
     }
+
+
+class UpdateOnboardingRequest(BaseModel):
+    step: int  # 0-10, 99 (skipped), or 100 (completed)
+
+
+@router.patch("/me/onboarding")
+async def update_onboarding(
+    req: UpdateOnboardingRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Save the user's progress through the 10-step product tour.
+    Step values: 0=not started, 1-10=in progress, 99=skipped, 100=completed."""
+    if req.step < 0 or req.step > 100:
+        raise HTTPException(status_code=400, detail="step must be 0-100")
+    user.onboarding_step = req.step
+    await db.commit()
+    return {"onboarding_step": user.onboarding_step}
+
+
+@router.post("/me/onboarding/restart")
+async def restart_onboarding(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Reset onboarding so the tour fires again next login (or immediately if
+    the frontend polls). Used by the 'Restart Tour' button in Settings."""
+    user.onboarding_step = 0
+    await db.commit()
+    return {"onboarding_step": 0}
 
 
 # ============ Admin: User Management ============

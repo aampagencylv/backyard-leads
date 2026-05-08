@@ -31,6 +31,10 @@ class User(Base):
     sending_enabled = Column(Boolean, default=False)
     role = Column(String(20), nullable=False, default="sales_rep")  # super_admin, admin, sales_rep, read_only
 
+    # Guided onboarding tour progress. 0 = not started, N = currently on step N (1-10),
+    # 99 = skipped, 100 = completed. New users auto-start on first login until 99 or 100.
+    onboarding_step = Column(Integer, nullable=False, default=0)
+
     # Twilio Voice — per-rep phone number + SDK identity
     twilio_phone_number = Column(String(40), nullable=True)  # E.164 format, e.g. +17025551234
     twilio_identity = Column(String(80), nullable=True)      # SDK identity, e.g. "bmp_user_3"

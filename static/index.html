@@ -780,6 +780,13 @@
                     <button class="btn btn-primary btn-sm" onclick="enableBrowserNotifications()">🔔 Enable Browser Notifications</button>
                 </div>
 
+                <!-- Product Tour -->
+                <div class="search-box" style="max-width:600px;margin-top:16px">
+                    <h3 style="margin:0 0 6px">Product Tour</h3>
+                    <p style="font-size:12px;color:#888;margin-bottom:10px">10-step walk-through of the platform. Auto-runs on first login for new BDRs; restart any time to refresh your memory or show a teammate.</p>
+                    <button class="btn btn-primary btn-sm" onclick="restartTour()">🧭 Restart Tour</button>
+                </div>
+
                 <!-- Website Visitor Tracking (Phase 2 snippet to embed on bymp.com) -->
                 <div class="search-box" style="max-width:600px;margin-top:16px">
                     <h3 style="margin:0 0 6px">Website Visitor Tracking <span style="font-size:11px;font-weight:400;color:var(--bmp-green)">· active</span></h3>
@@ -1072,6 +1079,11 @@
                     refreshNavBadges();
                     startNotificationPoller();
                     if (user.role === 'admin' || user.role === 'super_admin') initAdminRepFilters();
+                    // Auto-start the product tour for new users — onboarding_step 0 = never seen,
+                    // 99 = skipped, 100 = completed. Anything between starts mid-tour.
+                    if (typeof user.onboarding_step === 'number' && user.onboarding_step < 99) {
+                        setTimeout(() => startTour(Math.max(1, user.onboarding_step)), 1200);
+                    }
                 }
             } catch(e) { logout(); }
         }
@@ -1170,6 +1182,201 @@
                 toast('Permission denied. To enable: click the lock icon in the address bar → Notifications → Allow.');
             }
         }
+
+        // ============================================================
+        // Guided 10-step product tour
+        //
+        // Vanilla JS overlay system — no library dependency. Each step is a
+        // tooltip pinned to a target selector with a spotlight effect (achieved
+        // via 4 absolutely-positioned divs around the target so we don't fight
+        // with z-indexes elsewhere in the app). Progress saved to the API
+        // after each Next click so a refresh resumes mid-tour.
+        // ============================================================
+
+        const TOUR_STEPS = [
+            {
+                target: 'a[onclick*="showPage(\'dashboard\')"]',
+                page: 'dashboard',
+                title: '👋 Welcome to your CRM',
+                text: "This is the Dashboard — your command center. KPIs, today's tasks, hot leads, pipeline by stage, and the activity feed all live here. Let's take a quick tour.",
+            },
+            {
+                target: 'a[onclick*="showPage(\'find\')"]',
+                page: 'dashboard',
+                title: '🔍 Step 2: Find Leads',
+                text: 'Search Google Maps for prospects by industry + location. Filter by review count to find established businesses that probably have a marketing budget.',
+            },
+            {
+                target: 'a[onclick*="showPage(\'companies\')"]',
+                page: 'companies',
+                title: '🏢 Step 3: Companies',
+                text: "Every prospect lives here. Found a good one? Click 'Add to Pipeline' on a company — that one click runs enrichment, finds contacts, generates an audit report, and creates a deal.",
+            },
+            {
+                target: '#all-companies, #companies-list, .company-card',
+                page: 'companies',
+                title: '🗂 Step 4: Company Detail',
+                text: 'Click any company name to see its full record: enrichment data on the right, contacts + sequences in the middle, full timeline of every interaction. Three columns, no clicks to dig.',
+            },
+            {
+                target: '#all-companies, #companies-list',
+                page: 'companies',
+                title: '📨 Step 5: Sequences',
+                text: 'Each contact gets a 30-day multi-channel cadence: email + LinkedIn + iMessage + scheduled calls. Steps auto-fire on schedule. Replies, voicemails, and call-connects auto-pause the sequence so you never look spammy.',
+            },
+            {
+                target: 'a[onclick*="showPage(\'pipeline\')"]',
+                page: 'pipeline',
+                title: '💼 Step 6: Pipeline',
+                text: "Drag deals between stages. Cards show package, monthly value, and days in stage. The 'In Sequence' column is for active outreach — deals only get a dollar value once the prospect actually engages.",
+            },
+            {
+                target: '#kanban',
+                page: 'pipeline',
+                title: '⏰ Step 7: Snooze',
+                text: "Not ready yet but worth coming back to? Snooze the deal — it disappears from your pipeline until the wake date, then auto-creates a follow-up task. No more 'I forgot to follow up' deals dying.",
+            },
+            {
+                target: 'a[onclick*="showPage(\'contacts\')"]',
+                page: 'contacts',
+                title: '👥 Step 8: Contacts',
+                text: 'Every contact across every company. Filter by phone-type, sequence status, hot-lead activity. Multi-select to bulk-message, bulk-call, or bulk-merge. The Power Dialer rips through a filtered list one call after another.',
+            },
+            {
+                target: 'a[onclick*="showPage(\'tasks\')"]',
+                page: 'tasks',
+                title: '📅 Step 9: Tasks',
+                text: 'My open / Team open with filter chips for Today, This Week, Overdue. Sequences create tasks for you automatically (call steps + manual LinkedIn). Auto-tasks appear when prospects engage — 3+ opens or any click triggers a follow-up.',
+            },
+            {
+                target: 'a[onclick*="showPage(\'dashboard\')"]',
+                page: 'dashboard',
+                title: '🎯 Step 10: Audit reports + GEO',
+                text: 'Your differentiator: AI-Findability + Local-SEO audit reports. Generate one from any company detail page → host it under a unique URL → embed in emails, iMessage, and the breakup sequence. Gated competitor comparison drives discovery-call bookings.',
+            },
+        ];
+
+        let _tourActiveStep = 0;
+        let _tourEls = [];
+
+        async function startTour(fromStep = 1) {
+            _tourActiveStep = Math.max(1, Math.min(10, fromStep));
+            await renderTourStep();
+        }
+
+        async function renderTourStep() {
+            const stepData = TOUR_STEPS[_tourActiveStep - 1];
+            if (!stepData) { return endTour(100); }
+
+            // Navigate to the right page if needed before placing the spotlight
+            if (stepData.page && typeof showPage === 'function') {
+                showPage(stepData.page);
+                // Give the page render a moment before measuring DOM
+                await new Promise(r => setTimeout(r, 350));
+            }
+
+            _clearTourOverlay();
+            const target = document.querySelector(stepData.target);
+            const rect = target ? target.getBoundingClientRect() : null;
+
+            // Spotlight: four divs forming a hole around the target rect (or full overlay if target missing)
+            const overlay = document.createElement('div');
+            overlay.className = 'tour-overlay';
+            overlay.style.cssText = 'position:fixed;inset:0;z-index:9998;pointer-events:auto';
+            overlay.onclick = (e) => { if (e.target === overlay) {/* swallow background clicks */} };
+            document.body.appendChild(overlay);
+            _tourEls.push(overlay);
+
+            const dim = 'background:rgba(0,0,0,0.55)';
+            if (rect && rect.width > 0 && rect.height > 0) {
+                const pad = 8;
+                const top = Math.max(0, rect.top - pad);
+                const left = Math.max(0, rect.left - pad);
+                const width = rect.width + pad * 2;
+                const height = rect.height + pad * 2;
+                // top, bottom, left, right slabs
+                _spotlightSlab(0, 0, '100vw', `${top}px`, dim);
+                _spotlightSlab(0, top + height, '100vw', `calc(100vh - ${top + height}px)`, dim);
+                _spotlightSlab(0, top, `${left}px`, `${height}px`, dim);
+                _spotlightSlab(left + width, top, `calc(100vw - ${left + width}px)`, `${height}px`, dim);
+                // Outline ring
+                const ring = document.createElement('div');
+                ring.style.cssText = `position:fixed;top:${top}px;left:${left}px;width:${width}px;height:${height}px;border:3px solid var(--bmp-orange);border-radius:8px;z-index:9999;pointer-events:none;box-shadow:0 0 0 9999px transparent`;
+                document.body.appendChild(ring);
+                _tourEls.push(ring);
+            } else {
+                // Fall back to a single full-screen dim
+                _spotlightSlab(0, 0, '100vw', '100vh', dim);
+            }
+
+            // Tooltip — pin near the target if we have one, else centered
+            const tip = document.createElement('div');
+            tip.style.cssText = 'position:fixed;background:white;border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,0.3);padding:18px 22px;z-index:10000;width:380px;max-width:90vw';
+            const tipTop = rect ? Math.min(window.innerHeight - 220, Math.max(20, rect.bottom + 16)) : window.innerHeight / 2 - 100;
+            const tipLeft = rect ? Math.min(window.innerWidth - 400, Math.max(20, rect.left)) : window.innerWidth / 2 - 190;
+            tip.style.top = `${tipTop}px`;
+            tip.style.left = `${tipLeft}px`;
+            tip.innerHTML = `
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                    <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:0.5px">Step ${_tourActiveStep} of 10</div>
+                    <div style="display:flex;gap:3px">${TOUR_STEPS.map((_, i) => `<span style="width:8px;height:8px;border-radius:50%;background:${i < _tourActiveStep ? 'var(--bmp-orange)' : '#ddd'}"></span>`).join('')}</div>
+                </div>
+                <h3 style="margin:0 0 8px;font-size:18px">${stepData.title}</h3>
+                <p style="margin:0 0 14px;font-size:14px;line-height:1.5;color:#333">${stepData.text}</p>
+                <div style="display:flex;gap:8px;justify-content:space-between;align-items:center">
+                    <button class="btn btn-secondary btn-sm" onclick="skipTour()">Skip Tour</button>
+                    <div style="display:flex;gap:6px">
+                        ${_tourActiveStep > 1 ? '<button class="btn btn-secondary btn-sm" onclick="prevTourStep()">Back</button>' : ''}
+                        <button class="btn btn-primary btn-sm" onclick="nextTourStep()">${_tourActiveStep === 10 ? 'Finish' : 'Next →'}</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(tip);
+            _tourEls.push(tip);
+        }
+
+        function _spotlightSlab(left, top, width, height, css) {
+            const slab = document.createElement('div');
+            slab.style.cssText = `position:fixed;top:${typeof top === 'number' ? top + 'px' : top};left:${typeof left === 'number' ? left + 'px' : left};width:${typeof width === 'number' ? width + 'px' : width};height:${typeof height === 'number' ? height + 'px' : height};z-index:9998;pointer-events:auto;${css}`;
+            document.body.appendChild(slab);
+            _tourEls.push(slab);
+        }
+
+        function _clearTourOverlay() {
+            _tourEls.forEach(el => el.remove());
+            _tourEls = [];
+        }
+
+        async function nextTourStep() {
+            if (_tourActiveStep >= 10) return endTour(100);
+            _tourActiveStep++;
+            await api('/api/auth/me/onboarding', { method: 'PATCH', body: JSON.stringify({ step: _tourActiveStep }) });
+            renderTourStep();
+        }
+
+        async function prevTourStep() {
+            if (_tourActiveStep <= 1) return;
+            _tourActiveStep--;
+            renderTourStep();
+        }
+
+        async function skipTour() {
+            if (!confirm('Skip the tour? You can restart it any time from Settings.')) return;
+            endTour(99);
+        }
+
+        async function endTour(finalStep) {
+            _clearTourOverlay();
+            _tourActiveStep = 0;
+            try { await api('/api/auth/me/onboarding', { method: 'PATCH', body: JSON.stringify({ step: finalStep }) }); } catch (e) {}
+            if (finalStep === 100) toast('🎉 Tour complete — happy prospecting!');
+        }
+
+        async function restartTour() {
+            await api('/api/auth/me/onboarding/restart', { method: 'POST' });
+            startTour(1);
+        }
+
         async function login() {
             const email = document.getElementById('login-email').value;
             const password = document.getElementById('login-password').value;
