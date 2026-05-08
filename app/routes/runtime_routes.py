@@ -20,6 +20,7 @@ from app.runtime_config import (
     set_blooio_signing_secret,
     set_resend_webhook_secret,
     set_messaging_direction,
+    set_apollo_api_key,
     DEFAULT_MESSAGING_DIRECTION,
     mask_key,
 )
@@ -39,21 +40,25 @@ class UpdateRuntimeConfigRequest(BaseModel):
     blooio_signing_secret: Optional[str] = None
     resend_webhook_secret: Optional[str] = None
     messaging_direction: Optional[str] = None
+    apollo_api_key: Optional[str] = None  # Tenant-tier (admin can set)
 
 
 def _tenant_payload(rc, settings_obj) -> dict:
-    """Tenant-tier config — admins can read + edit these.
-    Anything that's properly "BMP runs its own X" rather than
-    "infrastructure that affects billing or compliance" lives here."""
-    netrows_db = (rc.netrows_api_key or "").strip()
-    netrows_env = settings_obj.netrows_api_key or ""
-    netrows_eff = netrows_db or netrows_env
+    """Tenant-tier config — admins read + edit.
+
+    SaaS model: the platform supplies enrichment / carrier / AI / email
+    infrastructure. The ONE customer-supplied integration is Apollo —
+    tenants who already pay for Apollo can plug their key in to layer
+    Apollo's data over the platform-supplied Netrows + Hunter results.
+
+    AI tone (messaging direction) is also tenant-tier so admins can shape
+    their team's voice without escalating to platform-level access.
+    """
+    apollo_key = (rc.apollo_api_key or "").strip()
     return {
-        "netrows": {
-            "set": bool(netrows_eff),
-            "source": "database" if netrows_db else ("env" if netrows_env else "none"),
-            "masked": mask_key(netrows_eff),
-            "updated_at": rc.updated_at.isoformat() if rc.updated_at else None,
+        "apollo": {
+            "set": bool(apollo_key),
+            "masked": mask_key(apollo_key),
         },
         "messaging": {
             "direction": (rc.messaging_direction or "").strip(),
@@ -64,14 +69,30 @@ def _tenant_payload(rc, settings_obj) -> dict:
 
 
 def _platform_payload(rc, settings_obj) -> dict:
-    """Platform-tier config — super_admin only. Carrier creds, telephony
-    transcription, iMessage automation, webhook secrets. Touching these
-    can affect billing, deliverability, or compliance for the whole org."""
+    """Platform-tier config — super_admin only.
+
+    Everything the SaaS platform pays for and provisions on behalf of
+    tenants: enrichment (Netrows), carrier (Twilio), telephony
+    transcription (Deepgram), iMessage automation (Blooio), inbound
+    email webhook auth (Resend). Touching these affects billing,
+    deliverability, or compliance for every tenant on the platform, so
+    it's locked above admin tier.
+    """
     def t(field: str | None) -> dict:
         v = (field or "").strip()
         return {"set": bool(v), "masked": mask_key(v)}
 
+    netrows_db = (rc.netrows_api_key or "").strip()
+    netrows_env = settings_obj.netrows_api_key or ""
+    netrows_eff = netrows_db or netrows_env
+
     return {
+        "netrows": {
+            "set": bool(netrows_eff),
+            "source": "database" if netrows_db else ("env" if netrows_env else "none"),
+            "masked": mask_key(netrows_eff),
+            "updated_at": rc.updated_at.isoformat() if rc.updated_at else None,
+        },
         "twilio": {
             "account_sid":    t(rc.twilio_account_sid),
             "auth_token":     t(rc.twilio_auth_token),
@@ -159,8 +180,11 @@ async def update_runtime_config(
 
     is_super = (user.role == "super_admin")
 
-    # Platform-tier fields rejected for admins.
+    # Platform-tier fields rejected for admins. Netrows moved here from
+    # tenant-tier — the SaaS platform supplies Netrows out of the box, so
+    # tenants don't bring their own.
     platform_changes = (
+        req.netrows_api_key,
         req.twilio_account_sid, req.twilio_auth_token,
         req.twilio_api_key_sid, req.twilio_api_key_secret, req.twilio_twiml_app_sid,
         req.deepgram_api_key,
@@ -170,14 +194,18 @@ async def update_runtime_config(
     if any(v is not None for v in platform_changes) and not is_super:
         raise HTTPException(status_code=403, detail="Only super admins can modify platform credentials")
 
-    # Tenant-tier writes (admin + super_admin)
-    if req.netrows_api_key is not None:
-        await set_netrows_api_key(db, req.netrows_api_key)
+    # Tenant-tier writes (admin + super_admin):
+    #   - apollo_api_key (the one BYO integration in the SaaS model)
+    #   - messaging_direction (team voice / AI tone)
+    if req.apollo_api_key is not None:
+        await set_apollo_api_key(db, req.apollo_api_key)
     if req.messaging_direction is not None:
         await set_messaging_direction(db, req.messaging_direction)
 
     # Platform-tier writes (super_admin only)
     if is_super:
+        if req.netrows_api_key is not None:
+            await set_netrows_api_key(db, req.netrows_api_key)
         twilio_changes = {
             "account_sid":    req.twilio_account_sid,
             "auth_token":     req.twilio_auth_token,

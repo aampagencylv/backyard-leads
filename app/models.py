@@ -375,6 +375,15 @@ class RuntimeConfig(Base):
     # settings.resend_webhook_secret env var if this is empty.
     resend_webhook_secret = Column(Text, nullable=True)
 
+    # Apollo BYO-key — the ONE customer-supplied integration in the SaaS
+    # model. Tenants who already pay Apollo can plug their key in to unlock
+    # decision-maker contacts + direct dials for verticals where Apollo's
+    # database wins (B2B SaaS, mid-market, tech). Per-record cost stays on
+    # the tenant's Apollo bill; we charge a small orchestration fee in
+    # credits (see credit_meter RATE_CARD enrich_apollo). Tenant-tier:
+    # admins set + rotate this from Settings.
+    apollo_api_key = Column(Text, nullable=True)
+
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
 

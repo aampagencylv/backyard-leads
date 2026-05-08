@@ -722,17 +722,43 @@
                     <p style="font-size:13px;color:#666;margin-bottom:16px">This is what your signature looks like. Edit your profile fields above to update it.</p>
                     <div id="signature-preview" style="background:#fff;border:1px solid #e5e7eb;border-radius:6px;padding:16px"></div>
                 </div>
-                <!-- Tenant-tier settings (visible to admin + super_admin):
-                     enrichment provider keys, AI tone — operational config that
-                     team admins should be able to manage without escalating. -->
+                <!-- Tenant-tier settings (visible to admin + super_admin).
+                     SaaS model: the platform supplies enrichment / carrier /
+                     AI / email infrastructure. The ONE customer-supplied
+                     integration is Apollo — tenants who already pay Apollo
+                     plug their key in here to layer Apollo's data over the
+                     platform-supplied Netrows + Hunter results. -->
                 <div id="tenant-keys-section" class="search-box hidden" style="max-width:600px;margin-top:16px">
-                    <h3>Enrichment & AI Settings</h3>
-                    <p style="font-size:13px;color:#666;margin-bottom:16px">Provider keys and AI tone for your team. Stored in the database — rotate without SSH access. Empty value falls back to the server's environment variable.</p>
+                    <h3>Integrations</h3>
+                    <p style="font-size:13px;color:#666;margin-bottom:16px">Optional add-on integrations. Enrichment, email, calling, and AI are included with your plan — there's nothing to configure for those. Bring your Apollo key here if you'd like Apollo data layered on top.</p>
+
+                    <div class="form-group">
+                        <label>Apollo API Key <span style="font-weight:400;color:#888;font-size:11px">· bring-your-own (optional)</span>
+                            <span id="apollo-key-status" style="font-size:11px;font-weight:400;color:#888;margin-left:6px"></span>
+                        </label>
+                        <p style="font-size:12px;color:#888;margin:4px 0 8px">Optional. If your team already pays for Apollo, paste your API key here to enrich contacts with Apollo's data alongside our standard enrichment. Per-record cost stays on your Apollo bill — we charge a small orchestration fee in credits.</p>
+                        <div style="display:flex;gap:6px">
+                            <input type="password" id="settings-apollo-key" placeholder="Apollo API key from app.apollo.io → Settings → Integrations → API" autocomplete="off" style="flex:1">
+                            <button class="btn btn-primary" onclick="saveApolloKey()">Save</button>
+                            <button class="btn btn-secondary" onclick="clearApolloKey()" title="Remove the Apollo key">Clear</button>
+                        </div>
+                        <div id="apollo-key-current" style="font-size:11px;color:#888;margin-top:4px"></div>
+                    </div>
+                </div>
+
+                <!-- Platform-tier settings (super_admin only): everything the
+                     SaaS platform pays for and provisions on behalf of tenants.
+                     Locked above admin tier — touching these affects billing /
+                     deliverability / compliance for every tenant. -->
+                <div id="api-keys-section" class="search-box hidden" style="max-width:600px;margin-top:16px">
+                    <h3>Platform Credentials <span style="font-size:11px;font-weight:400;color:#888;margin-left:8px">🔒 super admin only</span></h3>
+                    <p style="font-size:13px;color:#666;margin-bottom:16px">Carrier credentials, enrichment provider keys, and webhook secrets. Changing these affects billing / deliverability / compliance for every tenant on the platform.</p>
 
                     <div class="form-group">
                         <label>Netrows API Key
                             <span id="netrows-key-status" style="font-size:11px;font-weight:400;color:#888;margin-left:6px"></span>
                         </label>
+                        <p style="font-size:12px;color:#888;margin:4px 0 8px">Platform-paid enrichment — included for every tenant. Rotate annually.</p>
                         <div style="display:flex;gap:6px">
                             <input type="password" id="settings-netrows-key" placeholder="pk_live_..." autocomplete="off" style="flex:1">
                             <button class="btn btn-primary" onclick="saveNetrowsKey()">Save</button>
@@ -740,17 +766,8 @@
                         </div>
                         <div id="netrows-key-current" style="font-size:11px;color:#888;margin-top:4px"></div>
                     </div>
-                </div>
 
-                <!-- Platform-tier settings (super_admin only): carrier creds,
-                     webhook secrets, infrastructure keys. Touching these can
-                     affect billing / deliverability / compliance for the whole
-                     org, so they're locked above admin tier. -->
-                <div id="api-keys-section" class="search-box hidden" style="max-width:600px;margin-top:16px">
-                    <h3>Platform Credentials <span style="font-size:11px;font-weight:400;color:#888;margin-left:8px">🔒 super admin only</span></h3>
-                    <p style="font-size:13px;color:#666;margin-bottom:16px">Carrier credentials, webhooks, and infrastructure keys. Changing these affects billing / deliverability / compliance for the whole organization.</p>
-
-                    <div>
+                    <div style="margin-top:24px;padding-top:16px;border-top:1px solid #eee">
                         <h4 style="font-size:14px;margin-bottom:6px">Twilio Voice
                             <span id="twilio-overall-status" style="font-size:11px;font-weight:400;color:#888;margin-left:6px"></span>
                         </h4>
@@ -4845,20 +4862,44 @@
             const cfg = await api('/api/runtime-config');
             if (!cfg) return;
 
-            // Netrows
+            // Apollo BYO-key (tenant-tier — visible to admin+)
+            const a = cfg.apollo || {};
+            const aStatus = document.getElementById('apollo-key-status');
+            const aCurrent = document.getElementById('apollo-key-current');
+            const aInput = document.getElementById('settings-apollo-key');
+            if (aInput) aInput.value = '';
+            if (aStatus) {
+                if (a.set) {
+                    aStatus.textContent = '· active';
+                    aStatus.style.color = 'var(--bmp-green)';
+                } else {
+                    aStatus.textContent = '· not set';
+                    aStatus.style.color = '#888';
+                }
+            }
+            if (aCurrent) {
+                aCurrent.textContent = a.set
+                    ? `Current: ${a.masked} — Apollo enrichment will run alongside our standard chain.`
+                    : 'Apollo enrichment is optional. Leave blank to use only the included Netrows + Hunter chain.';
+            }
+
+            // Netrows (platform-tier — only populated when payload includes it,
+            // i.e. caller is super_admin)
             const n = cfg.netrows || {};
             const status = document.getElementById('netrows-key-status');
             const current = document.getElementById('netrows-key-current');
             const input = document.getElementById('settings-netrows-key');
-            input.value = '';
-            if (n.set) {
-                status.textContent = `(active · source: ${n.source})`;
-                status.style.color = 'var(--bmp-green)';
-                current.textContent = `Current: ${n.masked}${n.updated_at ? ' · updated ' + fmtRelative(n.updated_at) : ''}`;
-            } else {
-                status.textContent = '(not set)';
-                status.style.color = '#c0392b';
-                current.textContent = 'No key configured. Netrows enrichment will be skipped until you add a key.';
+            if (input) input.value = '';
+            if (status && current) {
+                if (n.set) {
+                    status.textContent = `(active · source: ${n.source})`;
+                    status.style.color = 'var(--bmp-green)';
+                    current.textContent = `Current: ${n.masked}${n.updated_at ? ' · updated ' + fmtRelative(n.updated_at) : ''}`;
+                } else {
+                    status.textContent = '(not set)';
+                    status.style.color = '#c0392b';
+                    current.textContent = 'No key configured. Netrows enrichment will be skipped until you add a key.';
+                }
             }
 
             // Twilio per-field status
@@ -6393,6 +6434,28 @@
                 body: JSON.stringify({ netrows_api_key: '' }),
             });
             if (data) { toast('Netrows key cleared'); loadRuntimeConfig(); }
+        }
+
+        // Apollo BYO-key — the one customer-supplied integration. Tenant-tier
+        // (admins can manage). No env fallback by design: if cleared, Apollo
+        // paths just skip rather than falling back to a platform key.
+        async function saveApolloKey() {
+            const value = document.getElementById('settings-apollo-key').value.trim();
+            if (!value) { toast('Paste a key first, or click Clear to remove it'); return; }
+            const data = await api('/api/runtime-config', {
+                method: 'PATCH',
+                body: JSON.stringify({ apollo_api_key: value }),
+            });
+            if (data) { toast('Apollo key saved'); loadRuntimeConfig(); }
+        }
+
+        async function clearApolloKey() {
+            if (!confirm('Remove your Apollo key? Apollo enrichment will be skipped until you add a new one.')) return;
+            const data = await api('/api/runtime-config', {
+                method: 'PATCH',
+                body: JSON.stringify({ apollo_api_key: '' }),
+            });
+            if (data) { toast('Apollo key cleared'); loadRuntimeConfig(); }
         }
         async function saveProfile() {
             const data = await api('/api/send/profile', {

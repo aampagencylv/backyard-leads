@@ -140,6 +140,22 @@ async def set_resend_webhook_secret(db: AsyncSession, value: str) -> RuntimeConf
     return rc
 
 
+async def get_apollo_api_key(db: AsyncSession) -> str:
+    """Apollo BYO-key — customer-supplied integration. No env fallback;
+    if the tenant hasn't entered one, Apollo paths are skipped."""
+    rc = await _get_or_create(db)
+    return (rc.apollo_api_key or "").strip()
+
+
+async def set_apollo_api_key(db: AsyncSession, value: str) -> RuntimeConfig:
+    rc = await _get_or_create(db)
+    rc.apollo_api_key = value.strip() or None
+    rc.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(rc)
+    return rc
+
+
 # ============================================================
 # Messaging tone / strategic direction (prepended to AI prompts)
 # ============================================================
