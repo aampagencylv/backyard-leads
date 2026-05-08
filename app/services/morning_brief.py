@@ -471,7 +471,8 @@ def _brief_subject(brief: BriefData) -> str:
     o = brief.overnight or {}
     if o.get("replies_overnight"):
         n = o["replies_overnight"]
-        return f"☀️ {n} reply{'' if n == 1 else 'ies'} to act on this morning"
+        word = "reply" if n == 1 else "replies"
+        return f"☀️ {n} {word} to act on this morning"
     if o.get("contacts_enrolled_overnight"):
         return f"☀️ {o['contacts_enrolled_overnight']} contacts enrolled overnight"
     return "Your morning brief"
