@@ -788,3 +788,478 @@ async def instagram_recent_posts(handle: str, api_key: str, limit: int = 9) -> L
             thumbnail_url=p.get("thumbnailUrl") or p.get("thumbnail_url") or p.get("display_url"),
         ))
     return out
+
+
+# ============================================================
+# Tier 2 wrappers — qualifying + intent intel
+# ============================================================
+#
+# All seven endpoints below tolerate Netrows response-shape variation
+# (data wrapped in `data:`, alternate field names, items list vs bare
+# array). On 4xx/5xx or transport error the wrappers return empty
+# list / None rather than raising — callers should treat absence as
+# "we don't know" not "the call failed".
+
+
+def _unwrap(data: dict) -> dict | list:
+    """Most Netrows endpoints wrap payload in {data: ...}; some don't."""
+    if not isinstance(data, dict):
+        return data
+    inner = data.get("data")
+    if inner is not None:
+        return inner
+    return data
+
+
+# ----- /businesses/search (Yellow Pages) -----------------------------
+
+@dataclass
+class YPBusiness:
+    """Yellow Pages SMB record. Useful as an alternative lead source
+    when Yelp / Google Maps come up empty (rural areas, certain trades)."""
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    website: Optional[str] = None
+    street: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    zip_code: Optional[str] = None
+    categories: List[str] = field(default_factory=list)
+    rating: Optional[float] = None
+    review_count: Optional[int] = None
+    yp_url: Optional[str] = None
+
+
+async def yellow_pages_search(
+    query: str,
+    location: str,
+    api_key: str,
+    page: int = 1,
+) -> List[YPBusiness]:
+    """US Business search via Yellow Pages. ~30 results per page.
+    `query` accepts category ('plumbers') or business name ('Smith Pools').
+    `location` accepts 'City, ST' or ZIP."""
+    if not (query and location and api_key):
+        return []
+    async with httpx.AsyncClient(timeout=20) as client:
+        try:
+            r = await client.get(
+                f"{BASE_URL}/businesses/search",
+                params={"query": query, "location": location, "page": page},
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        except httpx.HTTPError:
+            return []
+    if r.status_code != 200:
+        return []
+    body = _unwrap(r.json() or {})
+    items = body.get("items") if isinstance(body, dict) else body
+    items = items or []
+    out: List[YPBusiness] = []
+    for b in items[:50]:
+        if not isinstance(b, dict):
+            continue
+        addr = b.get("address") or {}
+        if isinstance(addr, str):
+            addr = {"street": addr}
+        cats = b.get("categories") or b.get("category") or []
+        if isinstance(cats, str):
+            cats = [c.strip() for c in cats.split(",") if c.strip()]
+        out.append(YPBusiness(
+            name=b.get("name") or b.get("businessName"),
+            phone=b.get("phone") or b.get("phoneNumber"),
+            website=b.get("website") or b.get("url"),
+            street=addr.get("street") or addr.get("street1") or b.get("street"),
+            city=addr.get("city") or b.get("city"),
+            state=addr.get("state") or b.get("state"),
+            zip_code=addr.get("zip") or addr.get("postalCode") or b.get("zip"),
+            categories=list(cats)[:5] if isinstance(cats, list) else [],
+            rating=b.get("rating") or b.get("averageRating"),
+            review_count=b.get("reviewCount") or b.get("reviewsCount"),
+            yp_url=b.get("ypUrl") or b.get("profileUrl") or b.get("link"),
+        ))
+    return out
+
+
+# ----- /yelp/business-search + business-details + business-reviews ---
+
+@dataclass
+class YelpBusiness:
+    alias: Optional[str] = None  # the slug Yelp uses ('nobu-new-york')
+    biz_id: Optional[str] = None
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    website: Optional[str] = None
+    yelp_url: Optional[str] = None
+    rating: Optional[float] = None
+    review_count: Optional[int] = None
+    price_range: Optional[str] = None  # '$', '$$', '$$$'
+    categories: List[str] = field(default_factory=list)
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    zip_code: Optional[str] = None
+    hours_summary: Optional[str] = None
+    photo_url: Optional[str] = None
+
+
+@dataclass
+class YelpReview:
+    """A single Yelp review. The text + rating + date is the primary
+    payload; for the highest-value cases (responses from the owner) we
+    also surface owner_response — Steve's working theory is that owner-
+    written replies on Yelp/Google Maps are gold for personalization
+    ('I see how you handled that one-star — let's talk')."""
+    rating: Optional[float] = None
+    text: Optional[str] = None
+    posted_at: Optional[str] = None
+    reviewer_name: Optional[str] = None
+    reviewer_profile_url: Optional[str] = None
+    owner_response: Optional[str] = None
+    owner_response_at: Optional[str] = None
+    review_url: Optional[str] = None
+
+
+def _parse_yelp_business(b: dict) -> YelpBusiness:
+    cats = b.get("categories") or []
+    if isinstance(cats, list):
+        cats = [(c.get("title") if isinstance(c, dict) else c) for c in cats if c]
+    elif isinstance(cats, str):
+        cats = [c.strip() for c in cats.split(",") if c.strip()]
+    addr = b.get("location") or b.get("address") or {}
+    if isinstance(addr, str):
+        addr = {"display_address": addr}
+    return YelpBusiness(
+        alias=b.get("alias") or b.get("slug"),
+        biz_id=b.get("id") or b.get("business_id") or b.get("bizId"),
+        name=b.get("name"),
+        phone=b.get("phone") or b.get("displayPhone") or b.get("display_phone"),
+        website=b.get("url") if "yelp.com" not in (b.get("url") or "") else (b.get("website") or None),
+        yelp_url=b.get("url") if "yelp.com" in (b.get("url") or "") else b.get("yelpUrl"),
+        rating=b.get("rating"),
+        review_count=b.get("reviewCount") or b.get("review_count"),
+        price_range=b.get("price"),
+        categories=[c for c in cats if c][:8],
+        address=addr.get("address1") or addr.get("display_address") or addr.get("street"),
+        city=addr.get("city"),
+        state=addr.get("state"),
+        zip_code=addr.get("zipCode") or addr.get("zip_code") or addr.get("postalCode"),
+        hours_summary=b.get("hoursSummary") or b.get("hours_summary"),
+        photo_url=b.get("imageUrl") or b.get("image_url") or b.get("photo"),
+    )
+
+
+async def yelp_business_search(
+    keyword: str,
+    location: str,
+    api_key: str,
+    limit: int = 20,
+) -> List[YelpBusiness]:
+    if not (keyword and location and api_key):
+        return []
+    async with httpx.AsyncClient(timeout=20) as client:
+        try:
+            r = await client.get(
+                f"{BASE_URL}/yelp/business-search",
+                params={"keyword": keyword, "location": location, "limit": min(20, max(1, limit))},
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        except httpx.HTTPError:
+            return []
+    if r.status_code != 200:
+        return []
+    body = _unwrap(r.json() or {})
+    items = body.get("items") or body.get("businesses") if isinstance(body, dict) else body
+    items = items or []
+    return [_parse_yelp_business(b) for b in items if isinstance(b, dict)]
+
+
+async def yelp_business_details(alias: str, api_key: str) -> Optional[YelpBusiness]:
+    """Detail page for a Yelp business. `alias` is the slug
+    ('nobu-new-york'); get it from yelp_business_search results
+    or from the Yelp URL path."""
+    if not (alias and api_key):
+        return None
+    async with httpx.AsyncClient(timeout=20) as client:
+        try:
+            r = await client.get(
+                f"{BASE_URL}/yelp/business-details",
+                params={"alias": alias},
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        except httpx.HTTPError:
+            return None
+    if r.status_code != 200:
+        return None
+    body = _unwrap(r.json() or {})
+    if isinstance(body, list):
+        body = body[0] if body else {}
+    return _parse_yelp_business(body) if isinstance(body, dict) else None
+
+
+async def yelp_business_reviews(
+    biz_id: str,
+    alias: str,
+    api_key: str,
+    limit: int = 20,
+) -> List[YelpReview]:
+    """Reviews for a Yelp business. Both biz_id AND alias are required
+    by Netrows. Owner responses (when present) are the most valuable
+    field — surface them in the UI for personalization."""
+    if not (biz_id and alias and api_key):
+        return []
+    async with httpx.AsyncClient(timeout=20) as client:
+        try:
+            r = await client.get(
+                f"{BASE_URL}/yelp/business-reviews",
+                params={"biz_id": biz_id, "alias": alias, "limit": min(20, max(1, limit))},
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        except httpx.HTTPError:
+            return []
+    if r.status_code != 200:
+        return []
+    body = _unwrap(r.json() or {})
+    items = body.get("items") or body.get("reviews") if isinstance(body, dict) else body
+    items = items or []
+    out: List[YelpReview] = []
+    for v in items[:limit]:
+        if not isinstance(v, dict):
+            continue
+        rev = v.get("user") or {}
+        if isinstance(rev, str):
+            rev = {"name": rev}
+        owner = v.get("ownerResponse") or v.get("owner_response") or {}
+        if isinstance(owner, str):
+            owner = {"text": owner}
+        out.append(YelpReview(
+            rating=v.get("rating"),
+            text=(v.get("text") or v.get("comment") or "")[:2000] or None,
+            posted_at=v.get("timeCreated") or v.get("time_created") or v.get("date") or v.get("postedAt"),
+            reviewer_name=rev.get("name") if isinstance(rev, dict) else None,
+            reviewer_profile_url=rev.get("profileUrl") or rev.get("url") if isinstance(rev, dict) else None,
+            owner_response=(owner.get("text") if isinstance(owner, dict) else None) or None,
+            owner_response_at=(owner.get("postedAt") or owner.get("date") if isinstance(owner, dict) else None),
+            review_url=v.get("url") or v.get("reviewUrl"),
+        ))
+    return out
+
+
+# ----- /similarweb/website-overview ----------------------------------
+
+@dataclass
+class SimilarWebOverview:
+    """Website traffic overview from SimilarWeb. The killer field for
+    qualifying is `monthly_visits` — drop prospects with <100 visits/mo
+    from cold-outreach cadences (likely abandoned site / dropshipper /
+    parked domain)."""
+    domain: Optional[str] = None
+    global_rank: Optional[int] = None
+    country_rank: Optional[int] = None
+    category_rank: Optional[int] = None
+    monthly_visits: Optional[int] = None
+    bounce_rate: Optional[float] = None
+    avg_visit_duration_seconds: Optional[float] = None
+    pages_per_visit: Optional[float] = None
+    top_country: Optional[str] = None
+    top_country_share: Optional[float] = None
+    traffic_sources: dict = field(default_factory=dict)  # direct/search/social/etc → fraction
+    raw_payload: Optional[dict] = None
+
+
+async def similarweb_website_overview(domain: str, api_key: str) -> Optional[SimilarWebOverview]:
+    if not (domain and api_key):
+        return None
+    clean = (domain or "").replace("https://", "").replace("http://", "").split("/")[0].replace("www.", "")
+    async with httpx.AsyncClient(timeout=25) as client:
+        try:
+            r = await client.get(
+                f"{BASE_URL}/similarweb/website-overview",
+                params={"domain": clean},
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        except httpx.HTTPError:
+            return None
+    if r.status_code != 200:
+        return None
+    body = _unwrap(r.json() or {})
+    if not isinstance(body, dict):
+        return None
+    engagement = body.get("engagement") or body.get("engagements") or {}
+    if not isinstance(engagement, dict):
+        engagement = {}
+    sources = body.get("trafficSources") or body.get("traffic_sources") or {}
+    if isinstance(sources, list):
+        # Sometimes [{name,share}, ...] — flatten
+        sources = {s.get("name", str(i)): s.get("share")
+                   for i, s in enumerate(sources) if isinstance(s, dict)}
+    top_countries = body.get("topCountries") or body.get("top_countries") or []
+    top_country = None
+    top_share = None
+    if isinstance(top_countries, list) and top_countries:
+        first = top_countries[0]
+        if isinstance(first, dict):
+            top_country = first.get("country") or first.get("code") or first.get("name")
+            top_share = first.get("share") or first.get("visitShare")
+    return SimilarWebOverview(
+        domain=clean,
+        global_rank=body.get("globalRank") or body.get("global_rank"),
+        country_rank=body.get("countryRank") or body.get("country_rank"),
+        category_rank=body.get("categoryRank") or body.get("category_rank"),
+        monthly_visits=body.get("monthlyVisits") or body.get("monthly_visits") or body.get("visits"),
+        bounce_rate=engagement.get("bounceRate") or engagement.get("bounce_rate"),
+        avg_visit_duration_seconds=engagement.get("avgVisitDuration") or engagement.get("avg_visit_duration"),
+        pages_per_visit=engagement.get("pagesPerVisit") or engagement.get("pages_per_visit"),
+        top_country=top_country,
+        top_country_share=top_share,
+        traffic_sources=sources if isinstance(sources, dict) else {},
+        raw_payload=body,
+    )
+
+
+# ----- /technographics/lookup (BuiltWith-equivalent) -----------------
+
+@dataclass
+class TechnographicsResult:
+    """Detected technologies on a website. Categorized; useful both for
+    qualifying ('uses Shopify' = e-commerce, different motion) and for
+    objection prep ('they're on HubSpot — frame against that')."""
+    url: Optional[str] = None
+    technologies: List[dict] = field(default_factory=list)  # [{name, category, confidence}]
+    categories: List[str] = field(default_factory=list)  # flattened category names
+    cms: Optional[str] = None
+    ecommerce: Optional[str] = None
+    analytics: List[str] = field(default_factory=list)
+    advertising: List[str] = field(default_factory=list)
+    raw_payload: Optional[dict] = None
+
+
+async def technographics_lookup(url: str, api_key: str) -> Optional[TechnographicsResult]:
+    if not (url and api_key):
+        return None
+    async with httpx.AsyncClient(timeout=25) as client:
+        try:
+            r = await client.get(
+                f"{BASE_URL}/technographics/lookup",
+                params={"url": url},
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        except httpx.HTTPError:
+            return None
+    if r.status_code != 200:
+        return None
+    body = _unwrap(r.json() or {})
+    if not isinstance(body, dict):
+        return None
+    raw_techs = body.get("technologies") or body.get("techStack") or body.get("tech") or []
+    if isinstance(raw_techs, dict):
+        # Sometimes returned as {category: [tech, tech, ...]} — flatten
+        flat = []
+        for cat, lst in raw_techs.items():
+            if isinstance(lst, list):
+                for t in lst:
+                    if isinstance(t, dict):
+                        flat.append({**t, "category": t.get("category") or cat})
+                    elif isinstance(t, str):
+                        flat.append({"name": t, "category": cat})
+        raw_techs = flat
+    techs: List[dict] = []
+    for t in raw_techs[:60] if isinstance(raw_techs, list) else []:
+        if isinstance(t, str):
+            techs.append({"name": t, "category": None, "confidence": None})
+        elif isinstance(t, dict):
+            techs.append({
+                "name": t.get("name") or t.get("technology"),
+                "category": t.get("category") or t.get("group"),
+                "confidence": t.get("confidence") or t.get("score"),
+            })
+    categories = sorted({t["category"] for t in techs if t.get("category")})
+
+    def _by_cat(*needles: str) -> List[str]:
+        out: list[str] = []
+        for t in techs:
+            cat = (t.get("category") or "").lower()
+            if any(n in cat for n in needles) and t.get("name"):
+                out.append(t["name"])
+        return out
+
+    cms_list = _by_cat("cms", "content management")
+    ecom_list = _by_cat("ecommerce", "e-commerce", "shop")
+    return TechnographicsResult(
+        url=url,
+        technologies=techs,
+        categories=categories,
+        cms=cms_list[0] if cms_list else None,
+        ecommerce=ecom_list[0] if ecom_list else None,
+        analytics=_by_cat("analytics", "tag manag"),
+        advertising=_by_cat("advertis", "ads", "tracking"),
+        raw_payload=body,
+    )
+
+
+# ----- /indeed/job-search (by company name) -------------------------
+
+@dataclass
+class IndeedJob:
+    title: Optional[str] = None
+    company: Optional[str] = None
+    location: Optional[str] = None
+    posted_at: Optional[str] = None
+    job_url: Optional[str] = None
+    salary: Optional[str] = None
+    job_type: Optional[str] = None
+    snippet: Optional[str] = None
+
+
+async def indeed_jobs_for_company(
+    company_name: str,
+    api_key: str,
+    location: Optional[str] = None,
+    page: int = 1,
+) -> List[IndeedJob]:
+    """Indeed doesn't have a per-company search filter, so we use the
+    company name as the freeform query. Caller should filter the
+    returned list by exact company match — a search for 'Smith Pools'
+    will surface jobs that just mention 'pools' too. Hiring activity =
+    budget signal."""
+    if not (company_name and api_key):
+        return []
+    params: dict = {"query": company_name.strip(), "page": page}
+    if location:
+        params["location"] = location
+    async with httpx.AsyncClient(timeout=20) as client:
+        try:
+            r = await client.get(
+                f"{BASE_URL}/indeed/job-search",
+                params=params,
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        except httpx.HTTPError:
+            return []
+    if r.status_code != 200:
+        return []
+    body = _unwrap(r.json() or {})
+    items = body.get("items") or body.get("jobs") if isinstance(body, dict) else body
+    items = items or []
+    out: List[IndeedJob] = []
+    norm_name = (company_name or "").strip().lower()
+    for j in items[:30]:
+        if not isinstance(j, dict):
+            continue
+        comp = (j.get("company") or j.get("companyName") or "").strip()
+        # Conservative match: only return jobs whose company contains the
+        # query name. Same defensive posture as enrich_company_by_domain
+        # (avoid the Proficient Patios cross-record class of bugs).
+        if norm_name and norm_name not in comp.lower():
+            continue
+        out.append(IndeedJob(
+            title=j.get("title") or j.get("jobTitle"),
+            company=comp or None,
+            location=j.get("location") or j.get("locationName"),
+            posted_at=j.get("postedAt") or j.get("posted_at") or j.get("date"),
+            job_url=j.get("url") or j.get("jobUrl"),
+            salary=j.get("salary") or j.get("salaryEstimate"),
+            job_type=j.get("jobType") or j.get("type"),
+            snippet=(j.get("snippet") or j.get("description") or "")[:300] or None,
+        ))
+    return out
