@@ -65,6 +65,19 @@ async def get_timeline(
             "metadata": json.loads(a.metadata_json) if a.metadata_json else None,
             "reply_sentiment": a.reply_sentiment,
             "reply_sentiment_summary": a.reply_sentiment_summary,
+            # Call-specific fields — needed so the renderTimeline JS can
+            # render the wavesurfer ▶ Play button + transcript / summary
+            # buttons on call activities. recording_url is exposed as a
+            # boolean (the actual stream goes through /api/twilio/recording/{id}
+            # which auth-checks before proxying), the rest are full strings.
+            "recording_url": bool(a.recording_url),
+            "transcript": a.transcript,
+            "call_summary": a.call_summary,
+            "call_duration_seconds": a.call_duration_seconds,
+            "call_outcome": a.call_outcome,
+            "call_direction": a.call_direction,
+            "call_rating": a.call_rating,
+            "call_feedback": a.call_feedback,
             "created_at": a.created_at.isoformat() if a.created_at else None,
         }
         for a in activities
