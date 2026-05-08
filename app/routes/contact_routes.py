@@ -42,11 +42,21 @@ async def list_all_contacts(
     search: Optional[str] = None,  # Search by name or email
     email_status: Optional[str] = None,  # valid, invalid, bounced, unknown
     has_sequence: Optional[bool] = None,
+    phone_type: Optional[str] = None,    # mobile, landline, voip, unknown
+    opted_out: Optional[bool] = None,    # unsubscribed_at OR do_not_text
+    hot_lead_recent: Optional[bool] = None,  # had any hot_lead Activity in last 30 min
+    city: Optional[str] = None,          # ILIKE substring on Company.city
+    state: Optional[str] = None,         # exact (or ILIKE) match on Company.state
+    tag_id: Optional[int] = None,        # any tag on the contact's company
+    sort_by: str = "updated",            # updated | name | company | created | email_status
+    sort_dir: str = "desc",              # asc | desc
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """List contacts with multi-tenant scoping and advanced filters."""
+    """List contacts with multi-tenant scoping and advanced filters/sorts."""
     from app.scoping import scope_contacts
+    from app.models import Activity, company_tags
+    from sqlalchemy import or_, exists
 
     email_count_sq = (
         select(
@@ -61,7 +71,6 @@ async def list_all_contacts(
                func.coalesce(email_count_sq.c.email_count, 0).label("email_count"))
         .join(Company, Contact.company_id == Company.id)
         .outerjoin(email_count_sq, Contact.id == email_count_sq.c.contact_id)
-        .order_by(Contact.updated_at.desc())
     )
 
     # Multi-tenant scoping
@@ -81,7 +90,6 @@ async def list_all_contacts(
 
     if search:
         pattern = f"%{search}%"
-        from sqlalchemy import or_
         query = query.where(or_(
             (Contact.first_name + " " + Contact.last_name).ilike(pattern),
             Contact.email.ilike(pattern),
@@ -95,6 +103,62 @@ async def list_all_contacts(
         query = query.where(email_count_sq.c.email_count > 0)
     elif has_sequence is False:
         query = query.where(func.coalesce(email_count_sq.c.email_count, 0) == 0)
+
+    if phone_type:
+        # Treat 'unknown' as "either NULL or literally 'unknown' or 'error'"
+        if phone_type == "unknown":
+            query = query.where(or_(Contact.phone_type.is_(None), Contact.phone_type.in_(("unknown", "error"))))
+        else:
+            query = query.where(Contact.phone_type == phone_type)
+
+    if opted_out is True:
+        query = query.where(or_(Contact.unsubscribed_at.isnot(None), Contact.do_not_text == True))
+    elif opted_out is False:
+        query = query.where(Contact.unsubscribed_at.is_(None), Contact.do_not_text == False)
+
+    if hot_lead_recent is True:
+        # EXISTS subquery: a hot_lead Activity within the last 30 min
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=30)
+        query = query.where(exists(
+            select(Activity.id).where(
+                Activity.contact_id == Contact.id,
+                Activity.activity_type == "hot_lead",
+                Activity.created_at >= cutoff,
+            )
+        ))
+
+    if city:
+        query = query.where(Company.city.ilike(f"%{city}%"))
+    if state:
+        query = query.where(Company.state.ilike(state))
+
+    if tag_id:
+        # Company has this tag (via the company_tags association)
+        query = query.where(exists(
+            select(company_tags.c.company_id).where(
+                company_tags.c.company_id == Company.id,
+                company_tags.c.tag_id == tag_id,
+            )
+        ))
+
+    # Sort — sane defaults, configurable by query param
+    sort_dir_lower = (sort_dir or "desc").lower()
+    desc_first = sort_dir_lower == "desc"
+    sort_col_map = {
+        "updated":      Contact.updated_at,
+        "created":      Contact.created_at,
+        "name":         Contact.last_name,  # primary sort; first_name as tiebreak below
+        "company":      Company.name,
+        "email_status": Contact.email_status,
+    }
+    sort_col = sort_col_map.get(sort_by, Contact.updated_at)
+    primary = sort_col.desc() if desc_first else sort_col.asc()
+    if sort_by == "name":
+        # Tiebreak by first_name in the same direction
+        secondary = Contact.first_name.desc() if desc_first else Contact.first_name.asc()
+        query = query.order_by(primary, secondary)
+    else:
+        query = query.order_by(primary)
 
     rows = (await db.execute(query)).all()
     return [
@@ -579,4 +643,153 @@ async def verify_contact_email(
         "email_status": contact.email_status,
         "result": hunter_result,
         "score": score,
+    }
+
+
+# ============================================================
+# Merge contacts — consolidate duplicate person records
+#
+# Mirrors the Company merge pattern from app/routes/company_routes.py.
+# Re-points all child rows to the kept contact, backfills empty fields,
+# unions notes, and deletes the duplicates. Admin-only — destructive.
+# ============================================================
+
+class MergeContactsRequest(BaseModel):
+    keep_id: int
+    merge_from_ids: list[int]
+
+
+# Tables that have a contact_id FK we need to re-point during a merge.
+# Activity, GeneratedEmail, Task, TrackingLink, PageView all have contact_id.
+_CONTACT_MERGE_REPOINT_TABLES = ["activities", "generated_emails", "tasks", "tracking_links", "page_views"]
+
+
+@router.post("/contacts/merge")
+async def merge_contacts(
+    req: MergeContactsRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Merge duplicate contacts into a kept contact.
+
+    Use cases:
+      - Same person captured twice (manual + import)
+      - Person has two email addresses on different rows
+      - Person changed companies — kept on new company, old contact merged in
+
+    What happens:
+      1. All child rows on the merge-from contacts are re-pointed:
+         contact_id → keep_id AND company_id → keep.company_id (so all
+         history follows the consolidated person to whichever company they
+         now live on). Activities, GeneratedEmails, Tasks, TrackingLinks,
+         PageViews all flow through.
+      2. Empty fields on kept contact (phone, linkedin_url, title, notes)
+         are backfilled from the first merge-from row that has a non-empty
+         value. Populated kept fields are NOT overwritten.
+      3. Notes are appended (kept's notes + each merge-from's notes,
+         separated by '\\n---\\n') so we don't lose any handwritten context.
+      4. The merge-from contacts are deleted.
+      5. An Activity is logged on the kept contact's company recording the merge.
+
+    Idempotent against re-runs: if A+B → A and you call again, A is
+    unchanged because B no longer exists.
+    """
+    from sqlalchemy import text as sql_text
+    from app.models import Tag
+
+    # Admin-only — destructive
+    if user.role not in ("admin", "super_admin"):
+        raise HTTPException(status_code=403, detail="Admin only")
+    if req.keep_id in req.merge_from_ids:
+        raise HTTPException(status_code=400, detail="keep_id can't also appear in merge_from_ids")
+    if not req.merge_from_ids:
+        raise HTTPException(status_code=400, detail="Pass at least one merge_from_id")
+
+    keep = (await db.execute(select(Contact).where(Contact.id == req.keep_id))).scalar_one_or_none()
+    if not keep:
+        raise HTTPException(status_code=404, detail="keep_id contact not found")
+
+    merge_from = (await db.execute(select(Contact).where(Contact.id.in_(req.merge_from_ids)))).scalars().all()
+    if len(merge_from) != len(req.merge_from_ids):
+        found = {c.id for c in merge_from}
+        missing = [i for i in req.merge_from_ids if i not in found]
+        raise HTTPException(status_code=404, detail=f"Some merge_from_ids not found: {missing}")
+
+    # Backfill empty nullable string fields on the kept contact
+    backfill_fields = [
+        "first_name", "last_name", "title", "email", "phone", "linkedin_url",
+        "phone_type", "phone_carrier", "recent_posts_json",
+    ]
+    backfilled = []
+    for f in backfill_fields:
+        if not hasattr(keep, f):
+            continue
+        cur = getattr(keep, f)
+        if isinstance(cur, str) and cur.strip():
+            continue  # already populated
+        if cur not in (None, ""):
+            continue
+        for src in merge_from:
+            v = getattr(src, f, None)
+            if v not in (None, ""):
+                setattr(keep, f, v)
+                backfilled.append(f)
+                break
+
+    # Notes: append (don't overwrite). Keeps any handwritten context from any
+    # of the merged rows.
+    notes_parts: list[str] = []
+    if (keep.notes or "").strip():
+        notes_parts.append(keep.notes.strip())
+    for src in merge_from:
+        if (src.notes or "").strip():
+            notes_parts.append(f"--- merged from contact #{src.id} ---\n{src.notes.strip()}")
+    if notes_parts:
+        keep.notes = "\n\n".join(notes_parts)
+
+    # Re-point all child tables. Set BOTH contact_id and company_id so the
+    # full activity/sequence/task history follows the kept contact onto
+    # their canonical company (matters when the merge-from contacts lived
+    # on different companies than keep).
+    placeholders = ",".join(f":id{i}" for i in range(len(req.merge_from_ids)))
+    base_params = {"keep": req.keep_id, "keep_co": keep.company_id,
+                   **{f"id{i}": v for i, v in enumerate(req.merge_from_ids)}}
+    repoint_counts: dict[str, int] = {}
+    for tbl in _CONTACT_MERGE_REPOINT_TABLES:
+        result = await db.execute(
+            sql_text(f"UPDATE {tbl} SET contact_id = :keep, company_id = :keep_co WHERE contact_id IN ({placeholders})"),
+            base_params,
+        )
+        repoint_counts[tbl] = result.rowcount or 0
+
+    # Now safe to delete the merge-from contact rows. Cascades nothing
+    # because we already moved every child row.
+    deleted_descriptors = [f"#{c.id} {(c.full_name or c.email or 'unnamed')}" for c in merge_from]
+    for src in merge_from:
+        await db.delete(src)
+
+    # Audit Activity on the kept contact's company
+    db.add(Activity(
+        company_id=keep.company_id,
+        contact_id=keep.id,
+        user_id=user.id,
+        activity_type="contact_merged",
+        content=f"Merged {len(merge_from)} duplicate contact(s) into {keep.full_name or keep.email or '#' + str(keep.id)}: {', '.join(deleted_descriptors)}",
+        metadata_json=json.dumps({
+            "merged_from_ids": req.merge_from_ids,
+            "merged_from_descriptors": deleted_descriptors,
+            "repoint_counts": repoint_counts,
+            "backfilled_fields": backfilled,
+        }),
+    ))
+
+    await db.commit()
+    await db.refresh(keep)
+    return {
+        "kept_id": keep.id,
+        "kept_name": keep.full_name or keep.email,
+        "merged_count": len(merge_from),
+        "merged_descriptors": deleted_descriptors,
+        "repoint_counts": repoint_counts,
+        "backfilled_fields": backfilled,
     }

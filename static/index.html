@@ -538,22 +538,50 @@
                         <button class="btn btn-primary btn-sm" onclick="startPowerDialer()" title="Dial through this filtered list, one after another">Power Dial</button>
                     </div>
                 </div>
-                <div style="display:flex;gap:12px;margin-bottom:12px;align-items:center;flex-wrap:wrap">
+                <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap">
                     <input type="text" id="contacts-search" placeholder="Search name, email, company..." oninput="debouncedContactSearch()" style="padding:6px 12px;border:1px solid #ddd;border-radius:6px;font-size:13px;width:220px">
+                    <input type="text" id="contacts-city" placeholder="City" oninput="debouncedContactSearch()" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px;width:90px">
+                    <input type="text" id="contacts-state" placeholder="State (e.g. NV)" oninput="debouncedContactSearch()" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px;width:100px">
                     <select id="contacts-rep-filter" onchange="loadContacts(_lastContactMode)" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px;display:none">
                         <option value="">All Reps</option>
                     </select>
                     <select id="contacts-email-status" onchange="loadContacts(_lastContactMode)" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px">
-                        <option value="">Any Status</option>
+                        <option value="">Any Email Status</option>
                         <option value="valid">Valid Email</option>
                         <option value="invalid">Invalid</option>
                         <option value="bounced">Bounced</option>
                         <option value="unknown">Unknown</option>
                     </select>
+                    <select id="contacts-phone-type" onchange="loadContacts(_lastContactMode)" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px">
+                        <option value="">Any Phone</option>
+                        <option value="mobile">📱 Mobile</option>
+                        <option value="landline">☎ Landline</option>
+                        <option value="voip">VoIP</option>
+                        <option value="unknown">Not checked yet</option>
+                    </select>
                     <select id="contacts-sequence-filter" onchange="loadContacts(_lastContactMode)" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px">
                         <option value="">Any Sequence</option>
                         <option value="yes">Has Sequence</option>
                         <option value="no">No Sequence</option>
+                    </select>
+                    <select id="contacts-opt-out" onchange="loadContacts(_lastContactMode)" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px">
+                        <option value="">Any Opt-Out</option>
+                        <option value="no">Reachable</option>
+                        <option value="yes">Opted Out</option>
+                    </select>
+                    <select id="contacts-tag-filter" onchange="loadContacts(_lastContactMode)" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px">
+                        <option value="">Any Tag</option>
+                    </select>
+                    <label style="font-size:12px;color:#666;display:flex;align-items:center;gap:4px"><input type="checkbox" id="contacts-hot-only" onchange="loadContacts(_lastContactMode)"> 🔥 Hot only</label>
+                    <span style="border-left:1px solid #ddd;height:20px"></span>
+                    <select id="contacts-sort" onchange="loadContacts(_lastContactMode)" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px" title="Sort by">
+                        <option value="updated:desc">Recently updated</option>
+                        <option value="created:desc">Recently created</option>
+                        <option value="name:asc">Name A→Z</option>
+                        <option value="name:desc">Name Z→A</option>
+                        <option value="company:asc">Company A→Z</option>
+                        <option value="company:desc">Company Z→A</option>
+                        <option value="email_status:asc">Email status</option>
                     </select>
                     <span id="contacts-count" style="font-size:12px;color:#888"></span>
                 </div>
@@ -1204,7 +1232,7 @@
             window.scrollTo(0, 0);
             if (page === 'dashboard') loadDashboard();
             if (page === 'companies') loadCompanies('active');
-            if (page === 'contacts') loadContacts('all');
+            if (page === 'contacts') { loadContacts('all'); loadContactTagOptions(); }
             if (page === 'pipeline') loadPipeline();
             if (page === 'tasks') loadTasks('mine');
             if (page === 'settings') loadSettings();
@@ -1687,6 +1715,21 @@
             _contactSearchTimeout = setTimeout(() => loadContacts(_lastContactMode), 300);
         }
 
+        // Populate the tag-filter dropdown once when the page is opened. Tags are
+        // org-wide (not per-contact), so we cache via the dropdown's existing options.
+        async function loadContactTagOptions() {
+            const sel = document.getElementById('contacts-tag-filter');
+            if (!sel || sel.dataset.loaded === '1') return;
+            sel.dataset.loaded = '1';
+            const tags = await api('/api/crm/tags') || [];
+            for (const t of tags) {
+                const opt = document.createElement('option');
+                opt.value = t.id;
+                opt.textContent = t.name;
+                sel.appendChild(opt);
+            }
+        }
+
         async function loadContacts(mode) {
             _lastContactMode = mode || 'all';
             let params = [];
@@ -1694,9 +1737,13 @@
             else if (mode === 'no_email') params.push('has_email=false');
             else if (mode === 'with_phone') params.push('has_phone=true');
 
-            // Search
+            // Search + city + state
             const search = document.getElementById('contacts-search')?.value?.trim();
             if (search) params.push(`search=${encodeURIComponent(search)}`);
+            const city = document.getElementById('contacts-city')?.value?.trim();
+            if (city) params.push(`city=${encodeURIComponent(city)}`);
+            const state = document.getElementById('contacts-state')?.value?.trim();
+            if (state) params.push(`state=${encodeURIComponent(state)}`);
 
             // Rep filter (admin only)
             const repId = document.getElementById('contacts-rep-filter')?.value;
@@ -1706,10 +1753,32 @@
             const emailStatus = document.getElementById('contacts-email-status')?.value;
             if (emailStatus) params.push(`email_status=${emailStatus}`);
 
+            // Phone-type
+            const phoneType = document.getElementById('contacts-phone-type')?.value;
+            if (phoneType) params.push(`phone_type=${phoneType}`);
+
             // Sequence filter
             const seqFilter = document.getElementById('contacts-sequence-filter')?.value;
             if (seqFilter === 'yes') params.push('has_sequence=true');
             else if (seqFilter === 'no') params.push('has_sequence=false');
+
+            // Opt-out
+            const optOut = document.getElementById('contacts-opt-out')?.value;
+            if (optOut === 'yes') params.push('opted_out=true');
+            else if (optOut === 'no') params.push('opted_out=false');
+
+            // Tag
+            const tagId = document.getElementById('contacts-tag-filter')?.value;
+            if (tagId) params.push(`tag_id=${tagId}`);
+
+            // Hot lead recent
+            if (document.getElementById('contacts-hot-only')?.checked) params.push('hot_lead_recent=true');
+
+            // Sort
+            const sortVal = document.getElementById('contacts-sort')?.value || 'updated:desc';
+            const [sortBy, sortDir] = sortVal.split(':');
+            if (sortBy) params.push(`sort_by=${sortBy}`);
+            if (sortDir) params.push(`sort_dir=${sortDir}`);
 
             let path = '/api/contacts' + (params.length ? '?' + params.join('&') : '');
             const data = await api(path);
@@ -1802,12 +1871,84 @@
                 return;
             }
             bar.style.display = 'flex';
+            const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.role === 'super_admin');
+            const mergeBtn = (isAdmin && _contactSel.size >= 2)
+                ? `<button class="btn btn-sm" onclick="openContactMergeModal()" style="background:var(--bmp-orange);color:white;font-weight:600" title="Combine these duplicates into one contact">🔀 Merge</button>`
+                : '';
             bar.innerHTML = `
                 <span><strong>${_contactSel.size}</strong> contact${_contactSel.size > 1 ? 's' : ''} selected</span>
                 <button class="btn btn-sm" onclick="batchContactsToDialer()" style="background:var(--bmp-green);color:white;font-weight:600">📞 Power Dialer</button>
+                ${mergeBtn}
                 <button class="btn btn-sm" onclick="batchDeleteContacts()" style="background:#c0392b;color:white;font-weight:600">🗑 Delete</button>
                 <button class="btn btn-sm" onclick="clearContactSelection()" style="background:transparent;color:white;border:1px solid white">Clear</button>
             `;
+        }
+
+        async function openContactMergeModal() {
+            if (_contactSel.size < 2) return;
+            const ids = Array.from(_contactSel);
+            // The contacts list already has the data we need — pull from _lastContactsList
+            const byId = Object.fromEntries((_lastContactsList || []).map(c => [c.id, c]));
+            const contacts = ids.map(id => byId[id] || { id, name: `(unknown #${id})` });
+
+            const root = document.getElementById('modal-root');
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:640px">
+                        <h3 style="margin:0 0 8px">Merge ${contacts.length} contacts</h3>
+                        <p style="font-size:12px;color:#666;margin-bottom:12px">Pick the contact to <strong>keep</strong>. All activities, sequences, tasks, click-throughs, and page-views from the others will be re-pointed to this contact's company. The duplicates are then deleted.</p>
+                        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;max-height:400px;overflow-y:auto">
+                            ${contacts.map((c, i) => `
+                                <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid #ddd;border-radius:6px;cursor:pointer;background:#fafafa">
+                                    <input type="radio" name="contact-merge-keep" value="${c.id}" ${i === 0 ? 'checked' : ''}>
+                                    <div style="flex:1">
+                                        <div style="font-weight:600">${escapeHtml(c.name || c.email || `(unnamed #${c.id})`)}${c.is_primary ? ' <span style="font-size:9px;background:var(--bmp-green);color:white;padding:1px 4px;border-radius:2px">PRIMARY</span>' : ''}</div>
+                                        <div style="font-size:11px;color:#888">
+                                            ${c.title ? escapeHtml(c.title) + ' · ' : ''}
+                                            ${escapeHtml(c.company_name || '(no company)')}
+                                            ${c.email ? ' · ' + escapeHtml(c.email) : ''}
+                                            ${c.phone ? ' · ' + escapeHtml(c.phone) : ''}
+                                            ${c.has_sequence ? ' · <strong>has sequence</strong>' : ''}
+                                        </div>
+                                    </div>
+                                </label>
+                            `).join('')}
+                        </div>
+                        <div style="font-size:11px;color:#888;background:#fdf6e3;border-left:3px solid var(--bmp-orange);padding:8px 10px;border-radius:4px;margin-bottom:12px">
+                            ⚠️ Cannot be undone. Empty fields on the kept contact will be backfilled from the others (phone, LinkedIn, title, etc.) but populated fields are <strong>not</strong> overwritten. Notes are appended (you keep all handwritten context). Activities and sequences from the duplicates flow to the kept contact's company.
+                        </div>
+                        <div class="modal-actions" style="display:flex;gap:8px;justify-content:flex-end">
+                            <button class="btn btn-secondary" onclick="document.getElementById('modal-root').innerHTML=''">Cancel</button>
+                            <button class="btn btn-danger" id="confirm-contact-merge-btn" onclick="confirmContactMerge()">Merge</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function confirmContactMerge() {
+            const keepId = parseInt((document.querySelector('input[name="contact-merge-keep"]:checked') || {}).value, 10);
+            if (!keepId) { toast('Pick a contact to keep'); return; }
+            const mergeFromIds = Array.from(_contactSel).filter(id => id !== keepId);
+            if (mergeFromIds.length === 0) { toast('Nothing to merge'); return; }
+
+            const btn = document.getElementById('confirm-contact-merge-btn');
+            if (btn) { btn.disabled = true; btn.textContent = 'Merging…'; }
+
+            const data = await api('/api/contacts/merge', {
+                method: 'POST',
+                body: JSON.stringify({ keep_id: keepId, merge_from_ids: mergeFromIds }),
+            });
+
+            if (data) {
+                const counts = data.repoint_counts || {};
+                const moved = Object.entries(counts).filter(([_, n]) => n > 0).map(([t, n]) => `${n} ${t}`).join(', ') || 'no child rows';
+                toast(`✓ Merged ${data.merged_count} into ${escapeHtml(data.kept_name || 'contact')} — moved: ${moved}`);
+                document.getElementById('modal-root').innerHTML = '';
+                clearContactSelection();
+                loadContacts(_lastContactMode);
+            }
+            if (btn) { btn.disabled = false; btn.textContent = 'Merge'; }
         }
 
         function clearContactSelection() {
@@ -2850,7 +2991,7 @@
                 imessage_sent: '💬', imessage_received: '💬', imessage_read: '👁️',
                 sms_sent: '📱', sms_received: '📱', sms_opt_out: '🛑', sms_opt_in: '✅',
                 hot_lead: '🔥', sequence_step_skipped: '⏭️',
-                company_merged: '🔀',
+                company_merged: '🔀', contact_merged: '🔀',
             };
             return items.map(a => {
                 _callPanels[a.id] = a;  // stash for later expand
