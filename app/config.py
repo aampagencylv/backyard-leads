@@ -20,8 +20,11 @@ class Settings(BaseSettings):
     reply_domain: str = "backyardmarketingpros.com"
     # Reply-To token routing — Reply-To becomes `r-<token>@<inbound_reply_domain>`.
     # Resend Inbound catches every email at this domain via catch-all and POSTs to
-    # /api/email/inbound. Empty/legacy mode = fall back to user@reply_domain.
-    inbound_reply_domain: str = "inbound.backyardmarketingpros.com"
+    # /api/email/inbound. We use the same domain as outbound (go.bymp.com already
+    # has Receiving enabled in Resend with a verified MX) — no separate
+    # subdomain needed. The `r-<27char>` local-part won't collide with normal
+    # user addresses since no real person has a username that long + random.
+    inbound_reply_domain: str = "go.backyardmarketingpros.com"
     public_url: str = "https://prospector.backyardmarketingpros.com"
     bmp_postal_address: str = "Backyard Marketing Pros, Las Vegas, NV"  # CAN-SPAM requires a real postal address; override in .env
 

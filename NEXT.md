@@ -127,30 +127,40 @@ Inbound catches all mail at that subdomain via catch-all routing and POSTs to
 Works regardless of inbox tool — the BDR's choice of Missive vs. Gmail vs.
 Outlook doesn't matter. Critical for the SaaS plan.
 
-**Setup steps Steve needs to do (5-10 min):**
+**Setup steps Steve needs to do (~5 min):**
 
-1. **Create Resend Inbound domain**:
-   - Resend dashboard → Domains → Add domain → `inbound.backyardmarketingpros.com`
-   - Choose "Receiving" mode. Resend will give you the MX record value
-     (something like `inbound-smtp.resend.com` or similar).
+> Update 2026-05-08: The existing `go.backyardmarketingpros.com` domain in
+> Resend ALREADY has Receiving enabled (Steve confirmed via screenshot —
+> MX → inbound-smtp.us-east-1.amazonaws.com is verified). So there's no
+> new DNS or new domain to add. We just configure the webhook destination
+> in Resend's dashboard.
 
-2. **Add MX record at SiteGround DNS**:
-   - DNS Manager → Add MX record
-   - Host: `inbound` (creates `inbound.backyardmarketingpros.com`)
-   - Value: the MX target Resend gave you
-   - Priority: 10
-   - TTL: 3600
-   - Save. Propagation usually <5 min.
+1. **In Resend dashboard, configure the inbound webhook:**
+   - Look for either: (a) `Webhooks` in the left nav, or (b) `go.backyardmarketingpros.com` → Configuration tab → Inbound section. Resend has rearranged this UI a couple of times.
+   - Add a new webhook for the `email.received` event scoped to
+     `go.backyardmarketingpros.com`.
+   - Endpoint URL: `https://prospector.backyardmarketingpros.com/api/email/inbound`
+   - Save the signing secret Resend generates.
 
-3. **Create Resend Inbound route**:
-   - Resend dashboard → Inbound → Create Route
-   - Match pattern: `*@inbound.backyardmarketingpros.com` (catch-all)
-   - Webhook URL: `https://prospector.backyardmarketingpros.com/api/email/inbound`
-   - Save the signing secret it generates → paste into platform `.env` as
-     `RESEND_WEBHOOK_SECRET=<the secret>` (next to the existing webhook
-     secret if you have one, else create the env var). Restart the service.
-   - Without the secret, the webhook accepts any payload (fine for testing,
-     bad for prod). Set it before going live.
+2. **Paste the signing secret into the platform `.env`**:
+   ```bash
+   ssh vps "echo 'RESEND_WEBHOOK_SECRET=<the-secret-from-resend>' >> /opt/backyard-leads/.env && systemctl restart backyard-leads"
+   ```
+   Without this, the webhook accepts any payload (fine for testing, bad for
+   prod — anyone who knew the URL could forge fake replies).
+
+3. **Test it**: send yourself a test sequence email. Reply from a different
+   email address. Within ~30 seconds you should see:
+   - `email_replied` Activity on the contact's timeline
+   - The contact's sequence auto-paused
+   - The reply forwarded to your Missive inbox with the prospect's email as
+     Reply-To (so when you hit Reply in Missive, it goes to them, not back
+     through us)
+
+4. **Watch for**: auto-responders / OOO replies should log as
+   `email_auto_response` (different icon, doesn't pause sequence). Tune the
+   detection heuristic in `email_inbound_routes._looks_like_auto_response()`
+   if you see false positives.
 
 4. **Test it**: send yourself a test sequence email. Reply from a different
    email address. Within ~30 seconds you should see:
