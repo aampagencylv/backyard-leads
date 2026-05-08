@@ -31,6 +31,7 @@ from app.routes import (
     public_api,
     integration_routes,
     google_oauth_routes,
+    scheduler_routes,
 )
 
 
@@ -190,6 +191,9 @@ app.include_router(custom_field_routes.router)
 app.include_router(public_api.router)
 app.include_router(integration_routes.router)
 app.include_router(google_oauth_routes.router)
+app.include_router(scheduler_routes.host_router)
+app.include_router(scheduler_routes.public_router)
+app.include_router(scheduler_routes.booking_page_router)
 
 # Serve static frontend
 app.mount("/static", StaticFiles(directory="static"), name="static")

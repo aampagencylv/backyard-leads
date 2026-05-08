@@ -1389,12 +1389,82 @@ function verify(secret, rawBody, header) {
                         <div style="font-size:13px;line-height:1.7">
                             <div><strong>Connected as:</strong> <span id="google-cal-email" style="color:#1b5e20"></span></div>
                             <div id="google-cal-since" style="color:#888;font-size:11px"></div>
-                            <div style="margin-top:6px"><strong>Booking URL:</strong> <a id="google-cal-booking-link" target="_blank" rel="noopener" style="color:#0077B5"></a> <span style="font-size:10px;color:#888">(public page goes live in Phase 3)</span></div>
+                            <div style="margin-top:6px"><strong>Booking URL:</strong> <a id="google-cal-booking-link" target="_blank" rel="noopener" style="color:#0077B5"></a></div>
                         </div>
                         <div style="margin-top:10px">
                             <button class="btn btn-secondary btn-sm" onclick="disconnectGoogleCalendar()">Disconnect</button>
                         </div>
                     </div>
+                </div>
+
+                <!-- Scheduling rules — only meaningful when Google is connected -->
+                <div id="scheduling-rules-section" class="search-box" style="max-width:600px;margin-top:16px;display:none">
+                    <h3 style="margin:0 0 6px">⏰ Booking Availability</h3>
+                    <p style="font-size:12px;color:#888;margin-bottom:14px">When are you available to take discovery calls? Slots respect your calendar — if you're already booked elsewhere, that time won't be offered.</p>
+
+                    <div style="display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:center;font-size:13px;margin-bottom:14px">
+                        <label style="color:#666">Slot length</label>
+                        <select id="sched-slot-minutes" onchange="saveSchedulingConfig()" style="padding:6px;border:1px solid #ddd;border-radius:4px;width:140px">
+                            <option value="15">15 minutes</option>
+                            <option value="30">30 minutes</option>
+                            <option value="45">45 minutes</option>
+                            <option value="60">60 minutes</option>
+                        </select>
+                        <label style="color:#666">Buffer after</label>
+                        <select id="sched-buffer-after" onchange="saveSchedulingConfig()" style="padding:6px;border:1px solid #ddd;border-radius:4px;width:140px">
+                            <option value="0">No buffer</option>
+                            <option value="5">5 min</option>
+                            <option value="10">10 min</option>
+                            <option value="15">15 min</option>
+                            <option value="30">30 min</option>
+                        </select>
+                        <label style="color:#666">Min lead time</label>
+                        <select id="sched-min-lead" onchange="saveSchedulingConfig()" style="padding:6px;border:1px solid #ddd;border-radius:4px;width:140px">
+                            <option value="0">None</option>
+                            <option value="1">1 hour</option>
+                            <option value="2">2 hours</option>
+                            <option value="4">4 hours</option>
+                            <option value="8">8 hours</option>
+                            <option value="24">24 hours</option>
+                        </select>
+                        <label style="color:#666">Max advance</label>
+                        <select id="sched-max-advance" onchange="saveSchedulingConfig()" style="padding:6px;border:1px solid #ddd;border-radius:4px;width:140px">
+                            <option value="7">7 days</option>
+                            <option value="14">14 days</option>
+                            <option value="30">30 days</option>
+                            <option value="60">60 days</option>
+                        </select>
+                        <label style="color:#666">Daily limit</label>
+                        <select id="sched-daily-limit" onchange="saveSchedulingConfig()" style="padding:6px;border:1px solid #ddd;border-radius:4px;width:140px">
+                            <option value="0">Unlimited</option>
+                            <option value="3">3 / day</option>
+                            <option value="5">5 / day</option>
+                            <option value="8">8 / day</option>
+                        </select>
+                    </div>
+
+                    <h4 style="margin:0 0 8px;font-size:13px;color:#444">Weekly hours <span style="color:#888;font-weight:400;font-size:11px">(in your timezone, <span id="sched-host-tz"></span>)</span></h4>
+                    <div id="sched-rules-grid" style="display:grid;grid-template-columns:80px 1fr;gap:6px 12px;font-size:12px;align-items:start;margin-bottom:14px"></div>
+
+                    <details style="margin-bottom:12px">
+                        <summary style="cursor:pointer;font-size:12px;color:#666">Booking page wording</summary>
+                        <div style="margin-top:8px;display:grid;grid-template-columns:auto 1fr;gap:6px 10px;align-items:center;font-size:12px">
+                            <label style="color:#666">Page title</label>
+                            <input id="sched-page-headline" onchange="saveSchedulingConfig()" maxlength="200" style="padding:6px;border:1px solid #ddd;border-radius:4px">
+                            <label style="color:#666">Page intro</label>
+                            <textarea id="sched-page-intro" onchange="saveSchedulingConfig()" rows="2" style="padding:6px;border:1px solid #ddd;border-radius:4px;font-family:inherit"></textarea>
+                            <label style="color:#666">Meeting title</label>
+                            <input id="sched-meeting-title" onchange="saveSchedulingConfig()" maxlength="120" style="padding:6px;border:1px solid #ddd;border-radius:4px">
+                            <label style="color:#666">Meeting description</label>
+                            <textarea id="sched-meeting-desc" onchange="saveSchedulingConfig()" rows="2" style="padding:6px;border:1px solid #ddd;border-radius:4px;font-family:inherit"></textarea>
+                        </div>
+                    </details>
+
+                    <div style="display:flex;gap:8px;align-items:center">
+                        <button class="btn btn-secondary btn-sm" onclick="previewSchedulingSlots()">👁️ Preview slots (next 7 days)</button>
+                        <span id="sched-preview-status" style="font-size:11px;color:#888"></span>
+                    </div>
+                    <div id="sched-preview-results" style="margin-top:12px"></div>
                 </div>
 
                 <!-- Notifications -->
@@ -6524,12 +6594,14 @@ hmac.compare_digest(expected, header)</pre>
             const notConn = document.getElementById('google-cal-not-connected');
             const conn = document.getElementById('google-cal-connected');
             const notCfg = document.getElementById('google-cal-not-configured');
+            const rulesSection = document.getElementById('scheduling-rules-section');
             if (!data.configured) {
                 if (status) status.textContent = '· not configured';
                 if (status) status.style.color = '#c0392b';
                 if (notConn) notConn.style.display = '';
                 if (conn) conn.style.display = 'none';
                 if (notCfg) notCfg.style.display = '';
+                if (rulesSection) rulesSection.style.display = 'none';
                 const redirEl = document.getElementById('google-cal-redirect-uri');
                 if (redirEl) redirEl.textContent = location.origin + '/api/google/oauth/callback';
                 return;
@@ -6548,11 +6620,188 @@ hmac.compare_digest(expected, header)</pre>
                     linkEl.href = data.booking_url;
                     linkEl.textContent = data.booking_url;
                 }
+                if (rulesSection) rulesSection.style.display = '';
+                loadSchedulingConfig();
             } else {
                 if (status) { status.textContent = '· not connected'; status.style.color = '#888'; }
                 if (notConn) notConn.style.display = '';
                 if (conn) conn.style.display = 'none';
+                if (rulesSection) rulesSection.style.display = 'none';
             }
+        }
+
+        // ============================================================
+        // Scheduling availability rules
+        // ============================================================
+
+        const _DAY_NAMES = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+
+        function _renderRulesGrid(rules) {
+            const grid = document.getElementById('sched-rules-grid');
+            if (!grid) return;
+            // Group rules by weekday
+            const byDay = [[],[],[],[],[],[],[]];
+            for (const r of rules || []) {
+                if (typeof r.weekday === 'number' && r.weekday >= 0 && r.weekday < 7) {
+                    byDay[r.weekday].push(r);
+                }
+            }
+            let html = '';
+            for (let d = 0; d < 7; d++) {
+                html += `<div style="font-weight:600;color:#444;line-height:30px">${_DAY_NAMES[d]}</div><div style="display:flex;flex-direction:column;gap:4px">`;
+                for (let i = 0; i < byDay[d].length; i++) {
+                    const r = byDay[d][i];
+                    html += `<div style="display:flex;gap:4px;align-items:center" data-day="${d}" data-idx="${i}">
+                        <input type="time" value="${r.start_time}" data-which="start" onchange="updateRuleField(${d},${i},'start_time',this.value)" style="padding:4px;border:1px solid #ddd;border-radius:4px;font-size:12px;width:100px">
+                        <span style="color:#888">→</span>
+                        <input type="time" value="${r.end_time}" data-which="end" onchange="updateRuleField(${d},${i},'end_time',this.value)" style="padding:4px;border:1px solid #ddd;border-radius:4px;font-size:12px;width:100px">
+                        <button type="button" onclick="removeRule(${d},${i})" style="background:transparent;color:#c0392b;border:0;cursor:pointer;font-size:14px;padding:0 4px" title="Remove">✕</button>
+                    </div>`;
+                }
+                html += `<button type="button" onclick="addRule(${d})" style="background:transparent;color:#0077B5;border:0;cursor:pointer;font-size:11px;padding:2px 0;text-align:left">+ add hours</button></div>`;
+            }
+            grid.innerHTML = html;
+        }
+
+        let _schedRules = [];
+
+        function _flattenAndSave() {
+            // Save current state
+            saveSchedulingConfig();
+        }
+
+        function addRule(day) {
+            _schedRules.push({ weekday: day, start_time: '09:00', end_time: '17:00' });
+            _renderRulesGrid(_schedRules);
+            _flattenAndSave();
+        }
+
+        function removeRule(day, idx) {
+            // Find the idx-th rule with weekday=day in _schedRules
+            let seen = 0;
+            for (let i = 0; i < _schedRules.length; i++) {
+                if (_schedRules[i].weekday === day) {
+                    if (seen === idx) {
+                        _schedRules.splice(i, 1);
+                        break;
+                    }
+                    seen++;
+                }
+            }
+            _renderRulesGrid(_schedRules);
+            _flattenAndSave();
+        }
+
+        function updateRuleField(day, idx, field, value) {
+            let seen = 0;
+            for (let i = 0; i < _schedRules.length; i++) {
+                if (_schedRules[i].weekday === day) {
+                    if (seen === idx) {
+                        _schedRules[i][field] = value;
+                        break;
+                    }
+                    seen++;
+                }
+            }
+            _flattenAndSave();
+        }
+
+        async function loadSchedulingConfig() {
+            const data = await api('/api/me/scheduling/config');
+            if (!data) return;
+            const set = (id, val) => { const el = document.getElementById(id); if (el != null && val != null) el.value = String(val); };
+            set('sched-slot-minutes', data.slot_minutes);
+            set('sched-buffer-after', data.buffer_after_minutes);
+            set('sched-min-lead', data.min_lead_time_hours);
+            set('sched-max-advance', data.max_advance_days);
+            set('sched-daily-limit', data.daily_limit);
+            set('sched-page-headline', data.page_headline);
+            set('sched-page-intro', data.page_intro);
+            set('sched-meeting-title', data.meeting_title);
+            set('sched-meeting-desc', data.meeting_description);
+            // Show host TZ next to "Weekly hours" label
+            const tzEl = document.getElementById('sched-host-tz');
+            if (tzEl) {
+                const briefTz = document.getElementById('brief-tz');
+                tzEl.textContent = (briefTz && briefTz.value) || 'America/Phoenix';
+            }
+            _schedRules = (data.rules || []).map(r => ({ weekday: r.weekday, start_time: r.start_time, end_time: r.end_time }));
+            _renderRulesGrid(_schedRules);
+        }
+
+        let _schedSaveTimer = null;
+        async function saveSchedulingConfig() {
+            // Debounce — if the user is mashing through fields, batch
+            if (_schedSaveTimer) clearTimeout(_schedSaveTimer);
+            _schedSaveTimer = setTimeout(async () => {
+                const num = id => {
+                    const el = document.getElementById(id);
+                    return el ? parseInt(el.value, 10) : null;
+                };
+                const txt = id => {
+                    const el = document.getElementById(id);
+                    return el ? el.value : null;
+                };
+                const body = {
+                    slot_minutes: num('sched-slot-minutes'),
+                    buffer_after_minutes: num('sched-buffer-after'),
+                    min_lead_time_hours: num('sched-min-lead'),
+                    max_advance_days: num('sched-max-advance'),
+                    daily_limit: num('sched-daily-limit'),
+                    rules: _schedRules,
+                    meeting_title: txt('sched-meeting-title'),
+                    meeting_description: txt('sched-meeting-desc'),
+                    page_headline: txt('sched-page-headline'),
+                    page_intro: txt('sched-page-intro'),
+                };
+                const data = await api('/api/me/scheduling/config', {
+                    method: 'PATCH',
+                    body: JSON.stringify(body),
+                });
+                if (data) {
+                    const status = document.getElementById('sched-preview-status');
+                    if (status) {
+                        status.textContent = '✓ saved';
+                        status.style.color = '#1b5e20';
+                        setTimeout(() => { if (status.textContent === '✓ saved') status.textContent = ''; }, 1500);
+                    }
+                }
+            }, 300);
+        }
+
+        async function previewSchedulingSlots() {
+            const status = document.getElementById('sched-preview-status');
+            const results = document.getElementById('sched-preview-results');
+            if (status) { status.textContent = 'Previewing…'; status.style.color = '#888'; }
+            results.innerHTML = '';
+            const data = await api('/api/me/scheduling/preview?days=7');
+            if (!data) return;
+            if (data.google_error) {
+                results.innerHTML = `<div style="color:#c0392b;font-size:12px">⚠️ ${data.google_error.replace(/_/g,' ')} — reconnect Google Calendar.</div>`;
+                if (status) status.textContent = '';
+                return;
+            }
+            if (!data.slots || !data.slots.length) {
+                results.innerHTML = `<div style="color:#888;font-size:12px">No slots in the next 7 days. Add weekly hours above.</div>`;
+                if (status) status.textContent = '';
+                return;
+            }
+            const tz = data.host_timezone || 'America/Phoenix';
+            const byDay = {};
+            for (const s of data.slots) {
+                const day = s.starts_at_local.slice(0, 10);
+                if (!byDay[day]) byDay[day] = [];
+                byDay[day].push(s);
+            }
+            let html = `<div style="font-size:12px;color:#666;margin-bottom:6px">${data.slots.length} slot${data.slots.length === 1 ? '' : 's'} available — times shown in ${tz}</div>`;
+            html += '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;font-size:11px">';
+            for (const day of Object.keys(byDay).sort().slice(0, 7)) {
+                const dt = new Date(day + 'T00:00:00');
+                html += `<div style="background:#f8f8f8;padding:8px;border-radius:6px"><strong>${dt.toLocaleDateString(undefined, { weekday:'short', month:'short', day:'numeric' })}</strong><div style="margin-top:4px;line-height:1.5">${byDay[day].slice(0, 12).map(s => new Date(s.starts_at_local).toLocaleTimeString(undefined, { hour:'numeric', minute:'2-digit' })).join(' · ')}${byDay[day].length > 12 ? ' …' : ''}</div></div>`;
+            }
+            html += '</div>';
+            results.innerHTML = html;
+            if (status) { status.textContent = '✓ rendered'; status.style.color = '#1b5e20'; }
         }
 
         async function connectGoogleCalendar() {

@@ -974,3 +974,86 @@ class AuditReportModel(Base):
     # "I've Scheduled" button. nullable means: not booked yet.
     booked_at = Column(DateTime, nullable=True)
     booked_email = Column(String(255), nullable=True)
+
+
+class SchedulingConfig(Base):
+    """Per-user availability rules + display preferences for the native
+    scheduler. One row per User; created lazily on first access.
+
+    Recurring availability lives in `rules_json` as an array of:
+      [{"weekday": 0-6 (Mon=0), "start_time": "09:00", "end_time": "12:00"}, ...]
+
+    Date-specific overrides (vacation, special hours) intentionally
+    deferred to a follow-up — recurring rules cover the 95% case.
+    """
+    __tablename__ = "scheduling_configs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, unique=True, index=True)
+
+    # Slot mechanics
+    slot_minutes = Column(Integer, nullable=False, default=30)             # 15/30/45/60
+    buffer_before_minutes = Column(Integer, nullable=False, default=0)
+    buffer_after_minutes = Column(Integer, nullable=False, default=5)
+    min_lead_time_hours = Column(Integer, nullable=False, default=4)        # don't show slots within X hours
+    max_advance_days = Column(Integer, nullable=False, default=30)
+    daily_limit = Column(Integer, nullable=False, default=0)                # 0 = unlimited
+
+    # Recurring availability (JSON array)
+    rules_json = Column(Text, nullable=True)
+
+    # Booking page customization
+    meeting_title = Column(String(120), nullable=False, default="Discovery Call")
+    meeting_description = Column(Text, nullable=False,
+                                 default="A quick call to walk through how Backyard Marketing Pros can grow your business.")
+    page_headline = Column(String(200), nullable=False, default="Book a Discovery Call")
+    page_intro = Column(Text, nullable=False,
+                        default="Pick a time that works for you. The call lands on both our calendars and you'll get a confirmation email.")
+
+    # Public visibility — admin can deactivate without disconnecting Google
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+
+class Booking(Base):
+    """A confirmed booking made through the native scheduler.
+
+    Persisted independently of Google so we can rebuild state if the
+    user disconnects, and so cancellation/reschedule UI doesn't depend
+    on round-tripping the Google event id every time.
+
+    `host_user_id` is the rep being booked. `prospect_*` fields capture
+    what the booker submitted on the form. `google_event_id` is the
+    event we created on the host's BMP Discovery Calls calendar."""
+    __tablename__ = "bookings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    host_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+
+    # Time window (UTC)
+    starts_at = Column(DateTime, nullable=False, index=True)
+    ends_at = Column(DateTime, nullable=False)
+
+    # Prospect-supplied
+    prospect_name = Column(String(160), nullable=False)
+    prospect_email = Column(String(255), nullable=False, index=True)
+    prospect_phone = Column(String(40), nullable=True)
+    prospect_message = Column(Text, nullable=True)
+
+    # Linkage back to CRM (best-effort match on email at booking time)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=True)
+    contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=True)
+
+    # Google Calendar
+    google_event_id = Column(String(255), nullable=True)
+    google_event_link = Column(String(500), nullable=True)
+
+    # Lifecycle
+    status = Column(String(20), nullable=False, default="confirmed")  # confirmed/cancelled
+    cancelled_at = Column(DateTime, nullable=True)
+    cancelled_reason = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
