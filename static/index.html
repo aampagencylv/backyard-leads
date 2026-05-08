@@ -103,13 +103,74 @@
         .lead-actions, .company-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 
         /* Email previews */
-        .email-card { background: #f8f9fa; border-radius: 8px; padding: 14px; margin: 8px 0; font-size: 13px; border-left: 3px solid #ddd; }
-        .email-card.sent { border-left-color: var(--bmp-green); }
-        .email-card.paused { border-left-color: #95a5a6; opacity: 0.7; }
-        .email-card .meta { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 11px; font-weight: 600; color: #999; text-transform: uppercase; }
+        /* Sequence step cards — each is a discrete unit with strong visual identity */
+        .email-card {
+            background: #ffffff;
+            border-radius: 10px;
+            padding: 16px 18px 14px;
+            margin: 16px 0;
+            font-size: 13px;
+            border: 1px solid #e2e6e8;
+            border-left: 6px solid #cfd5d8;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.02);
+            position: relative;
+            transition: box-shadow 0.15s, transform 0.05s;
+        }
+        .email-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.06), 0 2px 4px rgba(0,0,0,0.03); }
+        /* Channel-colored left rail — at-a-glance step type */
+        .email-card.step-type-email    { border-left-color: var(--bmp-green); }
+        .email-card.step-type-imessage { border-left-color: #0b93f6; }
+        .email-card.step-type-linkedin { border-left-color: #0077B5; }
+        .email-card.step-type-call     { border-left-color: var(--bmp-orange); }
+        .email-card.step-type-text     { border-left-color: #0b93f6; }
+        /* State overrides */
+        .email-card.sent {
+            background: linear-gradient(to right, #f0f8f0 0%, #ffffff 8%);
+            border-left-color: var(--bmp-green);
+        }
+        .email-card.sent::after {
+            content: 'DONE';
+            position: absolute; top: 14px; right: 16px;
+            font-size: 9px; font-weight: 700; letter-spacing: 0.5px;
+            color: var(--bmp-green); background: #e8f5e9;
+            padding: 2px 8px; border-radius: 10px;
+        }
+        .email-card.paused { background: #fafafa; opacity: 0.78; border-left-color: #95a5a6; }
+        .email-card .meta {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 10px;
+            font-size: 11px; font-weight: 600; color: #677;
+            text-transform: uppercase; letter-spacing: 0.4px;
+        }
         .email-card .meta.sent { color: var(--bmp-green); }
-        .email-card .subject { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
-        .email-card .body { color: #444; white-space: pre-wrap; line-height: 1.5; max-height: 240px; overflow-y: auto; }
+        .email-card .subject {
+            font-weight: 700; font-size: 15px; color: #1a1a1a;
+            margin-bottom: 8px; line-height: 1.4;
+        }
+        .email-card .body {
+            color: #333; white-space: pre-wrap; line-height: 1.6;
+            max-height: 240px; overflow-y: auto;
+        }
+        /* Step-number badge sits inline at the start of the meta row */
+        .email-card .step-number {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 22px; height: 22px; border-radius: 50%;
+            background: #f0f3f5; color: #455;
+            font-size: 11px; font-weight: 700; margin-right: 8px;
+            text-transform: none; letter-spacing: 0;
+        }
+        .email-card.sent .step-number { background: var(--bmp-green); color: white; }
+        .email-card.step-type-email    .step-number { background: #e8f5e9; color: #1b5e20; }
+        .email-card.step-type-imessage .step-number { background: #e1f0ff; color: #0b67c2; }
+        .email-card.step-type-linkedin .step-number { background: #e1eef7; color: #0077B5; }
+        .email-card.step-type-call     .step-number { background: #fff3e6; color: #b8540e; }
+        .email-card.sent.step-type-email    .step-number,
+        .email-card.sent.step-type-imessage .step-number,
+        .email-card.sent.step-type-linkedin .step-number,
+        .email-card.sent.step-type-call     .step-number { background: var(--bmp-green); color: white; }
+        /* Faded content for skipped steps */
+        .email-card.skipped { opacity: 0.55; background: #fafafa; }
+        .email-card.skipped .subject, .email-card.skipped .body { text-decoration: line-through; }
 
         /* Contacts panel */
         .contact-card { background: #f9faf9; border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; border: 1px solid #e8ece8; }
@@ -3079,29 +3140,32 @@
             const stype = e.step_type || 'email';
             const iconMap = { linkedin: '💼', call: '📞', text: '💬', imessage: '💬', email: '📧' };
             const icon = iconMap[stype] || '•';
+            const channelLabelMap = { email: 'Email', imessage: 'iMessage', linkedin: 'LinkedIn', call: 'Call', text: 'SMS' };
+            const channelLabel = channelLabelMap[stype] || stype;
             const isSkipped = !!e.skipped_at;
-            const klass = e.is_sent ? 'email-card sent'
-                        : isSkipped ? 'email-card paused'
-                        : (e.paused_at ? 'email-card paused' : 'email-card');
+            // Compose CSS classes — base + state + step-type
+            const stateClass = e.is_sent ? 'sent' : isSkipped ? 'skipped' : (e.paused_at ? 'paused' : '');
+            const klass = `email-card ${stateClass} step-type-${stype}`.trim();
+
             const meta = e.is_sent ? 'sent' : '';
-            const auto = e.auto_execute === false ? ' · BDR TASK' : (stype === 'imessage' ? ' · auto' : '');
-            const stateLabel = e.is_sent ? '· DONE'
+            const auto = e.auto_execute === false ? '· BDR Task' : (stype === 'imessage' ? '· Auto-send' : '');
+            const stateLabel = e.is_sent ? ''
                               : isSkipped ? `· SKIPPED (${escapeHtml(e.skip_reason || 'unknown')})`
                               : (e.paused_at ? '· PAUSED' : `· Day ${e.send_delay_days||0}`);
             const skipBadges = (e.skip_if || []).length > 0
-                ? ` <span style="font-size:9px;color:#888">[skip-if: ${(e.skip_if||[]).map(escapeHtml).join(', ')}]</span>`
+                ? ` <span style="font-size:9px;color:#999;font-weight:400;text-transform:none;letter-spacing:0">[skip-if: ${(e.skip_if||[]).map(escapeHtml).join(', ')}]</span>`
                 : '';
-            // Only pending steps are draggable — reordering DONE/SKIPPED steps makes no sense
             const isDraggable = !e.is_sent && !isSkipped;
             const dragAttrs = isDraggable
                 ? `draggable="true" ondragstart="seqDragStart(event,${e.id})" ondragover="seqDragOver(event,${e.id})" ondragleave="seqDragLeave(event,${e.id})" ondrop="seqDrop(event,${e.id},${contactId})" ondragend="seqDragEnd(event)"`
                 : '';
-            const handle = isDraggable ? '<span style="cursor:grab;user-select:none;color:#bbb;margin-right:4px" title="Drag to reorder">⋮⋮</span>' : '';
+            const handle = isDraggable ? '<span style="cursor:grab;user-select:none;color:#aab;margin-right:6px" title="Drag to reorder">⋮⋮</span>' : '';
+
             return `
                 <div class="${klass}" data-email-id="${e.id}" data-sequence-label="${escapeHtml(e.sequence_label || 'main')}" ${dragAttrs}>
                     <div class="meta ${meta}">
-                        <span>${handle}${icon} Step ${e.sequence_order} — ${escapeHtml((e.email_type||'').replace(/_/g,' '))} ${stateLabel}${auto}${skipBadges}</span>
-                        <span>
+                        <span>${handle}<span class="step-number">${e.sequence_order || '·'}</span>${icon} ${escapeHtml(channelLabel)} <span style="color:#aab">·</span> ${escapeHtml((e.email_type||'').replace(/_/g,' '))} ${stateLabel} ${auto}${skipBadges}</span>
+                        <span style="display:flex;gap:4px">
                             ${!e.is_sent && !isSkipped ? `<button class="btn btn-secondary btn-xs" onclick="editEmail(${e.id})">Edit</button>` : ''}
                             ${!e.is_sent && !isSkipped && stype !== 'email' && stype !== 'imessage' ? `<button class="btn btn-success btn-xs" onclick="completeStep(${e.id})">Mark Done</button>` : ''}
                             ${!e.is_sent && !isSkipped ? `<button class="btn btn-danger btn-xs" onclick="deleteEmail(${e.id})">Delete</button>` : ''}
