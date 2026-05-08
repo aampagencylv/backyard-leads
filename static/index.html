@@ -3378,6 +3378,7 @@
                 sms_sent: '📱', sms_received: '📱', sms_opt_out: '🛑', sms_opt_in: '✅',
                 hot_lead: '🔥', sequence_step_skipped: '⏭️',
                 company_merged: '🔀', contact_merged: '🔀',
+                email_auto_response: '🤖', enriched_from_reply: '📋',
             };
             return items.map(a => {
                 _callPanels[a.id] = a;  // stash for later expand
@@ -3385,6 +3386,20 @@
                     <div><span class="timeline-icon">${icons[a.type] || '•'}</span>${escapeHtml(a.content)}</div>
                     <div class="timeline-meta">${escapeHtml(a.user_name || 'System')} · ${fmtDateTime(a.created_at)}</div>
                 `;
+                // Email replies (and auto-responses) get an inline expand button
+                // showing the full body — signature + everything. Strip-but-store
+                // pattern: timeline shows the cleaned preview, expand reveals all.
+                if ((a.type === 'email_replied' || a.type === 'email_auto_response') && a.metadata && (a.metadata.body_text || a.metadata.body_html)) {
+                    return `
+                        <div class="timeline-item">
+                            ${baseRow}
+                            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+                                <button class="btn btn-secondary btn-xs" onclick="toggleReplyExpand(${a.id})">📄 Full reply</button>
+                            </div>
+                            <div id="reply-expand-${a.id}" style="display:none;margin-top:8px"></div>
+                        </div>
+                    `;
+                }
                 if (a.type !== 'call' && a.type !== 'voicemail') {
                     return `<div class="timeline-item">${baseRow}</div>`;
                 }
@@ -3416,6 +3431,40 @@
         // Stash the latest timeline item per activity id so we don't re-fetch when expanding
         const _callPanels = {};
         function _stashCallActivity(a) { _callPanels[a.id] = a; }
+
+        function toggleReplyExpand(activityId) {
+            const panel = document.getElementById('reply-expand-' + activityId);
+            if (!panel) return;
+            if (panel.style.display !== 'none') {
+                panel.style.display = 'none';
+                panel.innerHTML = '';
+                return;
+            }
+            const a = _callPanels[activityId] || {};
+            const md = a.metadata || {};
+            const fromLabel = md.from || '(unknown)';
+            const subj = md.subject || '(no subject)';
+            // Prefer HTML render — preserves formatting + links + the prospect's
+            // signature with phone numbers we may want to copy. Fall back to
+            // pre-formatted plain text for replies that don't have HTML.
+            let body;
+            if (md.body_html) {
+                body = `<div style="background:white;border:1px solid #e0e0e0;border-radius:6px;padding:14px 16px;font-size:13px;line-height:1.55;max-height:520px;overflow-y:auto">${md.body_html}</div>`;
+            } else if (md.body_text) {
+                body = `<pre style="background:#f8f9fa;border:1px solid #e0e0e0;border-radius:6px;padding:12px;font-size:12px;line-height:1.5;max-height:520px;overflow-y:auto;white-space:pre-wrap;font-family:-apple-system,BlinkMacSystemFont,sans-serif">${escapeHtml(md.body_text)}</pre>`;
+            } else {
+                body = '<p style="font-size:12px;color:#888">No body content recorded.</p>';
+            }
+            const enriched = (md.enriched_fields && md.enriched_fields.length > 0)
+                ? `<div style="font-size:11px;color:var(--bmp-green);background:#f0f8f0;border-radius:6px;padding:8px 10px;margin-bottom:8px">📋 Auto-enriched: ${md.enriched_fields.map(escapeHtml).join(' · ')}</div>`
+                : '';
+            panel.innerHTML = `
+                <div style="font-size:11px;color:#666;margin-bottom:6px">From <strong>${escapeHtml(fromLabel)}</strong> · Subject: <em>${escapeHtml(subj)}</em></div>
+                ${enriched}
+                ${body}
+            `;
+            panel.style.display = 'block';
+        }
 
         async function toggleCallExpand(activityId, view) {
             const panel = document.getElementById('call-expand-' + activityId);

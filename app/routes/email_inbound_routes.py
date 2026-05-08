@@ -183,7 +183,11 @@ async def email_inbound(request: Request):
     text_body = (data.get("text") or data.get("text_body") or "").strip()
     html_body = (data.get("html") or data.get("html_body") or "").strip()
     body_for_log = text_body or _strip_html(html_body)
-    body_preview = body_for_log[:400] + ("…" if len(body_for_log) > 400 else "")
+    # Strip signatures + quoted reply chains for the short preview the timeline
+    # shows. Full body is stored separately in metadata_json so the UI can
+    # expand it on click.
+    stripped = _strip_reply_signature(body_for_log)
+    body_preview = stripped[:300] + ("…" if len(stripped) > 300 else "")
 
     # Auto-responder / bounce detection — common patterns in From or Subject.
     # We still log these but DON'T auto-pause (the human didn't actually engage).
@@ -207,6 +211,28 @@ async def email_inbound(request: Request):
         contact = (await db.execute(select(Contact).where(Contact.id == ge.contact_id))).scalar_one_or_none()
         company = (await db.execute(select(Company).where(Company.id == ge.company_id))).scalar_one_or_none()
 
+        # Mine the signature for enrichment data (mobile, office, LinkedIn) BEFORE
+        # we strip it for display. Apply found values to the contact ONLY when
+        # their existing field is empty — never overwrite something the BDR has
+        # already curated.
+        sig_data = parse_signature_for_enrichment(body_for_log) if not is_auto_response else {}
+        enriched_fields: list[str] = []
+        if contact and sig_data:
+            # Phone: prefer mobile > any_phone > office. Mobile is the highest
+            # value because it unlocks SMS/iMessage.
+            new_phone = sig_data.get("mobile_phone") or sig_data.get("any_phone") or sig_data.get("office_phone")
+            if new_phone and not (contact.phone or "").strip():
+                contact.phone = new_phone
+                enriched_fields.append(f"phone={new_phone}")
+                # Reset phone-type cache so the next iMessage/SMS attempt does a
+                # fresh lookup against this newly-discovered number.
+                contact.phone_type = None
+                contact.phone_carrier = None
+                contact.phone_type_checked_at = None
+            if sig_data.get("linkedin_url") and not (contact.linkedin_url or "").strip():
+                contact.linkedin_url = sig_data["linkedin_url"]
+                enriched_fields.append(f"linkedin={sig_data['linkedin_url']}")
+
         # Log Activity to the contact's timeline
         activity_type = "email_auto_response" if is_auto_response else "email_replied"
         prefix = "[Auto-response]" if is_auto_response else "[Reply]"
@@ -220,10 +246,30 @@ async def email_inbound(request: Request):
                 "from_raw": from_addr,
                 "subject": subject,
                 "preview": body_preview,
+                "body_text": body_for_log,            # full plaintext for UI expand
+                "body_html": html_body,                # full HTML for UI expand (rich render)
                 "email_id": ge.id,
                 "is_auto_response": is_auto_response,
+                "signature_extracted": sig_data,
+                "enriched_fields": enriched_fields,
             }),
         ))
+
+        # If we enriched, log a separate enrichment Activity so the BDR sees
+        # exactly what got auto-applied. Distinct from the email_replied entry
+        # so it surfaces in any "what got changed" feed.
+        if enriched_fields:
+            db.add(Activity(
+                company_id=ge.company_id,
+                contact_id=ge.contact_id,
+                activity_type="enriched_from_reply",
+                content=f"📋 Auto-enriched from reply signature: {', '.join(enriched_fields)}",
+                metadata_json=json.dumps({
+                    "fields": enriched_fields,
+                    "from_reply_email_id": ge.id,
+                    "raw_signature_data": sig_data,
+                }),
+            ))
 
         # Auto-pause + status bump only on REAL replies
         if not is_auto_response:
@@ -276,6 +322,126 @@ async def email_inbound(request: Request):
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 def _strip_html(s: str) -> str:
     return _HTML_TAG_RE.sub("", s or "").strip()
+
+
+# ============================================================
+# Signature stripping + enrichment extraction
+#
+# Two-pass: keep the full body in metadata for UI expand, BUT extract
+# phone / mobile / LinkedIn URL from the signature for contact enrichment
+# BEFORE stripping. Steve's whole point — prospects often don't list
+# their mobile in their CRM record but do in their email signature, and
+# that mobile is the most valuable field to capture for SMS / iMessage.
+# ============================================================
+
+# Markers that conventionally signal "the human-written part is over"
+_SIGNATURE_DELIMITERS = (
+    "\n-- \n", "\n--\n",                           # RFC 3676 sigdash
+    "\n_______________________",                   # underscores
+    "\n----------",                                 # generic divider
+    "Sent from my iPhone", "Sent from my iPad", "Sent from my Phone",
+    "Sent from Outlook", "Sent from Gmail", "Sent from Yahoo Mail",
+    "Get Outlook for", "Get the Outlook app",
+    "On Mon", "On Tue", "On Wed", "On Thu", "On Fri", "On Sat", "On Sun",  # quoted reply chain
+    "On May", "On Jan", "On Feb", "On Mar", "On Apr", "On Jun",
+    "On Jul", "On Aug", "On Sep", "On Oct", "On Nov", "On Dec",
+    "From: ", "\nFrom:",                            # forwarded message header
+    "IMPORTANT: The contents of this email",        # Steve's signature footer
+    "Click Here To Schedule",                       # Steve-specific signature element
+    "CONFIDENTIALITY", "Confidentiality Notice",    # Common legal footer
+)
+
+
+def _strip_reply_signature(text: str) -> str:
+    """Cut at the first signature/quote-chain marker. Falls through to a
+    soft cap (800 chars) if no marker is found so the preview stays readable."""
+    if not text:
+        return ""
+    earliest = len(text)
+    for marker in _SIGNATURE_DELIMITERS:
+        idx = text.find(marker)
+        if 0 <= idx < earliest:
+            earliest = idx
+    cut = text[:earliest].rstrip()
+    # Soft cap — long single-paragraph replies still get trimmed
+    if len(cut) > 800:
+        cut = cut[:800].rstrip()
+    return cut
+
+
+# Phone formats we'll extract. Loose enough to catch (702) 555-1234, 702-555-1234,
+# 702.555.1234, 7025551234, +1-702-555-1234, etc.
+_PHONE_BARE_RE = re.compile(r"(?:\+?1[-.\s]?)?\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})")
+# Phone with explicit "M:" / "Mobile:" / "Cell:" / "C:" label preceding it
+_MOBILE_LABEL_RE = re.compile(
+    r"\b(?:M|Mobile|Cell|C)[:.]?\s*(\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})",
+    re.IGNORECASE,
+)
+# Phone with "O:" / "Office:" / "Direct:" / "Tel:" / "T:"
+_OFFICE_LABEL_RE = re.compile(
+    r"\b(?:O|Office|Direct|D|Tel|T|Phone|P)[:.]?\s*(\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})",
+    re.IGNORECASE,
+)
+_LINKEDIN_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?linkedin\.com/(?:in|pub)/[\w%\-_.]+",
+    re.IGNORECASE,
+)
+
+
+def _normalize_phone(s: str) -> str:
+    """Reuse the e164 normalizer from twilio_voice for consistency."""
+    try:
+        from app.services.twilio_voice import normalize_phone_e164
+        return normalize_phone_e164(s) or ""
+    except Exception:
+        # Bare-bones fallback — strip non-digits, prepend +1 if 10 digits
+        digits = re.sub(r"\D", "", s or "")
+        if len(digits) == 10:
+            return f"+1{digits}"
+        if len(digits) == 11 and digits.startswith("1"):
+            return f"+{digits}"
+        return ""
+
+
+def parse_signature_for_enrichment(body_text: str) -> dict:
+    """Mine an inbound email body (signature + main text) for high-value
+    contact enrichment fields. Returns a dict with optional keys:
+
+      mobile_phone — phone explicitly labeled as mobile/cell
+      office_phone — phone explicitly labeled as office/direct
+      any_phone    — first phone found if no labels matched
+      linkedin_url — first LinkedIn profile URL
+
+    Conservative: returns None for fields we couldn't confidently detect.
+    Caller decides whether to auto-apply (only when the contact's
+    corresponding field is empty)."""
+    out: dict = {}
+    if not body_text:
+        return out
+    s = body_text
+
+    m = _MOBILE_LABEL_RE.search(s)
+    if m:
+        out["mobile_phone"] = _normalize_phone(m.group(1))
+
+    m = _OFFICE_LABEL_RE.search(s)
+    if m:
+        out["office_phone"] = _normalize_phone(m.group(1))
+
+    if not (out.get("mobile_phone") or out.get("office_phone")):
+        m = _PHONE_BARE_RE.search(s)
+        if m:
+            out["any_phone"] = _normalize_phone(m.group(0))
+
+    li = _LINKEDIN_RE.search(s)
+    if li:
+        url = li.group(0)
+        if not url.lower().startswith("http"):
+            url = "https://" + url
+        out["linkedin_url"] = url.rstrip("/")
+
+    # Drop empty values that fell through normalization
+    return {k: v for k, v in out.items() if v}
 
 
 _DISPLAY_NAME_RE = re.compile(r"^([^<]+)<")
