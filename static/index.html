@@ -968,6 +968,33 @@
                         <div id="team-members-list"></div>
                     </div>
                 </div>
+
+                <!-- Credits & Cost panel (everyone sees own usage; admins see COGS) -->
+                <div id="credits-section" style="margin-top:16px">
+                    <div class="search-box" style="max-width:800px">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                            <h3 style="margin:0">Credits &amp; Usage</h3>
+                            <select id="credits-window" onchange="loadCreditsPanel()" style="padding:4px 8px;font-size:13px">
+                                <option value="7">Last 7 days</option>
+                                <option value="30" selected>Last 30 days</option>
+                                <option value="90">Last 90 days</option>
+                            </select>
+                        </div>
+                        <div style="font-size:12px;color:#888;margin-bottom:12px">
+                            Tracking only — nothing is enforced yet. Used to ground SaaS pricing in real cost data.
+                        </div>
+                        <div id="credits-my-summary" style="margin-bottom:12px"></div>
+                        <div id="credits-cogs-section" class="hidden">
+                            <hr style="margin:16px 0;border:none;border-top:1px solid #eee">
+                            <h4 style="margin:0 0 8px 0">Platform cost-of-goods (admin)</h4>
+                            <div id="credits-cogs-summary"></div>
+                            <h4 style="margin:16px 0 8px 0;font-size:13px;color:#666">By vendor</h4>
+                            <div id="credits-cogs-by-vendor"></div>
+                            <h4 style="margin:16px 0 8px 0;font-size:13px;color:#666">By user</h4>
+                            <div id="credits-cogs-by-user"></div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </main>
     </div>
@@ -4429,6 +4456,107 @@
             }
 
             if (currentUser && currentUser.role === 'super_admin') loadRuntimeConfig();
+
+            loadCreditsPanel();
+        }
+
+        // ============ Credits & COGS panel ============
+        async function loadCreditsPanel() {
+            const days = parseInt(document.getElementById('credits-window').value) || 30;
+            const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.role === 'super_admin');
+
+            // Per-user summary (everyone sees this)
+            const me = await api(`/api/credits/me?days=${days}`);
+            const mySummaryEl = document.getElementById('credits-my-summary');
+            if (me && mySummaryEl) {
+                const byAction = (me.by_action || []).map(r =>
+                    `<tr><td style="padding:4px 8px">${escapeHtml(r.action_type)}</td>` +
+                    `<td style="padding:4px 8px;text-align:right">${r.count.toLocaleString()}</td>` +
+                    `<td style="padding:4px 8px;text-align:right">${r.credits.toLocaleString()}</td></tr>`
+                ).join('');
+                mySummaryEl.innerHTML = `
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px">
+                        <div style="background:#f8f9fa;padding:10px;border-radius:6px">
+                            <div style="font-size:11px;color:#888;text-transform:uppercase">Credits used</div>
+                            <div style="font-size:20px;font-weight:600">${me.total_credits_used.toLocaleString()}</div>
+                        </div>
+                        <div style="background:#f8f9fa;padding:10px;border-radius:6px">
+                            <div style="font-size:11px;color:#888;text-transform:uppercase">Total actions</div>
+                            <div style="font-size:20px;font-weight:600">${me.total_actions.toLocaleString()}</div>
+                        </div>
+                        <div style="background:#f8f9fa;padding:10px;border-radius:6px">
+                            <div style="font-size:11px;color:#888;text-transform:uppercase">Avg/day</div>
+                            <div style="font-size:20px;font-weight:600">${me.burn_per_day}</div>
+                        </div>
+                    </div>
+                    ${byAction ? `<table style="width:100%;font-size:13px;border-collapse:collapse">
+                        <thead><tr style="background:#fafafa">
+                            <th style="padding:6px 8px;text-align:left">Action</th>
+                            <th style="padding:6px 8px;text-align:right">Count</th>
+                            <th style="padding:6px 8px;text-align:right">Credits</th>
+                        </tr></thead><tbody>${byAction}</tbody></table>` : '<div style="color:#999;font-size:13px">No usage yet in this window.</div>'}
+                `;
+            }
+
+            // Admin-only COGS
+            const cogsSection = document.getElementById('credits-cogs-section');
+            if (!cogsSection) return;
+            cogsSection.classList.toggle('hidden', !isAdmin);
+            if (!isAdmin) return;
+
+            const cogs = await api(`/api/admin/cogs/summary?days=${days}`);
+            if (cogs) {
+                document.getElementById('credits-cogs-summary').innerHTML = `
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+                        <div style="background:#fff8e1;padding:10px;border-radius:6px">
+                            <div style="font-size:11px;color:#7a5c00;text-transform:uppercase">Total raw cost</div>
+                            <div style="font-size:20px;font-weight:600">$${cogs.total_raw_cost_usd.toFixed(4)}</div>
+                        </div>
+                        <div style="background:#f8f9fa;padding:10px;border-radius:6px">
+                            <div style="font-size:11px;color:#888;text-transform:uppercase">Credits charged</div>
+                            <div style="font-size:20px;font-weight:600">${cogs.total_credits.toLocaleString()}</div>
+                        </div>
+                        <div style="background:#f8f9fa;padding:10px;border-radius:6px">
+                            <div style="font-size:11px;color:#888;text-transform:uppercase">Total actions</div>
+                            <div style="font-size:20px;font-weight:600">${cogs.total_actions.toLocaleString()}</div>
+                        </div>
+                    </div>
+                `;
+                const vendorRows = (cogs.by_vendor || []).map(r =>
+                    `<tr><td style="padding:4px 8px">${escapeHtml(r.vendor)}</td>` +
+                    `<td style="padding:4px 8px;text-align:right">${r.count}</td>` +
+                    `<td style="padding:4px 8px;text-align:right">$${r.raw_cost_usd.toFixed(4)}</td>` +
+                    `<td style="padding:4px 8px;text-align:right">${r.credits.toLocaleString()}</td></tr>`
+                ).join('');
+                document.getElementById('credits-cogs-by-vendor').innerHTML = vendorRows
+                    ? `<table style="width:100%;font-size:13px;border-collapse:collapse">
+                        <thead><tr style="background:#fafafa">
+                            <th style="padding:6px 8px;text-align:left">Vendor</th>
+                            <th style="padding:6px 8px;text-align:right">Calls</th>
+                            <th style="padding:6px 8px;text-align:right">Raw cost</th>
+                            <th style="padding:6px 8px;text-align:right">Credits</th>
+                        </tr></thead><tbody>${vendorRows}</tbody></table>`
+                    : '<div style="color:#999;font-size:13px">No spend in this window.</div>';
+            }
+
+            const byUser = await api(`/api/admin/cogs/by-user?days=${days}`);
+            if (byUser) {
+                const userRows = (byUser.rows || []).map(r =>
+                    `<tr><td style="padding:4px 8px">${escapeHtml(r.user_name || r.user_email || '(system)')}</td>` +
+                    `<td style="padding:4px 8px;text-align:right">${r.actions}</td>` +
+                    `<td style="padding:4px 8px;text-align:right">${r.credits_debited.toLocaleString()}</td>` +
+                    `<td style="padding:4px 8px;text-align:right">$${r.raw_cost_usd.toFixed(4)}</td></tr>`
+                ).join('');
+                document.getElementById('credits-cogs-by-user').innerHTML = userRows
+                    ? `<table style="width:100%;font-size:13px;border-collapse:collapse">
+                        <thead><tr style="background:#fafafa">
+                            <th style="padding:6px 8px;text-align:left">User</th>
+                            <th style="padding:6px 8px;text-align:right">Actions</th>
+                            <th style="padding:6px 8px;text-align:right">Credits</th>
+                            <th style="padding:6px 8px;text-align:right">Raw cost</th>
+                        </tr></thead><tbody>${userRows}</tbody></table>`
+                    : '<div style="color:#999;font-size:13px">No per-user data yet.</div>';
+            }
         }
 
         async function changePassword() {

@@ -190,6 +190,15 @@ async def _handle_email(db: AsyncSession, step: GeneratedEmail, contact: Contact
         activity_type="email_sent",
         content=f"[Auto] Sent: {step.subject}",
     ))
+    # Credit meter — shim mode (records cost, does not block)
+    from app.services.credit_meter import meter, make_idem_key
+    await meter(
+        db,
+        action_type="email_send",
+        idempotency_key=make_idem_key("email_send", step.id),
+        user_id=sender_user.id,
+        action_ref=f"generated_email:{step.id}",
+    )
     return True, "email sent"
 
 

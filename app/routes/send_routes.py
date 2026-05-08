@@ -99,6 +99,12 @@ async def send_single_email(
         db.add(Activity(company_id=company.id, contact_id=contact.id, user_id=user.id,
                         activity_type="email_sent",
                         content=f"Sent: {email.subject}"))
+        from app.services.credit_meter import meter, make_idem_key
+        await meter(
+            db, action_type="email_send",
+            idempotency_key=make_idem_key("email_send", email.id),
+            user_id=user.id, action_ref=f"generated_email:{email.id}",
+        )
         await db.commit()
         return {"success": True, "email_id": email.id, "resend_id": result.get("resend_id"),
                 "sent_to": contact.email, "from": sender["from_email"], "reply_to": sender["reply_to"]}
@@ -177,6 +183,12 @@ async def send_next_in_sequence(
         email.sent_at = datetime.now(timezone.utc)
         email.sent_by_user_id = user.id
         company.email_sent = True
+        from app.services.credit_meter import meter, make_idem_key
+        await meter(
+            db, action_type="email_send",
+            idempotency_key=make_idem_key("email_send", email.id),
+            user_id=user.id, action_ref=f"generated_email:{email.id}",
+        )
 
         remaining = (await db.execute(
             select(GeneratedEmail).where(
@@ -861,6 +873,12 @@ async def send_adhoc_email(
         activity_type="email_sent",
         content=f"[Ad-hoc] Sent: {subject}",
     ))
+    from app.services.credit_meter import meter, make_idem_key
+    await meter(
+        db, action_type="email_send",
+        idempotency_key=make_idem_key("email_send", ge.id),
+        user_id=user.id, action_ref=f"generated_email:{ge.id}",
+    )
     await db.commit()
     return {
         "success": True,

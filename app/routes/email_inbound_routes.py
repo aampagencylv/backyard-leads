@@ -308,6 +308,8 @@ async def email_inbound(request: Request):
                         body_html=html_body,
                         contact=contact,
                         company=company,
+                        inbound_id=resend_inbound_id,
+                        db=db,
                     )
                 except Exception as e:
                     log.exception(f"[inbound] forward to BDR failed: {e}")
@@ -483,6 +485,8 @@ async def _forward_to_bdr(
     body_html: str,
     contact: Optional[Contact],
     company: Optional[Company],
+    inbound_id: Optional[str] = None,
+    db=None,
 ):
     """Forward the prospect's reply to the BDR's actual inbox.
 
@@ -515,7 +519,7 @@ async def _forward_to_bdr(
     )
     forwarded_html = context_header_html + (body_html if body_html else f"<pre>{(body_text or '').replace('<', '&lt;')}</pre>")
 
-    await send_email(
+    result = await send_email(
         to_email=bdr_inbox,
         subject=subject or "(no subject)",
         body=forwarded_html,
@@ -528,3 +532,11 @@ async def _forward_to_bdr(
         signature_html="",  # no auto-signature on forwards — already a real conversation
         unsubscribe_token=None,  # this isn't outreach, no compliance footer needed
     )
+    if db is not None and result.get("success") and inbound_id:
+        from app.services.credit_meter import meter, make_idem_key
+        await meter(
+            db, action_type="email_send",
+            idempotency_key=make_idem_key("email_send", "forward", inbound_id),
+            user_id=sender_user.id,
+            action_ref=f"forward_inbound:{inbound_id}",
+        )

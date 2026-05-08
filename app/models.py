@@ -546,6 +546,42 @@ class CampaignLog(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+class CreditLedger(Base):
+    """Per-action ledger of every billable thing we do.
+
+    Two layers, one table:
+      - credits_debited        — what we charge tenants (customer-facing)
+      - raw_cost_usd            — what we actually pay vendors (admin/COGS view)
+
+    Single-tenant today (BMP). When SaaS multi-tenancy lands, an `org_id`
+    column gets added and existing rows backfill to org_id=1.
+
+    Shim mode: rows are written but never enforced — no balance check
+    blocks any action yet. Lets us collect 1-2 weeks of real cost data
+    before we set retail SaaS prices.
+    """
+    __tablename__ = "credit_ledger"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    # Action type — one of the keys in credit_meter.RATE_CARD
+    # (email_send, email_verify, ai_email_gen, ai_chat_turn, ai_reply_classify,
+    #  enrich_netrows, enrich_hunter, enrich_apollo, phone_lookup,
+    #  sms_send, voice_minute, scrape_yelp, scrape_maps)
+    action_type = Column(String(40), nullable=False, index=True)
+    # Free-form ref to the entity that triggered the action — e.g.
+    # "generated_email:1234", "company:567", "contact:89".
+    action_ref = Column(String(100), nullable=True)
+    credits_debited = Column(Integer, nullable=False, default=0)
+    raw_cost_usd = Column(Float, nullable=False, default=0.0)
+    vendor = Column(String(40), nullable=True, index=True)  # resend, twilio, anthropic, netrows, hunter, apollo, internal
+    # Idempotency key — meter() upserts on this. Lets retries (re-fired sequence
+    # steps, webhook redeliveries, etc.) not double-charge.
+    idempotency_key = Column(String(120), unique=True, index=True, nullable=False)
+    metadata_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+
+
 class AuditReportModel(Base):
     """Stored AI Findability Audit report for a company."""
     __tablename__ = "audit_reports"

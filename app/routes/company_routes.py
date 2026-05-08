@@ -696,6 +696,8 @@ async def enrich_company(
     netrows_added, netrows_found = 0, 0
     hunter_added, hunter_found = 0, 0
 
+    from app.services.credit_meter import meter, make_idem_key
+
     # Netrows decision-maker first — verified owner emails for SMB (10 credits/call)
     if await get_netrows_api_key(db):
         try:
@@ -714,6 +716,12 @@ async def enrich_company(
                 if await _ensure_contact(db, company_id, dm.full_name, dm.email,
                                          dm.job_title, None, dm.linkedin_url):
                     netrows_added += 1
+            await meter(
+                db, action_type="enrich_netrows",
+                idempotency_key=make_idem_key("enrich_netrows", company_id, "dm"),
+                user_id=user.id, action_ref=f"company:{company_id}",
+                metadata={"decision_makers": netrows_found},
+            )
         except Exception as e:
             netrows_data = {"error": str(e)[:200]}
 
@@ -737,6 +745,12 @@ async def enrich_company(
                 full = f"{hc.first_name or ''} {hc.last_name or ''}".strip()
                 if await _ensure_contact(db, company_id, full, hc.email, hc.position, None, None):
                     hunter_added += 1
+            await meter(
+                db, action_type="enrich_hunter",
+                idempotency_key=make_idem_key("enrich_hunter", company_id),
+                user_id=user.id, action_ref=f"company:{company_id}",
+                metadata={"contacts_found": hunter_found},
+            )
         except Exception as e:
             hunter_data = {"error": str(e)[:200]}
 
@@ -756,6 +770,13 @@ async def enrich_company(
                     "owner_reply": r.owner_reply, "owner_reply_time": r.owner_reply_time,
                 } for r in mr.reviews])
                 company.reviews_fetched_at = datetime.now(timezone.utc)
+                await meter(
+                    db, action_type="enrich_netrows",
+                    idempotency_key=make_idem_key("enrich_netrows", company_id, "maps"),
+                    user_id=user.id, action_ref=f"company:{company_id}",
+                    raw_cost_override_usd=0.0055,  # 1 credit on Netrows ~ €0.005
+                    metadata={"endpoint": "google-maps/reviews"},
+                )
         except Exception:
             pass
 

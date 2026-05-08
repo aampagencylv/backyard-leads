@@ -1315,6 +1315,399 @@ The same tour system works for SaaS customers, but the steps would be slightly d
 
 ---
 
+## 🎯 SaaS-readiness initiatives (locked 2026-05-08 with Steve)
+
+After the strategic review, Steve picked these for the build queue. Order is
+the recommended sequence; each item links to its design notes below.
+
+### Picked — Foundation (A/B/C — must come first)
+- **A. Enrichment waterfall + provider-adapter architecture** — `EnrichmentProvider` interface, configurable cascade per tenant. Unblocks Apollo BYO-key.
+- **A2. Twilio Lookup integration** — landline/mobile/voip detection on every phone we collect. New `phone_line_type` column on Contact. Cost ~$0.005/lookup. Required for safe SMS + safe voice dial + lead scoring.
+- **B. Apollo BYO-key adapter** — first SaaS-only provider, tenant supplies key, we eat zero per-record cost. Proves the adapter pattern.
+- **C. Credit metering + cost-per-action ledger** — required before any of the above can be billed. New `credit_ledger` table; every billable action emits a row.
+- **C2. Admin cost-of-goods dashboard** — platform-side view: what does each tenant cost us in raw spend (Resend + Twilio + Anthropic + provider APIs)? Shows margin per tenant. Critical for SaaS unit-economics visibility.
+
+### Picked — D-list (CRM features)
+- **D1. Reply sentiment classification** — auto-tag every inbound reply
+- **D3. Send-time optimization** — per-contact best send hour, learned
+- **D4. Email verification before send (hard gate)** — Hunter verify required, not optional
+- **D6. Deliverability dashboard** — bounce rate, complaints, blacklist status per domain
+- **D7. Lead scoring (fit × intent)** — replaces "3+ opens" heuristic with real model. Now also incorporates `phone_line_type` (mobile = higher contactability score).
+- **D8. Bulk import wizard** — column mapping UI, replaces rigid CSV
+- **D9. Audit log** — required for SOC2 + enterprise sales
+- **D10. Public API + Zapier** — table stakes for SaaS
+
+### Picked — God Mode (E)
+Refined per Steve: **multi-vertical + multi-geo portfolio**, runs forever
+until paused. Existing Autopilot caps to one (vertical, geo); God Mode
+makes it a list. Design notes in section below.
+
+### Picked — Morning brief email
+Per-user daily digest: overnight summary, today's priorities, hot replies,
+weekly stats, AI-flagged insight. Sent via Resend at user's TZ-aware 7am.
+
+### Picked — AI chatbot (corner widget)
+Conversational query interface. Sales rep chats with the DB. "Find me hot
+leads in Phoenix I haven't contacted in 7 days." Anthropic tool-use under
+the hood. Yes, this is very buildable.
+
+---
+
+### 💰 Credit metering + cost-of-goods — design
+
+**The two layers** (don't conflate them):
+
+1. **Customer-facing credits.** Tenants buy credit packs. Every billable
+   action burns N credits. They see balance, burn rate, projected runway.
+2. **Platform-internal cost-of-goods.** What we actually pay vendors per
+   action. Admins (Steve / staff) see margin per tenant, total platform
+   COGS, alerts on outliers. Customers never see this.
+
+**Schema:**
+```
+credit_ledger
+  id, company_id, user_id, action_type, action_ref,
+  credits_debited, raw_cost_usd, vendor (resend/twilio/anthropic/apollo/...),
+  created_at, idempotency_key
+
+credit_balance  (one per company)
+  company_id, balance_credits, monthly_included, last_topup_at, next_reset_at
+
+action_pricing  (rate card, editable by admin)
+  action_type, credits_per_unit, raw_cost_estimate_usd, last_updated
+```
+
+**Action types to meter (initial set):**
+| action_type | Vendor | Raw cost | Credits |
+|---|---|---|---|
+| email_send | Resend | $0.0004 | 1 |
+| email_verify | Hunter | $0.04 | 8 |
+| ai_email_gen | Anthropic | $0.005 | 2 |
+| ai_chat_turn | Anthropic | $0.015 | 5 |
+| ai_reply_classify | Anthropic | $0.001 | 1 |
+| enrich_apollo | Apollo (BYO) | $0 to us | 0 (tenant key) |
+| enrich_netrows | Netrows | €0.05 | 10 |
+| enrich_hunter | Hunter | $0.04 | 8 |
+| phone_lookup | Twilio Lookup | $0.005 | 1 |
+| sms_send | Twilio | $0.008 | 2 |
+| voice_minute | Vapi/Retell | $0.10 | 20 |
+| scrape_yelp | (compute) | $0.001 | 1 |
+| scrape_maps | (compute) | $0.001 | 1 |
+
+**Customer dashboard widgets:**
+- Balance + projected runway ("at current burn, 14 days left")
+- Burn-by-action pie ("60% enrichment, 25% sends, 10% AI gen, 5% other")
+- Top-spending campaigns
+- Top-spending users (admin only)
+
+**Admin (platform staff) cost-of-goods dashboard:**
+- COGS per tenant (last 30d, MoM trend)
+- Margin per tenant (revenue from credit packs - raw COGS)
+- Top vendors by spend (where's our money going)
+- Outlier alerts ("Tenant X spent 3× their plan this week")
+- Per-action unit-cost trend (catch vendor price changes)
+
+**Idempotency.** Every meter call must take an `idempotency_key` so retries
+(e.g., a re-fired sequence step) don't double-charge. Use the action's
+natural ID (e.g., `email_send:{generated_email_id}`).
+
+**Implementation footprint:**
+- `app/services/credit_meter.py` — `meter(company, user, action_type, ref, idempotency_key)`
+- Wrap every existing billable call site (Resend send, Anthropic call, Netrows lookup, etc.) with `meter()`
+- New routes `/api/me/credits/*` and `/api/admin/cogs/*`
+- New dashboard panel for tenants + new admin-only view
+
+**Migration order:**
+1. Build the meter as a no-op shim first (just logs to ledger, doesn't enforce)
+2. Run for 1-2 weeks to observe real costs vs. estimates → tune the rate card
+3. Flip enforcement on (out-of-credits → block action)
+
+This gives us live cost data BEFORE we have to set retail prices, so the
+SaaS launch pricing is grounded in reality.
+
+---
+
+### 📞 Twilio Lookup — design
+
+**What.** Twilio's Lookup API tells you, for any phone number:
+- `line_type` — mobile / landline / voip / fixed_voip / unknown
+- carrier name
+- caller name (US only, ~$0.01 surcharge)
+- whether the number is even valid
+
+**Pricing.** Basic validation = $0.005/lookup. Line type = $0.008. Caller
+name = $0.01. We'd run validation + line_type as the default; caller name
+on demand only.
+
+**Where it plugs in:**
+1. **On every new Contact phone field write** — async background job, sets
+   `contact.phone_line_type` + `contact.phone_carrier`
+2. **On bulk import** — run lookup pass after CSV import, before any send
+3. **On any sequence step that uses phone** — gate SMS/voice channels
+   based on line_type
+4. **On scrape/enrichment** — confirm phones we mined from web/Yelp are real
+5. **Pre-Voice-AI dial** — hard requirement, won't dial mobiles for cold
+
+**Schema additions:**
+```
+contacts
+  + phone_line_type (varchar 20, nullable)
+  + phone_carrier (varchar 100, nullable)
+  + phone_validated_at (timestamp, nullable)
+  + phone_valid (boolean, nullable)  -- false → suppress
+```
+
+**Cost in practice.** At $0.005/lookup × 30 contacts/day under God Mode =
+$0.15/day per active campaign. Negligible. Charge tenants 1 credit per
+lookup (50% margin).
+
+**Failure modes.**
+- Twilio Lookup occasionally returns `unknown` — treat as "do not assume
+  mobile, do not assume landline". UI surfaces as a warning.
+- VoIP numbers — TCPA treats them like mobile for SMS, but voice rules
+  vary. Default to "treat as mobile" for compliance.
+
+---
+
+### 🛰️ God Mode — multi-vertical / multi-geo design
+
+**The shape.** A God Mode campaign is a *portfolio* of targets, not a single
+target. Each portfolio has many `(vertical, geo)` pairs that all run
+concurrently under one daily budget cap.
+
+**Schema (proposed):**
+```
+god_mode_campaigns
+  id, company_id, owner_user_id, name, status (running/paused),
+  daily_budget_credits, daily_max_new_contacts, daily_max_sends_per_sender,
+  channel_mix (email/sms/voice json), sequence_id (which sequence to enroll into),
+  created_at, paused_at, paused_reason
+
+god_mode_targets  (one per vertical+geo pair, many per campaign)
+  id, campaign_id, vertical, geo_city, geo_state, geo_radius_miles,
+  weight (1-10, for budget allocation), scrape_cursor (offset/page state),
+  status (active/exhausted/paused), last_run_at,
+  total_contacts_enrolled, total_credits_spent
+
+god_mode_runs  (one per nightly tick, drives morning brief)
+  id, campaign_id, started_at, finished_at,
+  contacts_enrolled, sends_made, replies_received,
+  credits_spent, error, summary_json
+```
+
+**Daily budget allocation across targets.**
+- Round-robin by default (each target gets equal share)
+- OR weighted: `target.weight` determines share of `daily_budget_credits`
+- Per-target spend cap = `(weight / sum_weights) * campaign.daily_budget_credits`
+- When a target hits its cap, it sleeps until tomorrow but others keep running
+
+**Per-target guardrails.** A spam-complaint spike in one geo pauses *that
+target*, not the whole campaign. Bounce rate >3% on a target = auto-pause +
+alert. This is the key win over the current Autopilot.
+
+**Cursor management.** Each target tracks where it left off in the scrape so
+we never re-process the same Yelp/Maps results. When a target exhausts
+(no new results for N runs), mark `status=exhausted` and surface in the brief
+("Phoenix pool builders is tapped out — add new geo or expand radius").
+
+**UI sketch.** New page `God Mode → Campaigns`. Each campaign shows a table
+of targets with live counters (enrolled today, replies today, credits spent
+today, status). Add Target button → vertical dropdown + geo picker (with
+multi-select map). Master Pause/Resume button.
+
+**Channel-mix-over-time.** Email is primary. SMS day 5 if no reply. Voicemail
+day 9 if no reply. Configurable per campaign. This is just sequence template
+selection at enroll time — most logic already exists.
+
+---
+
+### ☀️ Morning Brief — daily digest email
+
+**Trigger.** Cron tick every 15 min checks for users whose local time is
+their configured brief hour (default 7am). One email per user per day.
+
+**Sections (in order):**
+1. **Overnight** — what God Mode + sequences did while you slept
+   ("28 contacts enrolled, 47 emails sent, 4 replies, 1 booked, $12 spent")
+2. **Today's priorities** — top 5 tasks due today, hot leads needing call,
+   stuck deals you own
+3. **Inbox replies** — quick list of replies awaiting human action with
+   sentiment tag (interested / objection / OOO) and one-click links to view
+4. **AI insight (one item)** — single highest-value observation from your data
+   ("Smith Pools opened your email 4× yesterday — schedule a call")
+5. **Weekly stats** — sends, opens, replies, books vs last week (mini-trend)
+6. **Footer** — manage brief settings · snooze 7 days · unsubscribe
+
+**Personalization.**
+- Scoped to user (sees only what their role permissions allow)
+- TZ-aware delivery — store user's timezone in `users.timezone`
+- Skip on weekends if `users.brief_weekends = false`
+
+**Implementation footprint.**
+- New route `/api/me/brief/preview` — render the brief for current user
+- Cron job in existing scheduler (every 15 min check user.brief_send_at)
+- New table `brief_sends` (idempotency: one per user per day)
+- AI insight is one Anthropic call per user per day, ~$0.01 each
+- HTML template at `app/templates/morning_brief.html`
+
+**Why this matters strategically.** This is the SaaS retention play.
+Customers who open daily emails *don't churn*. It also creates a "magic
+moment" — they wake up to a smart digest and feel the AI working for them.
+
+---
+
+### 🤖 AI chatbot ("Ask BMP") — conversational query widget
+
+**The shape.** Floating bottom-right widget, expands to a chat panel.
+Sales rep types in plain English; the bot queries the database via
+Anthropic tool-use and returns scoped, role-aware answers.
+
+**Sample queries the v1 should handle:**
+- "Find hot leads in Phoenix I haven't contacted in 7 days"
+- "What's my pipeline value for closed-won this quarter?"
+- "Who replied this week and what did they say?"
+- "Show me pool builders rated 4.5+ we haven't enrolled yet"
+- "Summarize Smith Pools — full thread plus deal status"
+- "Which sequence has the best reply rate this month?"
+- "Draft a casual follow-up to John at Acme using their last reply"
+
+**Architecture.**
+```
+[Widget UI]  ←streaming SSE→  [POST /api/ai/chat]
+                                    │
+                                    ▼
+                       Claude Sonnet 4.6 + tool-use
+                                    │
+                ┌───────────────────┼─────────────────────┐
+                ▼                   ▼                     ▼
+       search_contacts()    search_companies()    search_deals()
+       get_activity()       get_pipeline_stats()  draft_email()
+       (all tools wrap Scope(user) — tenant + role enforcement)
+```
+
+**Tool design (the safety-critical part):**
+- NO raw `run_sql` tool. Each tool is a typed, scoped query helper.
+- Every tool's first line: `q = Scope(user).filter(BaseQuery)` — multi-tenant + role isolation enforced at the tool level, not relied on at the model level
+- Return structured JSON, never raw rows; redact fields the user can't see
+- Hard cap on result size (50 rows max per tool call)
+- Conversation logs stored for audit + future fine-tuning
+
+**Cost model.**
+- ~3-5k input tokens per turn (system prompt + tools + history)
+- ~500-1k output tokens per turn
+- Sonnet pricing: ~$0.005-0.02 per turn
+- Suggest charging 5 credits per turn (50% margin) — "AI Assistant credits"
+
+**v1 scope (3-4 days):**
+- Widget UI with streaming
+- 6 read-only tools (search_contacts, search_companies, search_deals,
+  get_activity, get_pipeline_stats, summarize_entity)
+- Conversation memory client-side, stateless server
+- Basic guardrails (rate limit, role scoping, redaction)
+
+**v2 (later):**
+- Write actions (create_task, send_message, enroll_in_sequence) with
+  confirmation step ("Enroll these 8 contacts in Pool Builder Sequence A?")
+- Voice input (whisper) for dictation
+- Cross-conversation memory ("remember I prefer terse responses")
+
+**Why this is buildable.** Anthropic tool-use is mature; we already use
+Claude for email gen. The constrained tool surface (no raw SQL) makes the
+multi-tenant scope problem tractable. Biggest risk is prompt injection
+through user-supplied data (contact names with `</tool_use>` etc.) — mitigate
+with strict tool-result sanitization.
+
+---
+
+## 🎙️ AI Voice — agentic BDR exploration (added 2026-05-08)
+
+> Added by Steve: voice models have gotten good enough that a fully AI-driven
+> outbound agent is plausibly within reach. This is exploration, not a commit.
+
+### The thesis
+A truly agentic BDR system runs three lanes — email, SMS, voice — with the same
+sequence engine driving all three. Voice is the lane we have not built. If the
+voice agent can: (a) place an outbound call, (b) handle the gatekeeper, (c) ask
+3-5 qualifying questions, and (d) book a meeting OR transfer to a human — we
+have a closed-loop AI BDR that can run on God Mode (see SaaS plan section).
+
+### Vendor landscape (research-only, no decision yet)
+| Vendor | Model | Pricing rough | Strengths | Weak spots |
+|---|---|---|---|---|
+| **Vapi** | BYO-LLM, ElevenLabs/Deepgram TTS | ~$0.05–0.12/min all-in | Best dev UX, function calling, low latency | You assemble the stack |
+| **Retell** | Hosted end-to-end | ~$0.07–0.15/min | Plug-and-play, good defaults | Less flexible |
+| **Bland.ai** | Hosted | ~$0.09/min, enterprise tiers | Phone numbers + dialer included, scales hard | Pricier, opinionated |
+| **ElevenLabs Conversational** | EL voice + LLM | ~$0.08/min | Best-in-class voice quality | Newer, less feature-rich |
+| **Deepgram Voice Agent** | Deepgram STT/TTS + BYO-LLM | ~$0.06/min | Lowest latency, good for live transfer | DIY orchestration |
+
+### Use cases (in order of risk/value)
+1. **Voicemail drop** — lowest risk, no live convo. Detect VM via Twilio AMD,
+   play a personalized 20-sec message generated from the prospect's company
+   data. Cheap, compliant, scalable. **Start here.**
+2. **Warm dialer / transfer** — agent makes the call, qualifies for 60 sec,
+   then transfers to a human BDR. Human handles close. Reduces BDR time-on-dial.
+3. **Full agent** — agent handles entire convo end-to-end, books via iClosed
+   API. Highest reward, highest compliance/quality risk.
+
+### Compliance & deliverability landmines
+- **TCPA** — no autodialed calls to mobile numbers without prior express written
+  consent. Cold calling cell phones with an AI dialer is a $500–$1,500 per-call
+  liability. We need a clean landline filter (Twilio Lookup line_type) before
+  any AI dial. **This is the single biggest blocker.**
+- **State-specific**: FL, OK, MD have stricter "mini-TCPA" laws. WA requires
+  AI disclosure on the call. CA CCPA-adjacent rules around recordings.
+- **AI disclosure** — federal FCC ruling (Feb 2024) treats AI-generated voice
+  in robocalls as illegal under the TCPA absent consent. Disclosure ("This is
+  an AI assistant calling on behalf of...") is now table stakes; we should bake
+  it into the system prompt.
+- **Recording consent** — two-party-consent states (CA, FL, IL, MD, MA, MT,
+  NH, PA, WA) require both sides to consent before recording. Either get
+  consent at the top of the call or don't record those states.
+- **Suppression** — DNC list scrub before any dial. Federal + state lists.
+
+### Architecture sketch (when we build it)
+```
+sequence_engine.py
+  └── _handle_voice(step)
+        ├── compliance_check(contact)        # mobile? DNC? state rules?
+        ├── twilio_lookup(phone)              # landline confirmation
+        ├── voice_provider.start_call(...)   # Vapi/Retell/Bland
+        │     └── webhook on call complete
+        │           ├── log Activity (transcript, duration, outcome)
+        │           ├── if booked → create Deal/Task
+        │           ├── if not_interested → close lost + suppress
+        │           └── if voicemail → log + advance sequence
+        └── credit_meter.charge(minutes * cost_per_min)
+```
+
+### Cost modeling for SaaS pricing
+- 60 sec call ≈ $0.06–0.15 voice + $0.01 Twilio = ~$0.10/call
+- A 1,000-dial daily campaign = ~$100/day per tenant in raw cost
+- Need a "voice credits" SKU separate from email/AI credits — voice burns 10-30x faster
+- Suggested package: 500 voice minutes/seat/mo standard, overage $0.20/min retail (50-100% margin)
+
+### What we'd need before building
+1. Twilio Lookup integration for landline filtering (cheap, ~$0.005/lookup)
+2. DNC scrub vendor (RealPhoneValidation, NumVerify, or DNC.com API)
+3. State-by-state compliance config table (per-state opt-in rules)
+4. Recording consent flow with state-aware system prompt injection
+5. Voice-credit ledger added to the credit metering system (which itself doesn't exist yet)
+
+### Recommended path
+- **Phase 1** (1-2 days): Voicemail drop only. Twilio AMD + ElevenLabs
+  pre-recorded personalized VMs. No live convo, minimal compliance surface.
+- **Phase 2** (3-5 days): Vapi-driven warm dialer with human transfer to
+  iClosed-booked BDR. Pilot internally on warm leads only (replied → no-show).
+- **Phase 3** (2+ weeks): Full agent with booking authority. Only after
+  Phases 1-2 prove out and compliance scaffolding is solid.
+
+### Open questions for Steve
+- Are we OK with starting voicemail-only as a wedge, or do we want to skip to live-agent?
+- What's the appetite for restricting voice dial to landlines only at launch (huge addressable market shrink, but kills the TCPA risk)?
+- Do we want voice as a BMP-only feature first, or wait to ship it inside SaaS?
+
+---
+
 ## 🔴 Closed / decided
 - Apollo evaluated → keeping integration code but it's effectively dead for SMB; Netrows replaces it
 - Coresignal evaluated → rejected (LinkedIn-derived, same blind spot as Apollo)
