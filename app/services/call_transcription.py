@@ -294,6 +294,10 @@ async def _summarize_with_claude(
         system=CALL_SUMMARY_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
     )
+    from app.services.credit_meter import meter_standalone as _meter_ai
+    await _meter_ai(action_type="ai_summary", action_ref="call_transcript_summary",
+                    raw_cost_override_usd=0.012,  # 1200 max_tokens output ~ $0.01-0.015
+                    metadata={"max_tokens": 1200, "kind": "call_summary"})
     return response.content[0].text
 
 

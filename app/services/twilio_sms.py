@@ -161,7 +161,17 @@ async def send_sms(
             return SmsSendResult(False, error=f"Network error: {e}")
 
     if r.status_code in (200, 201):
-        return SmsSendResult(True, message_sid=r.json().get("sid"))
+        sid = r.json().get("sid")
+        # Credit meter — record the spend (shim mode, no enforcement).
+        # Idempotency keyed off the Twilio message SID so retries dedupe.
+        from app.services.credit_meter import meter_standalone as _meter_sms
+        await _meter_sms(
+            action_type="sms_send",
+            idempotency_key=f"sms_send:{sid}" if sid else None,
+            action_ref=f"twilio_sms:{sid or to_e164}",
+            metadata={"to": to_e164, "from": from_e164},
+        )
+        return SmsSendResult(True, message_sid=sid)
     body_text = r.text[:300] if r.text else ""
     return SmsSendResult(False, error=body_text, status_code=r.status_code)
 

@@ -112,6 +112,9 @@ Return as JSON: {{"subject": "...", "body": "..."}}
         system=_compose_system_prompt(SYSTEM_PROMPT, messaging_direction),
         messages=[{"role": "user", "content": user_prompt}],
     )
+    from app.services.credit_meter import meter_standalone as _meter_ai
+    await _meter_ai(action_type="ai_email_gen", action_ref=f"cold_email:{business_name[:60]}",
+                    metadata={"max_tokens": 500, "kind": "cold_email"})
 
     text = response.content[0].text
     try:
@@ -176,6 +179,9 @@ Return as JSON: {{"subject": "...", "body": "..."}}
         system=_compose_system_prompt(SYSTEM_PROMPT, messaging_direction),
         messages=[{"role": "user", "content": user_prompt}],
     )
+    from app.services.credit_meter import meter_standalone as _meter_ai
+    await _meter_ai(action_type="ai_email_gen", action_ref=f"follow_up:{business_name[:60]}",
+                    metadata={"max_tokens": 400, "kind": "follow_up"})
 
     text = response.content[0].text
     try:
@@ -256,6 +262,9 @@ Return as JSON: {{"subject": "LinkedIn message: {first_name or business_name}", 
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
     )
+    from app.services.credit_meter import meter_standalone as _meter_ai
+    await _meter_ai(action_type="ai_email_gen", action_ref=f"linkedin:{business_name[:60]}",
+                    metadata={"max_tokens": 300, "kind": "linkedin_message"})
 
     text = response.content[0].text
     try:
@@ -377,6 +386,9 @@ Return as JSON: {{"body": "the text message, under 240 chars, no signature"}}
         system=_compose_system_prompt(IMESSAGE_SYSTEM_PROMPT, messaging_direction),
         messages=[{"role": "user", "content": user_prompt}],
     )
+    from app.services.credit_meter import meter_standalone as _meter_ai
+    await _meter_ai(action_type="ai_email_gen", action_ref=f"imessage:{business_name[:60]}",
+                    metadata={"max_tokens": 300, "kind": "imessage"})
 
     text = response.content[0].text
     try:
@@ -544,6 +556,12 @@ Return JSON only, no other text:
         system=_compose_system_prompt(POST_CALL_SYSTEM_PROMPT, messaging_direction),
         messages=[{"role": "user", "content": user_prompt}],
     )
+    from app.services.credit_meter import meter_standalone as _meter_ai
+    # Post-call sequence is ~4x bigger output than a normal cold email,
+    # so override the rate-card raw cost to reflect the real spend.
+    await _meter_ai(action_type="ai_email_gen", action_ref=f"post_call_seq",
+                    raw_cost_override_usd=0.018,
+                    metadata={"max_tokens": 2000, "kind": "post_call_sequence"})
 
     text = response.content[0].text
     try:

@@ -160,6 +160,15 @@ async def send_message(
         message_id = body.get("id") or body.get("message_id") or body.get("messageId")
         if not message_id and isinstance(body.get("data"), dict):
             message_id = body["data"].get("id") or body["data"].get("message_id")
+        # Credit meter — Blooio iMessage send. Same rate as SMS for now;
+        # vendor cost differs but customer-facing credits stay aligned.
+        from app.services.credit_meter import meter_standalone as _meter_im
+        await _meter_im(
+            action_type="sms_send",
+            idempotency_key=f"imessage_send:{message_id}" if message_id else None,
+            action_ref=f"blooio:{message_id or to_e164}",
+            metadata={"to": to_e164, "channel": "imessage"},
+        )
         return BlooioSendResult(
             success=True,
             message_id=message_id,

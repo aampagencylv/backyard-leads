@@ -134,3 +134,45 @@ def make_idem_key(action_type: str, *parts: Any) -> str:
              make_idem_key("ai_email_gen", company_id, contact_id) -> "ai_email_gen:567:89"
     """
     return f"{action_type}:" + ":".join(str(p) for p in parts if p is not None)
+
+
+async def meter_standalone(
+    *,
+    action_type: str,
+    idempotency_key: Optional[str] = None,
+    user_id: Optional[int] = None,
+    action_ref: Optional[str] = None,
+    metadata: Optional[dict[str, Any]] = None,
+    raw_cost_override_usd: Optional[float] = None,
+    units: float = 1.0,
+) -> None:
+    """Same as meter() but opens its own DB session.
+
+    Use when the call site has no db session in scope — e.g. AI gen
+    helpers that are called from many places (sequence engine, routes,
+    background tasks). Commits independently; does not interfere with
+    the caller's transaction.
+
+    Idempotency key defaults to a random per-call token, since AI gen
+    calls are intrinsically unique (each invocation IS a new spend).
+    """
+    if idempotency_key is None:
+        import secrets as _s
+        idempotency_key = make_idem_key(action_type, _s.token_hex(8))
+    try:
+        from app.database import async_session
+        async with async_session() as db:
+            await meter(
+                db,
+                action_type=action_type,
+                idempotency_key=idempotency_key,
+                user_id=user_id,
+                action_ref=action_ref,
+                metadata=metadata,
+                raw_cost_override_usd=raw_cost_override_usd,
+                units=units,
+            )
+            await db.commit()
+    except Exception as e:
+        # Same fail-open contract as meter(): never break the caller.
+        log.warning(f"credit_meter.meter_standalone failed (action={action_type}): {e}")
