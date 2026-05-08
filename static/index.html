@@ -4040,85 +4040,285 @@
             }
         }
 
+        // ============ CSV Import Wizard ============
+        // Three-step flow: pick file → map columns → submit + summary.
+        // Robust CSV parser handles quoted fields with embedded commas /
+        // newlines / escaped quotes — handles real exports from HubSpot,
+        // Apollo, Pipedrive, Excel, and Google Sheets.
+        const CSV_CANONICAL_FIELDS = [
+            { key: '',              label: '— skip this column —' },
+            { key: 'company_name',  label: 'Company Name *', required: true },
+            { key: 'website',       label: 'Website / Domain' },
+            { key: 'phone',         label: 'Phone' },
+            { key: 'address',       label: 'Address' },
+            { key: 'city',          label: 'City' },
+            { key: 'state',         label: 'State' },
+            { key: 'first_name',    label: 'Contact First Name' },
+            { key: 'last_name',     label: 'Contact Last Name' },
+            { key: 'email',         label: 'Contact Email' },
+            { key: 'title',         label: 'Contact Title / Job Title' },
+            { key: 'linkedin_url',  label: 'LinkedIn URL' },
+        ];
+
+        // Parse CSV text honoring quotes, embedded commas, embedded newlines,
+        // and the "" escape inside quoted fields. Returns { headers, data }.
+        function parseCSVText(text) {
+            const rows = [];
+            let row = [];
+            let field = '';
+            let inQuotes = false;
+            let i = 0;
+            while (i < text.length) {
+                const ch = text[i];
+                if (inQuotes) {
+                    if (ch === '"' && text[i + 1] === '"') { field += '"'; i += 2; continue; }
+                    if (ch === '"') { inQuotes = false; i++; continue; }
+                    field += ch; i++; continue;
+                }
+                if (ch === '"') { inQuotes = true; i++; continue; }
+                if (ch === ',') { row.push(field); field = ''; i++; continue; }
+                if (ch === '\r') { i++; continue; }
+                if (ch === '\n') {
+                    row.push(field); field = '';
+                    if (row.some(c => c !== '')) rows.push(row);
+                    row = []; i++; continue;
+                }
+                field += ch; i++;
+            }
+            if (field !== '' || row.length > 0) {
+                row.push(field);
+                if (row.some(c => c !== '')) rows.push(row);
+            }
+            if (rows.length < 2) return { headers: [], data: [] };
+            const headers = rows[0].map(h => h.trim());
+            const data = rows.slice(1).map(r => {
+                const obj = {};
+                headers.forEach((h, idx) => { obj[h] = (r[idx] || '').trim(); });
+                return obj;
+            });
+            return { headers, data };
+        }
+
+        // Auto-suggest a canonical field for a CSV column header. Loose
+        // matching: lowercases, strips punctuation, checks for keyword
+        // presence so "Email Address", "email_address", "EMAIL" all map.
+        function autoMapColumn(header) {
+            const h = (header || '').toLowerCase().replace(/[^a-z0-9]/g, ' ').trim();
+            const has = (kw) => h.includes(kw);
+            if (has('company') && (has('name') || h === 'company')) return 'company_name';
+            if (h === 'organization' || h === 'org' || h === 'business' || h === 'business name') return 'company_name';
+            if (has('first') && has('name')) return 'first_name';
+            if (has('last') && has('name')) return 'last_name';
+            if (has('full') && has('name')) return 'first_name';   // best guess for combined
+            if (has('email')) return 'email';
+            if (has('mobile') || has('cell') || has('phone')) return 'phone';
+            if (has('website') || has('url') || has('domain') || has('site')) return 'website';
+            if (has('title') || has('job') || has('position') || has('role')) return 'title';
+            if (has('linkedin') || has('li ')) return 'linkedin_url';
+            if (h === 'street' || has('address') || has('street')) return 'address';
+            if (h === 'city' || h === 'town') return 'city';
+            if (h === 'state' || h === 'region' || h === 'province') return 'state';
+            return '';
+        }
+
+        // Holding state for the wizard between steps.
+        let _csvWizardState = null;
+
         async function showUploadCSVModal() {
-            const users = await api('/api/crm/users') || [];
+            _csvWizardState = { rows: [], headers: [], mapping: {}, fileName: '' };
+            renderCsvWizardStep1();
+        }
+
+        function renderCsvWizardStep1() {
             const root = document.getElementById('modal-root');
             root.innerHTML = `
                 <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
-                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:600px;max-height:90vh;overflow-y:auto">
-                        <h2>Upload Contact List</h2>
-                        <p style="font-size:13px;color:#666;margin-bottom:12px">
-                            Paste your CSV data below. Each row creates a company + contact.<br>
-                            Required columns: <strong>company_name</strong>. Optional: first_name, last_name, email, phone, website, title, linkedin_url
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:640px">
+                        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
+                            <h2 style="margin:0">Import CSV</h2>
+                            <span style="font-size:11px;color:#888">Step 1 of 3</span>
+                        </div>
+                        <p style="font-size:13px;color:#666;margin:6px 0 16px">
+                            Pick a CSV file or paste the contents below. The next step will let you map columns to CRM fields — your headers don't need to match anything specific.
                         </p>
 
-                        <div style="background:#f8f9fa;border-radius:6px;padding:8px;margin-bottom:12px;font-size:11px;font-family:monospace;color:#666">
-                            company_name,first_name,last_name,email,phone,website,title<br>
-                            Blue Wave Pools,John,Martinez,john@bwp.com,555-1234,bluewavepools.com,Owner
+                        <div style="border:2px dashed #ddd;border-radius:8px;padding:24px;text-align:center;margin-bottom:14px">
+                            <input type="file" id="csv-file" accept=".csv,text/csv" style="display:none" onchange="handleCsvFileSelected(this)">
+                            <button class="btn btn-primary" onclick="document.getElementById('csv-file').click()">📂 Choose CSV file</button>
+                            <div style="font-size:11px;color:#888;margin-top:8px">or paste below</div>
                         </div>
 
                         <div class="form-group">
-                            <label>Paste CSV data</label>
-                            <textarea id="csv-data" rows="8" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:12px;font-family:monospace" placeholder="company_name,first_name,last_name,email,phone,website,title"></textarea>
+                            <label style="font-size:12px;color:#666">Paste CSV (header row + data rows)</label>
+                            <textarea id="csv-data" rows="6" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:12px;font-family:monospace" placeholder="Company,First Name,Email,Phone,Website..."></textarea>
                         </div>
 
-                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-                            <div class="form-group">
-                                <label>Assign All To</label>
-                                <select id="csv-assign" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px">
-                                    <option value="">Unassigned</option>
-                                    ${users.map(u => `<option value="${u.id}">${escapeHtml(u.name)}</option>`).join('')}
-                                </select>
-                            </div>
-                            <div class="form-group" style="display:flex;flex-direction:column;justify-content:end;gap:4px">
-                                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px"><input type="checkbox" id="csv-enrich" checked> Auto-enrich</label>
-                                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px"><input type="checkbox" id="csv-sequence" checked> Auto-sequence</label>
-                            </div>
-                        </div>
-
-                        <div class="modal-actions" style="display:flex;gap:8px;margin-top:16px">
+                        <div class="modal-actions" style="display:flex;gap:8px;margin-top:16px;justify-content:space-between">
                             <button class="btn btn-secondary" onclick="document.getElementById('modal-root').innerHTML=''">Cancel</button>
-                            <button class="btn btn-primary" onclick="submitCSVUpload()">Upload & Process</button>
+                            <button class="btn btn-primary" onclick="parsePastedCsv()">Continue →</button>
                         </div>
                     </div>
                 </div>
             `;
         }
 
-        function parseCSV(text) {
-            const lines = text.trim().split('\n');
-            if (lines.length < 2) return [];
-            const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/[^a-z_]/g, ''));
-            return lines.slice(1).map(line => {
-                const vals = line.split(',').map(v => v.trim());
-                const row = {};
-                headers.forEach((h, i) => { row[h] = vals[i] || ''; });
-                return row;
-            });
+        function handleCsvFileSelected(input) {
+            const f = input.files && input.files[0];
+            if (!f) return;
+            _csvWizardState.fileName = f.name;
+            const reader = new FileReader();
+            reader.onload = () => {
+                const text = String(reader.result || '');
+                advanceWizardWithCsvText(text);
+            };
+            reader.onerror = () => toast('Could not read the file.');
+            reader.readAsText(f);
         }
 
-        async function submitCSVUpload() {
-            const csvText = document.getElementById('csv-data').value;
-            const rows = parseCSV(csvText);
-            if (!rows.length) { toast('No data found. Make sure you have a header row and at least one data row.'); return; }
+        function parsePastedCsv() {
+            const text = document.getElementById('csv-data').value;
+            if (!text || !text.trim()) { toast('Paste your CSV first or pick a file.'); return; }
+            advanceWizardWithCsvText(text);
+        }
 
-            toast(`Processing ${rows.length} rows... this may take a while.`);
+        function advanceWizardWithCsvText(text) {
+            const { headers, data } = parseCSVText(text);
+            if (!headers.length || !data.length) {
+                toast('Could not detect a header + data rows.');
+                return;
+            }
+            _csvWizardState.headers = headers;
+            _csvWizardState.rows = data;
+            // Auto-suggest mappings for each column
+            _csvWizardState.mapping = {};
+            headers.forEach(h => { _csvWizardState.mapping[h] = autoMapColumn(h); });
+            renderCsvWizardStep2();
+        }
+
+        async function renderCsvWizardStep2() {
+            const users = await api('/api/crm/users') || [];
+            const { headers, rows, mapping, fileName } = _csvWizardState;
+            const previewRows = rows.slice(0, 5);
+            const root = document.getElementById('modal-root');
+            const fieldOptions = (selected) => CSV_CANONICAL_FIELDS.map(f =>
+                `<option value="${f.key}" ${f.key === (selected || '') ? 'selected' : ''}>${escapeHtml(f.label)}</option>`
+            ).join('');
+
+            root.innerHTML = `
+                <div class="modal-backdrop">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:980px;max-height:92vh;display:flex;flex-direction:column">
+                        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
+                            <h2 style="margin:0">Map Columns</h2>
+                            <span style="font-size:11px;color:#888">Step 2 of 3</span>
+                        </div>
+                        <p style="font-size:13px;color:#666;margin:6px 0 12px">
+                            ${rows.length.toLocaleString()} row${rows.length === 1 ? '' : 's'} detected${fileName ? ` from <strong>${escapeHtml(fileName)}</strong>` : ''}. Match each column to a CRM field. We auto-detected what we could.
+                        </p>
+
+                        <div style="overflow:auto;flex:1;min-height:0;border:1px solid #eee;border-radius:8px">
+                            <table style="width:100%;font-size:12px;border-collapse:collapse">
+                                <thead style="position:sticky;top:0;background:#fafafa;z-index:1">
+                                    <tr>
+                                        ${headers.map(h => `
+                                            <th style="padding:10px 8px;text-align:left;border-bottom:1px solid #eee;min-width:160px">
+                                                <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:0.4px">${escapeHtml(h)}</div>
+                                                <select onchange="updateCsvMapping('${escapeHtml(h).replace(/'/g, '&#39;')}', this.value)" style="margin-top:4px;width:100%;padding:4px 6px;font-size:12px;border:1px solid #ddd;border-radius:4px">
+                                                    ${fieldOptions(mapping[h])}
+                                                </select>
+                                            </th>
+                                        `).join('')}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${previewRows.map(r => `
+                                        <tr style="border-top:1px solid #f5f5f5">
+                                            ${headers.map(h => `<td style="padding:6px 8px;color:#444">${escapeHtml((r[h] || '').slice(0, 80))}</td>`).join('')}
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div style="margin-top:14px;display:grid;grid-template-columns:1fr 1fr;gap:12px">
+                            <div class="form-group" style="margin:0">
+                                <label style="font-size:12px">Assign all to</label>
+                                <select id="csv-assign" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px">
+                                    <option value="">Unassigned</option>
+                                    ${users.map(u => `<option value="${u.id}">${escapeHtml(u.name)}</option>`).join('')}
+                                </select>
+                            </div>
+                            <div style="display:flex;flex-direction:column;justify-content:end;gap:4px">
+                                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px"><input type="checkbox" id="csv-enrich" checked> Auto-enrich after import</label>
+                                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px"><input type="checkbox" id="csv-sequence" checked> Auto-create sequences</label>
+                            </div>
+                        </div>
+
+                        <div class="modal-actions" style="display:flex;gap:8px;margin-top:14px;justify-content:space-between">
+                            <button class="btn btn-secondary" onclick="renderCsvWizardStep1()">← Back</button>
+                            <button class="btn btn-primary" onclick="submitCsvWizard()">Import ${rows.length.toLocaleString()} row${rows.length === 1 ? '' : 's'} →</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function updateCsvMapping(header, value) {
+            if (!_csvWizardState) return;
+            _csvWizardState.mapping[header] = value;
+        }
+
+        async function submitCsvWizard() {
+            const { rows, mapping } = _csvWizardState;
+            const cleanMapping = {};
+            for (const [k, v] of Object.entries(mapping)) {
+                if (v && v !== 'skip') cleanMapping[k] = v;
+            }
+            if (!Object.values(cleanMapping).includes('company_name')) {
+                if (!confirm('You have not mapped any column to "Company Name" — required for import. Continue anyway? Rows without a company name will be skipped.')) return;
+            }
+
+            // Step 3: progress + summary
+            const root = document.getElementById('modal-root');
+            root.innerHTML = `
+                <div class="modal-backdrop">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:520px;text-align:center;padding:36px">
+                        <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px">Step 3 of 3</div>
+                        <h2 style="margin:0 0 12px">Importing ${rows.length.toLocaleString()} row${rows.length === 1 ? '' : 's'}…</h2>
+                        <div style="margin:18px auto;width:48px;height:48px;border:4px solid #eee;border-top-color:var(--bmp-green);border-radius:50%;animation:spin 1s linear infinite"></div>
+                        <p style="font-size:12px;color:#888">This may take a while if Auto-enrich is on.</p>
+                        <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+                    </div>
+                </div>
+            `;
 
             const data = await api('/api/companies/upload', {
                 method: 'POST',
                 body: JSON.stringify({
                     rows,
-                    assigned_to: parseInt(document.getElementById('csv-assign').value) || null,
-                    auto_enrich: document.getElementById('csv-enrich').checked,
-                    auto_sequence: document.getElementById('csv-sequence').checked,
+                    mapping: cleanMapping,
+                    assigned_to: parseInt(document.getElementById('csv-assign')?.value || '') || null,
+                    auto_enrich: !!document.getElementById('csv-enrich')?.checked,
+                    auto_sequence: !!document.getElementById('csv-sequence')?.checked,
                 }),
             });
 
-            if (data) {
-                toast(`Done! Created: ${data.created}, Enriched: ${data.enriched}, Sequences: ${data.sequences}, Skipped: ${data.skipped}${data.errors.length ? ', Errors: ' + data.errors.length : ''}`);
-                document.getElementById('modal-root').innerHTML = '';
-                loadCompanies(_lastCompaniesFilter);
-            }
+            if (!data) return;
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:520px;padding:32px;text-align:center">
+                        <div style="font-size:48px;margin-bottom:8px">✅</div>
+                        <h2 style="margin:0 0 12px;color:var(--bmp-green)">Import complete</h2>
+                        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:16px 0">
+                            <div style="background:#e8f5e9;padding:10px;border-radius:6px"><div style="font-size:20px;font-weight:700;color:#1b5e20">${data.created}</div><div style="font-size:10px;color:#888">Created</div></div>
+                            <div style="background:#fff8e1;padding:10px;border-radius:6px"><div style="font-size:20px;font-weight:700">${data.enriched}</div><div style="font-size:10px;color:#888">Enriched</div></div>
+                            <div style="background:#e3f2fd;padding:10px;border-radius:6px"><div style="font-size:20px;font-weight:700">${data.sequences}</div><div style="font-size:10px;color:#888">Sequences</div></div>
+                            <div style="background:#f5f5f5;padding:10px;border-radius:6px"><div style="font-size:20px;font-weight:700">${data.skipped}</div><div style="font-size:10px;color:#888">Skipped</div></div>
+                        </div>
+                        ${data.errors && data.errors.length ? `<div style="text-align:left;background:#ffebee;border-radius:6px;padding:10px;margin-top:8px;max-height:140px;overflow:auto;font-size:11px;color:#666"><strong>${data.errors.length} error${data.errors.length === 1 ? '' : 's'}:</strong><br>${data.errors.slice(0, 8).map(e => escapeHtml(e)).join('<br>')}</div>` : ''}
+                        <button class="btn btn-primary" style="margin-top:14px" onclick="document.getElementById('modal-root').innerHTML='';loadCompanies(_lastCompaniesFilter)">Done</button>
+                    </div>
+                </div>
+            `;
         }
 
         async function saveCompanyLinkedIn(companyId) {

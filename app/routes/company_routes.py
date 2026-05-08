@@ -249,7 +249,21 @@ class CSVUploadRow(BaseModel):
 
 
 class CSVUploadRequest(BaseModel):
+    """Accepts EITHER pre-mapped rows (legacy callers) OR raw CSV rows
+    with a column-mapping dict.
+      rows:    list of dicts already keyed by canonical field names
+               (company_name, email, ...). Used by older callers.
+      mapping: dict {csv_column_name → canonical_field_name}. When set,
+               each row is re-keyed by the mapping before processing —
+               so the wizard frontend can keep arbitrary CSV column
+               names and tell the backend how to translate.
+    Canonical field names: company_name, website, phone, address, city,
+      state, first_name, last_name, email, title, linkedin_url.
+    Any unmapped CSV columns are stored on the contact's custom_fields_json
+    once that ships (TODO).
+    """
     rows: list
+    mapping: Optional[dict] = None
     assigned_to: Optional[int] = None
     auto_enrich: bool = True
     auto_sequence: bool = True
@@ -264,12 +278,46 @@ async def upload_contacts(
     """
     Bulk upload contacts with companies. Each row creates a company + contact.
     Optionally auto-enriches and auto-generates sequences.
+
+    When `mapping` is provided, each input row is re-keyed first so the
+    wizard frontend can pass raw CSV column names. Unmapped or missing
+    keys fall through to the empty-string defaults below.
     """
     import secrets as _secrets
 
     results = {"created": 0, "skipped": 0, "enriched": 0, "sequences": 0, "errors": []}
 
-    for i, row in enumerate(req.rows):
+    # Apply column mapping (if supplied) — translate raw CSV keys to
+    # canonical field names before the row enters the pipeline.
+    if req.mapping:
+        # Mapping is {csv_column_name: canonical_field_name}; canonicalize
+        # case + whitespace so 'Email' / 'email' / ' Email ' all collapse.
+        normalized_mapping = {
+            str(k).strip(): str(v).strip()
+            for k, v in req.mapping.items()
+            if v and v != "skip"
+        }
+        translated_rows = []
+        for raw in req.rows:
+            if not isinstance(raw, dict):
+                continue
+            translated = {}
+            for csv_col, canonical in normalized_mapping.items():
+                # Match the CSV column case-insensitively to be forgiving
+                # of upload tools that capitalize headers
+                value = None
+                for k in raw.keys():
+                    if k and str(k).strip().lower() == csv_col.lower():
+                        value = raw[k]
+                        break
+                if value is not None:
+                    translated[canonical] = str(value) if value is not None else ""
+            translated_rows.append(translated)
+        rows_to_process = translated_rows
+    else:
+        rows_to_process = req.rows
+
+    for i, row in enumerate(rows_to_process):
         try:
             company_name = row.get("company_name", "").strip()
             if not company_name:
