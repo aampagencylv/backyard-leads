@@ -49,8 +49,12 @@ async def send_single_email(
         raise HTTPException(status_code=400, detail="Contact has no email address. Add one first.")
     if contact.unsubscribed_at:
         raise HTTPException(status_code=400, detail="Contact has unsubscribed.")
-    if contact.email_status == "invalid":
-        raise HTTPException(status_code=400, detail="Contact email is marked invalid. Verify or update the email before sending.")
+    # Hard gate: verify the contact's email before send. Caches on
+    # contact.email_status so subsequent sends skip the verify cost.
+    from app.services.email_validation import ensure_email_validated
+    ok_to_send, gate_reason = await ensure_email_validated(db, contact)
+    if not ok_to_send:
+        raise HTTPException(status_code=400, detail=f"Email failed verification ({gate_reason}). Update the email or remove the contact.")
 
     company = (await db.execute(select(Company).where(Company.id == email.company_id))).scalar_one_or_none()
     if not company:

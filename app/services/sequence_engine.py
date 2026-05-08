@@ -112,6 +112,14 @@ async def _handle_email(db: AsyncSession, step: GeneratedEmail, contact: Contact
     if not settings.resend_api_key:
         return False, "Resend not configured"
 
+    # Hard gate: verify the contact's email before we send. Hunter $0.04
+    # one-time per email; cached on contact.email_status so subsequent
+    # sequence steps skip the cost. Fail-open on outage.
+    from app.services.email_validation import ensure_email_validated
+    ok_to_send, gate_reason = await ensure_email_validated(db, contact)
+    if not ok_to_send:
+        return False, f"email_invalid: {gate_reason}"
+
     # Pick a "sender" — fall back to the company's assigned user, else the company's owner
     sender_user: Optional[User] = None
     if company.assigned_to:
