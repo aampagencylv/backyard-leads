@@ -519,3 +519,208 @@ async def enrich_company_by_domain(domain: str, api_key: str) -> Optional[Compan
     if not result.name and not result.employee_count:
         return None
     return result
+
+
+# ============================================================
+# Untapped endpoints — high-value adds for B2B SMB outreach
+# ============================================================
+# Netrows exposes 273 endpoints; today we use ~7. These three add
+# meaningful signal for BMP's verticals without changing existing flows.
+
+@dataclass
+class CompanyJobListing:
+    title: Optional[str] = None
+    location: Optional[str] = None
+    posted_at: Optional[str] = None
+    url: Optional[str] = None
+    department: Optional[str] = None
+    description_snippet: Optional[str] = None
+
+
+async def company_jobs(
+    company_id: str,
+    api_key: str,
+    page: int = 1,
+) -> List[CompanyJobListing]:
+    """Pull a company's open job listings (LinkedIn). Strong intent
+    signal for sales — companies hiring sales/marketing roles often
+    need vendors. Requires the Netrows internal company id, which
+    `enrich_company_by_domain` already returns. ~1 credit / call."""
+    if not (company_id and api_key):
+        return []
+    async with httpx.AsyncClient(timeout=20) as client:
+        try:
+            r = await client.get(
+                f"{BASE_URL}/companies/jobs",
+                params={"companyIds": company_id, "page": page},
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        except httpx.HTTPError:
+            return []
+    if r.status_code != 200:
+        return []
+    data = r.json() or {}
+    items = data.get("data", {}).get("items") if isinstance(data.get("data"), dict) else data.get("jobs", [])
+    items = items or []
+    out: List[CompanyJobListing] = []
+    for j in items[:20]:
+        out.append(CompanyJobListing(
+            title=j.get("title") or j.get("jobTitle"),
+            location=j.get("location") or j.get("locationName"),
+            posted_at=j.get("postedAt") or j.get("posted_at") or j.get("listedAt"),
+            url=j.get("url") or j.get("jobUrl"),
+            department=j.get("department") or j.get("function"),
+            description_snippet=(j.get("description") or "")[:200] if j.get("description") else None,
+        ))
+    return out
+
+
+@dataclass
+class CompanyInsights:
+    """Premium endpoint — deeper firmographic data. Signature is wide
+    because Netrows returns whatever they have; not all fields populate."""
+    revenue_range: Optional[str] = None
+    funding_stage: Optional[str] = None
+    technologies: List[str] = field(default_factory=list)
+    growth_signals: List[str] = field(default_factory=list)
+    headcount_growth_pct: Optional[float] = None
+    raw_payload: Optional[dict] = None
+
+
+async def company_insights(domain_or_url: str, api_key: str) -> Optional[CompanyInsights]:
+    """Premium /companies/insights. Domain-keyed. Returns deeper signal
+    than /companies/by-domain — revenue, funding, growth, tech stack."""
+    if not (domain_or_url and api_key):
+        return None
+    clean = (domain_or_url or "").replace("https://", "").replace("http://", "").split("/")[0].replace("www.", "")
+    async with httpx.AsyncClient(timeout=20) as client:
+        try:
+            r = await client.get(
+                f"{BASE_URL}/companies/insights",
+                params={"url": clean},
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        except httpx.HTTPError:
+            return None
+    if r.status_code != 200:
+        return None
+    data = r.json() or {}
+    body = data.get("data", data) if isinstance(data, dict) else data
+
+    techs = body.get("technologies") or body.get("techStack") or []
+    if isinstance(techs, str):
+        techs = [t.strip() for t in techs.split(",") if t.strip()]
+    growth = body.get("growthSignals") or body.get("signals") or []
+    if isinstance(growth, str):
+        growth = [growth]
+
+    return CompanyInsights(
+        revenue_range=body.get("revenueRange") or body.get("revenue_range") or body.get("revenue"),
+        funding_stage=body.get("fundingStage") or body.get("funding_stage"),
+        technologies=list(techs)[:30] if isinstance(techs, list) else [],
+        growth_signals=list(growth)[:10] if isinstance(growth, list) else [],
+        headcount_growth_pct=body.get("headcountGrowth") or body.get("headcount_growth_pct"),
+        raw_payload=body if isinstance(body, dict) else None,
+    )
+
+
+@dataclass
+class FullPersonProfile:
+    """Full LinkedIn profile (richer than /people/reverse-lookup which is
+    email-keyed). Use when we have the LinkedIn URL but want job history,
+    summary, education etc."""
+    full_name: Optional[str] = None
+    headline: Optional[str] = None
+    summary: Optional[str] = None
+    location: Optional[str] = None
+    current_title: Optional[str] = None
+    current_company: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    profile_pic_url: Optional[str] = None
+    skills: List[str] = field(default_factory=list)
+    raw_payload: Optional[dict] = None
+
+
+async def person_profile_by_url(url: str, api_key: str) -> Optional[FullPersonProfile]:
+    """Full LinkedIn profile by URL (1 credit). Use to fill out a contact
+    we discovered via email-finder when they only have email + name."""
+    if not (url and api_key):
+        return None
+    async with httpx.AsyncClient(timeout=20) as client:
+        try:
+            r = await client.get(
+                f"{BASE_URL}/people/profile-by-url",
+                params={"url": url},
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        except httpx.HTTPError:
+            return None
+    if r.status_code != 200:
+        return None
+    data = r.json() or {}
+    body = data.get("data", data) if isinstance(data, dict) else data
+    skills = body.get("skills") or []
+    if isinstance(skills, list) and skills and isinstance(skills[0], dict):
+        skills = [s.get("name") or s.get("skill") for s in skills if s.get("name") or s.get("skill")]
+    return FullPersonProfile(
+        full_name=body.get("fullName") or body.get("full_name") or body.get("name"),
+        headline=body.get("headline"),
+        summary=(body.get("summary") or "")[:1000] or None,
+        location=body.get("location") or body.get("locationName"),
+        current_title=body.get("currentTitle") or body.get("current_title") or body.get("title"),
+        current_company=body.get("currentCompany") or body.get("current_company"),
+        linkedin_url=body.get("publicProfileUrl") or body.get("profileUrl") or url,
+        profile_pic_url=body.get("profilePicUrl") or body.get("profilePicture"),
+        skills=[s for s in skills if s][:30],
+        raw_payload=body if isinstance(body, dict) else None,
+    )
+
+
+@dataclass
+class InstagramPost:
+    caption: Optional[str] = None
+    posted_at: Optional[str] = None
+    url: Optional[str] = None
+    likes: Optional[int] = None
+    comments: Optional[int] = None
+    media_type: Optional[str] = None  # 'image' | 'video' | 'reel'
+    thumbnail_url: Optional[str] = None
+
+
+async def instagram_recent_posts(handle: str, api_key: str, limit: int = 9) -> List[InstagramPost]:
+    """Recent Instagram posts for a profile (1 credit). Critical for
+    backyard-pro outreach — they post pool installs, before/afters,
+    landscaping reveals. Personalization gold: 'just saw your reveal
+    post on the Scottsdale build…'"""
+    if not (handle and api_key):
+        return []
+    # Strip @ + URL prefix if user pasted an instagram.com link
+    handle = handle.strip().lstrip("@")
+    if "instagram.com/" in handle:
+        handle = handle.split("instagram.com/")[1].rstrip("/").split("/")[0]
+    async with httpx.AsyncClient(timeout=20) as client:
+        try:
+            r = await client.get(
+                f"{BASE_URL}/instagram/user/posts",
+                params={"handle": handle, "trim": True},
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        except httpx.HTTPError:
+            return []
+    if r.status_code != 200:
+        return []
+    data = r.json() or {}
+    items = data.get("data", {}).get("items") if isinstance(data.get("data"), dict) else data.get("posts", [])
+    items = items or []
+    out: List[InstagramPost] = []
+    for p in items[:limit]:
+        out.append(InstagramPost(
+            caption=(p.get("caption") or p.get("text") or "")[:500] or None,
+            posted_at=p.get("postedAt") or p.get("posted_at") or p.get("taken_at"),
+            url=p.get("url") or p.get("permalink"),
+            likes=p.get("likes") or p.get("like_count"),
+            comments=p.get("comments") or p.get("comment_count"),
+            media_type=p.get("mediaType") or p.get("media_type"),
+            thumbnail_url=p.get("thumbnailUrl") or p.get("thumbnail_url") or p.get("display_url"),
+        ))
+    return out
