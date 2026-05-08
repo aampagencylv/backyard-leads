@@ -681,6 +681,16 @@ async def get_company_full(
         "insights_fetched_at": company.insights_fetched_at.isoformat() if company.insights_fetched_at else None,
         "instagram_posts": json.loads(company.instagram_posts_json) if company.instagram_posts_json else None,
         "instagram_posts_fetched_at": company.instagram_posts_fetched_at.isoformat() if company.instagram_posts_fetched_at else None,
+        # Tier 2 Netrows caches
+        "similarweb": json.loads(company.similarweb_json) if company.similarweb_json else None,
+        "similarweb_fetched_at": company.similarweb_fetched_at.isoformat() if company.similarweb_fetched_at else None,
+        "monthly_visits": company.monthly_visits,
+        "tech_stack": json.loads(company.tech_stack_json) if company.tech_stack_json else None,
+        "tech_stack_fetched_at": company.tech_stack_fetched_at.isoformat() if company.tech_stack_fetched_at else None,
+        "yelp": json.loads(company.yelp_json) if company.yelp_json else None,
+        "yelp_fetched_at": company.yelp_fetched_at.isoformat() if company.yelp_fetched_at else None,
+        "indeed_jobs": json.loads(company.indeed_jobs_json) if company.indeed_jobs_json else None,
+        "indeed_jobs_fetched_at": company.indeed_jobs_fetched_at.isoformat() if company.indeed_jobs_fetched_at else None,
         "assigned_to": company.assigned_to,
         "assigned_name": assigned_name,
         "tags": tag_list,
@@ -989,6 +999,94 @@ async def enrich_company(
                                        officer.name, None, officer.title, None, None)
     except Exception as e:
         sos_data = {"error": str(e)[:200]}
+
+    # Phase 2 enrichment: SimilarWeb traffic + tech-stack detection
+    # (Tier 2). Both are domain-keyed so we run them whenever we have
+    # a website on file, with 30-day cache. monthly_visits gets
+    # denormalized for filtering / lead-scoring.
+    similarweb_data = None
+    tech_stack_data = None
+    try:
+        if company.website:
+            nr_key = await get_netrows_api_key(db)
+            if nr_key:
+                from app.services.netrows_enrichment import (
+                    similarweb_website_overview, technographics_lookup,
+                )
+                # SimilarWeb — 30-day TTL
+                sw_stale = (
+                    not company.similarweb_fetched_at or
+                    (datetime.now(timezone.utc) - (
+                        company.similarweb_fetched_at if company.similarweb_fetched_at.tzinfo
+                        else company.similarweb_fetched_at.replace(tzinfo=timezone.utc)
+                    )).days >= 30
+                )
+                if sw_stale:
+                    sw = await similarweb_website_overview(company.website, nr_key)
+                    if sw:
+                        payload = {
+                            "domain": sw.domain,
+                            "global_rank": sw.global_rank,
+                            "country_rank": sw.country_rank,
+                            "category_rank": sw.category_rank,
+                            "monthly_visits": sw.monthly_visits,
+                            "bounce_rate": sw.bounce_rate,
+                            "avg_visit_duration_seconds": sw.avg_visit_duration_seconds,
+                            "pages_per_visit": sw.pages_per_visit,
+                            "top_country": sw.top_country,
+                            "top_country_share": sw.top_country_share,
+                            "traffic_sources": sw.traffic_sources,
+                        }
+                        company.similarweb_json = json.dumps(payload, default=str)
+                        company.similarweb_fetched_at = datetime.now(timezone.utc)
+                        if isinstance(sw.monthly_visits, (int, float)):
+                            company.monthly_visits = int(sw.monthly_visits)
+                        similarweb_data = payload
+                        try:
+                            await meter(
+                                db, action_type="enrich_netrows",
+                                idempotency_key=make_idem_key("enrich_netrows", company_id, "similarweb"),
+                                user_id=user.id, action_ref=f"company:{company_id}",
+                                raw_cost_override_usd=0.011,
+                                metadata={"endpoint": "similarweb/website-overview"},
+                            )
+                        except Exception:
+                            pass
+                # Technographics — 30-day TTL
+                tech_stale = (
+                    not company.tech_stack_fetched_at or
+                    (datetime.now(timezone.utc) - (
+                        company.tech_stack_fetched_at if company.tech_stack_fetched_at.tzinfo
+                        else company.tech_stack_fetched_at.replace(tzinfo=timezone.utc)
+                    )).days >= 30
+                )
+                if tech_stale:
+                    tech = await technographics_lookup(company.website, nr_key)
+                    if tech:
+                        payload = {
+                            "url": tech.url,
+                            "technologies": tech.technologies,
+                            "categories": tech.categories,
+                            "cms": tech.cms,
+                            "ecommerce": tech.ecommerce,
+                            "analytics": tech.analytics,
+                            "advertising": tech.advertising,
+                        }
+                        company.tech_stack_json = json.dumps(payload, default=str)
+                        company.tech_stack_fetched_at = datetime.now(timezone.utc)
+                        tech_stack_data = payload
+                        try:
+                            await meter(
+                                db, action_type="enrich_netrows",
+                                idempotency_key=make_idem_key("enrich_netrows", company_id, "technographics"),
+                                user_id=user.id, action_ref=f"company:{company_id}",
+                                raw_cost_override_usd=0.011,
+                                metadata={"endpoint": "technographics/lookup"},
+                            )
+                        except Exception:
+                            pass
+    except Exception as e:
+        similarweb_data = {"error": str(e)[:200]}
 
     # Apply company-level data the waterfall surfaced (employee_count,
     # industry, linkedin_url) when our local fields are still empty.
@@ -1790,6 +1888,135 @@ async def refresh_company_insights(
         pass
     await db.commit()
     return {"found": True, "fetched_at": company.insights_fetched_at.isoformat(), **payload}
+
+
+@router.post("/{company_id}/refresh-yelp")
+async def refresh_company_yelp(
+    company_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Pull Yelp profile + recent reviews for a company. Two-step:
+    search by name + city → details + reviews (owner replies highlighted).
+    Owner replies are gold for personalization ('I see how you handled
+    that one-star — let's talk')."""
+    company = (await db.execute(select(Company).where(Company.id == company_id))).scalar_one_or_none()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    if not (company.name and (company.city or company.state)):
+        raise HTTPException(status_code=400, detail="Company needs name + city/state for Yelp search")
+    nr_key = await get_netrows_api_key(db)
+    if not nr_key:
+        raise HTTPException(status_code=400, detail="Netrows API key not configured")
+
+    from app.services.netrows_enrichment import (
+        yelp_business_search, yelp_business_details, yelp_business_reviews,
+    )
+    from app.services.credit_meter import meter, make_idem_key
+
+    location = ", ".join(p for p in [company.city, company.state] if p)
+    matches = await yelp_business_search(company.name, location, nr_key, limit=5)
+    if not matches:
+        return {"found": False, "message": "No Yelp results matched this company"}
+    # Pick top match — same defensive posture as enrich_company_by_domain:
+    # if the top result name has zero token overlap with our company name,
+    # bail rather than guess.
+    top = matches[0]
+    a, b = (top.name or "").lower(), (company.name or "").lower()
+    overlap = len(set(a.split()) & set(b.split()))
+    if overlap == 0:
+        return {"found": False, "message": f"Top Yelp match '{top.name}' doesn't match — bailing rather than mismatch"}
+
+    detail = await yelp_business_details(top.alias, nr_key) if top.alias else top
+    reviews = []
+    if detail and detail.biz_id and detail.alias:
+        reviews = await yelp_business_reviews(detail.biz_id, detail.alias, nr_key, limit=20)
+
+    payload = {
+        "alias": (detail or top).alias,
+        "biz_id": (detail or top).biz_id,
+        "name": (detail or top).name,
+        "phone": (detail or top).phone,
+        "website": (detail or top).website,
+        "yelp_url": (detail or top).yelp_url,
+        "rating": (detail or top).rating,
+        "review_count": (detail or top).review_count,
+        "price_range": (detail or top).price_range,
+        "categories": (detail or top).categories,
+        "address": (detail or top).address,
+        "city": (detail or top).city,
+        "state": (detail or top).state,
+        "zip_code": (detail or top).zip_code,
+        "hours_summary": (detail or top).hours_summary,
+        "photo_url": (detail or top).photo_url,
+        "reviews": [{
+            "rating": r.rating, "text": r.text, "posted_at": r.posted_at,
+            "reviewer_name": r.reviewer_name, "reviewer_profile_url": r.reviewer_profile_url,
+            "owner_response": r.owner_response, "owner_response_at": r.owner_response_at,
+            "review_url": r.review_url,
+        } for r in reviews],
+    }
+    company.yelp_json = json.dumps(payload, default=str)
+    company.yelp_fetched_at = datetime.now(timezone.utc)
+    try:
+        await meter(
+            db, action_type="enrich_netrows",
+            idempotency_key=make_idem_key("enrich_netrows", company_id, "yelp_manual",
+                                          datetime.now(timezone.utc).timestamp()),
+            user_id=user.id, action_ref=f"company:{company_id}",
+            raw_cost_override_usd=0.022,  # ~3 endpoint calls
+            metadata={"endpoint": "yelp/*", "trigger": "manual"},
+        )
+    except Exception:
+        pass
+    await db.commit()
+    return {"found": True, "fetched_at": company.yelp_fetched_at.isoformat(), **payload}
+
+
+@router.post("/{company_id}/refresh-indeed")
+async def refresh_company_indeed(
+    company_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Indeed jobs for a company. Hiring activity = budget signal.
+    Search filters by company name + city — caller's burden to interpret
+    'no jobs found' (could mean truly not hiring, or company isn't on
+    Indeed at all)."""
+    company = (await db.execute(select(Company).where(Company.id == company_id))).scalar_one_or_none()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    if not company.name:
+        raise HTTPException(status_code=400, detail="Company name required")
+    nr_key = await get_netrows_api_key(db)
+    if not nr_key:
+        raise HTTPException(status_code=400, detail="Netrows API key not configured")
+
+    from app.services.netrows_enrichment import indeed_jobs_for_company
+    from app.services.credit_meter import meter, make_idem_key
+
+    location = ", ".join(p for p in [company.city, company.state] if p) or None
+    jobs = await indeed_jobs_for_company(company.name, nr_key, location=location)
+    payload = {"jobs": [{
+        "title": j.title, "company": j.company, "location": j.location,
+        "posted_at": j.posted_at, "job_url": j.job_url, "salary": j.salary,
+        "job_type": j.job_type, "snippet": j.snippet,
+    } for j in jobs]}
+    company.indeed_jobs_json = json.dumps(payload, default=str)
+    company.indeed_jobs_fetched_at = datetime.now(timezone.utc)
+    try:
+        await meter(
+            db, action_type="enrich_netrows",
+            idempotency_key=make_idem_key("enrich_netrows", company_id, "indeed_manual",
+                                          datetime.now(timezone.utc).timestamp()),
+            user_id=user.id, action_ref=f"company:{company_id}",
+            raw_cost_override_usd=0.011,
+            metadata={"endpoint": "indeed/job-search", "trigger": "manual"},
+        )
+    except Exception:
+        pass
+    await db.commit()
+    return {"found": bool(jobs), "fetched_at": company.indeed_jobs_fetched_at.isoformat(), **payload}
 
 
 def _summarize(analysis) -> str:

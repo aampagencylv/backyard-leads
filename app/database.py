@@ -46,6 +46,7 @@ async def init_db():
         "scripts.migrate_audit_log",
         "scripts.migrate_api_keys_webhooks",
         "scripts.migrate_zoominfo",
+        "scripts.migrate_tier2_netrows",
     ):
         try:
             mod = __import__(_migration_module, fromlist=["main"])

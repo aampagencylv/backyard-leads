@@ -153,6 +153,23 @@ class Company(Base):
     instagram_posts_json = Column(Text, nullable=True)
     instagram_posts_fetched_at = Column(DateTime, nullable=True)
 
+    # Tier 2 Netrows caches.
+    # SimilarWeb traffic — `monthly_visits` is denormalized for filtering /
+    # lead-scoring without parsing the JSON blob. <100 visits/mo signals a
+    # parked / abandoned site → drop from cold-outreach cadences.
+    similarweb_json = Column(Text, nullable=True)
+    similarweb_fetched_at = Column(DateTime, nullable=True)
+    monthly_visits = Column(Integer, nullable=True)
+    # Tech-stack detection (BuiltWith-equivalent).
+    tech_stack_json = Column(Text, nullable=True)
+    tech_stack_fetched_at = Column(DateTime, nullable=True)
+    # Yelp profile cache — populated on-demand via "Yelp" button.
+    yelp_json = Column(Text, nullable=True)
+    yelp_fetched_at = Column(DateTime, nullable=True)
+    # Indeed hiring activity — populated on-demand.
+    indeed_jobs_json = Column(Text, nullable=True)
+    indeed_jobs_fetched_at = Column(DateTime, nullable=True)
+
     # Google Maps reviews cache (Netrows /google-maps/reviews)
     google_place_id = Column(String(80), nullable=True)
     reviews_json = Column(Text, nullable=True)  # JSON array of reviews with owner_reply parsed out

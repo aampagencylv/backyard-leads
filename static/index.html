@@ -3686,6 +3686,91 @@ function verify(secret, rawBody, header) {
                         </div>
                         ` : ''}
 
+                        ${d.similarweb && (d.similarweb.monthly_visits != null || d.similarweb.global_rank) ? (() => {
+                            const sw = d.similarweb;
+                            const v = sw.monthly_visits;
+                            const visitChip = v == null ? '' : (() => {
+                                const color = v < 100 ? '#c0392b' : (v < 1000 ? '#f39c12' : '#1b5e20');
+                                const label = v < 100 ? 'parked / abandoned?' : (v < 1000 ? 'low traffic' : 'active');
+                                const fmt = v >= 1000000 ? (v/1000000).toFixed(1)+'M' : (v >= 1000 ? Math.round(v/1000)+'k' : v);
+                                return `<span style="display:inline-block;background:${color}1a;color:${color};border-radius:3px;padding:1px 6px;font-size:10px;margin-left:4px">${label}</span>`;
+                            })();
+                            return `<div class="panel">
+                                <h3 style="font-size:14px">Website Traffic <span style="font-size:10px;font-weight:400;color:#888">SimilarWeb</span></h3>
+                                <div style="font-size:12px;line-height:1.7">
+                                    ${v != null ? `<div><strong>Monthly visits:</strong> ${(v >= 1000000 ? (v/1000000).toFixed(1)+'M' : (v >= 1000 ? Math.round(v/1000)+'k' : v))} ${visitChip}</div>` : ''}
+                                    ${sw.global_rank ? `<div><strong>Global rank:</strong> #${sw.global_rank.toLocaleString()}</div>` : ''}
+                                    ${sw.country_rank ? `<div><strong>Country rank:</strong> #${sw.country_rank.toLocaleString()}${sw.top_country ? ` (${escapeHtml(sw.top_country)})` : ''}</div>` : ''}
+                                    ${sw.bounce_rate != null ? `<div><strong>Bounce rate:</strong> ${(sw.bounce_rate * 100).toFixed(0)}%</div>` : ''}
+                                    ${sw.pages_per_visit != null ? `<div><strong>Pages/visit:</strong> ${sw.pages_per_visit.toFixed(1)}</div>` : ''}
+                                    ${sw.avg_visit_duration_seconds != null ? `<div><strong>Avg session:</strong> ${Math.round(sw.avg_visit_duration_seconds)}s</div>` : ''}
+                                    ${sw.traffic_sources && Object.keys(sw.traffic_sources).length ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #eee"><strong>Traffic sources:</strong><br>${Object.entries(sw.traffic_sources).slice(0,5).map(([k,val]) => `<span style="display:inline-block;background:#f0f4f8;border-radius:3px;padding:1px 6px;font-size:10px;margin:2px 4px 0 0">${escapeHtml(k)}: ${typeof val === 'number' ? (val * 100).toFixed(0)+'%' : escapeHtml(String(val))}</span>`).join('')}</div>` : ''}
+                                    <div style="margin-top:6px;font-size:11px;color:#888">
+                                        ${d.similarweb_fetched_at ? `Updated ${fmtRelative(d.similarweb_fetched_at)}` : ''}
+                                    </div>
+                                </div>
+                            </div>`;
+                        })() : ''}
+
+                        ${d.tech_stack && (d.tech_stack.technologies || []).length ? `
+                        <div class="panel">
+                            <h3 style="font-size:14px">Tech Stack <span style="font-size:10px;font-weight:400;color:#888">${d.tech_stack.technologies.length} detected</span></h3>
+                            <div style="font-size:12px;line-height:1.7">
+                                ${d.tech_stack.cms ? `<div><strong>CMS:</strong> ${escapeHtml(d.tech_stack.cms)}</div>` : ''}
+                                ${d.tech_stack.ecommerce ? `<div><strong>E-commerce:</strong> ${escapeHtml(d.tech_stack.ecommerce)}</div>` : ''}
+                                ${(d.tech_stack.analytics || []).length ? `<div><strong>Analytics:</strong> ${d.tech_stack.analytics.map(a => escapeHtml(a)).join(', ')}</div>` : ''}
+                                <div style="margin-top:6px;padding-top:6px;border-top:1px solid #eee">
+                                    ${d.tech_stack.technologies.slice(0, 24).map(t => `<span style="display:inline-block;background:#f0f4f8;border-radius:3px;padding:2px 6px;font-size:10px;margin:2px 4px 0 0" title="${escapeHtml(t.category || '')}">${escapeHtml(t.name || '')}</span>`).join('')}
+                                </div>
+                                <div style="margin-top:6px;font-size:11px;color:#888">
+                                    ${d.tech_stack_fetched_at ? `Updated ${fmtRelative(d.tech_stack_fetched_at)}` : ''}
+                                </div>
+                            </div>
+                        </div>
+                        ` : ''}
+
+                        ${d.yelp && d.yelp.name ? `
+                        <div class="panel">
+                            <h3 style="font-size:14px">Yelp Profile <span style="font-size:10px;font-weight:400;color:#888">${d.yelp.rating ? `${d.yelp.rating}★` : ''}${d.yelp.review_count ? ` · ${d.yelp.review_count} reviews` : ''}</span></h3>
+                            <div style="font-size:12px;line-height:1.7">
+                                ${d.yelp.yelp_url ? `<div><a href="${escapeHtml(d.yelp.yelp_url)}" target="_blank" rel="noopener" style="color:#0077B5">${escapeHtml(d.yelp.name)} →</a></div>` : `<div>${escapeHtml(d.yelp.name)}</div>`}
+                                ${(d.yelp.categories || []).length ? `<div>${d.yelp.categories.map(c => `<span style="display:inline-block;background:#f0f4f8;border-radius:3px;padding:1px 6px;font-size:10px;margin-right:4px">${escapeHtml(c)}</span>`).join('')}</div>` : ''}
+                                ${(d.yelp.reviews || []).length ? `<div style="margin-top:8px;padding-top:8px;border-top:1px solid #eee">
+                                    <strong>Recent reviews</strong> (${d.yelp.reviews.length})
+                                    ${d.yelp.reviews.slice(0, 5).map(r => `
+                                        <div style="margin-top:6px;padding:6px 8px;background:#fafafa;border-radius:4px">
+                                            <div style="font-size:11px;color:#666">${r.rating ? `${r.rating}★` : ''} ${r.reviewer_name ? `· ${escapeHtml(r.reviewer_name)}` : ''} ${r.posted_at ? `· ${escapeHtml(String(r.posted_at).split('T')[0])}` : ''}</div>
+                                            ${r.text ? `<div style="font-size:11px;margin-top:2px">${escapeHtml(r.text.slice(0, 200))}${r.text.length > 200 ? '…' : ''}</div>` : ''}
+                                            ${r.owner_response ? `<div style="font-size:11px;margin-top:4px;padding:4px 6px;background:#FFF8F0;border-left:3px solid var(--bmp-orange);border-radius:2px"><strong style="color:var(--bmp-orange)">Owner reply:</strong> ${escapeHtml(r.owner_response.slice(0, 200))}${r.owner_response.length > 200 ? '…' : ''}</div>` : ''}
+                                        </div>
+                                    `).join('')}
+                                </div>` : ''}
+                                <div style="margin-top:8px;font-size:11px;color:#888">
+                                    ${d.yelp_fetched_at ? `Updated ${fmtRelative(d.yelp_fetched_at)}` : ''}
+                                    <button class="btn btn-secondary btn-xs" style="margin-left:8px" onclick="refreshYelp(${d.id})">↻ Refresh</button>
+                                </div>
+                            </div>
+                        </div>
+                        ` : `
+                        ${d.website ? `<div style="padding:8px 12px;font-size:11px;color:#888"><button class="btn btn-secondary btn-xs" onclick="refreshYelp(${d.id})">🔍 Pull Yelp profile + reviews</button></div>` : ''}
+                        `}
+
+                        ${d.indeed_jobs && (d.indeed_jobs.jobs || []).length ? `
+                        <div class="panel">
+                            <h3 style="font-size:14px">Hiring Activity <span style="font-size:10px;font-weight:400;color:#888">Indeed · ${d.indeed_jobs.jobs.length} open</span></h3>
+                            <p style="font-size:11px;color:#888;margin-bottom:6px">Active hiring = budget signal.</p>
+                            <ul style="font-size:12px;margin:0;padding-left:18px">
+                                ${d.indeed_jobs.jobs.slice(0, 8).map(j => `<li style="margin-bottom:3px">${j.job_url ? `<a href="${escapeHtml(j.job_url)}" target="_blank" rel="noopener" style="color:#0077B5">${escapeHtml(j.title || '?')}</a>` : escapeHtml(j.title || '?')} ${j.location ? `<span style="color:#888;font-size:11px">— ${escapeHtml(j.location)}</span>` : ''}${j.salary ? `<span style="color:#1b5e20;font-size:10px;margin-left:4px">${escapeHtml(j.salary)}</span>` : ''}</li>`).join('')}
+                            </ul>
+                            <div style="margin-top:8px;font-size:11px;color:#888">
+                                ${d.indeed_jobs_fetched_at ? `Updated ${fmtRelative(d.indeed_jobs_fetched_at)}` : ''}
+                                <button class="btn btn-secondary btn-xs" style="margin-left:8px" onclick="refreshIndeed(${d.id})">↻ Refresh</button>
+                            </div>
+                        </div>
+                        ` : `
+                        ${d.name ? `<div style="padding:4px 12px;font-size:11px;color:#888"><button class="btn btn-secondary btn-xs" onclick="refreshIndeed(${d.id})">📋 Check Indeed for hiring activity</button></div>` : ''}
+                        `}
+
                         ${d.instagram_posts && d.instagram_posts.length ? `
                         <div class="panel">
                             <h3 style="font-size:14px">Recent Instagram Posts <span style="font-size:10px;font-weight:400;color:#888">${d.instagram_posts.length}</span></h3>
@@ -4608,6 +4693,25 @@ function verify(secret, rawBody, header) {
             const data = await api(`/api/companies/${companyId}/refresh-insights`, { method: 'POST' });
             if (data) {
                 toast(data.found ? 'Insights updated' : 'No data returned (domain not in Netrows DB)');
+                openCompanyDetail(companyId);
+            }
+        }
+
+        async function refreshYelp(companyId) {
+            toast('Pulling Yelp profile + reviews…');
+            const data = await api(`/api/companies/${companyId}/refresh-yelp`, { method: 'POST' });
+            if (data) {
+                toast(data.found ? `Yelp loaded${data.reviews && data.reviews.length ? ` · ${data.reviews.length} reviews` : ''}` : (data.message || 'No Yelp match'));
+                openCompanyDetail(companyId);
+            }
+        }
+
+        async function refreshIndeed(companyId) {
+            toast('Checking Indeed for hiring activity…');
+            const data = await api(`/api/companies/${companyId}/refresh-indeed`, { method: 'POST' });
+            if (data) {
+                const n = (data.jobs || []).length;
+                toast(n ? `${n} open role${n === 1 ? '' : 's'} found` : 'No active hiring on Indeed');
                 openCompanyDetail(companyId);
             }
         }
