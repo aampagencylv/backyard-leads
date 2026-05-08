@@ -233,6 +233,13 @@ class Contact(Base):
     # Definitions live in custom_field_definitions where entity_type='contact'.
     custom_fields_json = Column(Text, nullable=True)
 
+    # Full LinkedIn profile cache (Netrows /people/profile-by-url).
+    # Triggered on-demand from the contact card. Auto-fills title +
+    # first/last name when those are empty; full payload kept here for
+    # future "view profile" UI without a fresh API hit.
+    linkedin_profile_json = Column(Text, nullable=True)
+    linkedin_profile_fetched_at = Column(DateTime, nullable=True)
+
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 

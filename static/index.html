@@ -3034,6 +3034,7 @@
                                         </div>
                                         <div style="display:flex;gap:3px;flex-shrink:0">
                                             ${c.linkedin_url ? `<a href="${escapeHtml(c.linkedin_url)}" target="_blank" onclick="event.stopPropagation()" style="color:#0077B5;font-size:11px;text-decoration:none" title="LinkedIn">in</a>` : ''}
+                                            ${c.linkedin_url ? `<button class="btn btn-secondary btn-xs" onclick="event.stopPropagation();refreshContactLinkedInProfile(${c.id})" style="padding:2px 5px;font-size:10px" title="Pull full LinkedIn profile (1 credit)">↻</button>` : ''}
                                             <button class="btn btn-secondary btn-xs" onclick="event.stopPropagation();editContact(${c.id})" style="padding:2px 5px;font-size:10px">Edit</button>
                                             <button class="btn btn-secondary btn-xs" onclick="event.stopPropagation();editContactCustomFields(${c.id})" style="padding:2px 5px;font-size:10px" title="Additional Information">ⓘ</button>
                                         </div>
@@ -4020,6 +4021,23 @@
                 if (data.url) window.open(data.url, '_blank');
                 openCompanyDetail(companyId);
             }
+        }
+
+        async function refreshContactLinkedInProfile(contactId) {
+            toast('Pulling LinkedIn profile…');
+            const data = await api(`/api/contacts/${contactId}/refresh-linkedin-profile`, { method: 'POST' });
+            if (!data) return;
+            if (!data.found) {
+                toast('Profile not found or rate-limited');
+                return;
+            }
+            const filled = data.filled || [];
+            const msg = filled.length
+                ? `Profile pulled — auto-filled: ${filled.join(', ')}`
+                : 'Profile cached (all contact fields already populated)';
+            toast(msg);
+            const c = await api(`/api/contacts/${contactId}`);
+            if (c && c.company_id) openCompanyDetail(c.company_id);
         }
 
         async function refreshInstagramPosts(companyId) {

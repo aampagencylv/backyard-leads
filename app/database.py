@@ -42,6 +42,7 @@ async def init_db():
         "scripts.migrate_morning_brief",
         "scripts.migrate_sos_lookups",
         "scripts.migrate_netrows_extras",
+        "scripts.migrate_contact_linkedin_profile",
     ):
         try:
             mod = __import__(_migration_module, fromlist=["main"])

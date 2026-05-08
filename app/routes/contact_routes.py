@@ -532,6 +532,8 @@ def _contact_summary(c: Contact) -> dict:
         "recent_posts": json.loads(c.recent_posts_json) if c.recent_posts_json else [],
         "posts_fetched_at": c.posts_fetched_at.isoformat() if c.posts_fetched_at else None,
         "custom_fields": json.loads(c.custom_fields_json) if c.custom_fields_json else {},
+        "linkedin_profile": json.loads(c.linkedin_profile_json) if c.linkedin_profile_json else None,
+        "linkedin_profile_fetched_at": c.linkedin_profile_fetched_at.isoformat() if c.linkedin_profile_fetched_at else None,
         "created_at": c.created_at.isoformat() if c.created_at else None,
     }
 
@@ -563,6 +565,82 @@ async def refresh_contact_posts(
     contact.posts_fetched_at = datetime.now(timezone.utc)
     await db.commit()
     return {"posts_count": len(posts), "fetched_at": contact.posts_fetched_at.isoformat()}
+
+
+@router.post("/contacts/{contact_id}/refresh-linkedin-profile")
+async def refresh_contact_linkedin_profile(
+    contact_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Pull a full LinkedIn profile via Netrows /people/profile-by-url
+    (1 credit). Auto-fills empty title / first_name / last_name on the
+    contact and caches the full payload for future renders."""
+    contact = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    if not contact.linkedin_url:
+        raise HTTPException(status_code=400, detail="Contact has no LinkedIn URL on file")
+    nr_key = await get_netrows_api_key(db)
+    if not nr_key:
+        raise HTTPException(status_code=400, detail="Netrows API key not configured")
+
+    from app.services.netrows_enrichment import person_profile_by_url
+    profile = await person_profile_by_url(contact.linkedin_url, nr_key)
+    if profile is None:
+        return {"found": False, "message": "Profile not found or rate-limited"}
+
+    # Auto-fill empty fields — never overwrite manually-entered data
+    filled = []
+    if profile.current_title and not (contact.title or "").strip():
+        contact.title = profile.current_title
+        filled.append("title")
+    if profile.full_name and not (contact.first_name or "").strip() and not (contact.last_name or "").strip():
+        parts = profile.full_name.split(maxsplit=1)
+        contact.first_name = parts[0]
+        if len(parts) > 1:
+            contact.last_name = parts[1]
+        filled.append("name")
+
+    contact.linkedin_profile_json = json.dumps({
+        "full_name": profile.full_name,
+        "headline": profile.headline,
+        "summary": profile.summary,
+        "location": profile.location,
+        "current_title": profile.current_title,
+        "current_company": profile.current_company,
+        "linkedin_url": profile.linkedin_url,
+        "profile_pic_url": profile.profile_pic_url,
+        "skills": profile.skills,
+    }, default=str)
+    contact.linkedin_profile_fetched_at = datetime.now(timezone.utc)
+
+    try:
+        from app.services.credit_meter import meter, make_idem_key
+        await meter(
+            db, action_type="enrich_netrows",
+            idempotency_key=make_idem_key("enrich_netrows", "profile", contact_id,
+                                          datetime.now(timezone.utc).timestamp()),
+            user_id=user.id, action_ref=f"contact:{contact_id}",
+            raw_cost_override_usd=0.0055,
+            metadata={"endpoint": "people/profile-by-url"},
+        )
+    except Exception:
+        pass
+
+    await db.commit()
+    return {
+        "found": True,
+        "filled": filled,
+        "fetched_at": contact.linkedin_profile_fetched_at.isoformat(),
+        "profile": {
+            "full_name": profile.full_name,
+            "headline": profile.headline,
+            "current_title": profile.current_title,
+            "current_company": profile.current_company,
+            "location": profile.location,
+        },
+    }
 
 
 class LookupEmailRequest(BaseModel):
