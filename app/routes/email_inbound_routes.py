@@ -75,65 +75,29 @@ async def _resolve_resend_webhook_secret() -> str:
 
 
 def _verify_signature(raw_body: bytes, headers: dict, secret: str) -> bool:
-    """Verify a Resend (Svix) webhook.
+    """Verify a Resend webhook using the Svix Python library — the canonical
+    implementation Resend's docs recommend. Handles all the edge cases
+    (key rotation, multiple sigs, timestamp tolerance, secret decoding) so
+    we don't have to maintain our own crypto code.
 
-    Svix signs `{svix_id}.{svix_timestamp}.{body}` with HMAC-SHA256, where
-    the secret is the base64-decoded bytes following the `whsec_` prefix.
-    The svix-signature header can contain multiple space-separated
-    `v1,<base64sig>` pairs (for key rotation), and ANY of them matching
-    is sufficient.
-
-    Replay protection: reject signatures whose timestamp is more than
-    5 minutes off — protects against attacker resending an old request.
-
-    Defense-in-depth: if the secret isn't configured (early dev), accept
-    everything; once it's set, reject anything without a valid HMAC."""
+    Returns True if no secret configured (bootstrap mode), so the endpoint
+    works during early setup before the user has pasted a secret."""
     if not secret:
-        return True  # secret unset → accept all (bootstrap mode)
-
-    sig_header = headers.get("svix-signature") or headers.get("resend-signature") or ""
-    msg_id = headers.get("svix-id") or headers.get("webhook-id") or ""
-    msg_ts = headers.get("svix-timestamp") or headers.get("webhook-timestamp") or ""
-    if not sig_header or not msg_id or not msg_ts:
-        return False
-
-    # Replay protection — 5 minute tolerance window
+        return True
     try:
-        ts_int = int(msg_ts)
-        import time as _time
-        if abs(int(_time.time()) - ts_int) > 300:
-            return False
-    except ValueError:
-        return False
-
-    # Decode the secret — Svix format is `whsec_<base64>`
-    import base64
-    raw_secret = secret
-    if raw_secret.startswith("whsec_"):
-        raw_secret = raw_secret[len("whsec_"):]
+        from svix.webhooks import Webhook  # type: ignore
+    except ImportError:
+        log.error("[inbound] svix library not installed — accepting unverified")
+        return True
     try:
-        secret_bytes = base64.b64decode(raw_secret)
-    except Exception:
-        # If decode fails (someone pasted a non-base64 secret), use raw bytes
-        # as a fallback. Real Svix secrets always decode cleanly.
-        secret_bytes = raw_secret.encode()
-
-    signed_payload = f"{msg_id}.{msg_ts}.".encode("utf-8") + raw_body
-    expected_sig = base64.b64encode(
-        hmac.new(secret_bytes, signed_payload, hashlib.sha256).digest()
-    ).decode()
-
-    # Header contains one or more space-separated tokens like `v1,<sig>`
-    for token in sig_header.split():
-        parts = token.split(",", 1)
-        if len(parts) != 2:
-            continue
-        version, candidate = parts
-        if version.strip() != "v1":
-            continue
-        if hmac.compare_digest(candidate.strip(), expected_sig):
-            return True
-    return False
+        wh = Webhook(secret)
+        # svix expects the standard svix-* headers + the raw body. It raises
+        # WebhookVerificationError on any mismatch (signature, timestamp, etc).
+        wh.verify(raw_body, headers)
+        return True
+    except Exception as e:
+        log.warning(f"[inbound] signature verification failed: {e}")
+        return False
 
 
 @router.post("/inbound")
