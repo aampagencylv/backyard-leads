@@ -1315,6 +1315,93 @@ The same tour system works for SaaS customers, but the steps would be slightly d
 
 ---
 
+## 🏛️ Enrichment Phase 2: Secretary of State adapters (locked 2026-05-08)
+
+Steve's idea while shipping the enrichment waterfall: SoS data is a
+high-margin, vertical-relevant enrichment source. Public-record by
+nature, free to access, and it surfaces information the other providers
+either don't have or have stale versions of:
+
+  - Registered legal name (vs. DBA / Google Maps name)
+  - Registered agent name + address (often the actual owner / their attorney)
+  - Officers / directors / managing members
+  - Business age (filing date)
+  - Active / dissolved / inactive status (don't waste outreach on a dead LLC)
+  - Cross-LLC linkage — same owner often has multiple entities; consolidate to one prospect
+
+Why it matters for BMP's verticals: home-services owners are typically
+the registered agent OR named officer. Apollo / Netrows miss them because
+they're not on LinkedIn. SoS catches that gap.
+
+### Architecture fit
+The waterfall I'm building today is class-based — every provider
+implements the EnrichmentProvider protocol. Each US state becomes its
+own provider class:
+
+```
+ApolloProvider           (BYO-key, tenant pays)
+NetrowsProvider          (platform-paid)
+HunterProvider           (platform-paid)
+SoSProvider_AZ           (platform-paid; light scrape compute)
+SoSProvider_NV           (...)
+SoSProvider_FL           (...)
+SoSProvider_TX           (...)
+SoSProvider_CA           (...)
+```
+
+The waterfall picks the right SoS provider by `company.state` so we
+only hit one per lookup. A small `SOS_REGISTRY` dict maps state → provider.
+
+### State priority for v1
+Pick states by BMP's customer concentration:
+
+| State | Difficulty | Notes |
+|---|---|---|
+| **AZ** | Easy | eCorp searchable, scrape-friendly. BMP's home market. |
+| **NV** | Easy | SilverFlume; Vegas territory. |
+| **FL** | Easy-medium | Sunbiz.org — best public dataset of any US state. Officers + addresses exposed. Huge backyard-pro market. |
+| **TX** | Hard | SOSDirect requires login + per-search fee. May need to skip in v1 or use aggregator. |
+| **CA** | Hard | Bizfile JS-heavy + rate-limited. Defer. |
+| **OK** | Easy | Free public search. Smaller market, but easy win. |
+| **WA** | Easy | CCFS public search, scrape-friendly. |
+| **NY** | Easy | Bulk data download available. Less relevant for BMP but high-value for SaaS expansion. |
+
+v1 ship: AZ + NV + FL — covers BMP's territory + biggest backyard market.
+
+### Compliance notes
+- SoS records are public — no GDPR/CCPA per se
+- Each state's ToS varies; some explicitly disallow scraping for
+  commercial use. Rate-limit to 1 req/sec per state, identify the user-agent
+  honestly, cache aggressively (records change rarely)
+- Aggregator alternative: OpenCorporates ($400+/mo), Cobalt API ($0.20/lookup
+  in v2 we evaluated). Worth re-pricing once we have ≥10 SaaS tenants — at
+  that scale aggregator cost beats engineering + maintenance of 10+ scrapers.
+
+### Cost / pricing
+- Scrape compute: negligible (~$0.001/lookup including failed retries)
+- Cache hit ratio expected high (records change slowly; cache 30 days)
+- Suggested credit price: 3 credits per SoS lookup. ~$0.015 retail at ~50% margin
+  over compute, OR if we end up using an aggregator we can pass through with
+  a small fee (5 credits at ~$0.03 retail vs. $0.20 vendor cost)
+
+### Build order (when we get to Phase 2)
+1. Add a `state` field surfaced through the waterfall provider input
+   (extend `enrich(domain, company_name, state)` signature)
+2. Build `SoSProvider_FL` first — Sunbiz is the cleanest dataset and our
+   biggest market outside AZ
+3. AZ + NV next — BMP's territory
+4. Cache layer: new `sos_lookups` table keyed by (state, company_name) with
+   30-day TTL. Saves the cost on repeat enrichment of the same company.
+5. UI: surface SoS fields in the company detail panel (registered agent,
+   officers, filing status) — these are high-signal personalization angles
+   for cold outreach ("I see you registered Smith Pools LLC in 2018, how's
+   it going?")
+
+This stays in the queue behind Phase 1 (waterfall + Apollo) — no point
+adding more providers to the cascade until the cascade itself is shipped.
+
+---
+
 ## 💬 SaaS add-on: Blooio iMessage (locked 2026-05-08)
 
 **Pricing model**: Blooio numbers cost **$250/mo flat** per number. No

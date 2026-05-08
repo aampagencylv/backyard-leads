@@ -700,70 +700,110 @@ async def enrich_company(
     company.problems_found = json.dumps(analysis.problems)
     company.enrichment_summary = _summarize(analysis)
 
-    # Netrows + Hunter — import everything they find
-    netrows_data, hunter_data = None, None
-    netrows_added, netrows_found = 0, 0
-    hunter_added, hunter_found = 0, 0
-
+    # Contact discovery — runs through the EnrichmentWaterfall: Apollo (BYO,
+    # if configured) → Netrows decision-makers → Hunter. Each provider
+    # meters its own spend. Earlier providers' contacts win on dedup;
+    # later providers fill in null fields (e.g. Hunter adds a missing
+    # last name on an Apollo-found email).
+    from app.services.enrichment_waterfall import EnrichmentWaterfall
     from app.services.credit_meter import meter, make_idem_key
 
-    # Netrows decision-maker first — verified owner emails for SMB (10 credits/call)
-    if await get_netrows_api_key(db):
+    waterfall = EnrichmentWaterfall()
+    waterfall_result = await waterfall.enrich(
+        db, domain=(company.website or company.domain or ""),
+        company_name=company.name or "",
+    )
+
+    # Counters for backward-compat with the existing API response shape
+    netrows_added = sum(1 for c in waterfall_result.contacts if c.source == "netrows_dm")
+    netrows_found = netrows_added
+    hunter_added = sum(1 for c in waterfall_result.contacts if c.source == "hunter")
+    hunter_found = hunter_added
+    apollo_added = sum(1 for c in waterfall_result.contacts if c.source == "apollo")
+
+    # Persist contacts. _ensure_contact dedupes by email at the company level.
+    actually_added = {"netrows_dm": 0, "hunter": 0, "apollo": 0}
+    for c in waterfall_result.contacts:
+        if not c.email:
+            continue
+        # Apollo / Netrows often have the cleaner mobile number; fall back to phone.
+        contact_phone = c.mobile_phone or c.phone or None
+        created = await _ensure_contact(
+            db, company_id,
+            c.full_name, c.email, c.job_title, contact_phone, c.linkedin_url,
+        )
+        if created:
+            actually_added[c.source] = actually_added.get(c.source, 0) + 1
+
+    netrows_added = actually_added["netrows_dm"]
+    hunter_added = actually_added["hunter"]
+    apollo_added = actually_added["apollo"]
+
+    # Meter Netrows + Hunter at the route level (provider classes don't
+    # meter these yet; Apollo meters itself). When the providers fully
+    # own metering, this block goes away.
+    if "netrows_dm" in waterfall_result.providers_called:
         try:
-            nr = await netrows_find_decision_makers(company.website, await get_netrows_api_key(db))
-            netrows_data = {
-                "decision_makers": [{
-                    "email": dm.email, "full_name": dm.full_name,
-                    "job_title": dm.job_title, "linkedin_url": dm.linkedin_url,
-                    "email_status": dm.email_status, "category": dm.category,
-                } for dm in nr.decision_makers],
-                "generic_emails": nr.generic_emails,
-                "error": nr.error,
-            }
-            netrows_found = len(nr.decision_makers)
-            for dm in nr.decision_makers:
-                if await _ensure_contact(db, company_id, dm.full_name, dm.email,
-                                         dm.job_title, None, dm.linkedin_url):
-                    netrows_added += 1
             await meter(
                 db, action_type="enrich_netrows",
                 idempotency_key=make_idem_key("enrich_netrows", company_id, "dm"),
                 user_id=user.id, action_ref=f"company:{company_id}",
-                metadata={"decision_makers": netrows_found},
+                metadata={"decision_makers": netrows_found, "via": "waterfall"},
             )
-        except Exception as e:
-            netrows_data = {"error": str(e)[:200]}
-
-    if settings.hunter_api_key:
+        except Exception:
+            pass
+    if "hunter" in waterfall_result.providers_called:
         try:
-            hunter = await hunter_search(company.website, settings.hunter_api_key)
-            hunter_data = {
-                "organization": hunter.organization,
-                "emails_found": hunter.emails_found,
-                "pattern": hunter.pattern,
-                "contacts": [{"email": c.email,
-                              "name": f"{c.first_name or ''} {c.last_name or ''}".strip(),
-                              "position": c.position, "confidence": c.confidence, "type": c.type}
-                             for c in hunter.contacts],
-            }
-            hunter_found = len(hunter.contacts)
-            # Import every contact Hunter returns (deduped by email via _ensure_contact)
-            for hc in hunter.contacts:
-                if not hc.email:
-                    continue
-                full = f"{hc.first_name or ''} {hc.last_name or ''}".strip()
-                if await _ensure_contact(db, company_id, full, hc.email, hc.position, None, None):
-                    hunter_added += 1
             await meter(
                 db, action_type="enrich_hunter",
                 idempotency_key=make_idem_key("enrich_hunter", company_id),
                 user_id=user.id, action_ref=f"company:{company_id}",
-                metadata={"contacts_found": hunter_found},
+                metadata={"contacts_found": hunter_found, "via": "waterfall"},
             )
-        except Exception as e:
-            hunter_data = {"error": str(e)[:200]}
+        except Exception:
+            pass
 
-    contacts_added = netrows_added + hunter_added
+    # Apply company-level data the waterfall surfaced (employee_count,
+    # industry, linkedin_url) when our local fields are still empty.
+    cd = waterfall_result.company_data
+    if cd.get("employee_count") and not company.employee_count:
+        company.employee_count = cd["employee_count"]
+    if cd.get("industry") and not company.industry:
+        company.industry = cd["industry"]
+    if cd.get("linkedin_url") and not company.linkedin_url:
+        company.linkedin_url = cd["linkedin_url"]
+
+    # Response payload — keeps the same shape the old code returned plus
+    # waterfall-specific fields the UI can surface as provenance.
+    netrows_data = {
+        "decision_makers": [
+            {"email": c.email, "full_name": c.full_name, "job_title": c.job_title,
+             "linkedin_url": c.linkedin_url, "email_status": c.email_status}
+            for c in waterfall_result.contacts if c.source == "netrows_dm"
+        ],
+        "error": waterfall_result.errors.get("netrows_dm"),
+    }
+    hunter_data = {
+        "contacts": [
+            {"email": c.email,
+             "name": (c.full_name or "").strip(),
+             "position": c.job_title, "confidence": c.confidence}
+            for c in waterfall_result.contacts if c.source == "hunter"
+        ],
+        "error": waterfall_result.errors.get("hunter"),
+    }
+    apollo_data = {
+        "contacts": [
+            {"email": c.email, "full_name": c.full_name, "job_title": c.job_title,
+             "linkedin_url": c.linkedin_url, "email_status": c.email_status,
+             "mobile_phone": c.mobile_phone, "confidence": c.confidence}
+            for c in waterfall_result.contacts if c.source == "apollo"
+        ],
+        "found": apollo_added,
+        "error": waterfall_result.errors.get("apollo"),
+    }
+
+    contacts_added = netrows_added + hunter_added + apollo_added
 
     # Google Maps reviews (1 credit) — owner replies are personalization gold
     if await get_netrows_api_key(db):
@@ -859,11 +899,17 @@ async def enrich_company(
         "netrows_added": netrows_added,
         "hunter_found": hunter_found,
         "hunter_added": hunter_added,
+        "apollo_added": apollo_added,
         "analysis": analysis_dict,
         "local_seo": seo_data,
         "summary": company.enrichment_summary,
         "netrows": netrows_data,
         "hunter": hunter_data,
+        "apollo": apollo_data,
+        "waterfall": {
+            "providers_called": waterfall_result.providers_called,
+            "errors": waterfall_result.errors,
+        },
     }
 
 
