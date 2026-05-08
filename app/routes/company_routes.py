@@ -623,6 +623,24 @@ async def get_company_full(
     problems = json.loads(company.problems_found) if company.problems_found else []
     reviews = json.loads(company.reviews_json) if company.reviews_json else []
 
+    # SoS cache lookup — read-only, never triggers a fresh scrape.
+    # The scrape only runs during enrichment so reads are always fast.
+    sos_payload = None
+    try:
+        from app.models import SoSLookup
+        from app.services.sos_lookup import _normalize_name
+        sos_row = (await db.execute(
+            select(SoSLookup).where(
+                SoSLookup.state == (company.state or "").upper(),
+                SoSLookup.company_name == _normalize_name(company.name or ""),
+                SoSLookup.found == True,
+            )
+        )).scalar_one_or_none()
+        if sos_row and sos_row.result_json:
+            sos_payload = json.loads(sos_row.result_json)
+    except Exception:
+        sos_payload = None
+
     return {
         "id": company.id,
         "name": company.name,
@@ -658,6 +676,7 @@ async def get_company_full(
         "youtube_url": company.youtube_url,
         "tiktok_url": company.tiktok_url,
         "custom_fields": json.loads(company.custom_fields_json) if company.custom_fields_json else {},
+        "sos": sos_payload,
         "assigned_to": company.assigned_to,
         "assigned_name": assigned_name,
         "tags": tag_list,
@@ -871,6 +890,26 @@ async def enrich_company(
         except Exception:
             pass
 
+    # Phase 2 enrichment: Secretary of State lookup (currently FL only;
+    # AZ + NV pending). Free public-record data — registered agent +
+    # officers + filing date + active status. Cached 30 days; only
+    # fires for states we have a scraper for. Always best-effort —
+    # never blocks the core enrichment flow.
+    sos_data = None
+    try:
+        from app.services.sos_lookup import lookup_state, meter_sos_lookup
+        sos_result = await lookup_state(db, company.state, company.name)
+        if sos_result and sos_result.found:
+            sos_data = sos_result.to_payload()
+            await meter_sos_lookup(sos_result.state, company.id)
+            # Add officers as Contact rows (no email — Steve's BDRs can
+            # research email via Hunter / Netrows after)
+            for officer in sos_result.officers[:5]:
+                await _ensure_contact(db, company_id,
+                                       officer.name, None, officer.title, None, None)
+    except Exception as e:
+        sos_data = {"error": str(e)[:200]}
+
     # Apply company-level data the waterfall surfaced (employee_count,
     # industry, linkedin_url) when our local fields are still empty.
     cd = waterfall_result.company_data
@@ -1014,6 +1053,7 @@ async def enrich_company(
         "netrows": netrows_data,
         "hunter": hunter_data,
         "apollo": apollo_data,
+        "sos": sos_data,
         "waterfall": {
             "providers_called": waterfall_result.providers_called,
             "errors": waterfall_result.errors,

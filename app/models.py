@@ -608,6 +608,28 @@ class CampaignLog(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+class SoSLookup(Base):
+    """Cache for Secretary-of-State lookups (Phase 2 of the enrichment
+    chain). Free public records, but each scrape costs latency + we want
+    to be polite to the state's site, so cache aggressively. 30-day TTL
+    matches how rarely SoS filings change.
+
+    Keyed on (state, company_name_normalized) — name normalization
+    strips entity suffixes (LLC, Inc, Corp), punctuation, and case so
+    'Smith Pools, LLC' / 'SMITH POOLS' / 'Smith Pools Llc' all hit the
+    same cache row.
+    """
+    __tablename__ = "sos_lookups"
+
+    id = Column(Integer, primary_key=True, index=True)
+    state = Column(String(4), nullable=False, index=True)  # 'FL', 'AZ', 'NV', ...
+    company_name = Column(String(255), nullable=False, index=True)  # normalized form
+    found = Column(Boolean, default=False, nullable=False)
+    result_json = Column(Text, nullable=True)  # SoSResult dict serialized
+    fetched_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    expires_at = Column(DateTime, nullable=True, index=True)
+
+
 class CustomFieldDefinition(Base):
     """User-defined custom fields on Companies + Contacts.
 
