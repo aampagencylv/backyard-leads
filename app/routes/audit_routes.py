@@ -202,15 +202,113 @@ async def view_competitor_report(
     token: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """Serve the stored competitor comparison report if it exists."""
+    """Serve the competitor comparison report.
+
+    State machine:
+      - HTML exists                        → serve it
+      - Booked but generation in flight    → branded polling page
+      - Not booked or token unknown        → "please book first"
+    """
     report = (await db.execute(
         select(AuditReportModel).where(AuditReportModel.token == token)
     )).scalar_one_or_none()
+    if not report:
+        return HTMLResponse(
+            "<html><body><div style='font-family:sans-serif;text-align:center;padding:60px'>"
+            "<h2>Report not found</h2></div></body></html>",
+            status_code=404,
+        )
 
-    if not report or not report.competitor_html:
-        return HTMLResponse("<html><body><div style='font-family:sans-serif;text-align:center;padding:60px'><h2>Report is being generated...</h2><p>Check back in a few minutes.</p></div></body></html>")
+    # Done — serve it
+    if report.competitor_html:
+        return HTMLResponse(report.competitor_html)
 
-    return HTMLResponse(report.competitor_html)
+    # Booked but generation still running — serve the polling page
+    if report.booked_at:
+        company = (await db.execute(
+            select(Company).where(Company.id == report.company_id)
+        )).scalar_one_or_none()
+        company_name = company.name if company else "Your Business"
+        return HTMLResponse(_render_generating_page(token, company_name))
+
+    # Not booked — bounce them back to the gate
+    public_url = settings.public_url.rstrip("/")
+    compare_url = f"{public_url}/report/{token}/compare"
+    return HTMLResponse(
+        f"<html><body><div style='font-family:sans-serif;text-align:center;padding:60px'>"
+        f"<h2>Schedule your call to view this report</h2>"
+        f"<p style='color:#666;font-size:14px;margin:12px 0 20px'>The competitive comparison unlocks once you book your discovery call.</p>"
+        f"<a href='{_esc(compare_url)}' style='display:inline-block;background:#E65100;color:white;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600'>Schedule Now</a>"
+        f"</div></body></html>"
+    )
+
+
+def _render_generating_page(token: str, company_name: str) -> str:
+    """Branded 'still generating' page that polls /booking-status every 4s
+    and reloads the moment competitor_html is ready. Auto-email also fires
+    on completion, so even if the user closes this tab, they get the link
+    in their inbox."""
+    return f"""<!DOCTYPE html>
+<html><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Generating Comparison — {_esc(company_name)}</title>
+<style>
+    * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+    body {{ font-family: -apple-system, sans-serif; background: #f5f7f5; color: #1a1a1a; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }}
+    .card {{ background: white; border-radius: 12px; padding: 48px 40px; max-width: 520px; width: 100%; text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,0.08); }}
+    .card img {{ width: 200px; margin-bottom: 24px; }}
+    .spinner {{ display: inline-block; width: 56px; height: 56px; border: 5px solid #eaf3ea; border-top-color: #1B5E20; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 24px; }}
+    .card h1 {{ color: #1B5E20; font-size: 22px; margin-bottom: 12px; }}
+    .card p {{ color: #555; font-size: 14px; line-height: 1.6; margin-bottom: 8px; }}
+    .countdown {{ display: inline-block; margin-top: 16px; padding: 8px 16px; background: #f5f7f5; border-radius: 6px; font-size: 13px; color: #555; font-variant-numeric: tabular-nums; }}
+    .countdown b {{ color: #1B5E20; }}
+    .footer {{ margin-top: 24px; font-size: 12px; color: #888; }}
+    @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+</style>
+</head><body>
+<div class="card">
+    <img src="https://backyardmarketingpros.com/wp-content/uploads/2024/09/BMP_Logo_Color_Horiz-1024x269.png" alt="BMP">
+    <div class="spinner"></div>
+    <h1>Building your competitive comparison</h1>
+    <p>Auditing the top businesses in <strong>{_esc(company_name)}</strong>'s market right now.</p>
+    <p>This usually takes about <strong>60 seconds</strong> — hold tight.</p>
+    <div class="countdown" id="countdown">Elapsed: <b id="elapsed">0s</b></div>
+    <div class="footer">We'll also email this to you when it's ready, so you can close this tab if you need to.</div>
+</div>
+<script>
+const startedAt = Date.now();
+const elapsedEl = document.getElementById('elapsed');
+
+function tickElapsed() {{
+    const sec = Math.floor((Date.now() - startedAt) / 1000);
+    elapsedEl.textContent = sec + 's';
+}}
+setInterval(tickElapsed, 1000);
+
+let pollCount = 0;
+const POLL_INTERVAL_MS = 4000;
+const MAX_POLLS = 75;  // 5 minutes — generation runs <90s in practice; long tail covered by email
+async function poll() {{
+    pollCount++;
+    try {{
+        const res = await fetch('/api/report/{token}/booking-status', {{ cache: 'no-store' }});
+        const data = await res.json();
+        if (data && data.generated) {{
+            window.location.reload();
+            return;
+        }}
+    }} catch(e) {{ /* network blip; keep polling */ }}
+    if (pollCount < MAX_POLLS) {{
+        setTimeout(poll, POLL_INTERVAL_MS);
+    }} else {{
+        // After 5 min, surface a friendly fallback message
+        document.querySelector('.card h1').textContent = "Taking longer than expected";
+        document.querySelector('.card p').textContent = "We'll email you the report as soon as it's ready — usually within a few minutes.";
+    }}
+}}
+setTimeout(poll, POLL_INTERVAL_MS);
+</script>
+</body></html>"""
 
 
 @router.get("/report/{token}/compare", response_class=HTMLResponse)
@@ -258,8 +356,11 @@ async def request_competitor_comparison(
 
         await db.commit()
 
-    # Fire background generation
-    asyncio.create_task(_generate_competitor_report_bg(report.id))
+    # NOTE: report generation is now gated behind the iClosed booking webhook
+    # (see iclosed_webhook below). Generating here would spend DataForSEO
+    # credits on prospects who never schedule. Generation kicks off the moment
+    # iClosed confirms a real booking, and the polling JS on this gate page
+    # auto-redirects to /competitors once generation completes.
 
     public_url = settings.public_url.rstrip("/")
     competitors_url = f"{public_url}/report/{token}/competitors"
@@ -417,17 +518,25 @@ setTimeout(checkBooking, POLL_INTERVAL_MS);
 
 @router.get("/api/report/{token}/booking-status")
 async def report_booking_status(token: str, db: AsyncSession = Depends(get_db)):
-    """Returns whether the report has been marked as booked yet.
+    """Status snapshot used by both the gate page and the post-booking
+    'still generating' page.
 
-    Source of truth is audit_reports.booked_at, which the iClosed webhook
-    flips. The gate page polls this endpoint to detect when to unlock.
+    - `booked`     — iClosed webhook fired (audit_reports.booked_at set)
+    - `generated`  — competitor comparison HTML is ready in DB
+
+    Gate page polls until booked=true → redirect to /competitors.
+    /competitors poll page polls until generated=true → reload to view.
     """
     report = (await db.execute(
         select(AuditReportModel).where(AuditReportModel.token == token)
     )).scalar_one_or_none()
     if not report:
-        return {"booked": False, "found": False}
-    return {"booked": bool(report.booked_at), "found": True}
+        return {"booked": False, "generated": False, "found": False}
+    return {
+        "booked": bool(report.booked_at),
+        "generated": bool(report.competitor_html),
+        "found": True,
+    }
 
 
 # ============================================================
@@ -626,6 +735,17 @@ async def iclosed_webhook(request: Request, db: AsyncSession = Depends(get_db)):
             company.status = "qualified"
 
     await db.commit()
+
+    # Now that the booking is confirmed, kick off the competitor report
+    # generation. We deliberately don't generate before this point so we
+    # don't burn DataForSEO credits on prospects who never schedule.
+    # Generation is fire-and-forget; when it completes, the auto-email
+    # path inside _generate_competitor_report_bg sends the report link to
+    # the booked address and logs a CRM Activity.
+    if not report.competitor_html:
+        import asyncio as _asyncio
+        _asyncio.create_task(_generate_competitor_report_bg(report.id))
+
     return {"ok": True, "report_id": report.id, "matched_email": booked_email}
 
 
@@ -766,9 +886,105 @@ async def _generate_competitor_report_bg(report_id: int):
 
                 await db.commit()
                 log.info(f"Competitor report generated for {company.name} ({len(competitors)} competitors)")
+
+                # Auto-email the report to the booked address. We do this
+                # after the commit so a failed email never rolls back the
+                # generation work — the BDR can resend manually if needed.
+                if report.booked_email:
+                    try:
+                        await _email_competitor_report(
+                            db, report=report, company=company,
+                            to_email=report.booked_email,
+                        )
+                    except Exception as e:
+                        log.exception(f"Auto-email of competitor report failed: {e}")
             else:
                 log.warning(f"No competitors found for {company.name} in SERP")
 
     except Exception as e:
         import logging
         logging.getLogger("bmp").exception(f"Background competitor report failed: {e}")
+
+
+async def _email_competitor_report(db, *, report, company, to_email: str) -> None:
+    """Send the booked prospect a short email with a link to their report.
+
+    Uses the company's assigned BDR as the from-line so reply tracking
+    points at a real person on the team. Falls back to the first sending-
+    enabled admin if no assignee is set.
+    """
+    from app.services.email_sender import send_email, get_sender_info
+    from app.services.signature import render_signature
+
+    if not settings.resend_api_key or not to_email:
+        return
+
+    sender_user = None
+    if company.assigned_to:
+        sender_user = (await db.execute(
+            select(User).where(User.id == company.assigned_to)
+        )).scalar_one_or_none()
+    if not sender_user or not sender_user.sending_enabled:
+        sender_user = (await db.execute(
+            select(User).where(
+                User.role.in_(("admin", "super_admin")),
+                User.sending_enabled == True,
+            )
+        )).scalars().first()
+    if not sender_user:
+        return  # No one available to send from — silent skip
+
+    sender = get_sender_info(sender_user.first_name, sender_user.full_name)
+    public_url = settings.public_url.rstrip("/")
+    report_url = f"{public_url}/report/{report.token}/competitors"
+    company_name = company.name or "your business"
+
+    subject = f"Your Competitive Comparison for {company_name} is ready"
+    body = (
+        f"Hi,\n\n"
+        f"Your competitive comparison report for {company_name} is ready. "
+        f"We audited the top businesses in your market and put it side-by-side "
+        f"with your AI findability, content, and local SEO scores so you can see "
+        f"exactly where the gaps are.\n\n"
+        f'<a href="{report_url}" style="display:inline-block;background:#E65100;color:white;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;margin:8px 0">View My Comparison Report</a>\n\n'
+        f"Take a look before our call so we can dig into the biggest opportunities together.\n\n"
+        f"— {sender_user.first_name}"
+    )
+
+    import json
+    sig_html = render_signature(sender_user)
+    result = await send_email(
+        to_email=to_email,
+        subject=subject,
+        body=body,
+        from_name=sender["from_name"],
+        from_firstname=sender["from_firstname"],
+        reply_to_email=sender_user.email,  # direct reply to BDR
+        company_id=company.id,
+        contact_id=0,
+        email_id=0,  # not part of a sequence
+        signature_html=sig_html,
+        unsubscribe_token=None,  # transactional follow-up, not outreach
+    )
+
+    if result.get("success"):
+        # Log it to the company timeline so the BDR sees the auto-send
+        from app.services.credit_meter import meter, make_idem_key
+        db.add(Activity(
+            company_id=company.id,
+            user_id=sender_user.id,
+            activity_type="competitor_report_sent",
+            content=f"📤 Competitor report auto-emailed to {to_email}",
+            metadata_json=json.dumps({
+                "to": to_email,
+                "report_url": report_url,
+                "resend_id": result.get("resend_id"),
+            }),
+        ))
+        await meter(
+            db, action_type="email_send",
+            idempotency_key=make_idem_key("email_send", "competitor_report", report.id),
+            user_id=sender_user.id,
+            action_ref=f"competitor_report:{report.id}",
+        )
+        await db.commit()
