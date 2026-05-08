@@ -4401,6 +4401,9 @@
 
         async function showUploadCSVModal() {
             _csvWizardState = { rows: [], headers: [], mapping: {}, fileName: '' };
+            // Pre-warm the custom fields cache so step 2's mapping
+            // dropdown can offer them as targets without a fetch delay.
+            try { await getCustomFieldDefs('company'); } catch (e) { /* non-fatal */ }
             renderCsvWizardStep1();
         }
 
@@ -4475,9 +4478,26 @@
             const { headers, rows, mapping, fileName } = _csvWizardState;
             const previewRows = rows.slice(0, 5);
             const root = document.getElementById('modal-root');
-            const fieldOptions = (selected) => CSV_CANONICAL_FIELDS.map(f =>
-                `<option value="${f.key}" ${f.key === (selected || '') ? 'selected' : ''}>${escapeHtml(f.label)}</option>`
-            ).join('');
+            // Active company custom fields show up below the canonical
+            // fields in the dropdown so a CSV column can be mapped to a
+            // tenant-defined field (Pool Type, Service Area, etc.).
+            const customDefs = (await getCustomFieldDefs('company')).filter(d => d.is_active);
+            const customGroupHtml = customDefs.length ? (
+                '<optgroup label="Additional Info">' +
+                customDefs.map(d => `<option value="${escapeHtml(d.key)}" __sel__>${escapeHtml(d.label)}</option>`).join('') +
+                '</optgroup>'
+            ) : '';
+            const fieldOptions = (selected) => {
+                const canonical = CSV_CANONICAL_FIELDS.map(f =>
+                    `<option value="${f.key}" ${f.key === (selected || '') ? 'selected' : ''}>${escapeHtml(f.label)}</option>`
+                ).join('');
+                // Inject selected attribute on the matching custom-field option
+                const customWithSelection = customGroupHtml.replace(
+                    new RegExp(`value="${(selected || '').replace(/[-/\\^$*+?.()|[\\]{}]/g, '\\$&')}" __sel__`, 'g'),
+                    `value="${escapeHtml(selected || '')}" selected`
+                ).replace(/ __sel__/g, '');
+                return canonical + customWithSelection;
+            };
 
             root.innerHTML = `
                 <div class="modal-backdrop">

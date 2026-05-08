@@ -18,7 +18,7 @@ from sqlalchemy import select
 from pydantic import BaseModel
 
 from app.database import get_db
-from app.models import User, Company, Contact, Deal, GeneratedEmail, Activity, Task, Tag, company_tags
+from app.models import User, Company, Contact, Deal, GeneratedEmail, Activity, Task, Tag, company_tags, CustomFieldDefinition
 from app.auth import get_current_user
 from app.services.website_intel import analyze_website, analysis_to_dict
 from app.services.email_generator import generate_cold_email, generate_follow_up, generate_linkedin_message
@@ -287,31 +287,55 @@ async def upload_contacts(
 
     results = {"created": 0, "skipped": 0, "enriched": 0, "sequences": 0, "errors": []}
 
+    # Canonical row keys the downstream pipeline knows about.
+    # Anything else in the mapping is treated as a custom-field key.
+    _CANONICAL_FIELDS = {
+        "company_name", "website", "phone", "address", "city", "state",
+        "first_name", "last_name", "email", "title", "linkedin_url",
+    }
+
     # Apply column mapping (if supplied) — translate raw CSV keys to
     # canonical field names before the row enters the pipeline.
+    # Mapping targets that aren't canonical (e.g. 'pool_type') are
+    # routed into a special _custom_fields dict on the row, then merged
+    # into the company's custom_fields_json after creation.
     if req.mapping:
-        # Mapping is {csv_column_name: canonical_field_name}; canonicalize
-        # case + whitespace so 'Email' / 'email' / ' Email ' all collapse.
         normalized_mapping = {
             str(k).strip(): str(v).strip()
             for k, v in req.mapping.items()
             if v and v != "skip"
         }
+        # Only allow mappings to known custom field keys for the company
+        # entity — typo / stale-def safety. Pre-fetch active defs.
+        valid_custom_keys = set((await db.execute(
+            select(CustomFieldDefinition.key).where(
+                CustomFieldDefinition.entity_type == "company",
+                CustomFieldDefinition.is_active == True,
+            )
+        )).scalars().all())
+
         translated_rows = []
         for raw in req.rows:
             if not isinstance(raw, dict):
                 continue
             translated = {}
-            for csv_col, canonical in normalized_mapping.items():
-                # Match the CSV column case-insensitively to be forgiving
-                # of upload tools that capitalize headers
+            custom_fields = {}
+            for csv_col, target in normalized_mapping.items():
                 value = None
                 for k in raw.keys():
                     if k and str(k).strip().lower() == csv_col.lower():
                         value = raw[k]
                         break
-                if value is not None:
-                    translated[canonical] = str(value) if value is not None else ""
+                if value is None:
+                    continue
+                v = str(value)
+                if target in _CANONICAL_FIELDS:
+                    translated[target] = v
+                elif target in valid_custom_keys:
+                    custom_fields[target] = v
+                # else: silently drop — typo or stale mapping
+            if custom_fields:
+                translated["_custom_fields"] = custom_fields
             translated_rows.append(translated)
         rows_to_process = translated_rows
     else:
@@ -354,6 +378,21 @@ async def upload_contacts(
                 )
                 db.add(company)
                 await db.flush()
+
+            # Merge any custom-field values from the CSV row into the
+            # company's custom_fields_json. Existing values are preserved
+            # unless the CSV provides a non-empty replacement (admin
+            # imports usually overwrite stale data on purpose).
+            cf_in = row.get("_custom_fields") or {}
+            if cf_in:
+                try:
+                    existing_cf = json.loads(company.custom_fields_json) if company.custom_fields_json else {}
+                except Exception:
+                    existing_cf = {}
+                for k, v in cf_in.items():
+                    if v not in (None, ""):
+                        existing_cf[k] = v
+                company.custom_fields_json = json.dumps(existing_cf) if existing_cf else None
 
             # Create contact
             email = row.get("email", "").strip() or None
