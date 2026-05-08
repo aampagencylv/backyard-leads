@@ -445,6 +445,19 @@ class RuntimeConfig(Base):
     # admins set + rotate this from Settings.
     apollo_api_key = Column(Text, nullable=True)
 
+    # ZoomInfo BYO integration — also tenant-tier, also customer-supplied.
+    # ZoomInfo uses PKI authentication: tenants register an app in their
+    # ZoomInfo developer portal, get a client_id + RSA private key + the
+    # account email (username). Every API call we mint a fresh JWT signed
+    # with the private key, exchange it at /authenticate for an access
+    # token (24h validity), and use that for the actual data calls.
+    # Cached access token lives here too so re-mint isn't every call.
+    zoominfo_username = Column(Text, nullable=True)         # account email
+    zoominfo_client_id = Column(Text, nullable=True)
+    zoominfo_private_key = Column(Text, nullable=True)      # PEM-format RSA key
+    zoominfo_access_token = Column(Text, nullable=True)     # cached JWT, refreshed on expiry
+    zoominfo_token_expires_at = Column(DateTime, nullable=True)
+
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
 

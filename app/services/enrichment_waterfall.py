@@ -102,6 +102,89 @@ class EnrichmentProvider(Protocol):
 
 
 # ============================================================
+# ZoomInfo provider — premium B2B data, BYO credentials
+# ============================================================
+
+class ZoomInfoProvider:
+    """ZoomInfo's data quality > Apollo > Netrows for SMB-and-up B2B
+    coverage. Especially strong on direct-dial mobile numbers — the
+    single highest-value field for SMS + voice outreach.
+
+    Auth is PKI/JWT (see app/services/zoominfo.py); BYO credentials.
+    Slots first in the waterfall when configured."""
+
+    name = "zoominfo"
+
+    async def is_available(self, db: AsyncSession) -> bool:
+        from app.services.zoominfo import is_configured
+        return await is_configured(db)
+
+    async def enrich(self, db, *, domain, company_name=""):
+        from app.services.zoominfo import (
+            enrich_company as zi_enrich_company,
+            search_contacts_at_company,
+        )
+        if not domain:
+            return [], {}, "no_domain"
+
+        contacts: list[WaterfallContact] = []
+        company_patch: dict = {}
+        errors_acc: list[str] = []
+
+        # 1. Company-level enrichment for firmographics
+        try:
+            zi_company = await zi_enrich_company(db, domain)
+            if zi_company:
+                if zi_company.employee_count:
+                    company_patch["employee_count"] = zi_company.employee_count
+                if zi_company.industry:
+                    company_patch["industry"] = zi_company.industry
+                if zi_company.revenue_range:
+                    company_patch["revenue_range"] = zi_company.revenue_range
+                if zi_company.linkedin_url:
+                    company_patch["linkedin_url"] = zi_company.linkedin_url
+                if zi_company.founded:
+                    company_patch["founded"] = zi_company.founded
+                if zi_company.description:
+                    company_patch["description"] = zi_company.description
+        except Exception as e:
+            errors_acc.append(f"company: {e}")
+
+        # 2. Contact search at this company — pull decision-makers
+        try:
+            people = await search_contacts_at_company(
+                db, domain,
+                titles=["CEO", "Founder", "Owner", "President",
+                         "VP Sales", "VP Marketing", "Director", "Head of"],
+                limit=10,
+            )
+            for p in people:
+                email = (p.email or "").strip().lower()
+                if not email or "@" not in email:
+                    continue
+                contacts.append(WaterfallContact(
+                    email=email,
+                    full_name=p.full_name,
+                    first_name=p.first_name,
+                    last_name=p.last_name,
+                    job_title=p.job_title,
+                    phone=p.direct_phone or p.phone,
+                    mobile_phone=p.mobile_phone,
+                    linkedin_url=p.linkedin_url,
+                    email_status="valid",  # ZoomInfo verifies emails
+                    source="zoominfo",
+                    confidence=95,  # highest tier when ZoomInfo returns a hit
+                ))
+        except Exception as e:
+            errors_acc.append(f"search: {e}")
+
+        # Meter at the route level — see company_routes.py wiring; the
+        # provider class doesn't double-meter here.
+        err = "; ".join(errors_acc) if errors_acc and not contacts and not company_patch else None
+        return contacts, company_patch, err
+
+
+# ============================================================
 # Apollo provider — the one customer-supplied integration
 # ============================================================
 
