@@ -295,6 +295,400 @@ def _parse_florida_detail(html: str, url: str) -> SoSResult:
 
 
 # ============================================================
+# Arizona — eCorp (https://ecorp.azcc.gov)
+# ============================================================
+#
+# Arizona Corporation Commission's eCorp is a modern SPA backed by a
+# JSON API. The search endpoint accepts a JSON POST and returns a list
+# of matching entities; we then GET the detail page (also JSON) by
+# entity number. If AZCC ships a UI rewrite, the API tends to stay
+# stable longer than HTML, but we still parse defensively.
+#
+# Untested against live data on first ship — returns found=False on
+# any structural anomaly so we can iterate based on real responses
+# rather than poisoning records.
+
+AZCC_SEARCH_URL = "https://ecorp.azcc.gov/Services/Entity/SearchEntity"
+AZCC_DETAIL_URL = "https://ecorp.azcc.gov/Services/Entity/GetEntityDetails"
+
+
+async def _lookup_arizona_uncached(company_name: str) -> SoSResult:
+    result = SoSResult(state="AZ")
+    try:
+        if not (company_name or "").strip():
+            result.error = "empty_name"
+            return result
+        async with httpx.AsyncClient(
+            timeout=20, follow_redirects=True,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Origin": "https://ecorp.azcc.gov",
+                "Referer": "https://ecorp.azcc.gov/EntitySearch",
+            },
+        ) as client:
+            # AZCC's search payload — best-effort shape; field names taken
+            # from the eCorp UI's network calls.
+            payload = {
+                "entityName": company_name.strip(),
+                "entityNumber": "",
+                "agentName": "",
+                "principalName": "",
+                "exactMatch": False,
+                "activeOnly": False,
+            }
+            r = await client.post(AZCC_SEARCH_URL, json=payload)
+            if r.status_code != 200:
+                result.error = f"search_http_{r.status_code}"
+                return result
+
+            try:
+                data = r.json()
+            except Exception:
+                result.error = "search_not_json"
+                log.info(f"AZ SoS unexpected non-JSON for {company_name}: {r.text[:300]}")
+                return result
+
+            # Response can be either {"results": [...]} or a bare list
+            rows = data.get("results") if isinstance(data, dict) else data
+            if not isinstance(rows, list) or not rows:
+                return result  # found=False
+
+            # Take top match (AZCC sorts by relevance). Conservative: if
+            # the top match's name has zero token overlap with the query,
+            # bail rather than guess.
+            top = rows[0]
+            top_name = (top.get("entityName") or top.get("name") or "").strip()
+            if top_name and not _name_token_overlap(top_name, company_name):
+                result.error = "no_close_match"
+                log.info(f"AZ SoS top match {top_name!r} far from query {company_name!r}")
+                return result
+
+            entity_number = (top.get("entityNumber") or top.get("entityID")
+                             or top.get("entityId") or "").strip()
+            if not entity_number:
+                result.error = "no_entity_number"
+                return result
+
+            await asyncio.sleep(1.0)  # politeness throttle
+
+            r2 = await client.get(AZCC_DETAIL_URL, params={"entityNumber": entity_number})
+            if r2.status_code != 200:
+                result.error = f"detail_http_{r2.status_code}"
+                return result
+            try:
+                detail = r2.json()
+            except Exception:
+                result.error = "detail_not_json"
+                log.info(f"AZ SoS unexpected non-JSON detail for {entity_number}: {r2.text[:300]}")
+                return result
+
+            return _parse_arizona_detail(detail, entity_number)
+    except httpx.HTTPError as e:
+        log.warning(f"Arizona SoS network error for {company_name}: {e}")
+        result.error = f"network: {e}"
+        return result
+    except Exception as e:
+        log.warning(f"Arizona SoS lookup failed for {company_name}: {e}")
+        result.error = f"exception: {e}"
+        return result
+
+
+def _parse_arizona_detail(data: dict, entity_number: str) -> SoSResult:
+    """Defensively map AZCC JSON detail to SoSResult. Field names are
+    inferred from public eCorp pages; missing fields leave defaults."""
+    result = SoSResult(
+        state="AZ", found=True,
+        document_number=entity_number,
+        raw_url=f"https://ecorp.azcc.gov/EntitySearch/Entity?entityNumber={entity_number}",
+    )
+    if not isinstance(data, dict):
+        return SoSResult(state="AZ", error="detail_not_object")
+
+    result.legal_name = (data.get("entityName") or data.get("name") or "").strip() or None
+    result.entity_type = (data.get("entityType") or data.get("type") or "").strip() or None
+    result.status = ((data.get("status") or data.get("entityStatus") or "")
+                     .strip().lower() or None)
+
+    fd = data.get("formationDate") or data.get("incorporationDate") or data.get("filingDate")
+    if isinstance(fd, str) and fd:
+        # AZCC dates often "MM/DD/YYYY" or ISO — normalize to YYYY-MM-DD
+        m = re.match(r"^(\d{2})/(\d{2})/(\d{4})$", fd)
+        if m:
+            result.filing_date = f"{m.group(3)}-{m.group(1)}-{m.group(2)}"
+        else:
+            m2 = re.match(r"^(\d{4})-(\d{2})-(\d{2})", fd)
+            if m2:
+                result.filing_date = f"{m2.group(1)}-{m2.group(2)}-{m2.group(3)}"
+
+    pa = data.get("principalAddress") or data.get("principalOfficeAddress")
+    if isinstance(pa, str):
+        result.principal_address = pa.strip()[:300] or None
+    elif isinstance(pa, dict):
+        parts = [pa.get("street1"), pa.get("street2"), pa.get("city"),
+                 pa.get("state"), pa.get("zip") or pa.get("postalCode")]
+        joined = ", ".join(p.strip() for p in parts if isinstance(p, str) and p.strip())
+        result.principal_address = joined[:300] or None
+
+    agent = data.get("statutoryAgent") or data.get("registeredAgent") or {}
+    if isinstance(agent, dict):
+        result.registered_agent_name = (agent.get("name") or agent.get("agentName") or "").strip() or None
+        addr = agent.get("address")
+        if isinstance(addr, str):
+            result.registered_agent_address = addr.strip()[:300] or None
+        elif isinstance(addr, dict):
+            parts = [addr.get("street1"), addr.get("street2"), addr.get("city"),
+                     addr.get("state"), addr.get("zip") or addr.get("postalCode")]
+            joined = ", ".join(p.strip() for p in parts if isinstance(p, str) and p.strip())
+            result.registered_agent_address = joined[:300] or None
+
+    # Officers / members / managers
+    officer_lists = []
+    for key in ("officers", "members", "managers", "directors", "principals"):
+        v = data.get(key)
+        if isinstance(v, list):
+            officer_lists.append((key, v))
+    seen = set()
+    for key, lst in officer_lists:
+        for o in lst:
+            if not isinstance(o, dict):
+                continue
+            nm = (o.get("name") or
+                  " ".join(p for p in [o.get("firstName"), o.get("lastName")] if p)).strip()
+            if not nm:
+                continue
+            ttl = (o.get("title") or o.get("role") or key.rstrip("s").title()).strip()
+            sig = (nm.lower(), ttl.lower())
+            if sig in seen:
+                continue
+            seen.add(sig)
+            result.officers.append(SoSOfficer(name=nm, title=ttl))
+
+    return result
+
+
+# ============================================================
+# Nevada — SilverFlume (https://esos.nv.gov)
+# ============================================================
+#
+# Nevada SoS uses an ASP.NET WebForms search page at
+# https://esos.nv.gov/EntitySearch/OnlineEntitySearch. Submitting the
+# search form requires re-posting the __VIEWSTATE / __EVENTVALIDATION
+# tokens we got from the initial GET. Detail pages are linked from
+# the result row. Best-effort parser; conservative on anomalies.
+
+NV_SEARCH_URL = "https://esos.nv.gov/EntitySearch/OnlineEntitySearch"
+
+
+def _extract_aspnet_state(html: str) -> dict:
+    """Pull __VIEWSTATE / __VIEWSTATEGENERATOR / __EVENTVALIDATION from
+    an ASP.NET WebForms page. Missing tokens → empty dict."""
+    soup = BeautifulSoup(html, "html.parser")
+    out = {}
+    for name in ("__VIEWSTATE", "__VIEWSTATEGENERATOR", "__EVENTVALIDATION", "__EVENTTARGET", "__EVENTARGUMENT"):
+        el = soup.select_one(f"input[name='{name}']")
+        if el and el.get("value") is not None:
+            out[name] = el["value"]
+    return out
+
+
+async def _lookup_nevada_uncached(company_name: str) -> SoSResult:
+    result = SoSResult(state="NV")
+    try:
+        if not (company_name or "").strip():
+            result.error = "empty_name"
+            return result
+        async with httpx.AsyncClient(
+            timeout=25, follow_redirects=True,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+        ) as client:
+            r = await client.get(NV_SEARCH_URL)
+            if r.status_code != 200:
+                result.error = f"search_get_http_{r.status_code}"
+                return result
+
+            state_fields = _extract_aspnet_state(r.text)
+            if "__VIEWSTATE" not in state_fields:
+                result.error = "no_viewstate"
+                log.info(f"NV SoS missing __VIEWSTATE on initial GET")
+                return result
+
+            # Inspect the page to find the search-input + submit-button
+            # element names. ASP.NET prefixes nested controls (e.g.
+            # ctl00$BodyContentPlaceHolder$txtEntityName), so we don't
+            # hard-code names — find by best-guess label proximity.
+            soup = BeautifulSoup(r.text, "html.parser")
+            text_inputs = soup.select("input[type='text']")
+            entity_input_name = None
+            for inp in text_inputs:
+                nm = inp.get("name") or ""
+                idv = (inp.get("id") or "").lower()
+                if "entity" in idv or "name" in idv or "search" in idv.lower():
+                    entity_input_name = nm
+                    break
+            # Fall back to first text input
+            if not entity_input_name and text_inputs:
+                entity_input_name = text_inputs[0].get("name")
+            if not entity_input_name:
+                result.error = "no_entity_input"
+                return result
+
+            submit_name = None
+            for btn in soup.select("input[type='submit'], button[type='submit']"):
+                nm = btn.get("name") or ""
+                if "search" in (btn.get("value") or "").lower() or "search" in nm.lower():
+                    submit_name = nm
+                    break
+
+            form_data = {**state_fields, entity_input_name: company_name.strip()}
+            if submit_name:
+                form_data[submit_name] = "Search"
+
+            await asyncio.sleep(1.0)
+            r2 = await client.post(
+                NV_SEARCH_URL, data=form_data,
+                headers={"Content-Type": "application/x-www-form-urlencoded",
+                         "Referer": NV_SEARCH_URL},
+            )
+            if r2.status_code != 200:
+                result.error = f"search_post_http_{r2.status_code}"
+                return result
+
+            soup2 = BeautifulSoup(r2.text, "html.parser")
+
+            # Find the result table — typically id contains 'Results' or
+            # 'gvEntity' or similar.
+            rows = soup2.select("table tbody tr")
+            if not rows:
+                if "no records" in r2.text.lower() or "no entities" in r2.text.lower():
+                    return result  # found=False, no error
+                result.error = "no_result_rows"
+                return result
+
+            # First row that has a detail-page link
+            link_row = None
+            for row in rows[:5]:
+                a = row.select_one("a[href*='BusinessEntityDetail'], a[href*='EntityInformation']")
+                if a:
+                    link_row = (row, a)
+                    break
+            if not link_row:
+                result.error = "no_detail_link"
+                return result
+
+            row, a = link_row
+
+            # Conservative match check: tokens overlap with query
+            row_text = row.get_text(" ", strip=True)
+            if not _name_token_overlap(row_text, company_name):
+                result.error = "no_close_match"
+                log.info(f"NV SoS top match row {row_text[:80]!r} far from query {company_name!r}")
+                return result
+
+            href = a.get("href") or ""
+            detail_url = href if href.startswith("http") else f"https://esos.nv.gov{href if href.startswith('/') else '/EntitySearch/' + href}"
+
+            await asyncio.sleep(1.0)
+            r3 = await client.get(detail_url)
+            if r3.status_code != 200:
+                result.error = f"detail_http_{r3.status_code}"
+                return result
+
+            return _parse_nevada_detail(r3.text, detail_url)
+    except httpx.HTTPError as e:
+        log.warning(f"Nevada SoS network error for {company_name}: {e}")
+        result.error = f"network: {e}"
+        return result
+    except Exception as e:
+        log.warning(f"Nevada SoS lookup failed for {company_name}: {e}")
+        result.error = f"exception: {e}"
+        return result
+
+
+def _parse_nevada_detail(html: str, url: str) -> SoSResult:
+    """Parse a SilverFlume detail page. Pages render labeled fields in
+    a series of <span> / <td> pairs. We use text-based label matching
+    (same approach as FL) — tolerant of layout drift."""
+    soup = BeautifulSoup(html, "html.parser")
+    result = SoSResult(state="NV", found=True, raw_url=url)
+
+    text = soup.get_text("\n", strip=True)
+
+    # Legal name — usually under "Entity Name" or in a heading
+    nm = re.search(r"Entity Name[:\s]*\n+([A-Z0-9 ,&'.\-/]+)", text)
+    if nm:
+        result.legal_name = nm.group(1).strip().rstrip(",")
+
+    # Entity number — labeled "Entity Number" or "NV Business ID"
+    en = re.search(r"(?:Entity Number|NV Business ID|Business ID)[:\s]*\n+([A-Z0-9\-]+)", text)
+    if en:
+        result.document_number = en.group(1).strip()
+
+    # Entity type
+    et = re.search(r"Entity Type[:\s]*\n+([A-Za-z ]+)", text)
+    if et:
+        result.entity_type = et.group(1).strip()
+
+    # Filing date — labeled "Formation Date", "Date Filed", etc.
+    fd = re.search(r"(?:Formation Date|Date Filed|Filing Date)[:\s]*\n+([0-9]{1,2}/[0-9]{1,2}/[0-9]{4})", text)
+    if fd:
+        m, d, y = fd.group(1).split("/")
+        result.filing_date = f"{y}-{int(m):02d}-{int(d):02d}"
+
+    # Status
+    st = re.search(r"(?:Entity Status|Status)[:\s]*\n+([A-Za-z ]+)", text)
+    if st:
+        result.status = st.group(1).strip().lower()
+
+    # Registered Agent
+    ra = re.search(r"(?:Registered Agent Name|Registered Agent)[:\s]*\n+(.{0,400}?)(?:Agent Type|Agent Address|Officers|Managers|Members|Annual List)", text, re.S)
+    if ra:
+        block = [line.strip() for line in ra.group(1).splitlines() if line.strip()]
+        if block:
+            result.registered_agent_name = block[0][:120]
+            result.registered_agent_address = " ".join(block[1:])[:300] or None
+
+    # Principal Address
+    pa = re.search(r"(?:Principal Address|Mailing Address)[:\s]*\n+(.{0,400}?)(?:Officers|Managers|Members|Registered Agent|Annual List)", text, re.S)
+    if pa:
+        result.principal_address = " ".join(line.strip() for line in pa.group(1).splitlines() if line.strip())[:300]
+
+    # Officers / Managers / Members — Nevada lists each with role
+    for label in ("Officers", "Managers", "Members"):
+        sec = re.search(rf"{label}[:\s]*\n+(.{{0,2000}}?)(?:Officers|Managers|Members|Annual List|Stock|\Z)", text, re.S)
+        if not sec:
+            continue
+        for m in re.finditer(r"(?:Title|Position)[:\s]+([A-Za-z /]+)\s*\n+(?:Name[:\s]+)?([A-Z][A-Za-z, .\-']+)", sec.group(1)):
+            ttl = m.group(1).strip()
+            nm = m.group(2).strip().rstrip(",")
+            if nm:
+                result.officers.append(SoSOfficer(name=nm, title=ttl or label.rstrip("s")))
+
+    return result
+
+
+# ============================================================
+# Shared helpers
+# ============================================================
+
+def _name_token_overlap(candidate: str, query: str, threshold: float = 0.34) -> bool:
+    """Small Jaccard-style sanity check used to reject obviously-wrong
+    top matches (same defensive posture that protected against the
+    Proficient Patios cross-record bug). Threshold is intentionally
+    permissive — we'd rather skip enrichment than corrupt data."""
+    a = set(_normalize_name(candidate).split())
+    b = set(_normalize_name(query).split())
+    if not a or not b:
+        return False
+    overlap = len(a & b) / max(1, min(len(a), len(b)))
+    return overlap >= threshold
+
+
+# ============================================================
 # Public API
 # ============================================================
 
@@ -313,7 +707,31 @@ async def lookup_florida(db: AsyncSession, company_name: str) -> SoSResult:
     return result
 
 
-# Dispatcher — picks the right state scraper. AZ + NV land here next.
+async def lookup_arizona(db: AsyncSession, company_name: str) -> SoSResult:
+    cached = await _get_cached(db, "AZ", company_name)
+    if cached is not None:
+        return cached
+    result = await _lookup_arizona_uncached(company_name)
+    try:
+        await _save_cache(db, "AZ", company_name, result)
+    except Exception:
+        log.warning(f"Could not cache AZ SoS result for {company_name}")
+    return result
+
+
+async def lookup_nevada(db: AsyncSession, company_name: str) -> SoSResult:
+    cached = await _get_cached(db, "NV", company_name)
+    if cached is not None:
+        return cached
+    result = await _lookup_nevada_uncached(company_name)
+    try:
+        await _save_cache(db, "NV", company_name, result)
+    except Exception:
+        log.warning(f"Could not cache NV SoS result for {company_name}")
+    return result
+
+
+# Dispatcher — picks the right state scraper.
 async def lookup_state(db: AsyncSession, state: Optional[str], company_name: str) -> Optional[SoSResult]:
     """Returns None when we don't have a scraper for that state yet
     (callers can ignore SoS in that case)."""
@@ -322,7 +740,11 @@ async def lookup_state(db: AsyncSession, state: Optional[str], company_name: str
     state_upper = (state or "").strip().upper()
     if state_upper in ("FL", "FLORIDA"):
         return await lookup_florida(db, company_name)
-    # AZ, NV, TX, CA, etc. — pending scraper implementations
+    if state_upper in ("AZ", "ARIZONA"):
+        return await lookup_arizona(db, company_name)
+    if state_upper in ("NV", "NEVADA"):
+        return await lookup_nevada(db, company_name)
+    # TX, CA, etc. — pending scraper implementations
     return None
 
 

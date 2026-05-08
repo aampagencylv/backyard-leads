@@ -970,11 +970,11 @@ async def enrich_company(
     except Exception as e:
         instagram_data = {"error": str(e)[:200]}
 
-    # Phase 2 enrichment: Secretary of State lookup (currently FL only;
-    # AZ + NV pending). Free public-record data — registered agent +
-    # officers + filing date + active status. Cached 30 days; only
-    # fires for states we have a scraper for. Always best-effort —
-    # never blocks the core enrichment flow.
+    # Phase 2 enrichment: Secretary of State lookup (FL Sunbiz, AZ
+    # eCorp, NV SilverFlume). Free public-record data — registered
+    # agent + officers + filing date + active status. Cached 30 days;
+    # only fires for states we have a scraper for. Always best-effort
+    # — never blocks the core enrichment flow.
     sos_data = None
     try:
         from app.services.sos_lookup import lookup_state, meter_sos_lookup
