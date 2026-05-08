@@ -31,10 +31,14 @@ async def init_db():
 
     # Recent column-additions — chained here as a safety net even when
     # the VPS systemd unit also runs them.
-    try:
-        from scripts.migrate_audit_booked import main as _m_audit_booked
-        await _m_audit_booked()
-    except Exception:
-        # Migrations log their own outcome; don't crash startup if one
-        # fails — the app should still come up so the operator can debug.
-        pass
+    for _migration_module in (
+        "scripts.migrate_audit_booked",
+        "scripts.migrate_reply_sentiment",
+    ):
+        try:
+            mod = __import__(_migration_module, fromlist=["main"])
+            await mod.main()
+        except Exception:
+            # Migrations log their own outcome; don't crash startup if one
+            # fails — the app should still come up so the operator can debug.
+            pass

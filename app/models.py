@@ -316,6 +316,14 @@ class Activity(Base):
     rated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     rated_at = Column(DateTime, nullable=True)
 
+    # AI-classified sentiment for email_replied activities. One of:
+    # 'interested', 'objection', 'out_of_office', 'wrong_person',
+    # 'unsubscribe', 'other'. Populated async by reply_classifier after
+    # the reply is logged. NULL means not classified (yet, or
+    # classification disabled).
+    reply_sentiment = Column(String(20), nullable=True, index=True)
+    reply_sentiment_summary = Column(Text, nullable=True)  # one-line AI gist
+
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     company = relationship("Company", back_populates="activities")

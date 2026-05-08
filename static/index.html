@@ -1053,6 +1053,25 @@
             return `${datePart} · ${time}`;
         }
 
+        // Render the AI-classified reply-sentiment badge on email_replied
+        // / email_auto_response timeline rows. Empty string when not yet
+        // classified (returns gracefully into the existing flow).
+        function renderSentimentBadge(a) {
+            const s = a && a.reply_sentiment;
+            if (!s) return '';
+            const styles = {
+                interested:    {bg:'#e8f5e9', fg:'#1b5e20', icon:'🟢', label:'interested'},
+                objection:     {bg:'#fff3e0', fg:'#bf360c', icon:'🟡', label:'objection'},
+                out_of_office: {bg:'#eceff1', fg:'#455a64', icon:'🛏', label:'out of office'},
+                wrong_person:  {bg:'#f3e5f5', fg:'#6a1b9a', icon:'↪', label:'wrong person'},
+                unsubscribe:   {bg:'#ffebee', fg:'#b71c1c', icon:'🛑', label:'unsubscribe'},
+                other:         {bg:'#f5f5f5', fg:'#555',    icon:'•',  label:'other'},
+            };
+            const st = styles[s] || styles.other;
+            const summary = a.reply_sentiment_summary ? ` title="${escapeHtml(a.reply_sentiment_summary)}"` : '';
+            return ` <span style="font-size:10px;background:${st.bg};color:${st.fg};padding:2px 7px;border-radius:4px;font-weight:600;letter-spacing:0.2px"${summary}>${st.icon} ${st.label}</span>`;
+        }
+
         // Render the phone-type badge on contact cards. Empty string when we
         // haven't checked yet — keeps the UI quiet until we have real data.
         function renderPhoneTypeBadge(c) {
@@ -3421,9 +3440,15 @@
                 // showing the full body — signature + everything. Strip-but-store
                 // pattern: timeline shows the cleaned preview, expand reveals all.
                 if ((a.type === 'email_replied' || a.type === 'email_auto_response') && a.metadata && (a.metadata.body_text || a.metadata.body_html)) {
+                    const sentBadge = renderSentimentBadge(a);
+                    const sentSummary = a.reply_sentiment_summary
+                        ? `<div style="font-size:11px;color:#555;margin-top:4px;font-style:italic">${escapeHtml(a.reply_sentiment_summary)}</div>`
+                        : '';
                     return `
                         <div class="timeline-item">
-                            ${baseRow}
+                            <div><span class="timeline-icon">${icons[a.type] || '•'}</span>${escapeHtml(a.content)}${sentBadge}</div>
+                            <div class="timeline-meta">${escapeHtml(a.user_name || 'System')} · ${fmtDateTime(a.created_at)}</div>
+                            ${sentSummary}
                             <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
                                 <button class="btn btn-secondary btn-xs" onclick="toggleReplyExpand(${a.id})">📄 Full reply</button>
                             </div>

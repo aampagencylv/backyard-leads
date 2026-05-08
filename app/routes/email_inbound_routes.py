@@ -236,7 +236,7 @@ async def email_inbound(request: Request):
         # Log Activity to the contact's timeline
         activity_type = "email_auto_response" if is_auto_response else "email_replied"
         prefix = "[Auto-response]" if is_auto_response else "[Reply]"
-        db.add(Activity(
+        reply_activity = Activity(
             company_id=ge.company_id,
             contact_id=ge.contact_id,
             activity_type=activity_type,
@@ -253,7 +253,9 @@ async def email_inbound(request: Request):
                 "signature_extracted": sig_data,
                 "enriched_fields": enriched_fields,
             }),
-        ))
+        )
+        db.add(reply_activity)
+        await db.flush()  # ensure reply_activity.id is set so the async classifier can find it
 
         # If we enriched, log a separate enrichment Activity so the BDR sees
         # exactly what got auto-applied. Distinct from the email_replied entry
@@ -314,7 +316,43 @@ async def email_inbound(request: Request):
                 except Exception as e:
                     log.exception(f"[inbound] forward to BDR failed: {e}")
 
+    # Fire async sentiment classification — classifies the reply, writes
+    # sentiment + summary back onto the Activity row. Done out-of-band so
+    # the webhook responds fast and the AI call doesn't block other
+    # activity logging. Classification cost is metered as ai_reply_classify.
+    if reply_activity.id and (body_for_log or "").strip():
+        import asyncio as _asyncio
+        _asyncio.create_task(_classify_reply_async(
+            reply_activity.id, body_for_log, subject,
+        ))
+
     return {"ok": True, "token_matched": token[:8] + "…", "auto_response": is_auto_response}
+
+
+async def _classify_reply_async(activity_id: int, body_text: str, subject: str) -> None:
+    """Background: classify a reply and stamp the result on the Activity.
+
+    Opens its own DB session so the caller's transaction can commit without
+    waiting on the AI roundtrip. Failure is silent — the Activity simply
+    stays with NULL sentiment and the UI shows a neutral badge.
+    """
+    try:
+        from app.services.reply_classifier import classify_reply
+        from app.database import async_session
+        result = await classify_reply(body_text, subject)
+        if not result:
+            return
+        async with async_session() as db:
+            row = (await db.execute(
+                select(Activity).where(Activity.id == activity_id)
+            )).scalar_one_or_none()
+            if not row:
+                return
+            row.reply_sentiment = result.get("sentiment")
+            row.reply_sentiment_summary = result.get("summary") or ""
+            await db.commit()
+    except Exception as e:
+        log.warning(f"[inbound] async classify failed for activity {activity_id}: {e}")
 
 
 # ============================================================

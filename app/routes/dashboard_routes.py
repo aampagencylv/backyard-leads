@@ -237,6 +237,8 @@ async def get_dashboard(
             "company_id": a.company_id,
             "company_name": cname,
             "user_name": f"{ufirst} {ulast}".strip() if ufirst else None,
+            "reply_sentiment": a.reply_sentiment,
+            "reply_sentiment_summary": a.reply_sentiment_summary,
             "created_at": a.created_at.isoformat() if a.created_at else None,
         }
         for a, cname, ufirst, ulast in feed_rows

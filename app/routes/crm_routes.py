@@ -63,6 +63,8 @@ async def get_timeline(
             "contact_id": a.contact_id,
             "deal_id": a.deal_id,
             "metadata": json.loads(a.metadata_json) if a.metadata_json else None,
+            "reply_sentiment": a.reply_sentiment,
+            "reply_sentiment_summary": a.reply_sentiment_summary,
             "created_at": a.created_at.isoformat() if a.created_at else None,
         }
         for a in activities
