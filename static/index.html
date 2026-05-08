@@ -4484,15 +4484,111 @@
                         </div>
                     </div>
 
-                    <div style="display:flex;gap:8px;margin-top:12px">
+                    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
                         ${c.status === 'draft' || c.status === 'paused' ? `<button class="btn btn-success btn-sm" onclick="startCampaign(${c.id})">Start</button>` : ''}
                         ${c.status === 'running' ? `<button class="btn btn-primary btn-sm" onclick="runCampaignBatch(${c.id})">Run Next Batch</button>` : ''}
                         ${c.status === 'running' ? `<button class="btn btn-secondary btn-sm" onclick="pauseCampaign(${c.id})">Pause</button>` : ''}
+                        <button class="btn btn-secondary btn-sm" onclick="viewCampaignTargets(${c.id})">📊 Portfolio</button>
                         <button class="btn btn-secondary btn-sm" onclick="viewCampaignLogs(${c.id})">View Logs</button>
                     </div>
+                    <div id="campaign-targets-${c.id}" style="margin-top:8px"></div>
                     <div id="campaign-logs-${c.id}" style="margin-top:8px"></div>
                 </div>
             `).join('');
+        }
+
+        // God Mode: render the per-target portfolio table.
+        // Each row is one (vertical, location) pair the runner is working
+        // on, with status, today's enrollment, lifetime totals, and a
+        // weight slider. Manual pause/resume per target is a small admin
+        // power-tool — useful when one geo is throwing complaints.
+        async function viewCampaignTargets(campaignId) {
+            const panel = document.getElementById(`campaign-targets-${campaignId}`);
+            if (panel.innerHTML.trim()) { panel.innerHTML = ''; return; }
+            const targets = await api(`/api/campaigns/${campaignId}/targets`);
+            if (!targets) return;
+            if (targets.length === 0) {
+                panel.innerHTML = '<div style="font-size:12px;color:#888;padding:8px">No targets yet — start the campaign and the cross product of business types × locations will populate.</div>';
+                return;
+            }
+            const statusBadge = (s, reason) => {
+                const m = {
+                    active: ['#e8f5e9', '#1b5e20', '🟢 active'],
+                    paused: ['#fff8e1', '#7a5a00', `⏸ paused${reason ? ' · ' + reason : ''}`],
+                    exhausted: ['#fff3e0', '#bf360c', '⛔ exhausted'],
+                };
+                const [bg, fg, label] = m[s] || ['#f5f5f5', '#666', s];
+                return `<span style="font-size:10px;background:${bg};color:${fg};padding:2px 7px;border-radius:4px;font-weight:600">${label}</span>`;
+            };
+            const fmtAt = (iso) => iso ? fmtRelative(iso) : '—';
+            panel.innerHTML = `
+                <div style="margin-top:6px;background:#fafafa;border-radius:8px;padding:12px">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                        <strong style="font-size:13px">Portfolio · ${targets.length} target${targets.length === 1 ? '' : 's'}</strong>
+                        <span style="font-size:11px;color:#888">${targets.filter(t => t.status === 'active').length} active</span>
+                    </div>
+                    <table style="width:100%;font-size:12px;border-collapse:collapse">
+                        <thead>
+                            <tr style="background:#fff;text-align:left">
+                                <th style="padding:6px 8px">Vertical</th>
+                                <th style="padding:6px 8px">Location</th>
+                                <th style="padding:6px 8px">Status</th>
+                                <th style="padding:6px 8px;text-align:right">Today</th>
+                                <th style="padding:6px 8px;text-align:right">Total</th>
+                                <th style="padding:6px 8px;text-align:right">Weight</th>
+                                <th style="padding:6px 8px">Last run</th>
+                                <th style="padding:6px 8px"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        ${targets.map(t => `
+                            <tr style="border-top:1px solid #eee;background:#fff">
+                                <td style="padding:6px 8px">${escapeHtml(t.vertical)}</td>
+                                <td style="padding:6px 8px">${escapeHtml(t.location)}</td>
+                                <td style="padding:6px 8px">${statusBadge(t.status, t.paused_reason)}</td>
+                                <td style="padding:6px 8px;text-align:right">${t.enrolled_today}</td>
+                                <td style="padding:6px 8px;text-align:right">${t.contacts_enrolled}</td>
+                                <td style="padding:6px 8px;text-align:right">
+                                    <input type="number" min="1" max="10" value="${t.weight}" style="width:48px;padding:2px 4px;font-size:12px;border:1px solid #ddd;border-radius:3px"
+                                           onchange="updateTargetWeight(${campaignId}, ${t.id}, this.value)">
+                                </td>
+                                <td style="padding:6px 8px;color:#888">${fmtAt(t.last_run_at)}</td>
+                                <td style="padding:6px 8px;text-align:right">
+                                    ${t.status === 'active'
+                                        ? `<button class="btn btn-secondary btn-xs" onclick="setTargetStatus(${campaignId}, ${t.id}, 'paused')">Pause</button>`
+                                        : `<button class="btn btn-secondary btn-xs" onclick="setTargetStatus(${campaignId}, ${t.id}, 'active')">Resume</button>`}
+                                </td>
+                            </tr>
+                        `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        async function updateTargetWeight(campaignId, targetId, value) {
+            const w = parseInt(value);
+            if (!Number.isFinite(w) || w < 1 || w > 10) {
+                toast('Weight must be 1-10');
+                return;
+            }
+            await api(`/api/campaigns/${campaignId}/targets/${targetId}`, {
+                method: 'PATCH', body: JSON.stringify({ weight: w }),
+            });
+            toast(`Weight set to ${w}`);
+        }
+
+        async function setTargetStatus(campaignId, targetId, status) {
+            await api(`/api/campaigns/${campaignId}/targets/${targetId}`, {
+                method: 'PATCH', body: JSON.stringify({ status }),
+            });
+            toast(status === 'active' ? 'Target resumed' : 'Target paused');
+            // Re-render the portfolio table
+            const panel = document.getElementById(`campaign-targets-${campaignId}`);
+            if (panel) {
+                panel.innerHTML = '';
+                viewCampaignTargets(campaignId);
+            }
         }
 
         async function showCreateCampaignModal() {

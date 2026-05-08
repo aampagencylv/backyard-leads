@@ -237,6 +237,82 @@ async def stop_campaign(
     return {"id": campaign.id, "status": "paused"}
 
 
+@router.get("/{campaign_id}/targets")
+async def get_campaign_targets(
+    campaign_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Per-target portfolio for a campaign — what God Mode is producing
+    in each (vertical, location) pair. Drives the Settings UI table."""
+    rows = (await db.execute(
+        select(CampaignTarget)
+        .where(CampaignTarget.campaign_id == campaign_id)
+        .order_by(CampaignTarget.status, CampaignTarget.vertical, CampaignTarget.location)
+    )).scalars().all()
+    return [
+        {
+            "id": t.id,
+            "vertical": t.vertical,
+            "location": t.location,
+            "weight": t.weight,
+            "status": t.status,
+            "paused_reason": t.paused_reason,
+            "contacts_enrolled": t.contacts_enrolled,
+            "enrolled_today": t.enrolled_today,
+            "credits_spent": round(t.credits_spent, 4) if t.credits_spent else 0,
+            "consecutive_empty_runs": t.consecutive_empty_runs,
+            "scrape_cursor": t.scrape_cursor,
+            "last_run_at": t.last_run_at.isoformat() if t.last_run_at else None,
+        }
+        for t in rows
+    ]
+
+
+@router.patch("/{campaign_id}/targets/{target_id}")
+async def update_campaign_target(
+    campaign_id: int,
+    target_id: int,
+    req: dict,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Manual control over a single target — pause / resume / re-weight.
+    Body fields (all optional): { weight: int, status: 'active'|'paused' }."""
+    target = (await db.execute(
+        select(CampaignTarget).where(
+            CampaignTarget.id == target_id,
+            CampaignTarget.campaign_id == campaign_id,
+        )
+    )).scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="Target not found")
+
+    if "weight" in req and req["weight"] is not None:
+        try:
+            w = int(req["weight"])
+            if 1 <= w <= 10:
+                target.weight = w
+        except (ValueError, TypeError):
+            pass
+
+    if "status" in req and req["status"] in ("active", "paused"):
+        target.status = req["status"]
+        if target.status == "active":
+            # Manual unpause: clear exhaustion counter so it gets fresh runs
+            target.consecutive_empty_runs = 0
+            target.paused_reason = None
+        elif target.status == "paused":
+            target.paused_reason = "manual"
+
+    await db.commit()
+    return {
+        "id": target.id, "vertical": target.vertical, "location": target.location,
+        "weight": target.weight, "status": target.status,
+        "paused_reason": target.paused_reason,
+    }
+
+
 @router.get("/{campaign_id}/logs")
 async def get_campaign_logs(
     campaign_id: int,
