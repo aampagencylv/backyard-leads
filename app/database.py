@@ -35,6 +35,7 @@ async def init_db():
         "scripts.migrate_audit_booked",
         "scripts.migrate_reply_sentiment",
         "scripts.migrate_apollo_key",
+        "scripts.migrate_lead_score",
     ):
         try:
             mod = __import__(_migration_module, fromlist=["main"])

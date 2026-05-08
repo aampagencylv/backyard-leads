@@ -1,0 +1,289 @@
+"""
+Lead scoring v2 — fit × intent.
+
+Replaces the legacy "3+ opens OR any click" Hot Leads heuristic with a
+real per-company score driven by:
+
+  FIT (firmographic match to ICP):
+    - has website, has primary contact email, has decision-maker
+    - rating + review count (sweet spot 20-300 reviews, 4.0+ stars)
+    - business_type matches priority verticals
+    - mobile-validated phone (Twilio Lookup line_type)
+    - has LinkedIn URL on primary contact
+
+  INTENT (recent engagement signals, exponentially decayed by age):
+    - email opens, clicks, replies (with sentiment-weighted scoring)
+    - 'interested' replies score MUCH higher than 'objection' or 'OOO'
+    - hot lead activity, page views, form submits, tel-clicks
+    - meeting_booked is the ceiling signal
+
+Combined score = (fit + intent) / 2, capped at 100.
+Tiers: burning ≥80, hot ≥60, warm ≥40, cool ≥20, cold otherwise.
+
+Cost: zero — pure SQL-fed computation. Recomputed lazily when stale.
+"""
+from __future__ import annotations
+import json
+import math
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import Company, Contact, Activity
+
+
+# Recompute when cached value is older than this. 1h is a sweet spot —
+# fresh enough to feel live for engagement signals, infrequent enough
+# that hitting the dashboard for the 50th time today doesn't hammer the DB.
+STALE_AFTER = timedelta(hours=1)
+
+
+# Verticals BMP serves directly — bonus when business_type matches
+PRIORITY_VERTICALS = (
+    "pool", "landscap", "deck", "outdoor kitchen", "patio", "hardscape",
+    "outdoor lighting", "fence", "pergola", "artificial turf", "concrete",
+    "irrigation", "lawn", "backyard",
+)
+
+
+@dataclass
+class ScoreResult:
+    fit: int = 0
+    intent: int = 0
+    combined: int = 0
+    tier: str = "cold"
+    components: dict = field(default_factory=dict)
+    last_signal_at: Optional[datetime] = None
+
+
+# ============================================================
+# Fit
+# ============================================================
+
+def _fit_score(company: Company, primary_contact: Optional[Contact]) -> tuple[int, dict]:
+    score = 0
+    out: dict = {}
+
+    if company.website:
+        score += 15
+        out["has_website"] = 15
+
+    if company.rating:
+        if company.rating >= 4.5:
+            score += 15
+            out["rating_4_5_plus"] = 15
+        elif company.rating >= 4.0:
+            score += 10
+            out["rating_4_plus"] = 10
+        elif company.rating >= 3.5:
+            score += 5
+            out["rating_3_5_plus"] = 5
+
+    if company.review_count:
+        if 20 <= company.review_count <= 300:
+            score += 15
+            out["reviews_sweet_spot"] = 15
+        elif company.review_count >= 10:
+            score += 8
+            out["reviews_some"] = 8
+        elif company.review_count >= 3:
+            score += 3
+            out["reviews_few"] = 3
+
+    bt = (company.business_type or "").lower()
+    if bt and any(v in bt for v in PRIORITY_VERTICALS):
+        score += 15
+        out["priority_vertical"] = 15
+
+    if primary_contact:
+        if primary_contact.email:
+            score += 12
+            out["has_email"] = 12
+            if (primary_contact.email_status or "").lower() in ("valid", "verified", "deliverable"):
+                score += 5
+                out["email_verified"] = 5
+        if primary_contact.first_name and primary_contact.last_name:
+            score += 8
+            out["has_full_name"] = 8
+        if primary_contact.phone_type == "mobile":
+            score += 8
+            out["phone_mobile"] = 8
+        if primary_contact.linkedin_url:
+            score += 5
+            out["has_linkedin"] = 5
+
+    return min(100, score), out
+
+
+# ============================================================
+# Intent
+# ============================================================
+
+# Per-event base weights — multiplied by exp(-days_since/14) before adding.
+# Caps prevent any single signal type from dominating the score.
+EVENT_WEIGHTS = {
+    "email_opened":    (8,  40),   # +8 each, max +40 (5 effective opens)
+    "email_clicked":   (25, 60),   # +25 each, max +60
+    "hot_lead":        (60, 60),   # one signal already aggregates engagement
+    "form_submit":     (70, 70),   # high-intent action
+    "tel_click":       (50, 50),   # mobile call intent
+    "mailto_click":    (30, 30),
+    "outbound_click":  (20, 40),
+    "pageview":        (5,  30),
+    "meeting_booked":  (90, 90),   # near-ceiling — they ARE a hot lead
+}
+
+REPLY_SENTIMENT_WEIGHTS = {
+    "interested":     80,
+    "objection":      30,
+    "out_of_office":   5,
+    "wrong_person":    0,
+    "unsubscribe":     0,
+    "other":          15,
+    None:             20,  # not yet classified — give some weight
+}
+
+
+def _intent_score(activities: list[Activity]) -> tuple[int, dict, Optional[datetime]]:
+    now = datetime.now(timezone.utc)
+    raw_total = 0.0
+    out: dict = {}
+    capped: dict[str, float] = {}
+    last_signal_at: Optional[datetime] = None
+
+    for a in activities:
+        if not a.created_at:
+            continue
+        # Normalize to aware UTC for the diff
+        ts = a.created_at if a.created_at.tzinfo else a.created_at.replace(tzinfo=timezone.utc)
+        days = (now - ts).total_seconds() / 86400
+        if days < 0:
+            days = 0
+        if days > 60:
+            continue  # only look back 60 days
+
+        decay = math.exp(-days / 14)  # half-life ~10 days
+
+        weight = 0.0
+        kind = a.activity_type
+
+        if kind == "email_replied":
+            sent = (a.reply_sentiment or "").lower() or None
+            base = REPLY_SENTIMENT_WEIGHTS.get(sent, 20)
+            weight = base * decay
+            label = f"reply_{sent or 'unclassified'}"
+            capped[label] = capped.get(label, 0) + weight
+        elif kind in EVENT_WEIGHTS:
+            base, cap = EVENT_WEIGHTS[kind]
+            weight = base * decay
+            running = capped.get(kind, 0) + weight
+            capped[kind] = min(running, cap)
+            # don't double-add — handle below by summing capped
+            continue
+
+        raw_total += weight
+        if last_signal_at is None or ts > last_signal_at:
+            last_signal_at = ts
+
+    # Add capped event totals to the running score
+    for k, v in capped.items():
+        raw_total += v
+        if v > 0:
+            out[k] = round(v)
+
+    score = min(100, round(raw_total))
+    return score, out, last_signal_at
+
+
+# ============================================================
+# Combine + tier
+# ============================================================
+
+def _tier(combined: int) -> str:
+    if combined >= 80: return "burning"
+    if combined >= 60: return "hot"
+    if combined >= 40: return "warm"
+    if combined >= 20: return "cool"
+    return "cold"
+
+
+def _combine(fit: int, intent: int) -> int:
+    """50/50 blend. Slight upward adjustment when both axes are non-zero
+    to reward leads that match ICP AND are actively engaging — those
+    are the ones to call today."""
+    base = (fit + intent) / 2
+    if fit >= 30 and intent >= 30:
+        base *= 1.1
+    return min(100, round(base))
+
+
+def compute_score(company: Company, contacts: list[Contact], activities: list[Activity]) -> ScoreResult:
+    primary = next((c for c in contacts if c.is_primary), contacts[0] if contacts else None)
+    fit, fit_components = _fit_score(company, primary)
+    intent, intent_components, last_signal = _intent_score(activities)
+    combined = _combine(fit, intent)
+
+    return ScoreResult(
+        fit=fit,
+        intent=intent,
+        combined=combined,
+        tier=_tier(combined),
+        components={**fit_components, **intent_components},
+        last_signal_at=last_signal,
+    )
+
+
+# ============================================================
+# Persistence — lazy recompute
+# ============================================================
+
+async def get_or_recompute(db: AsyncSession, company: Company, *, force: bool = False) -> ScoreResult:
+    """Return the company's lead score, recomputing if the cache is stale.
+
+    Mutates company.lead_score* fields in-place + commits when a recompute
+    actually runs. Safe to call from any read path.
+    """
+    fresh = (
+        not force
+        and company.lead_score_updated_at is not None
+        and (datetime.now(timezone.utc) - (
+            company.lead_score_updated_at if company.lead_score_updated_at.tzinfo
+            else company.lead_score_updated_at.replace(tzinfo=timezone.utc)
+        )) < STALE_AFTER
+    )
+    if fresh:
+        return ScoreResult(
+            fit=company.lead_score_fit or 0,
+            intent=company.lead_score_intent or 0,
+            combined=company.lead_score or 0,
+            tier=company.lead_score_tier or "cold",
+            components=json.loads(company.lead_score_components or "{}"),
+            last_signal_at=None,
+        )
+
+    # Recompute. Pull contacts + activities for this company.
+    contacts = (await db.execute(
+        select(Contact).where(Contact.company_id == company.id)
+        .order_by(Contact.is_primary.desc(), Contact.id)
+    )).scalars().all()
+
+    activities = (await db.execute(
+        select(Activity).where(Activity.company_id == company.id)
+        .order_by(Activity.created_at.desc())
+        .limit(200)
+    )).scalars().all()
+
+    result = compute_score(company, list(contacts), list(activities))
+
+    company.lead_score = result.combined
+    company.lead_score_fit = result.fit
+    company.lead_score_intent = result.intent
+    company.lead_score_tier = result.tier
+    company.lead_score_components = json.dumps(result.components)
+    company.lead_score_updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    return result

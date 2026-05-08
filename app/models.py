@@ -129,6 +129,21 @@ class Company(Base):
     reviews_json = Column(Text, nullable=True)  # JSON array of reviews with owner_reply parsed out
     reviews_fetched_at = Column(DateTime, nullable=True)
 
+    # Lead score v2 (fit × intent). Lazy-computed by lead_scorer.py — recomputed
+    # on read when the cached value is older than _STALE_AFTER (default 1h).
+    # Replaces the old "3+ opens or any click" Hot Leads heuristic.
+    #   fit:      firmographic / ICP-match score (0-100)
+    #   intent:   engagement signal score (0-100, time-decayed)
+    #   combined: blended fit×intent score (0-100) — what the dashboard ranks by
+    #   tier:     'burning'|'hot'|'warm'|'cool'|'cold' bucket from combined
+    #   components_json: per-component breakdown for the score-tooltip UI
+    lead_score = Column(Integer, default=0, nullable=False, index=True)
+    lead_score_fit = Column(Integer, default=0, nullable=False)
+    lead_score_intent = Column(Integer, default=0, nullable=False)
+    lead_score_tier = Column(String(20), default="cold", nullable=False, index=True)
+    lead_score_components = Column(Text, nullable=True)
+    lead_score_updated_at = Column(DateTime, nullable=True)
+
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 

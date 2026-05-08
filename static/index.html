@@ -1083,6 +1083,20 @@
             return `${datePart} · ${time}`;
         }
 
+        // Render the lead-score tier badge (burning/hot/warm/cool/cold).
+        // Used in the hot-leads dashboard widget + (future) company list.
+        function renderTierBadge(tier) {
+            const styles = {
+                burning: {bg:'#ffebee', fg:'#b71c1c', icon:'🔥', label:'burning'},
+                hot:     {bg:'#fff3e0', fg:'#bf360c', icon:'🔴', label:'hot'},
+                warm:    {bg:'#fff8e1', fg:'#7a5c00', icon:'🟡', label:'warm'},
+                cool:    {bg:'#e3f2fd', fg:'#0d47a1', icon:'🔵', label:'cool'},
+                cold:    {bg:'#f5f5f5', fg:'#666',    icon:'❄️', label:'cold'},
+            };
+            const st = styles[tier] || styles.cold;
+            return `<span style="font-size:10px;background:${st.bg};color:${st.fg};padding:2px 6px;border-radius:4px;font-weight:600;letter-spacing:0.2px">${st.icon} ${st.label}</span>`;
+        }
+
         // Render the AI-classified reply-sentiment badge on email_replied
         // / email_auto_response timeline rows. Empty string when not yet
         // classified (returns gracefully into the existing flow).
@@ -1688,19 +1702,21 @@
                 </div>
             `).join('') : '<p style="font-size:12px;color:#888">No stuck deals. 👍</p>';
 
-            // Hot leads
+            // Hot leads (v2: ranked by Company.lead_score, fit × intent)
             const hl = document.getElementById('hot-leads-list');
             document.getElementById('hot-leads-count').textContent = data.hot_leads.length ? `(${data.hot_leads.length})` : '';
             hl.innerHTML = data.hot_leads.length ? data.hot_leads.map(l => {
-                const signals = (l.signals || []).map(s => `${SIGNAL_LABELS[s.type] || s.type} ${fmtRelative(s.at)}`).join(' · ');
+                const tier = l.lead_score_tier || 'cool';
+                const tierLabel = renderTierBadge(tier);
+                const fitIntent = `fit ${l.lead_score_fit || 0} · intent ${l.lead_score_intent || 0}`;
                 return `
                     <div class="hot-row" onclick="openCompanyDetail(${l.id})">
-                        <span class="hot-score">${l.engagement_score}</span>
-                        <div class="hot-name">${escapeHtml(l.name)} <span class="status-badge status-${l.status}">${l.status}</span></div>
-                        <div class="hot-signals">${escapeHtml(signals) || 'engaged recently'}</div>
+                        <span class="hot-score">${l.lead_score || l.engagement_score || 0}</span>
+                        <div class="hot-name">${escapeHtml(l.name)} ${tierLabel} <span class="status-badge status-${l.status}">${l.status}</span></div>
+                        <div class="hot-signals">${fitIntent}</div>
                     </div>
                 `;
-            }).join('') : '<p style="font-size:12px;color:#888">No hot leads in the last 30 days. Keep sending sequences!</p>';
+            }).join('') : '<p style="font-size:12px;color:#888">No hot leads yet. Send some sequences and check back!</p>';
 
             // Pipeline by stage bars
             const pb = document.getElementById('pipeline-bars');

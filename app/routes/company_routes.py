@@ -442,6 +442,15 @@ async def get_company_full(
     if not check_company_access(company, user):
         raise HTTPException(status_code=404, detail="Company not found")
 
+    # Lazy lead-score refresh — keeps the score current whenever the user
+    # opens the company detail. Cheap (cached after first read within
+    # STALE_AFTER) and never breaks the response if it fails.
+    try:
+        from app.services.lead_scorer import get_or_recompute
+        await get_or_recompute(db, company)
+    except Exception:
+        pass
+
     # Contacts with their emails
     contacts_result = await db.execute(
         select(Contact).where(Contact.company_id == company_id).order_by(Contact.is_primary.desc(), Contact.id)
@@ -1274,6 +1283,15 @@ def _company_summary(c: Company) -> dict:
         "company_description": c.company_description,
         "specialties": c.specialties,
         "follower_count": c.follower_count,
+        # Lead score v2 (cached). Recomputed lazily on /companies/{id}/full
+        # reads when stale; the dashboard hot-leads sweep also forces a
+        # refresh for any company with new engagement activity.
+        "lead_score": c.lead_score or 0,
+        "lead_score_tier": c.lead_score_tier or "cold",
+        "lead_score_fit": c.lead_score_fit or 0,
+        "lead_score_intent": c.lead_score_intent or 0,
+        "lead_score_components": json.loads(c.lead_score_components) if c.lead_score_components else {},
+        "lead_score_updated_at": c.lead_score_updated_at.isoformat() if c.lead_score_updated_at else None,
         "created_at": c.created_at.isoformat() if c.created_at else None,
     }
 

@@ -93,50 +93,67 @@ async def get_dashboard(
         if d.stage == "closed_won" and d.closed_at and _aware(d.closed_at) >= month_start
     )
 
-    # ---------- Engagement events for hot-lead scoring ----------
-    eng_rows = (await db.execute(
-        select(Activity).where(
-            Activity.activity_type.in_(list(ENGAGEMENT_WEIGHTS.keys())),
+    # ---------- Hot leads (v2 scorer: fit × intent) ----------
+    # The Company.lead_score column is the source of truth — written by
+    # app/services/lead_scorer.py. To keep the widget accurate even when a
+    # company hasn't been viewed in >1h, run a freshness sweep first:
+    # find any company with engagement Activity newer than its cached
+    # lead_score_updated_at and recompute those before the SELECT.
+    from app.services.lead_scorer import get_or_recompute, _tier
+    stale_q = (await db.execute(
+        select(Activity.company_id, func.max(Activity.created_at))
+        .where(
+            Activity.activity_type.in_((
+                "email_opened", "email_clicked", "email_replied",
+                "form_submit", "tel_click", "mailto_click",
+                "outbound_click", "pageview", "hot_lead", "meeting_booked",
+            )),
             Activity.created_at >= cutoff_engagement,
-        ).order_by(Activity.created_at.desc())
+        )
+        .group_by(Activity.company_id)
+    )).all()
+
+    # Map company_id → most-recent engagement activity timestamp
+    latest_by_co = {row[0]: _aware(row[1]) for row in stale_q if row[0] is not None}
+
+    # Pull the affected companies + companies with already-non-zero scores
+    sweep_ids = list(latest_by_co.keys())
+    if sweep_ids:
+        sweep_rows = (await db.execute(
+            select(Company).where(Company.id.in_(sweep_ids))
+        )).scalars().all()
+        for c in sweep_rows[:80]:  # safety cap so a flood doesn't stall the dashboard
+            cached_at = _aware(c.lead_score_updated_at) if c.lead_score_updated_at else None
+            sig_at = latest_by_co.get(c.id)
+            if cached_at is None or (sig_at and sig_at > cached_at):
+                try:
+                    await get_or_recompute(db, c, force=True)
+                except Exception:
+                    pass  # don't let one bad company break the dashboard
+
+    # Now query the top hot leads by cached score
+    hot_rows = (await db.execute(
+        select(Company)
+        .where(Company.lead_score >= 40)  # warm+; the UI labels by tier
+        .order_by(Company.lead_score.desc())
+        .limit(10)
     )).scalars().all()
 
-    # Aggregate score per company (also remember the most recent signal type per company)
-    company_score: dict[int, float] = defaultdict(float)
-    company_signals: dict[int, list[dict]] = defaultdict(list)
-    for a in eng_rows:
-        age = (now - _aware(a.created_at)).total_seconds() / 86400 if a.created_at else 0
-        weight = ENGAGEMENT_WEIGHTS.get(a.activity_type, 0)
-        company_score[a.company_id] += weight * _decay_weight(age)
-        if len(company_signals[a.company_id]) < 3:  # keep top 3 most recent signals
-            company_signals[a.company_id].append({
-                "type": a.activity_type, "at": a.created_at.isoformat() if a.created_at else None,
-                "contact_id": a.contact_id,
-            })
-
-    # Hot leads: score >= threshold, sorted desc
-    hot_company_ids = sorted(
-        [cid for cid, score in company_score.items() if score >= HOT_LEAD_THRESHOLD],
-        key=lambda cid: -company_score[cid],
-    )[:10]
-
-    hot_leads = []
-    if hot_company_ids:
-        rows = (await db.execute(
-            select(Company).where(Company.id.in_(hot_company_ids))
-        )).scalars().all()
-        by_id = {c.id: c for c in rows}
-        for cid in hot_company_ids:
-            c = by_id.get(cid)
-            if not c:
-                continue
-            hot_leads.append({
-                "id": c.id,
-                "name": c.name,
-                "status": c.status,
-                "engagement_score": round(company_score[cid], 1),
-                "signals": company_signals[cid],
-            })
+    hot_leads = [
+        {
+            "id": c.id,
+            "name": c.name,
+            "status": c.status,
+            "lead_score": c.lead_score,
+            "lead_score_tier": c.lead_score_tier,
+            "lead_score_fit": c.lead_score_fit,
+            "lead_score_intent": c.lead_score_intent,
+            # Back-compat field for any frontend code still reading it
+            "engagement_score": c.lead_score,
+            "signals": [],  # TODO: surface top components from lead_score_components
+        }
+        for c in hot_rows
+    ]
 
     # ---------- Today's tasks (mine) ----------
     todays_tasks_rows = (await db.execute(
