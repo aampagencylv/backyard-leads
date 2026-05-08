@@ -266,6 +266,25 @@ async def create_contact(
                     content=f"Contact added: {(first + ' ' + last).strip() or req.email or '(no name)'}"))
     await db.commit()
     await db.refresh(contact)
+
+    # Eager Twilio Lookup on phone — populates phone_type so the contact
+    # card shows the badge immediately and SMS/voice gating works on first
+    # send attempt instead of paying the latency on the hot path. ~$0.005.
+    if req.phone:
+        try:
+            from app.services.twilio_voice import lookup_phone_type
+            from app.runtime_config import get_twilio_credentials
+            creds = await get_twilio_credentials(db)
+            if creds and creds.is_minimally_configured:
+                r = await lookup_phone_type(creds, req.phone)
+                if r.type and r.type not in ("error",):
+                    contact.phone_type = r.type
+                    contact.phone_carrier = r.carrier
+                    contact.phone_type_checked_at = datetime.now(timezone.utc)
+                    await db.commit()
+        except Exception:
+            pass  # Lookup failure must not block contact create
+
     return _contact_summary(contact)
 
 

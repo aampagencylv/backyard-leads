@@ -226,6 +226,19 @@ async def lookup_phone_type(creds: TwilioCredentials, phone: str) -> PhoneTypeRe
     else:
         norm = "unknown"
 
+    # Credit meter — record the spend regardless of result. Idempotency key
+    # uses the E.164 number so re-checks of the same number dedupe within a
+    # short window (intentional — we want to know if a number is queried often).
+    try:
+        from app.services.credit_meter import meter_standalone as _meter_lookup
+        await _meter_lookup(
+            action_type="phone_lookup",
+            action_ref=f"twilio_lookup:{e164}",
+            metadata={"type": norm, "carrier": carrier_name},
+        )
+    except Exception:
+        pass
+
     return PhoneTypeResult(type=norm, carrier=carrier_name)
 
 
