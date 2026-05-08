@@ -60,6 +60,30 @@ def _extract_reply_token(to_addresses: list[str]) -> Optional[str]:
     return None
 
 
+async def _fetch_inbound_body(email_id: str) -> dict:
+    """Fetch the full inbound email content via Resend's API.
+
+    Resend's email.received webhook payload contains metadata only (from /
+    to / subject / message_id / attachments) — NOT the body. We pull the
+    body separately via GET /emails/inbound/{id} which returns text + html
+    + headers + raw mime. Returns {} on any failure (we still process the
+    metadata-only path, just with empty body)."""
+    if not email_id or not settings.resend_api_key:
+        return {}
+    import httpx
+    url = f"https://api.resend.com/emails/inbound/{email_id}"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(url, headers={"Authorization": f"Bearer {settings.resend_api_key}"})
+        if r.status_code != 200:
+            log.warning(f"[inbound] body fetch {r.status_code}: {r.text[:200]}")
+            return {}
+        return r.json() or {}
+    except Exception as e:
+        log.exception(f"[inbound] body fetch failed: {e}")
+        return {}
+
+
 async def _resolve_resend_webhook_secret() -> str:
     """DB-first lookup with env fallback so Steve can rotate from Settings UI
     without SSHing in. We do this in an async helper instead of a sync read so
@@ -124,16 +148,18 @@ async def email_inbound(request: Request):
         return {"ok": True, "ignored": event_type}
 
     data = payload.get("data") or payload  # tolerant — direct payload OR wrapped
-    # DEBUG (temporary): print() instead of log.info() because Python's default
-    # logger level drops INFO. uvicorn captures stdout to journalctl.
-    print(f"[inbound DEBUG] payload top-level keys: {sorted(payload.keys())}", flush=True)
-    print(f"[inbound DEBUG] data keys: {sorted(data.keys())}", flush=True)
-    for k, v in data.items():
-        if isinstance(v, str) and len(v) > 5:
-            preview = v[:300].replace("\n", "\\n")
-            print(f"[inbound DEBUG]   data.{k} (len={len(v)}): {preview}", flush=True)
-        elif isinstance(v, (list, dict)):
-            print(f"[inbound DEBUG]   data.{k}: {type(v).__name__} = {str(v)[:200]}", flush=True)
+
+    # Resend Inbound webhooks ship METADATA ONLY — the body (html + text) has
+    # to be fetched separately via GET /emails/inbound/{email_id}. So step 1
+    # is locate the resend email_id from the payload, then fetch the rest.
+    resend_inbound_id = data.get("email_id")
+    fetched = await _fetch_inbound_body(resend_inbound_id) if resend_inbound_id else {}
+    if fetched:
+        # Merge body fields onto the data dict so the rest of the handler
+        # works as if Resend had sent the body inline.
+        if fetched.get("html"): data["html"] = fetched["html"]
+        if fetched.get("text"): data["text"] = fetched["text"]
+
     to_list = data.get("to") or []
     if isinstance(to_list, str):
         to_list = [to_list]
