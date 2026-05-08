@@ -1315,6 +1315,56 @@ The same tour system works for SaaS customers, but the steps would be slightly d
 
 ---
 
+## 💬 SaaS add-on: Blooio iMessage (locked 2026-05-08)
+
+**Pricing model**: Blooio numbers cost **$250/mo flat** per number. No
+per-message charge. We're NOT including iMessage in the base SaaS plan —
+it's a paid add-on customers opt into.
+
+**What needs to exist:**
+1. **Tenant add-ons concept** — first real add-on the platform sells. Likely a
+   `tenant_addons` table or a JSON column on the (future) `organizations` model:
+   `{"imessage": {"active": true, "blooio_number": "+1...", "since": "..."}}`.
+   This is also the right shape for AI Voice, extra sender domains, etc. — design once.
+2. **Settings → "Plan & Add-Ons" page** (admin-tier, not super_admin) — shows
+   active add-ons + available upgrades. "Add iMessage — $250/mo" CTA → Stripe
+   checkout → webhook flips the add-on flag → number provisioned.
+3. **Capability gating** — every UI surface that exposes iMessage (contact cards,
+   compose modals, SMS-vs-iMessage choice) should hide or replace those controls
+   with an "Upgrade to enable iMessage" prompt when the add-on isn't active.
+   Server-side enforcement on `/api/blooio/*` routes — no relying on the UI.
+4. **Number provisioning** — open question, see below.
+
+**Open question — does Blooio's API provision numbers programmatically?**
+We currently use Blooio's `/v2/api/chats/{id}/messages` for sends and
+`/v2/api/phone-numbers/lookup` for capability checks. Whether they expose a
+"create / claim / assign number" endpoint isn't something I've verified. Two
+possibilities:
+- **Yes** → end-to-end self-serve: Stripe payment → API call → number live, all
+  inside our flow.
+- **No** → semi-manual: Stripe payment → CRM task surfaces to Steve → he
+  provisions in Blooio dashboard → pastes the number into our admin UI →
+  customer's iMessage goes live an hour later. Fine for v1; not great for
+  scale beyond ~20 customers.
+
+I can poke at Blooio's API docs in 10 min when you want me to — say the word
+and I'll get a definitive answer. Otherwise we slot the discovery work in
+right before the SaaS billing layer goes in.
+
+**Dependencies:**
+- A real `Organization` / `Tenant` model (still single-tenant today)
+- Stripe billing integration with subscription + metered add-ons
+- Decision on whether iMessage stays a single shared Blooio account with
+  per-tenant numbers, or if each tenant gets their own Blooio account
+
+**Where this slots in priority:**
+After enrichment waterfall + Apollo adapter (the foundational SaaS architecture
+work) and before God Mode / Morning brief / AI chatbot. Roughly when we start
+building the real billing layer — at which point we'll be wiring Stripe and
+this add-on becomes the second SKU after the base seat price.
+
+---
+
 ## ✅ Shipped 2026-05-08 (continuing session — Steve stepped away with approval)
 
 Seven commits landed end-to-end. Order shipped:
