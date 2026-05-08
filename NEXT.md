@@ -579,299 +579,560 @@ When prospect clicks "See Your Competitive Comparison" in the audit report:
 
 ---
 
-## 🚀 SaaS Platform Plan — Multi-Tenant Commercial Version
+## 🚀 SaaS Platform Plan — AI BDR for SMB B2B
 
-> This is the plan for forking the Backyard Marketing Pros CRM into a sellable SaaS product.
-> Steve plans to work on this separately while continuing to build BMP-specific features.
-
-### The Big Picture
-
-Turn the BMP Prospector into a white-label B2B sales platform that any agency or sales team can use.
-You (AAMP Agency) are the platform operator. Customers sign up, get their own isolated workspace,
-and pay you monthly based on usage.
-
-### Git Strategy — Fork + Upstream Sync
-
-```
-backyard-leads (main repo — BMP-specific)
-    │
-    └── fork → prospector-saas (the commercial product)
-              │
-              ├── shared core (CRM, pipeline, sequences, enrichment, audit engine)
-              └── saas layer (multi-org, billing, onboarding, white-label)
-```
-
-**How to set this up:**
-
-1. Create new repo: `aampagencylv/prospector-saas`
-2. Fork from `backyard-leads` (or push a copy)
-3. In `prospector-saas`, add `backyard-leads` as an upstream remote:
-   ```bash
-   git remote add upstream https://github.com/aampagencylv/backyard-leads.git
-   ```
-4. To pull BMP improvements into the SaaS version:
-   ```bash
-   git fetch upstream
-   git merge upstream/main  # resolve conflicts if any
-   ```
-5. SaaS-specific code lives in new files/modules — minimize touching shared files
-   to reduce merge conflicts
-
-**Key principle:** BMP repo stays the "reference implementation." New CRM features go there first,
-get tested with your team, then get pulled into the SaaS repo. SaaS-only features (billing,
-onboarding, white-label) only exist in the SaaS repo.
+> Comprehensive blueprint for turning the BMP Prospector into a sellable multi-tenant SaaS.
+> Locked with Steve 2026-05-08:
+>   1. **Shared Postgres DB** with `org_id` discriminator (Pipedrive/HubSpot pattern)
+>   2. **Org-only tenancy** — no nested workspaces. Teams (later) are user labels.
+>   3. **One codebase**, no fork. BMP becomes org #1.
+>   4. **Platform-managed API keys** — AAMP holds the master keys for Anthropic, Netrows,
+>      DataForSEO, Resend account, Twilio account, Blooio account. Customer orgs use them
+>      under the hood; we meter consumption + bill back. Customers DO bring their own
+>      verified email domain and their own phone numbers (provisioned through our master
+>      Twilio/Blooio accounts), but they never see or manage API keys.
+>   5. **Positioning**: AI BDR for small-to-mid B2B. Automate research + outreach +
+>      appointment setting. "Tired of paying sales reps that can't set leads?"
 
 ---
 
-### Architecture: What Changes for Multi-Tenant — DECISIONS LOCKED 2026-05-08
+### The North Star
 
-**Locked with Steve:**
-1. **Shared Postgres DB with `org_id` discriminator** — Pipedrive/HubSpot pattern
-2. **Org level only** — like HubSpot Portals; Teams (if added) are user labels not data boundaries
-3. **One codebase, BMP becomes "Org #1"** — no fork; SaaS = the same code with multiple orgs
-4. **Positioning**: AI BDR for SMB B2B — automated research + outreach + appointment setting
+A founder or sales manager signs up. In 10 minutes their CRM is populated with prospects,
+the AI is generating personalized outreach across email/iMessage/LinkedIn, calls are being
+scheduled into their iClosed/calendar, and they have a dashboard showing pipeline + revenue
+forecast. They never set up Twilio, never configured Resend, never paid for an Anthropic
+API key. We did all of that. They pay one monthly subscription that covers their seat +
+usage allowances, with overages auto-billed.
 
-**Current (single-tenant):**
-```
-SQLite → 1 org (implicit) → Multiple users → Shared API keys
-```
+That's the product. Everything below is in service of getting there without breaking,
+without leaking customer data into the wrong org, and without losing money on cost
+overruns.
 
-**Multi-tenant (target):**
-```
-Postgres → Many orgs → Each org has users, companies, contacts, deals, sequences
-                     → Each org has their own API keys (Resend, Twilio, Blooio, Netrows, Anthropic, etc.)
-                     → Platform admin (super_admin) oversees all orgs
-                     → BMP itself is just org_id=1
-```
+---
 
-#### Database — the rules that prevent the system from getting unsafe
+### Core architectural decisions
 
-Every tenant-scoped table gets a non-nullable `org_id INTEGER NOT NULL REFERENCES orgs(id)` column with an
-index. Tables that DON'T need org_id: `users` (already scoped by org_id), `tags` (might be per-org or global —
-decide later), `runtime_config` (per-org config table replaces the singleton), and lookup tables.
+#### 1. Multi-tenancy boundary
+- **Org** = tenant. One company = one org. All CRM data scoped to org.
+- **Users** belong to exactly one org. Cross-org access only for `super_admin` (AAMP staff).
+- **Teams** (when added) are a `team` text label on User — used for routing & report filters.
+  NOT a data partition. (Mirrors HubSpot Teams.)
+- **`org_id`** is non-nullable on every tenant-scoped table. Indexed. Enforced by:
+  - `scope_by_org()` helper required on every list query
+  - JWT carries `org_id` alongside `user_id`
+  - CI smoke test creates two orgs and asserts data is fully isolated across every list endpoint
 
-Concrete table list with org_id needed:
-- companies, contacts, deals, activities, tasks, generated_emails, page_views, tracking_links,
-  audit_reports, campaigns, searches, saved_views, runtime_config (becomes per-org),
-  call_ratings, sequence_steps (when promoted from generated_emails)
+#### 2. Platform-managed APIs (the key SaaS distinction)
+The whole point: customer never sees a setup screen for Anthropic, Netrows, DataForSEO,
+Resend, Twilio, or Blooio. They use AAMP's master keys; we meter and bill.
 
-**Mandatory query scoping pattern:**
-- Every async endpoint must take `current_org` from the JWT
-- Use a thin wrapper `scope(query, model, current_org)` that auto-adds `WHERE org_id = current_org.id`
-- **CI/test enforces it**: a smoke test that runs every list endpoint as a fresh-org user and
-  asserts the response is empty (catches accidental cross-org leaks before they ship)
-- All raw SQL must include the org_id filter explicitly — no exceptions
+| Service | Master account holder | Per-org provisioned resource | Customer sets up | Metered as |
+|---|---|---|---|---|
+| **Anthropic** (Claude) | AAMP | nothing — shared key | nothing | tokens or generations |
+| **Netrows** | AAMP | nothing — shared key | nothing | enrichments |
+| **DataForSEO** | AAMP | nothing — shared key | nothing | audits |
+| **Deepgram** (call transcripts) | AAMP | nothing — shared key | nothing | transcription minutes |
+| **Resend** (email send) | AAMP | a verified Domain in AAMP's Resend account | DNS records (1-time, guided wizard) | emails sent |
+| **Twilio** (calls) | AAMP | per-rep phone numbers under AAMP's Twilio sub-account-per-org | nothing — auto-purchase via wizard | call minutes + monthly per-number charge |
+| **Blooio** (iMessage) | AAMP | dedicated number per org under AAMP's Blooio account | nothing — auto-provision | messages sent |
+| **iClosed** | Customer's own | their existing iClosed account | one-time OAuth | nothing (their billing) |
 
-**JWT changes:** include `org_id` in the JWT payload alongside `user_id`. `get_current_user()` becomes
-`get_current_user_in_org()` returning `(user, org)`. A user can only belong to one org for v1.
+**Why this works:**
+- Onboarding goes from "set up 6 accounts and 8 API keys" to "fill in your company name and DNS-verify your email domain". Massive UX win.
+- We get volume discounts on every API → margin opportunity
+- We can swap providers without customer impact (e.g. Netrows → competitor)
+- We control the abuse vector (one bad actor can't burn through our master Anthropic key
+  because per-org rate limits + budget caps stop them well before that)
 
-**Why shared DB over per-tenant:**
-- Cost at 100 customers: $5/mo Postgres vs $500+/mo (100 × small RDS)
-- Migration complexity: one migration to write vs same code runs N times
-- Connection limits: shared DB = one pool; per-tenant = N pools = exhausts Postgres at scale
-- The risk (cross-org data leaks) is mitigated by enforced query scoping + tested boundaries
+**Why this is risky and how we mitigate:**
+- **Domain reputation cross-pollination on Resend** — one customer spamming hurts everyone's
+  inbox placement. Mitigation: per-customer Resend Domain (each customer DKIM-signs from
+  their OWN domain even though the API account is ours), automated bounce-rate monitoring
+  with auto-suspend at >5% bounce rate.
+- **TCPA exposure on Twilio** — one customer auto-dialing without consent → FCC complaint
+  hits AAMP. Mitigation: A2P 10DLC registration owned by AAMP, customer onboarding includes
+  TCPA agreement, send-window enforcement is mandatory (already built), do_not_call list
+  imported per-org.
+- **Blooio iMessage** — one customer abusing the channel could get ALL our orgs' iMessage
+  capability throttled by Apple. Mitigation: separate Blooio dedicated number per org so
+  abuse is contained to that number; rate limits per org per day.
+- **Cost runaway** — bug somewhere causes 1M Anthropic calls. Mitigation: per-org daily
+  spend cap on every metered service; alarm at 80%, hard-stop at 100%.
 
-#### How HubSpot does this (since Steve asked) — and we mirror it
+#### 3. Per-org domain provisioning (the only setup customer touches)
+Customer signs up → we ask for their sending domain (e.g. `bymp.com`) → call Resend
+Domains API to create the domain record under AAMP's Resend account → display the DNS
+records they need to add (DKIM, SPF, return-path) → poll until verified → enable sending.
 
-- **Portal** = HubSpot's term for "org" / "tenant". One company = one Portal. All data in a Portal is
-  visible to all users in that Portal subject to permissions.
-- **Users** belong to exactly one Portal. Cannot span Portals.
-- **Teams** are NOT separate workspaces — they're a labeling/assignment layer for users. A user can
-  be on multiple Teams. Reports filter by Team, lead routing rules can target a Team. The data
-  itself isn't partitioned by Team.
-- **Permissions** are set per-user via Roles, not per-team. Teams just affect routing + reporting visibility.
+This is the ONE technical step the customer can't avoid (you can't impersonate someone's
+domain in their absence — DKIM cryptographic proof is the whole point). We make it a 5-min
+wizard with screenshots for the popular DNS providers (Cloudflare, GoDaddy, Namecheap, etc.).
 
-Our v1 mirror: Org → Users (with `role`) → all CRM data scoped to org. We can add a `team` text label
-on users later for filter/routing without changing the data model. **No nested workspaces.**
+For phone numbers: customer picks an area code → we hit Twilio Available Numbers API →
+auto-purchase in our master account → assign to the rep. ~$1.15/mo per number, billed-back.
 
-#### New Models Needed
+#### 4. Per-org `runtime_config` replaces the singleton
+Today: `runtime_config(id=1)` holds API keys for the BMP install.
+SaaS: `runtime_config(org_id, ...)` — one row per org. Holds:
+- The org's Resend `from_domain` (the verified one)
+- The org's Twilio sub-account credentials (for per-org phone-number scoping)
+- The org's Blooio number ID
+- Custom messaging direction (already shipped — moves to per-org)
+- White-label branding (logo URL, primary color, signing-as name)
+- Plan tier + monthly limits + usage counters
+
+All API keys (Anthropic, Netrows, DataForSEO, Deepgram, base Resend account key, base
+Twilio account key, base Blooio key) move to **platform-level `.env`** — never per-org.
+Code that reads them goes through `app.platform_config.get_anthropic_key()` etc. instead
+of `app.runtime_config.get_anthropic_key()`. Single source of truth.
+
+---
+
+### Data model — what changes
+
+#### New tables
 
 ```python
 class Organization(Base):
     """A customer account on the platform."""
-    id: int
-    name: str                    # "Smith's Pool Marketing"
-    slug: str                    # "smiths-pool-marketing" (URL-friendly)
-    owner_email: str
-    plan: str                    # "starter", "growth", "enterprise"
-    status: str                  # "active", "trial", "suspended", "cancelled"
-    trial_ends_at: datetime
-    
-    # White-label
-    logo_url: str
-    primary_color: str
-    company_name: str            # Shows in emails, reports
-    send_domain: str             # Their Resend domain
-    
-    # Usage tracking
-    companies_count: int
-    contacts_count: int
-    emails_sent_this_month: int
-    enrichments_this_month: int
-    audits_this_month: int
-    api_calls_this_month: int
-    
-    # Billing
-    stripe_customer_id: str
-    stripe_subscription_id: str
-    monthly_price_cents: int
-    
-    # API Keys (org-level, not platform-level)
-    # You (AAMP) provide Netrows/DataForSEO/Resend as platform services
-    # Customer can optionally bring their own keys for some services
-    google_maps_api_key: str     # Customer provides (their Google account)
-    anthropic_api_key: str       # You provide (baked into platform pricing)
-    
-    created_at: datetime
+    __tablename__ = "organizations"
 
+    id              = Column(Integer, primary_key=True)
+    slug            = Column(String(60), unique=True, index=True, nullable=False)  # 'bymp', 'acme-pool'
+    name            = Column(String(255), nullable=False)                          # 'Backyard Marketing Pros'
+    legal_name      = Column(String(255))                                          # for invoicing
+    owner_user_id   = Column(Integer, ForeignKey("users.id"))                      # the founding user
+    plan            = Column(String(40), default="trial")                          # trial / starter / growth / scale
+    status          = Column(String(40), default="active")                         # active / suspended / cancelled
+    trial_ends_at   = Column(DateTime, nullable=True)
+    created_at      = Column(DateTime, default=now_utc)
+
+    # White-label
+    logo_url        = Column(String(500))
+    primary_color   = Column(String(20))                                           # '#1B5E20'
+    signing_name    = Column(String(120))                                          # appears in audit reports / emails
+
+    # Per-org sending identity
+    send_domain     = Column(String(255))                                          # 'bymp.com' — verified in Resend
+    send_domain_verified_at = Column(DateTime, nullable=True)
+
+    # Twilio per-org sub-account (for phone-number scoping + cost attribution)
+    twilio_subaccount_sid = Column(String(80), nullable=True)
+    twilio_subaccount_token = Column(String(80), nullable=True)
+
+    # Blooio per-org dedicated number
+    blooio_number   = Column(String(40), nullable=True)                            # E.164
+    blooio_number_id = Column(String(80), nullable=True)                           # Blooio's internal ID
+
+    # Stripe billing
+    stripe_customer_id     = Column(String(80), nullable=True, index=True)
+    stripe_subscription_id = Column(String(80), nullable=True)
+
+    # Spending caps (defense against runaway cost)
+    monthly_spend_cap_cents = Column(Integer, nullable=True)                       # NULL = unlimited
+    monthly_spend_alert_pct = Column(Integer, default=80)                          # email at this %
 ```
 
-**No separate PlatformAdmin model — just the existing `super_admin` role on User.** A super_admin
-record can have a special `org_id` (e.g. NULL or the platform org "AAMP") that grants cross-org
-access. Login-as / impersonation is a feature gated to `role = 'super_admin'`.
+```python
+class UsageEvent(Base):
+    """One row per billable platform action. Aggregated nightly into UsageSummary."""
+    __tablename__ = "usage_events"
+
+    id          = Column(Integer, primary_key=True)
+    org_id      = Column(Integer, ForeignKey("organizations.id"), index=True, nullable=False)
+    kind        = Column(String(40), nullable=False, index=True)
+    # kind values:
+    #   'anthropic_generation'   — input + output tokens billed
+    #   'netrows_enrichment'     — per call
+    #   'dataforseo_audit'       — per audit
+    #   'deepgram_minute'        — per minute of transcription
+    #   'resend_email'           — per email sent (delivered)
+    #   'twilio_call_minute'     — per minute of voice
+    #   'twilio_number_monthly'  — flat $1.15/mo per assigned number
+    #   'blooio_message'         — per outbound iMessage
+    #   'blooio_number_monthly'  — flat per-month per dedicated number
+
+    units       = Column(Float, default=1.0)         # tokens, minutes, count
+    cost_cents  = Column(Integer, default=0)         # what AAMP paid (true cost)
+    billed_cents= Column(Integer, default=0)         # what we charge the org
+    metadata    = Column(Text)                       # JSON — message_id, call_sid, model name, etc.
+    created_at  = Column(DateTime, default=now_utc, index=True)
+    user_id     = Column(Integer, ForeignKey("users.id"), nullable=True)  # for per-rep attribution
+```
+
+```python
+class UsageSummary(Base):
+    """Monthly per-org rollup, keyed (org_id, year, month, kind). Cron job builds this
+    nightly from UsageEvent so billing reads off a small table instead of millions of events."""
+    __tablename__ = "usage_summary"
+
+    id          = Column(Integer, primary_key=True)
+    org_id      = Column(Integer, ForeignKey("organizations.id"), index=True, nullable=False)
+    period_year = Column(Integer, nullable=False)
+    period_month= Column(Integer, nullable=False)
+    kind        = Column(String(40), nullable=False)
+    units_total = Column(Float, default=0.0)
+    cost_cents_total   = Column(Integer, default=0)
+    billed_cents_total = Column(Integer, default=0)
+    # (org_id, year, month, kind) is unique
+```
+
+```python
+class Plan(Base):
+    """Catalog of subscription plans with included allowances + overage pricing."""
+    __tablename__ = "plans"
+
+    id             = Column(Integer, primary_key=True)
+    slug           = Column(String(40), unique=True)        # 'trial' / 'starter' / 'growth' / 'scale'
+    name           = Column(String(80))
+    monthly_price_cents     = Column(Integer)               # base subscription
+    included_seats          = Column(Integer)               # users
+    # Allowances per month (null = unlimited)
+    allow_companies        = Column(Integer, nullable=True)
+    allow_emails           = Column(Integer, nullable=True)
+    allow_enrichments      = Column(Integer, nullable=True)
+    allow_audits           = Column(Integer, nullable=True)
+    allow_call_minutes     = Column(Integer, nullable=True)
+    allow_imessages        = Column(Integer, nullable=True)
+    # Overage pricing (cents per unit beyond allowance)
+    overage_email_cents       = Column(Float, default=2.0)
+    overage_enrichment_cents  = Column(Float, default=15.0)
+    overage_audit_cents       = Column(Float, default=200.0)
+    overage_call_minute_cents = Column(Float, default=4.0)
+    overage_imessage_cents    = Column(Float, default=3.0)
+```
+
+```python
+class DomainVerification(Base):
+    """Resend domain setup status per org. Tracks DNS records the customer needs to add."""
+    __tablename__ = "domain_verifications"
+
+    id          = Column(Integer, primary_key=True)
+    org_id      = Column(Integer, ForeignKey("organizations.id"), unique=True, index=True)
+    domain      = Column(String(255), nullable=False)
+    resend_domain_id = Column(String(80))
+    records_json= Column(Text)                       # the DKIM/SPF records to display
+    last_checked_at = Column(DateTime, nullable=True)
+    verified_at = Column(DateTime, nullable=True)
+    status      = Column(String(40), default="pending")  # pending / verified / failed
+```
+
+#### org_id added to every tenant-scoped existing table
+
+`companies, contacts, deals, activities, tasks, generated_emails, page_views,
+tracking_links, audit_reports, campaigns, searches, saved_views, runtime_config (becomes
+per-org), call_ratings, sequence_steps, tags (probably per-org)` — non-null after backfill.
 
 ---
 
-### Pricing Model
+### Phased build-out
 
-| Plan | Price | Included | Overage |
-|------|-------|----------|---------|
-| Starter | $149/mo | 3 users, 500 companies, 2k emails, 100 enrichments, 50 audits | $0.10/enrichment, $0.02/email |
-| Growth | $299/mo | 10 users, 2k companies, 10k emails, 500 enrichments, 200 audits | Same overage rates |
-| Enterprise | $599+/mo | Unlimited users, custom limits, dedicated support, white-label | Negotiated |
+Each phase ends with a clear "Definition of Done" + a smoke test you can run.
 
-**Your cost structure per customer:**
-- Netrows: ~$0.10-0.20/enrichment (you pay, baked into price)
-- DataForSEO: ~$0.05/audit (you pay)
-- Resend: ~$0.001/email (negligible)
-- Anthropic: ~$0.01/sequence generated (you pay)
-- Hosting: ~$5-10/customer on shared infrastructure
+#### Phase 0 — SQLite → Postgres (3-4 days, prerequisite)
 
-**Margin at Starter tier:** Customer pays $149, your cost ~$15-25/mo = ~80% gross margin
+Postgres unblocks everything. SQLite single-writer locking will collapse with multi-tenant load.
+
+- [ ] Add `asyncpg` dependency
+- [ ] `app/database.py` switch: `aiosqlite:///` → `postgresql+asyncpg://`
+- [ ] Audit every migration script — they all use `PRAGMA table_info` + `ALTER TABLE ADD COLUMN`
+      (SQLite-specific). Rewrite as Alembic migrations OR Postgres-compatible plain SQL.
+      Recommend: switch to **Alembic** during this phase. One-time cost; pays back immediately.
+- [ ] Audit raw SQL in `merge` endpoints (companies + contacts) — `INSERT OR IGNORE` is SQLite
+      syntax. Replace with `INSERT ... ON CONFLICT DO NOTHING`.
+- [ ] One-shot data move script: `scripts/migrate_sqlite_to_postgres.py` reads existing
+      `leads.db` and bulk-inserts into Postgres with order-preserving foreign keys.
+- [ ] Staging deploy with copy of prod SQLite → verify all features work
+- [ ] Production cutover: enable maintenance page, dump+import, swap DATABASE_URL, run app
+
+**Definition of Done**: BMP runs identically on Postgres. All tests pass. Migration runs idempotently.
+
+#### Phase 1 — Multi-org foundation (1 week)
+
+- [ ] `Organization` model + `migrate_organizations.py` creates `id=1, slug='bmp', name='Backyard Marketing Pros'`
+- [ ] `org_id` column on every tenant-scoped table (default = 1, then NOT NULL constraint added)
+- [ ] **`scope_by_org(query, model, org)`** helper in `app/scoping.py` — reuses existing
+      pattern. Every existing list query gets retrofitted.
+- [ ] JWT payload extended: `{user_id, org_id}`. `get_current_user_in_org()` returns `(user, org)`.
+      Old `get_current_user()` becomes a thin wrapper.
+- [ ] Per-org `runtime_config` table (drop the `id=1` singleton constraint, add `org_id` PK
+      with one row per org).
+- [ ] `app/platform_config.py` — reads platform-level secrets from env (Anthropic, Netrows,
+      DataForSEO, Deepgram, Resend, Twilio, Blooio master credentials). Replaces the
+      `runtime_config.get_*_api_key()` calls for these services. Per-org config keeps only
+      the tenant-specific values (send_domain, blooio_number, messaging_direction, branding).
+- [ ] Super-admin "Switch Org" UI — top-bar dropdown showing all orgs, sets `current_org_id`
+      in session for that browser tab.
+- [ ] **CI smoke test** (`tests/test_org_isolation.py`): create org A and org B with users + data,
+      log in as each, hit every list endpoint, assert response contains zero data from the
+      other org. Run on every push.
+- [ ] Audit subdomain (`audit.prospector.*`) routing: served by token (already works) but
+      tokens are now scoped to org via the audit_reports row.
+
+**Definition of Done**: BMP team uses the app exactly as before. Steve creates org #2 ("AAMP
+Agency Internal") and adds a couple companies — they appear ONLY when he switches to that
+org. Smoke test passes.
+
+#### Phase 2 — Domain + phone provisioning wizard (3-4 days)
+
+The customer-facing setup that turns a fresh org into a sending org.
+
+- [ ] `POST /api/orgs/{slug}/domain/setup` — accepts `domain` field, calls Resend Domains API,
+      creates `domain_verifications` row, returns DNS records.
+- [ ] `GET /api/orgs/{slug}/domain/status` — polls Resend, marks verified when DKIM passes.
+- [ ] Frontend wizard: 3 screens (enter domain → see DNS records with copy buttons + per-provider
+      screenshots → "Verify" button polls).
+- [ ] Send-domain selection per-org in `email_sender.send_email`: replace `settings.send_domain`
+      with `current_org.send_domain` (with platform fallback during dev).
+- [ ] `POST /api/orgs/{slug}/twilio/buy-number` — creates org's Twilio sub-account if missing,
+      buys number, assigns to user. Stores monthly UsageEvent for the $1.15 charge.
+- [ ] `POST /api/orgs/{slug}/blooio/provision-number` — provisions a dedicated Blooio number
+      under AAMP's account (if API supports; otherwise document manual step).
+
+**Definition of Done**: A new org slug created from scratch can verify a domain, buy a Twilio
+number, and send an email + place a call within 10 minutes.
+
+#### Phase 3 — Usage metering (3-4 days)
+
+Wire UsageEvent rows into every billable code path. This is the data we need to bill.
+
+- [ ] **`app/services/usage.py`** with `record(kind, org_id, units, cost_cents, billed_cents, metadata)`.
+      Async, idempotent (dedup by external_id when possible).
+- [ ] Hook into:
+  - `email_generator.generate_*` — record `anthropic_generation` with input + output tokens
+    (Anthropic API returns these in the response). cost = pricing × tokens.
+  - `netrows_enrichment.*` calls → `netrows_enrichment` event
+  - `audit_report.generate_report` → `dataforseo_audit` event (sum of inner DataForSEO calls)
+  - `call_transcription` → `deepgram_minute` event
+  - `email_sender.send_email` → `resend_email` event (only if Resend confirms 200)
+  - Twilio voice status callback → `twilio_call_minute` event when call completes
+  - Twilio number purchase → `twilio_number_monthly` event
+  - Blooio send → `blooio_message` event
+  - Blooio number provisioning → `blooio_number_monthly` event
+- [ ] **Daily aggregator cron** (`scripts/aggregate_usage.py`): groups previous day's UsageEvent
+      rows into per-(org, kind) UsageSummary rows. Idempotent.
+- [ ] **Hard spend cap enforcement**: before any expensive operation, check
+      `org.monthly_spend_cap_cents`; if exceeded → 402 Payment Required + email org admin.
+- [ ] **Soft alerts** at 80% — daily check emails the org admin.
+
+**Definition of Done**: Run sequences for a day, query `UsageSummary` and see exactly what
+the org consumed broken down by kind, with cost + billable amount. Numbers reconcile
+within 5% of the actual provider invoices.
+
+#### Phase 4 — Stripe billing (4-5 days)
+
+- [ ] `Plan` table + seed data (trial, starter, growth, scale)
+- [ ] Stripe Customer + Subscription per org (created at signup)
+- [ ] Stripe webhook receiver (`/api/billing/webhook`) — handles
+      `customer.subscription.updated`, `invoice.payment_failed`, `invoice.paid`,
+      `customer.subscription.deleted`
+- [ ] **Monthly invoice** trigger: at month rollover, push UsageSummary overages to Stripe
+      as `invoice_items` so the next subscription invoice includes overage charges
+- [ ] Customer billing page: current plan, usage bars per metric, billing history,
+      "Update payment method" button (Stripe Checkout)
+- [ ] **Trial flow**: 14 days, then `subscription.deleted` triggers org status="suspended"
+      (read-only — no sends, no enrichments, but data preserved)
+
+**Definition of Done**: Sign up a test org with a real (Stripe-test-mode) card, run for a
+"month" (cron-fast-forward), see the invoice land with base + overage. Cancel mid-cycle,
+data freezes correctly.
+
+#### Phase 5 — Self-serve signup + onboarding (3-4 days)
+
+- [ ] Public landing page (separate static site or `/marketing` route on prospector domain)
+- [ ] `POST /api/orgs/signup` — email + company name + password → creates Org + Owner User
+- [ ] Email verification (one-time link) before sending becomes possible
+- [ ] **Onboarding wizard** (replaces / extends the 10-step product tour for org owners):
+      Step 1: Verify your domain (the wizard from Phase 2)
+      Step 2: Pick a Twilio number for your first phone
+      Step 3: Invite your team
+      Step 4: Run your first prospect search
+      Step 5: Generate your first audit report
+- [ ] **Sample data option**: "Want some example prospects to play with?" — seeds 20 demo
+      companies into the new org so they see the product working before they import their own.
+
+**Definition of Done**: A stranger can hit the marketing site, sign up, verify domain, run
+a search, generate an audit report, and send their first email — all without anyone from
+AAMP touching their account.
+
+#### Phase 6 — White-label (3-4 days)
+
+- [ ] Org-level branding: `logo_url`, `primary_color`, `signing_name` apply across the app
+- [ ] Audit reports use org's logo + colors (not BMP)
+- [ ] Email signatures use the org's signing_name + Resend domain
+- [ ] Custom subdomain: `customer.prospector.com` resolves to the customer's org (slug-based
+      lookup at request time). Requires wildcard SSL cert (Let's Encrypt with DNS-01 challenge).
+- [ ] Optional: customer-supplied custom domain (`crm.theiragency.com`) via CNAME +
+      automated cert provisioning (Caddy or similar)
+
+**Definition of Done**: A customer logs in to `customer.prospector.com`, sees their logo
+in the top-left, generates an audit report → the report's banner shows their logo and
+brand colors, not BMP's.
+
+#### Phase 7 — Platform admin dashboard (2 days)
+
+For AAMP staff (super_admin role) to monitor and support customers.
+
+- [ ] List all orgs: name, plan, status, MRR, current month usage, last activity, owner email
+- [ ] **"Login as"** button — issues a JWT with the org's user_id + a flag in the JWT payload
+      that activities created during this session get tagged "via support". Audit Activity
+      logged to the customer's org so they can see we logged in.
+- [ ] Per-org usage drilldown: events table + summary with cost/billed split
+- [ ] Revenue dashboard: total MRR, MRR by plan, churn rate, growth rate, trial-to-paid
+      conversion
+- [ ] **Health alerts**: orgs approaching limits, payment failed, inactive 7+ days,
+      bounce rate >5%, abuse signals (high unsubscribe rate, complaints)
+
+**Definition of Done**: AAMP can run support without ever asking a customer for their
+password. Can spot a problem org before they churn.
+
+#### Phase 8 — Compliance + hardening (ongoing, must-do before public launch)
+
+- [ ] **Per-org rate limits** on every public endpoint (slowapi middleware keyed on org_id)
+- [ ] **TCPA agreement at signup** — checkbox required, logged
+- [ ] **DNC list import per org** — they upload, we check before dialing
+- [ ] **GDPR data export per org** (`POST /api/orgs/{slug}/export-data`)
+- [ ] **GDPR data deletion per org** (`POST /api/orgs/{slug}/delete-data`) — soft delete +
+      30-day purge
+- [ ] **Bounce-rate monitor**: org > 5% bounce rate → auto-suspend send → email admin
+- [ ] **SOC 2 readiness**: encrypted DB at rest (Postgres native), TLS everywhere (already
+      done), audit log of every admin action, password rotation policy, MFA for super_admin
+- [ ] **Sentry** for error monitoring
+- [ ] **Backup automation** per-org: daily pg_dump filtered by org_id → S3
+- [ ] Terms of Service, Privacy Policy, AUP — drafted with a lawyer before public launch
+
+**Definition of Done**: A customer's lawyer can review our docs and sign off. We can
+demonstrate that org A has zero ability to access org B's data even at the DB level
+(scope-by-org enforcement is auditable).
 
 ---
 
-### What You Build (in order, locked 2026-05-08)
+### Pricing — concrete cost math
 
-> **Strategy B confirmed**: ONE codebase. BMP becomes org #1. SaaS launches as additional orgs in
-> the same code/db. No fork. Steve's near-term plan: multi-tenant the code → add a couple more
-> of his own companies as orgs (real-world test) → THEN open self-serve signup + billing.
+**Cost per service (AAMP's wholesale):**
+- Anthropic Sonnet 4: ~$3/M input tokens, $15/M output. Avg sequence email = ~1.5K input + 0.4K output = $0.011 per generation
+- Netrows Starter: €49/mo for 1000 enrichments = $0.05/enrichment
+- DataForSEO: ~$0.03 per audit (mix of endpoints)
+- Deepgram Nova-2 telephony: $0.0043/min
+- Resend: $20/mo for 50K emails = $0.0004/email
+- Twilio voice: $0.013/min outbound, $0.0085/min inbound, $1.15/number/mo
+- Blooio: $99/mo per dedicated number + per-message fee (TBD per Steve's contract)
 
-#### Phase 1 — Multi-org foundation (the unblocker — ~1 week of focused work)
-This is what makes everything else possible. After Phase 1, BMP works exactly as it does today
-but the schema is multi-tenant-ready and "Steve's other companies" can come on as new orgs without
-any further code changes.
+**Plans:**
 
-- [ ] **Postgres migration** — `aiosqlite` → `asyncpg`, connection-string flip, run all existing
-      migrations against an empty Postgres. Move existing BMP data via a one-shot `pg_dump`-style
-      Python loader. Test on a staging DB first.
-- [ ] **Organization model** + `migrate_organizations.py`. Create org #1 ("Backyard Marketing Pros")
-      and migrate all existing rows to it.
-- [ ] **`org_id` column on every tenant-scoped table** (the list in the Architecture section above).
-      All NULL → set to org #1, then NOT NULL constraint added.
-- [ ] **`scope_by_org()` helper** in `app/scoping.py` — every list query goes through it. Mirror the
-      existing `scope_companies()` / `scope_contacts()` pattern.
-- [ ] **JWT payload** carries `org_id` — `get_current_user_in_org()` returns `(user, org)`.
-- [ ] **Per-org runtime_config** — replace the singleton `runtime_config(id=1)` with one row per org.
-      Each org has its own Resend / Twilio / Blooio / Netrows / Anthropic keys.
-- [ ] **CI safety net**: a smoke test that creates two orgs with users, logs in as each, and
-      verifies that every list endpoint returns ONLY that org's data. This is the regression
-      we cannot afford.
-- [ ] **Super-admin "switch org" UI** — Steve picks which org he's working in. BMP still feels
-      identical when he's in BMP; switch to "Other Co" and the data swaps.
-- [ ] **Audit-report subdomain routing** — currently single-tenant; either route by URL token
-      (already works) or namespace by org slug.
+| Plan | Price | Seats | Companies | Emails | Enrichments | Audits | Call mins | iMessages |
+|---|---|---|---|---|---|---|---|---|
+| Trial (14 days) | $0 | 1 | 50 | 100 | 25 | 5 | 60 | 50 |
+| Starter | $149/mo | 3 | 500 | 2K | 100 | 25 | 600 | 500 |
+| Growth | $349/mo | 10 | 5K | 10K | 500 | 100 | 3K | 2K |
+| Scale | $799/mo | 25 | 25K | 50K | 2K | 500 | 10K | 10K |
 
-#### Phase 2 — Billing + usage tracking (3-4 days)
-- [ ] Stripe integration (checkout, subscription management, webhooks)
-- [ ] Usage metering (count enrichments, emails, audits per org per month)
-- [ ] Usage limits enforcement (soft limit = warning, hard limit = block)
-- [ ] Billing dashboard for customers (current plan, usage, invoices)
-- [ ] Trial mode (14 days free, then requires payment)
+**Overage:**
+- $0.02 per email (vs cost $0.0004 → 50× markup, normal for value-based pricing)
+- $0.15 per enrichment (vs $0.05 → 3×)
+- $2.00 per audit (vs $0.03 → 60× — the audit is THE differentiator, premium pricing)
+- $0.04 per call minute (vs $0.013 → 3×)
+- $0.03 per iMessage (vs ~$0.005 → 6×)
 
-#### Phase 3 — Onboarding flow (2-3 days)
-- [ ] Landing page / marketing site (separate from the app)
-- [ ] Signup → org creation → onboarding wizard
-- [ ] Wizard steps: company info, logo upload, connect Resend domain, invite team
-- [ ] First-run experience: "Search for your first leads"
-- [ ] Email templates for onboarding drip (welcome, tips, trial ending)
+**Margin at Starter, mid-usage:**
+Customer pays $149. Cost: ~50 generations × $0.011 + 75 enrichments × $0.05 + 15 audits ×
+$0.03 + 1500 emails × $0.0004 + 400 call min × $0.013 + 5 numbers × $1.15 + Blooio fixed.
+Total cost ≈ $25/mo. Gross margin ~83%.
 
-#### Phase 4 — White-label (2-3 days)
-- [ ] Org-level branding: logo, colors, company name
-- [ ] Audit reports use org's branding (not BMP)
-- [ ] Email signatures use org's info
-- [ ] Custom domain support (CNAME → their app.theircompany.com)
-- [ ] Competitor comparison pages branded per org
-
-#### Phase 5 — Platform admin dashboard (2 days)
-- [ ] List all orgs with status, plan, usage, MRR
-- [ ] Login-as (impersonate any org for support)
-- [ ] Usage analytics across all orgs
-- [ ] Revenue dashboard (total MRR, churn, growth)
-- [ ] Org health alerts (approaching limits, payment failed, inactive)
-
-#### Phase 6 — Hardening for production (ongoing)
-- [ ] Rate limiting per org
-- [ ] Error monitoring (Sentry or similar)
-- [ ] Automated backups per org
-- [ ] SOC2-adjacent security practices
-- [ ] Terms of service, privacy policy
-- [ ] GDPR data export/delete per org
+**Break-even on infrastructure**: Postgres ($25) + Redis ($10) + hosting ($30) + S3 ($5) +
+Sentry/monitoring ($20) = $90/mo fixed. Need 1 paying customer to break even on
+infrastructure. Anthropic/Netrows/DataForSEO costs scale with revenue.
 
 ---
 
-### Infrastructure for SaaS
+### Risk register
 
-**Current (BMP):** Single VPS, SQLite, nginx
-
-**SaaS needs:**
-- **Postgres** (managed — Supabase, Railway, or AWS RDS)
-- **Redis** (for rate limiting, caching, background job queues)
-- **Object storage** (S3 or similar — for call recordings, report PDFs, logos)
-- **CDN** (CloudFront or Cloudflare — for static assets, report hosting)
-- **Deployment** (Railway, Fly.io, or AWS ECS — auto-scaling)
-- **Monitoring** (Sentry for errors, Datadog or Grafana for metrics)
-- **Email** (Resend — you're already on it, just need org-level domains)
-
-**Cost estimate for infrastructure:**
-- Postgres: $15-30/mo (managed)
-- Redis: $10/mo
-- Hosting: $20-50/mo (Railway or Fly.io)
-- S3: ~$5/mo
-- Total: ~$50-100/mo fixed cost (covers many orgs)
+| Risk | Likelihood | Impact | Mitigation |
+|---|---|---|---|
+| One customer's spam tanks Resend reputation for everyone | Medium | High | Per-customer Resend Domain (DKIM-signed from THEIR domain, not ours), bounce-rate auto-suspend |
+| TCPA complaint hits AAMP master Twilio | Medium | High | A2P 10DLC owned by AAMP, mandatory TCPA agreement, send-window enforcement (built), per-org DNC import |
+| Anthropic key leaks (e.g. via accidentally returning it in an API error) | Low | High | Never return key in any response; rotate quarterly; per-org spend cap stops runaway |
+| Customer data leaked to wrong org via missed scope | Medium | Critical | scope_by_org() helper required + CI smoke test asserts isolation on every endpoint |
+| Postgres connection exhaustion under load | Medium | High | PgBouncer in front, connection pool tuning, async everywhere already |
+| Stripe webhook drops a `subscription.deleted` event → suspended customer keeps using product | Low | Medium | Idempotent webhook handler + nightly reconciliation cron pulling subscription state from Stripe |
+| One customer abuses Blooio iMessage → Apple throttles all our orgs | Low | High | Per-org dedicated Blooio number, per-org daily message cap, abuse pattern monitoring |
+| Cost blowup from buggy generation loop | Medium | High | Per-org daily spend cap, alarm at 80%, hard-stop at 100%, request rate limit per user |
+| Customer churns mid-cycle but already burned through quota | Low | Medium | Stripe handles proration; we eat the difference (acceptable at our margins) |
 
 ---
 
-### What NOT to Change in the BMP Repo
+### What's intentionally out of scope for v1
 
-Keep building BMP-specific features in the main repo:
-- iClosed integration (specific to BMP's sales process)
-- BMP branding/logo
-- BMP-specific sequence templates
-- Your API keys and .env
-
-The SaaS fork makes these configurable per-org instead of hardcoded.
+- Multi-region deployment (one US region is fine for years)
+- SAML/SSO (paid add-on for Enterprise tier later)
+- Custom workflows / Zapier-style automation builder (we're opinionated; the engine IS the workflow)
+- Native mobile app (PWA covers it)
+- Multi-currency billing (USD only)
+- Self-serve SSO/SCIM (Enterprise tier hand-holds)
+- Multi-org users (one user = one org for v1; "switching orgs" needs a separate user record per org)
 
 ---
 
-### First Steps Tonight
+### Convention: how new BMP features get into the SaaS automatically
 
-1. **Create the fork:**
-   ```bash
-   # On GitHub: create aampagencylv/prospector-saas
-   # Then locally:
-   git clone https://github.com/aampagencylv/prospector-saas.git
-   cd prospector-saas
-   git remote add upstream https://github.com/aampagencylv/backyard-leads.git
-   ```
+Because the codebase is shared (no fork), every new BMP feature works for SaaS customers as soon
+as it's built — provided the developer follows the rules:
 
-2. **Create a SAAS.md** in the new repo with this plan
+1. **Never read API keys from env directly outside `app/platform_config.py`.** That's the
+   single dependency point.
+2. **Always scope list queries with `scope_by_org()`.** Never write `select(Company).all()`.
+3. **Never reference `org_id=1` as a hardcoded value.** Get it from the current user's JWT.
+4. **Never write to the singleton `runtime_config` row.** Use the per-org config helpers.
+5. **Public endpoints (no auth)** — webhook receivers, click trackers, the page-view beacon —
+   must derive `org_id` from the URL path (`/t/{token}` → look up token → get its org_id) or
+   from the inbound metadata (Twilio webhook → look up phone → which org owns this number).
+   No assumptions about a default org.
+6. **Every new migration** that touches an existing table must add `org_id` if the table is
+   tenant-scoped. Backfill = current org of any existing rows.
 
-3. **Start with the database migration** — SQLite → Postgres is the foundation.
-   Everything else builds on top of that.
+Wire these into a pre-commit hook OR a documented PR checklist. Skipping them is what kills SaaS
+products — silent cross-org leaks that no one notices for months.
 
-4. **Don't break BMP** — keep building features in backyard-leads. Only pull
-   into the SaaS repo when they're stable.
+---
+
+### Migration path — concrete week-by-week
+
+**Week 1**: Phase 0 (Postgres). BMP runs on Postgres. No multi-tenancy yet. Everything works.
+
+**Week 2**: Phase 1 (multi-org foundation). BMP becomes org #1. Steve creates his other
+companies as orgs #2, #3, #4. He uses them in real life for a week — this is the dogfood test.
+
+**Week 3**: Phase 2 + 3 (provisioning + metering). Steve's other orgs verify their own domains
+and buy phone numbers through the wizard. Usage events flowing into the table; we can SEE per-org
+costs.
+
+**Week 4**: Phase 4 (billing). Steve sets up a paid plan for his other companies (test mode).
+Stripe pulls overages correctly. Trial flow works.
+
+**Week 5**: Phase 5 (signup + onboarding). Open invitation-only beta — 5-10 friendly customers
+who agree to ride the early bumps. They come through the public signup flow.
+
+**Week 6**: Phase 6 (white-label). The friendly customers get their logo + colors + custom
+subdomain.
+
+**Week 7**: Phase 7 (admin dashboard). AAMP team can support customers without DB access.
+
+**Week 8 onwards**: Phase 8 (compliance + hardening). Iterate on what beta customers hit.
+Public launch when confident — likely 10-12 weeks total from start.
+
+---
+
+### First steps when we kick off
+
+1. **Provision a Postgres database** (Supabase or Railway free tier is fine for dev)
+2. **Create `tests/` directory + first smoke test** — even before we change anything. This
+   catches regressions during the migration.
+3. **Phase 0 starts with `requirements.txt` + `app/database.py`.** Everything else is mechanical
+   from there.
+
+No fork. No new repo. Just keep building on `main` and the SaaS comes for free at the right
+seam in the code.
 
 ---
 
