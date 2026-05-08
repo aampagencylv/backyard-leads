@@ -623,36 +623,66 @@ onboarding, white-label) only exist in the SaaS repo.
 
 ---
 
-### Architecture: What Changes for Multi-Tenant
+### Architecture: What Changes for Multi-Tenant — DECISIONS LOCKED 2026-05-08
+
+**Locked with Steve:**
+1. **Shared Postgres DB with `org_id` discriminator** — Pipedrive/HubSpot pattern
+2. **Org level only** — like HubSpot Portals; Teams (if added) are user labels not data boundaries
+3. **One codebase, BMP becomes "Org #1"** — no fork; SaaS = the same code with multiple orgs
+4. **Positioning**: AI BDR for SMB B2B — automated research + outreach + appointment setting
 
 **Current (single-tenant):**
 ```
-One database (SQLite) → One org → Multiple users → Shared API keys
+SQLite → 1 org (implicit) → Multiple users → Shared API keys
 ```
 
-**SaaS (multi-tenant):**
+**Multi-tenant (target):**
 ```
-One platform database (Postgres) → Many orgs → Each org has users, companies, contacts, deals
-                                              → Each org has their own API keys
-                                              → Platform admin (you) oversees all orgs
+Postgres → Many orgs → Each org has users, companies, contacts, deals, sequences
+                     → Each org has their own API keys (Resend, Twilio, Blooio, Netrows, Anthropic, etc.)
+                     → Platform admin (super_admin) oversees all orgs
+                     → BMP itself is just org_id=1
 ```
 
-#### Database Changes
+#### Database — the rules that prevent the system from getting unsafe
 
-**Option A — Schema-per-tenant (recommended for <100 customers):**
-- Each org gets its own SQLite file or Postgres schema
-- Complete data isolation — one customer can never see another's data
-- Easy backup/restore per customer
-- Simple to reason about
+Every tenant-scoped table gets a non-nullable `org_id INTEGER NOT NULL REFERENCES orgs(id)` column with an
+index. Tables that DON'T need org_id: `users` (already scoped by org_id), `tags` (might be per-org or global —
+decide later), `runtime_config` (per-org config table replaces the singleton), and lookup tables.
 
-**Option B — Shared tables with org_id (recommended for scale):**
-- Single database, every table gets an `org_id` column
-- Every query scoped by `WHERE org_id = current_org_id`
-- More efficient at scale but harder to guarantee isolation
-- Requires careful scoping on EVERY endpoint
+Concrete table list with org_id needed:
+- companies, contacts, deals, activities, tasks, generated_emails, page_views, tracking_links,
+  audit_reports, campaigns, searches, saved_views, runtime_config (becomes per-org),
+  call_ratings, sequence_steps (when promoted from generated_emails)
 
-**Recommendation:** Start with Option A (separate databases per org). It's simpler,
-completely secure, and you can migrate to Option B later if you hit 100+ customers.
+**Mandatory query scoping pattern:**
+- Every async endpoint must take `current_org` from the JWT
+- Use a thin wrapper `scope(query, model, current_org)` that auto-adds `WHERE org_id = current_org.id`
+- **CI/test enforces it**: a smoke test that runs every list endpoint as a fresh-org user and
+  asserts the response is empty (catches accidental cross-org leaks before they ship)
+- All raw SQL must include the org_id filter explicitly — no exceptions
+
+**JWT changes:** include `org_id` in the JWT payload alongside `user_id`. `get_current_user()` becomes
+`get_current_user_in_org()` returning `(user, org)`. A user can only belong to one org for v1.
+
+**Why shared DB over per-tenant:**
+- Cost at 100 customers: $5/mo Postgres vs $500+/mo (100 × small RDS)
+- Migration complexity: one migration to write vs same code runs N times
+- Connection limits: shared DB = one pool; per-tenant = N pools = exhausts Postgres at scale
+- The risk (cross-org data leaks) is mitigated by enforced query scoping + tested boundaries
+
+#### How HubSpot does this (since Steve asked) — and we mirror it
+
+- **Portal** = HubSpot's term for "org" / "tenant". One company = one Portal. All data in a Portal is
+  visible to all users in that Portal subject to permissions.
+- **Users** belong to exactly one Portal. Cannot span Portals.
+- **Teams** are NOT separate workspaces — they're a labeling/assignment layer for users. A user can
+  be on multiple Teams. Reports filter by Team, lead routing rules can target a Team. The data
+  itself isn't partitioned by Team.
+- **Permissions** are set per-user via Roles, not per-team. Teams just affect routing + reporting visibility.
+
+Our v1 mirror: Org → Users (with `role`) → all CRM data scoped to org. We can add a `team` text label
+on users later for filter/routing without changing the data model. **No nested workspaces.**
 
 #### New Models Needed
 
@@ -694,12 +724,11 @@ class Organization(Base):
     
     created_at: datetime
 
-class PlatformAdmin(Base):
-    """Super-admin who can see/manage all orgs. That's you."""
-    id: int
-    email: str
-    hashed_password: str
 ```
+
+**No separate PlatformAdmin model — just the existing `super_admin` role on User.** A super_admin
+record can have a special `org_id` (e.g. NULL or the platform org "AAMP") that grants cross-org
+access. Login-as / impersonation is a feature gated to `role = 'super_admin'`.
 
 ---
 
@@ -722,16 +751,36 @@ class PlatformAdmin(Base):
 
 ---
 
-### What You Build (in order)
+### What You Build (in order, locked 2026-05-08)
 
-#### Phase 1 — Multi-org foundation (1 week)
-- [ ] Fork repo, set up `prospector-saas`
-- [ ] Switch from SQLite to Postgres
-- [ ] Organization model + org-scoped queries
-- [ ] Platform admin dashboard (list orgs, login-as, usage stats)
-- [ ] Org signup flow (name, email, password → creates org + first admin user)
-- [ ] Org-level settings (logo, colors, send domain, API keys)
-- [ ] Move all existing BMP data into org #1
+> **Strategy B confirmed**: ONE codebase. BMP becomes org #1. SaaS launches as additional orgs in
+> the same code/db. No fork. Steve's near-term plan: multi-tenant the code → add a couple more
+> of his own companies as orgs (real-world test) → THEN open self-serve signup + billing.
+
+#### Phase 1 — Multi-org foundation (the unblocker — ~1 week of focused work)
+This is what makes everything else possible. After Phase 1, BMP works exactly as it does today
+but the schema is multi-tenant-ready and "Steve's other companies" can come on as new orgs without
+any further code changes.
+
+- [ ] **Postgres migration** — `aiosqlite` → `asyncpg`, connection-string flip, run all existing
+      migrations against an empty Postgres. Move existing BMP data via a one-shot `pg_dump`-style
+      Python loader. Test on a staging DB first.
+- [ ] **Organization model** + `migrate_organizations.py`. Create org #1 ("Backyard Marketing Pros")
+      and migrate all existing rows to it.
+- [ ] **`org_id` column on every tenant-scoped table** (the list in the Architecture section above).
+      All NULL → set to org #1, then NOT NULL constraint added.
+- [ ] **`scope_by_org()` helper** in `app/scoping.py` — every list query goes through it. Mirror the
+      existing `scope_companies()` / `scope_contacts()` pattern.
+- [ ] **JWT payload** carries `org_id` — `get_current_user_in_org()` returns `(user, org)`.
+- [ ] **Per-org runtime_config** — replace the singleton `runtime_config(id=1)` with one row per org.
+      Each org has its own Resend / Twilio / Blooio / Netrows / Anthropic keys.
+- [ ] **CI safety net**: a smoke test that creates two orgs with users, logs in as each, and
+      verifies that every list endpoint returns ONLY that org's data. This is the regression
+      we cannot afford.
+- [ ] **Super-admin "switch org" UI** — Steve picks which org he's working in. BMP still feels
+      identical when he's in BMP; switch to "Other Co" and the data swaps.
+- [ ] **Audit-report subdomain routing** — currently single-tenant; either route by URL token
+      (already works) or namespace by org slug.
 
 #### Phase 2 — Billing + usage tracking (3-4 days)
 - [ ] Stripe integration (checkout, subscription management, webhooks)
