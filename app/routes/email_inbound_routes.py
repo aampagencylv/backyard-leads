@@ -124,6 +124,16 @@ async def email_inbound(request: Request):
         return {"ok": True, "ignored": event_type}
 
     data = payload.get("data") or payload  # tolerant — direct payload OR wrapped
+    # Debug: log the exact payload shape so we can see what Resend actually
+    # sends (their docs are vague about body field names). Remove after we
+    # confirm the right keys.
+    log.info(f"[inbound] payload top-level keys: {sorted(payload.keys())}")
+    log.info(f"[inbound] data keys: {sorted(data.keys())}")
+    # Sample the first 200 chars of each string-typed value to find the body
+    for k, v in data.items():
+        if isinstance(v, str) and len(v) > 5:
+            preview = v[:200].replace("\n", "\\n")
+            log.info(f"[inbound]   data.{k} (len={len(v)}): {preview}")
     to_list = data.get("to") or []
     if isinstance(to_list, str):
         to_list = [to_list]
