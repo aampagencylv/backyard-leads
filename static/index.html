@@ -1006,6 +1006,22 @@
                     </div>
                 </div>
 
+                <!-- Custom Fields management (admin+ only).
+                     Manages definitions for company + contact entities.
+                     Values flow into /custom-fields/values/{entity}/{id}. -->
+                <div id="custom-fields-section" class="search-box hidden" style="max-width:800px;margin-top:16px">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                        <h3 style="margin:0">Custom Fields</h3>
+                        <button class="btn btn-primary btn-sm" onclick="showAddCustomFieldModal()">+ Add Field</button>
+                    </div>
+                    <p style="font-size:13px;color:#666;margin-bottom:8px">Add or remove fields shown on Company and Contact detail views. Defaults are platform-provided and can be deactivated but not deleted.</p>
+                    <div style="display:flex;gap:6px;margin-bottom:10px">
+                        <button class="btn btn-secondary btn-sm" id="cf-tab-company" onclick="switchCustomFieldTab('company')">Company Fields</button>
+                        <button class="btn btn-secondary btn-sm" id="cf-tab-contact" onclick="switchCustomFieldTab('contact')">Contact Fields</button>
+                    </div>
+                    <div id="custom-fields-list"></div>
+                </div>
+
                 <!-- Credits & Cost panel (everyone sees own usage; admins see COGS) -->
                 <div id="credits-section" style="margin-top:16px">
                     <div class="search-box" style="max-width:800px">
@@ -2918,8 +2934,12 @@
         // ============ Company Detail ============
         async function openCompanyDetail(id) {
             console.log('openCompanyDetail', id);
-            const data = await api(`/api/companies/${id}/full`);
+            const [data, customFieldDefs] = await Promise.all([
+                api(`/api/companies/${id}/full`),
+                getCustomFieldDefs('company'),
+            ]);
             if (!data) return;
+            data._customFieldDefs = customFieldDefs || [];
             try {
                 showPage('company-detail');
                 renderCompanyDetail(data);
@@ -3072,6 +3092,8 @@
                                 `}
                             </div>
                         </div>
+
+                        ${renderCompanyCustomFieldsPanel(d, d._customFieldDefs)}
 
                         ${d.talking_points && d.talking_points.length ? `
                         <div class="panel">
@@ -4040,6 +4062,204 @@
             }
         }
 
+        // ============ Custom Fields ============
+        // Definitions are admin-managed (Settings → Custom Fields).
+        // Values live on Company.custom_fields / Contact.custom_fields and
+        // are mutated via /api/custom-fields/values/{entity}/{id}.
+
+        let _customFieldsTab = 'company';
+        // Cache of definitions per entity type so company / contact pages
+        // don't refetch every render. Invalidated on any add/edit/delete.
+        const _customFieldDefsCache = { company: null, contact: null };
+
+        async function getCustomFieldDefs(entityType, force = false) {
+            if (!force && _customFieldDefsCache[entityType]) return _customFieldDefsCache[entityType];
+            const defs = await api(`/api/custom-fields?entity_type=${entityType}`);
+            _customFieldDefsCache[entityType] = defs || [];
+            return _customFieldDefsCache[entityType];
+        }
+
+        function invalidateCustomFieldDefs() {
+            _customFieldDefsCache.company = null;
+            _customFieldDefsCache.contact = null;
+        }
+
+        function switchCustomFieldTab(tab) {
+            _customFieldsTab = tab;
+            loadCustomFieldsList();
+        }
+
+        async function loadCustomFieldsList() {
+            const tabCompany = document.getElementById('cf-tab-company');
+            const tabContact = document.getElementById('cf-tab-contact');
+            if (tabCompany) tabCompany.style.background = (_customFieldsTab === 'company') ? 'var(--bmp-green)' : '';
+            if (tabCompany) tabCompany.style.color = (_customFieldsTab === 'company') ? 'white' : '';
+            if (tabContact) tabContact.style.background = (_customFieldsTab === 'contact') ? 'var(--bmp-green)' : '';
+            if (tabContact) tabContact.style.color = (_customFieldsTab === 'contact') ? 'white' : '';
+
+            const defs = await api(`/api/custom-fields?entity_type=${_customFieldsTab}&include_inactive=true`);
+            const panel = document.getElementById('custom-fields-list');
+            if (!panel) return;
+            if (!defs || defs.length === 0) {
+                panel.innerHTML = '<div style="color:#888;font-size:13px;padding:12px">No custom fields yet for this entity. Click + Add Field above to create one.</div>';
+                return;
+            }
+            panel.innerHTML = `
+                <table style="width:100%;font-size:13px;border-collapse:collapse">
+                    <thead><tr style="background:#fafafa">
+                        <th style="padding:8px;text-align:left">Label</th>
+                        <th style="padding:8px;text-align:left">Key</th>
+                        <th style="padding:8px;text-align:left">Type</th>
+                        <th style="padding:8px;text-align:left">Helper</th>
+                        <th style="padding:8px;text-align:right">Order</th>
+                        <th style="padding:8px"></th>
+                    </tr></thead>
+                    <tbody>
+                    ${defs.map(d => `
+                        <tr style="border-top:1px solid #f0f0f0;${d.is_active ? '' : 'opacity:0.5'}">
+                            <td style="padding:8px"><strong>${escapeHtml(d.label)}</strong>${d.is_default ? ' <span style="font-size:10px;background:#e3f2fd;color:#0d47a1;padding:2px 6px;border-radius:3px;margin-left:4px">default</span>' : ''}${!d.is_active ? ' <span style="font-size:10px;background:#f5f5f5;color:#888;padding:2px 6px;border-radius:3px;margin-left:4px">archived</span>' : ''}</td>
+                            <td style="padding:8px;font-family:monospace;font-size:11px;color:#666">${escapeHtml(d.key)}</td>
+                            <td style="padding:8px;color:#666">${escapeHtml(d.field_type)}</td>
+                            <td style="padding:8px;color:#888;font-size:11px">${escapeHtml(d.helper_text || '')}</td>
+                            <td style="padding:8px;text-align:right;color:#666">${d.display_order}</td>
+                            <td style="padding:8px;text-align:right">
+                                ${d.is_active
+                                    ? `<button class="btn btn-secondary btn-xs" onclick="toggleCustomField(${d.id}, false)">Archive</button>`
+                                    : `<button class="btn btn-secondary btn-xs" onclick="toggleCustomField(${d.id}, true)">Restore</button>`}
+                            </td>
+                        </tr>
+                    `).join('')}
+                    </tbody>
+                </table>
+            `;
+        }
+
+        async function toggleCustomField(defId, makeActive) {
+            await api(`/api/custom-fields/${defId}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ is_active: makeActive }),
+            });
+            invalidateCustomFieldDefs();
+            loadCustomFieldsList();
+            toast(makeActive ? 'Field restored' : 'Field archived');
+        }
+
+        function showAddCustomFieldModal() {
+            const root = document.getElementById('modal-root');
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:520px">
+                        <h2>Add Custom Field</h2>
+                        <p style="font-size:13px;color:#666;margin-bottom:12px">Surfaces on the ${_customFieldsTab === 'company' ? 'Company' : 'Contact'} detail view + becomes available as a CSV import target.</p>
+
+                        <div class="form-group">
+                            <label>Entity</label>
+                            <select id="cf-entity" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px">
+                                <option value="company" ${_customFieldsTab === 'company' ? 'selected' : ''}>Company</option>
+                                <option value="contact" ${_customFieldsTab === 'contact' ? 'selected' : ''}>Contact</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Label *</label>
+                            <input type="text" id="cf-label" placeholder="e.g. Annual Revenue" oninput="autoSlugCustomField()">
+                        </div>
+                        <div class="form-group">
+                            <label>Key (auto-generated, lowercase + underscores)</label>
+                            <input type="text" id="cf-key" placeholder="annual_revenue">
+                        </div>
+                        <div class="form-group">
+                            <label>Field Type</label>
+                            <select id="cf-type" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px">
+                                <option value="text">Text</option>
+                                <option value="textarea">Long Text</option>
+                                <option value="number">Number</option>
+                                <option value="url">URL</option>
+                                <option value="email">Email</option>
+                                <option value="phone">Phone</option>
+                                <option value="date">Date</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Helper Text (optional)</label>
+                            <input type="text" id="cf-helper" placeholder="Shown beneath the input as a hint" maxlength="200">
+                        </div>
+                        <div class="modal-actions" style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">
+                            <button class="btn btn-secondary" onclick="document.getElementById('modal-root').innerHTML=''">Cancel</button>
+                            <button class="btn btn-primary" onclick="submitNewCustomField()">Create Field</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function autoSlugCustomField() {
+            const label = document.getElementById('cf-label').value;
+            const key = (label || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 80);
+            document.getElementById('cf-key').value = key;
+        }
+
+        async function submitNewCustomField() {
+            const data = await api('/api/custom-fields', {
+                method: 'POST',
+                body: JSON.stringify({
+                    entity_type: document.getElementById('cf-entity').value,
+                    key: document.getElementById('cf-key').value.trim(),
+                    label: document.getElementById('cf-label').value.trim(),
+                    field_type: document.getElementById('cf-type').value,
+                    helper_text: document.getElementById('cf-helper').value.trim() || null,
+                }),
+            });
+            if (data) {
+                toast('Custom field created');
+                document.getElementById('modal-root').innerHTML = '';
+                invalidateCustomFieldDefs();
+                _customFieldsTab = data.entity_type;
+                loadCustomFieldsList();
+            }
+        }
+
+        // Render the custom-fields panel inside Company Detail. Returns an
+        // HTML string the caller drops into the right column. Hides itself
+        // when there are no active definitions.
+        function renderCompanyCustomFieldsPanel(d, defs) {
+            const activeDefs = (defs || []).filter(x => x.is_active);
+            if (activeDefs.length === 0) return '';
+            const values = d.custom_fields || {};
+            const inputFor = (def) => {
+                const v = values[def.key] != null ? values[def.key] : '';
+                const common = `id="cfval-${escapeHtml(def.key)}" data-key="${escapeHtml(def.key)}" data-companyid="${d.id}" onblur="saveCompanyCustomField(${d.id}, this.dataset.key, this.value)" placeholder="${escapeHtml(def.helper_text || '')}"`;
+                if (def.field_type === 'textarea') {
+                    return `<textarea ${common} rows="2" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px">${escapeHtml(String(v))}</textarea>`;
+                }
+                let inputType = 'text';
+                if (['number', 'url', 'email', 'date'].includes(def.field_type)) inputType = def.field_type;
+                else if (def.field_type === 'phone') inputType = 'tel';
+                return `<input type="${inputType}" value="${escapeHtml(String(v))}" ${common} style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px">`;
+            };
+            return `
+                <div class="panel">
+                    <h3 style="font-size:14px">Custom Fields</h3>
+                    <div style="font-size:12px;line-height:1.6">
+                        ${activeDefs.map(def => `
+                            <div style="margin-bottom:8px">
+                                <label style="font-weight:600;display:block;margin-bottom:2px;font-size:11px;color:#555">${escapeHtml(def.label)}</label>
+                                ${inputFor(def)}
+                                ${def.helper_text ? `<div style="font-size:10px;color:#888;margin-top:1px">${escapeHtml(def.helper_text)}</div>` : ''}
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        async function saveCompanyCustomField(companyId, key, value) {
+            // Single-key autosave on blur. Server merges into custom_fields_json.
+            await api(`/api/custom-fields/values/company/${companyId}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ values: { [key]: value } }),
+            });
+        }
+
         // ============ CSV Import Wizard ============
         // Three-step flow: pick file → map columns → submit + summary.
         // Robust CSV parser handles quoted fields with embedded commas /
@@ -4970,6 +5190,13 @@
 
             const apiKeysSection = document.getElementById('api-keys-section');
             if (apiKeysSection) apiKeysSection.classList.toggle('hidden', !isSuper);
+
+            const cfSection = document.getElementById('custom-fields-section');
+            if (cfSection) cfSection.classList.toggle('hidden', !isAdminPlus);
+            if (isAdminPlus) {
+                _customFieldsTab = 'company';
+                loadCustomFieldsList();
+            }
 
             if (isAdminPlus) loadRuntimeConfig();
 

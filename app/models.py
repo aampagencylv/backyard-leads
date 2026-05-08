@@ -144,6 +144,12 @@ class Company(Base):
     lead_score_components = Column(Text, nullable=True)
     lead_score_updated_at = Column(DateTime, nullable=True)
 
+    # User-defined custom fields. JSON dict {definition_key: value}. Field
+    # definitions live in custom_field_definitions; this column just holds
+    # the values. Both BMP defaults (facebook_page, instagram_page,
+    # annual_revenue) and tenant-defined fields share this storage.
+    custom_fields_json = Column(Text, nullable=True)
+
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -193,6 +199,10 @@ class Contact(Base):
     # Personalization context cache (Netrows /people/posts)
     recent_posts_json = Column(Text, nullable=True)  # JSON array of {text, posted_at, url, likes}
     posts_fetched_at = Column(DateTime, nullable=True)
+
+    # Tenant-defined custom fields. JSON dict {definition_key: value}.
+    # Definitions live in custom_field_definitions where entity_type='contact'.
+    custom_fields_json = Column(Text, nullable=True)
 
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
@@ -576,6 +586,48 @@ class CampaignLog(Base):
     company_id = Column(Integer, nullable=True)
     contact_id = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class CustomFieldDefinition(Base):
+    """User-defined custom fields on Companies + Contacts.
+
+    Schema is intentionally simple: a flat list of field definitions
+    (no per-field permissions, no validation rules beyond field_type).
+    Storage is denormalized into Company.custom_fields_json /
+    Contact.custom_fields_json — read/write goes through that JSON dict
+    keyed by `key`.
+
+    Pre-seeded BMP defaults include facebook_page, instagram_page,
+    annual_revenue (company) and instagram_handle (contact). Admins can
+    add more from Settings → Custom Fields.
+    """
+    __tablename__ = "custom_field_definitions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    # 'company' or 'contact' — determines which entity surfaces this field
+    entity_type = Column(String(20), nullable=False, index=True)
+    # Slug used as the JSON key in custom_fields_json. Lowercase, snake_case.
+    # Once a definition is created, key cannot change without orphaning data.
+    key = Column(String(80), nullable=False)
+    # Human-readable label shown in forms and detail views
+    label = Column(String(120), nullable=False)
+    # 'text' | 'textarea' | 'number' | 'url' | 'email' | 'phone' | 'date' | 'select'
+    field_type = Column(String(20), default="text", nullable=False)
+    # JSON list of options for field_type='select'
+    options_json = Column(Text, nullable=True)
+    # Helper text shown beneath the input (max 200 chars)
+    helper_text = Column(String(200), nullable=True)
+    # Render order in the UI (ascending)
+    display_order = Column(Integer, default=100, nullable=False)
+    # Soft-delete flag — false hides from forms but preserves field values
+    is_active = Column(Boolean, default=True, nullable=False)
+    # Pre-seeded BMP defaults set this so Settings UI can mark them as
+    # "platform-provided" vs. tenant-created
+    is_default = Column(Boolean, default=False, nullable=False)
+
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
 
 class CampaignTarget(Base):

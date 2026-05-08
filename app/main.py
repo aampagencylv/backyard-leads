@@ -27,6 +27,7 @@ from app.routes import (
     audit_routes,
     email_inbound_routes,
     credit_routes,
+    custom_field_routes,
 )
 
 
@@ -168,6 +169,7 @@ app.include_router(notification_routes.router)
 app.include_router(audit_routes.router)
 app.include_router(email_inbound_routes.router)
 app.include_router(credit_routes.router)
+app.include_router(custom_field_routes.router)
 
 # Serve static frontend
 app.mount("/static", StaticFiles(directory="static"), name="static")

@@ -611,6 +611,7 @@ async def get_company_full(
         "company_description": company.company_description,
         "specialties": company.specialties,
         "follower_count": company.follower_count,
+        "custom_fields": json.loads(company.custom_fields_json) if company.custom_fields_json else {},
         "assigned_to": company.assigned_to,
         "assigned_name": assigned_name,
         "tags": tag_list,
@@ -1386,6 +1387,9 @@ def _company_summary(c: Company) -> dict:
         "lead_score_intent": c.lead_score_intent or 0,
         "lead_score_components": json.loads(c.lead_score_components) if c.lead_score_components else {},
         "lead_score_updated_at": c.lead_score_updated_at.isoformat() if c.lead_score_updated_at else None,
+        # Tenant-defined custom field values (Facebook, Instagram, annual
+        # revenue, etc). Field definitions live in custom_field_definitions.
+        "custom_fields": json.loads(c.custom_fields_json) if c.custom_fields_json else {},
         "created_at": c.created_at.isoformat() if c.created_at else None,
     }
 
