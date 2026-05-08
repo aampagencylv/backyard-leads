@@ -27,13 +27,19 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import GeneratedEmail, Contact, Company, Activity, Task, User
 from app.config import settings
 
 logger = logging.getLogger("sequence_engine")
+
+# Per-sender daily cap. Inbox providers throttle reputation when a single
+# From-address sends > ~50 emails/day cold. Setting at 50 by default; could
+# be raised after sender-domain warmup. Override via env DAILY_SEND_CAP.
+import os as _os
+DAILY_SEND_CAP_PER_USER = int(_os.environ.get("DAILY_SEND_CAP", "50"))
 
 
 # ============================================================
@@ -118,6 +124,26 @@ async def _handle_email(db: AsyncSession, step: GeneratedEmail, contact: Contact
     if not sender_user or not sender_user.sending_enabled:
         return False, "No sending-enabled user available"
 
+    # Daily send-cap per sender — protects deliverability. If we'd push this user
+    # over the cap, defer this step to tomorrow morning instead of erroring.
+    today_utc = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    sent_today = (await db.execute(
+        select(func.count(GeneratedEmail.id)).where(
+            GeneratedEmail.sent_by_user_id == sender_user.id,
+            GeneratedEmail.is_sent == True,
+            GeneratedEmail.sent_at >= today_utc,
+        )
+    )).scalar() or 0
+    if sent_today >= DAILY_SEND_CAP_PER_USER:
+        # Push to tomorrow 8am UTC (~midnight Pacific) and bail without error
+        tomorrow_8am = today_utc + timedelta(days=1, hours=8)
+        step.scheduled_send_at = tomorrow_8am
+        logger.info(
+            f"[send-cap] Deferring email step #{step.id} — sender {sender_user.email} "
+            f"already sent {sent_today}/{DAILY_SEND_CAP_PER_USER} today. New schedule: {tomorrow_8am.isoformat()}"
+        )
+        return False, "DEFER_SEND_CAP"
+
     sender = get_sender_info(sender_user.first_name, sender_user.full_name)
     # Wrap any URLs in the body + signature through /t/{token} for click tracking
     from app.services.tracking import wrap_html_links
@@ -149,6 +175,8 @@ async def _handle_email(db: AsyncSession, step: GeneratedEmail, contact: Contact
     )
     if not result.get("success"):
         return False, f"Resend rejected: {result.get('error', 'unknown')}"
+    # Stamp the sender so future cap-checks count this email correctly
+    step.sent_by_user_id = sender_user.id
     db.add(Activity(
         company_id=company.id, contact_id=contact.id, user_id=sender_user.id,
         activity_type="email_sent",
@@ -374,6 +402,10 @@ async def process_pending_steps(db: AsyncSession, max_per_tick: int = 50) -> dic
                     step.is_sent = True
                     step.sent_at = now
                     counters["sent"] += 1
+                elif msg == "DEFER_SEND_CAP":
+                    # Cap hit — step.scheduled_send_at was bumped inside the handler
+                    counters.setdefault("deferred", 0)
+                    counters["deferred"] += 1
                 else:
                     counters["errors"] += 1
                     logger.warning(f"Email step #{step.id} failed: {msg}")

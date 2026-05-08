@@ -3665,10 +3665,46 @@
                   value: d.expected_close_date ? d.expected_close_date.slice(0,10) : '' },
             ];
             if (d.stage === 'closed_lost') {
-                fields.push({ key: 'lost_reason', label: 'Lost Reason', value: d.lost_reason || '', placeholder: 'No budget / went w/ competitor / etc.' });
+                // Predefined dropdown reasons — keeps the data analyzable so we can
+                // build a "why we lose" report later. "Other" reveals the free-text
+                // box if none of the canned reasons fit.
+                const LOST_REASONS = [
+                    { value: '',                 label: '— pick a reason —' },
+                    { value: 'not_interested',   label: 'Not interested' },
+                    { value: 'wrong_fit',        label: 'Wrong fit (too small / too large)' },
+                    { value: 'went_competitor',  label: 'Went with a competitor' },
+                    { value: 'no_budget',        label: 'No budget' },
+                    { value: 'no_response',      label: 'No response (never engaged)' },
+                    { value: 'bad_timing',       label: 'Bad timing (try again later)' },
+                    { value: 'other',            label: 'Other (notes below)' },
+                ];
+                // Match the existing free-text value back to a canned key if possible
+                const knownKeys = new Set(LOST_REASONS.map(r => r.value).filter(Boolean));
+                const initialKey = knownKeys.has(d.lost_reason) ? d.lost_reason : (d.lost_reason ? 'other' : '');
+                const initialNotes = (d.lost_reason && !knownKeys.has(d.lost_reason)) ? d.lost_reason : '';
+                fields.push({
+                    key: 'lost_reason_key', label: 'Lost Reason', type: 'select',
+                    value: initialKey, options: LOST_REASONS,
+                });
+                fields.push({
+                    key: 'lost_reason_notes', label: 'Notes (optional)', type: 'textarea', rows: 2,
+                    value: initialNotes, placeholder: 'Free-text — only visible to your team',
+                });
             }
             const values = await openModal('Edit Deal', fields, { saveLabel: 'Save Changes' });
             if (!values) return;
+            // Combine the canned reason key + free-text notes into a single
+            // string for storage. Format: "key" or "key — notes" or just "notes"
+            // if user picked "other". Keeps the column simple while supporting
+            // both structured + freeform answers.
+            let lostReasonOut = null;
+            if (values.stage === 'closed_lost' || d.stage === 'closed_lost') {
+                const k = (values.lost_reason_key || '').trim();
+                const notes = (values.lost_reason_notes || '').trim();
+                if (k && k !== 'other') lostReasonOut = notes ? `${k} — ${notes}` : k;
+                else if (notes) lostReasonOut = notes;
+                else lostReasonOut = null;
+            }
             await api(`/api/deals/${dealId}`, {
                 method: 'PATCH',
                 body: JSON.stringify({
@@ -3677,7 +3713,7 @@
                     contract_months: parseInt(values.contract_months) || 6,
                     stage: values.stage,
                     expected_close_date: values.expected_close_date || null,
-                    lost_reason: values.lost_reason ?? null,
+                    lost_reason: lostReasonOut,
                 }),
             });
             toast('Deal updated.');

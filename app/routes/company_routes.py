@@ -121,10 +121,70 @@ async def create_company(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Manually add a company with optional first contact. Auto-enriches if website provided."""
+    """Manually add a company with optional first contact. Auto-enriches if website provided.
+
+    Dedupe-by-domain: if the supplied website normalizes to a domain that already
+    matches an existing company, we return that one instead of inserting a duplicate.
+    Optional contact info is still created on the existing company so we don't lose
+    the BDR's input. Steve hit this on 2026-05-07 with two AAMP Agency rows.
+    """
+    from app.services.domain_utils import normalize_domain
+    new_domain = normalize_domain(req.website)
+
+    # Domain-level dedupe: if a row already exists for this canonical domain,
+    # reuse it. We attach the optional contact info onto the existing record.
+    existing_company: Optional[Company] = None
+    if new_domain:
+        existing_company = (await db.execute(
+            select(Company).where(Company.domain == new_domain)
+        )).scalars().first()
+
+    if existing_company:
+        company = existing_company
+        merged_contact = None
+        if req.contact_first_name or req.contact_email:
+            # If a contact with the same email is already on this company, skip;
+            # otherwise create a new contact row so we don't lose what the BDR typed.
+            dup_contact = None
+            if req.contact_email:
+                dup_contact = (await db.execute(
+                    select(Contact).where(
+                        Contact.company_id == company.id,
+                        Contact.email == req.contact_email,
+                    )
+                )).scalar_one_or_none()
+            if not dup_contact:
+                import secrets as _secrets
+                merged_contact = Contact(
+                    company_id=company.id,
+                    first_name=req.contact_first_name or "",
+                    last_name=req.contact_last_name or "",
+                    email=req.contact_email,
+                    phone=req.contact_phone,
+                    title=req.contact_title,
+                    linkedin_url=req.contact_linkedin,
+                    is_primary=False,
+                    unsubscribe_token=_secrets.token_urlsafe(32),
+                )
+                db.add(merged_contact)
+        db.add(Activity(
+            company_id=company.id, user_id=user.id,
+            activity_type="company_dedup_match",
+            content=f"Matched existing company by domain ({new_domain}); contact info merged in instead of creating a duplicate row.",
+        ))
+        await db.commit()
+        await db.refresh(company)
+        return {
+            "id": company.id, "name": company.name, "status": company.status,
+            "deduped": True,
+            "matched_by_domain": new_domain,
+            "added_contact": bool(merged_contact),
+        }
+
     company = Company(
         name=req.name,
         website=req.website,
+        domain=new_domain,
         phone=req.phone,
         address=req.address,
         city=req.city,
@@ -217,13 +277,16 @@ async def upload_contacts(
                 results["skipped"] += 1
                 continue
 
-            # Dedup by company name + website
+            # Dedup by canonical domain first, then by exact company name. Using the
+            # indexed `domain` column avoids the false-positive risk of LIKE '%foo%'
+            # (where 'foobar.com' would match 'foo.com').
+            from app.services.domain_utils import normalize_domain
             website = row.get("website", "").strip() or None
+            new_domain = normalize_domain(website)
             existing = None
-            if website:
-                domain = website.replace("https://", "").replace("http://", "").split("/")[0].replace("www.", "")
+            if new_domain:
                 existing = (await db.execute(
-                    select(Company).where(Company.website.ilike(f"%{domain}%"))
+                    select(Company).where(Company.domain == new_domain)
                 )).scalars().first()
             if not existing:
                 existing = (await db.execute(
@@ -236,6 +299,7 @@ async def upload_contacts(
                 company = Company(
                     name=company_name,
                     website=website,
+                    domain=new_domain,
                     phone=row.get("phone", "").strip() or None,
                     assigned_to=req.assigned_to,
                     status="new",

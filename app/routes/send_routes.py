@@ -87,6 +87,7 @@ async def send_single_email(
     if result["success"]:
         email.is_sent = True
         email.sent_at = datetime.now(timezone.utc)
+        email.sent_by_user_id = user.id
         company.email_sent = True
         if company.status not in ("contacted", "replied", "qualified", "converted"):
             company.status = "sequencing"
@@ -165,6 +166,7 @@ async def send_next_in_sequence(
     if result["success"]:
         email.is_sent = True
         email.sent_at = datetime.now(timezone.utc)
+        email.sent_by_user_id = user.id
         company.email_sent = True
 
         remaining = (await db.execute(
@@ -841,6 +843,7 @@ async def send_adhoc_email(
 
     ge.is_sent = True
     ge.sent_at = datetime.now(timezone.utc)
+    ge.sent_by_user_id = user.id
     db.add(Activity(
         company_id=company.id, contact_id=contact.id, user_id=user.id,
         activity_type="email_sent",

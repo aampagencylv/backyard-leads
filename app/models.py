@@ -77,6 +77,10 @@ class Company(Base):
     name = Column(String(500), nullable=False)
     phone = Column(String(50))
     website = Column(String(500))
+    # Normalized canonical domain extracted from `website` — used for dedupe so
+    # two Company rows can't accidentally exist with the same effective site.
+    # Populated automatically on create via domain_utils.normalize_domain().
+    domain = Column(String(255), index=True, nullable=True)
     address = Column(String(500))
     city = Column(String(255))
     state = Column(String(100))
@@ -256,6 +260,11 @@ class GeneratedEmail(Base):
     payload_json = Column(Text, nullable=True)
     # Resulting Task id when auto_execute=False — lets us check completion to advance the sequence
     task_id = Column(Integer, ForeignKey("tasks.id"), nullable=True)
+
+    # Which User sent (or will send) this email. Used for the per-sender daily
+    # send-cap that protects deliverability — if a user has already hit their
+    # cap today, the engine defers their pending steps to tomorrow 8am.
+    sent_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
 
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
