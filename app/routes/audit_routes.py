@@ -267,7 +267,10 @@ async def request_competitor_comparison(
     company_name = company.name if company else "Your Business"
     booking_url = settings.iclosed_booking_url
 
-    # Show gated page: blurred preview + iClosed widget + self-confirm unlock
+    # Gated page: blurred preview + iClosed widget. The iClosed webhook
+    # is the source of truth for "booked"; we poll /booking-status every
+    # few seconds and auto-redirect to the unlocked report once the
+    # webhook fires. No duplicate email form.
     return HTMLResponse(f"""<!DOCTYPE html>
 <html><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -284,14 +287,14 @@ async def request_competitor_comparison(
     .gate {{ background: white; border-radius: 12px; padding: 24px; box-shadow: 0 4px 24px rgba(0,0,0,0.08); }}
     .gate h2 {{ color: #1B5E20; margin-bottom: 4px; text-align: center; }}
     .gate p.lede {{ color: #666; font-size: 14px; margin-bottom: 18px; text-align: center; }}
-    .iclosed-frame {{ width: 100%; height: 720px; border: 0; border-radius: 8px; background: #fafafa; }}
-    .unlock-row {{ margin-top: 16px; padding-top: 16px; border-top: 1px solid #eee; text-align: center; }}
-    .unlock-row p {{ color: #666; font-size: 13px; margin-bottom: 10px; }}
-    .unlock-row input {{ width: 100%; max-width: 320px; padding: 10px 14px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; margin-bottom: 8px; }}
-    .unlock-row button {{ padding: 12px 20px; background: #E65100; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; }}
-    .unlock-row button:hover {{ background: #BF360C; }}
-    .success {{ display: none; text-align: center; padding: 20px; }}
-    .success h2 {{ color: #1B5E20; }}
+    .iclosed-frame {{ width: 100%; height: 1300px; border: 0; border-radius: 8px; background: #fafafa; }}
+    .status-row {{ margin-top: 12px; padding: 12px; text-align: center; font-size: 13px; color: #666; }}
+    .status-row .pulse {{ display: inline-block; width: 8px; height: 8px; background: #FF723F; border-radius: 50%; margin-right: 6px; animation: pulse 1.5s ease-in-out infinite; vertical-align: middle; }}
+    .escape-link {{ display: block; margin-top: 8px; font-size: 12px; color: #888; text-decoration: underline; cursor: pointer; }}
+    .escape-link:hover {{ color: #555; }}
+    .success {{ display: none; text-align: center; padding: 40px 20px; background: white; border-radius: 12px; }}
+    .success h2 {{ color: #1B5E20; margin-bottom: 12px; }}
+    @keyframes pulse {{ 0%,100% {{ opacity: 1; }} 50% {{ opacity: 0.3; }} }}
     @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
 </style>
 </head><body>
@@ -316,7 +319,9 @@ async def request_competitor_comparison(
         </table>
     </div>
 
-    <!-- Gate: iClosed booking widget. Scheduling IS the gate. -->
+    <!-- Gate: iClosed booking widget. Scheduling IS the gate.
+         No duplicate email form — once iClosed fires its webhook with the
+         booked email, the polling JS below auto-unlocks this page. -->
     <div class="gate" id="gate-form">
         <h2>Schedule a quick 15-minute call to unlock</h2>
         <p class="lede">Pick a time below — we'll walk through where you're winning, where competitors are pulling ahead, and the fastest fixes.</p>
@@ -324,48 +329,105 @@ async def request_competitor_comparison(
                 src="{booking_url}"
                 allow="fullscreen *"
                 loading="lazy"></iframe>
-        <div class="unlock-row">
-            <p>Already picked your time? Enter the email you used and we'll unlock your report.</p>
-            <input type="email" id="unlock-email" placeholder="Email used to book" required>
-            <br>
-            <button onclick="unlock()">View My Comparison →</button>
+        <div class="status-row">
+            <span class="pulse"></span>
+            <span id="status-text">Once you book, we'll automatically unlock your comparison report.</span>
+            <a class="escape-link" id="escape-link" onclick="manualUnlock()">Already booked? Click here to view your report →</a>
         </div>
     </div>
 
     <!-- Success / redirect -->
     <div class="success" id="gate-success">
-        <h2>Unlocking your comparison...</h2>
+        <h2>You're booked! 🎉</h2>
+        <p style="color:#555">Unlocking your competitive comparison...</p>
         <div style="margin:16px auto;width:40px;height:40px;border:4px solid #ddd;border-top-color:#1B5E20;border-radius:50%;animation:spin 1s linear infinite"></div>
     </div>
 </div>
 
 <script>
-async function unlock() {{
-    const email = document.getElementById('unlock-email').value.trim();
-    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {{
-        alert('Please enter the email you used to book.');
-        return;
+let pollCount = 0;
+const POLL_INTERVAL_MS = 4000;
+const MAX_POLLS = 150;  // ~10 minutes — plenty for someone to fill the form + pick a slot
+let pollTimer = null;
+
+async function checkBooking() {{
+    pollCount++;
+    try {{
+        const res = await fetch('/api/report/{token}/booking-status', {{ cache: 'no-store' }});
+        const data = await res.json();
+        if (data && data.booked) {{
+            showUnlock();
+            return;
+        }}
+    }} catch(e) {{ /* network blip; keep polling */ }}
+    if (pollCount < MAX_POLLS) {{
+        pollTimer = setTimeout(checkBooking, POLL_INTERVAL_MS);
     }}
-    const btn = document.querySelector('.unlock-row button');
-    btn.textContent = 'Unlocking...';
-    btn.disabled = true;
+}}
+
+function showUnlock() {{
+    if (pollTimer) clearTimeout(pollTimer);
+    document.getElementById('gate-form').style.display = 'none';
+    document.getElementById('gate-success').style.display = 'block';
+    setTimeout(() => {{ window.location.href = '{competitors_url}'; }}, 1200);
+}}
+
+// Manual escape hatch — for the rare case the webhook didn't match
+// (e.g. they used a different email than the contact has on file).
+async function manualUnlock() {{
+    if (!confirm('Confirm: you have already scheduled your discovery call?')) return;
     try {{
         await fetch('/api/report/{token}/unlock', {{
             method: 'POST',
-            headers: {{'Content-Type': 'application/json'}},
-            body: JSON.stringify({{ email, token: '{token}' }}),
+            headers: {{ 'Content-Type': 'application/json' }},
+            body: JSON.stringify({{ email: '', token: '{token}' }}),
         }});
-    }} catch(e) {{ /* fall through to redirect anyway */ }}
-    document.getElementById('gate-form').style.display = 'none';
-    document.getElementById('gate-success').style.display = 'block';
-    setTimeout(() => {{ window.location.href = '{competitors_url}'; }}, 800);
+    }} catch(e) {{ /* fall through */ }}
+    showUnlock();
 }}
+
+// Listen for postMessage from the iClosed iframe — if iClosed sends a
+// "booking-confirmed" event we redirect immediately instead of waiting
+// for the next poll. Best-effort; the polling path remains the canonical
+// signal because the webhook is server-authoritative.
+window.addEventListener('message', (ev) => {{
+    if (!ev.data) return;
+    const txt = JSON.stringify(ev.data).toLowerCase();
+    if (txt.includes('booking') && (txt.includes('confirm') || txt.includes('success') || txt.includes('booked'))) {{
+        // Trigger an immediate poll instead of trusting the postMessage payload
+        // outright — server-side webhook is the truth.
+        checkBooking();
+    }}
+}});
+
+// Kick off polling shortly after page load so we're not hammering the server
+// while they're still typing in the iframe form.
+setTimeout(checkBooking, POLL_INTERVAL_MS);
 </script>
 </body></html>""")
 
 
 # ============================================================
-# Unlock endpoint — called when prospect self-confirms scheduling
+# Booking-status poll — called every few seconds by the gate page
+# ============================================================
+
+@router.get("/api/report/{token}/booking-status")
+async def report_booking_status(token: str, db: AsyncSession = Depends(get_db)):
+    """Returns whether the report has been marked as booked yet.
+
+    Source of truth is audit_reports.booked_at, which the iClosed webhook
+    flips. The gate page polls this endpoint to detect when to unlock.
+    """
+    report = (await db.execute(
+        select(AuditReportModel).where(AuditReportModel.token == token)
+    )).scalar_one_or_none()
+    if not report:
+        return {"booked": False, "found": False}
+    return {"booked": bool(report.booked_at), "found": True}
+
+
+# ============================================================
+# Unlock endpoint — manual fallback when the webhook didn't match
 # ============================================================
 
 from pydantic import BaseModel as _BM
