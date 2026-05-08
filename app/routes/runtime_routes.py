@@ -18,6 +18,7 @@ from app.runtime_config import (
     set_deepgram_api_key,
     set_blooio_api_key,
     set_blooio_signing_secret,
+    set_resend_webhook_secret,
     set_messaging_direction,
     DEFAULT_MESSAGING_DIRECTION,
     mask_key,
@@ -36,6 +37,7 @@ class UpdateRuntimeConfigRequest(BaseModel):
     deepgram_api_key: Optional[str] = None
     blooio_api_key: Optional[str] = None
     blooio_signing_secret: Optional[str] = None
+    resend_webhook_secret: Optional[str] = None
     messaging_direction: Optional[str] = None
 
 
@@ -77,6 +79,16 @@ def _payload(rc, settings_obj) -> dict:
             "masked": mask_key(rc.blooio_api_key),
             "signing_secret_set": bool((rc.blooio_signing_secret or "").strip()),
             "signing_secret_masked": mask_key(rc.blooio_signing_secret),
+        },
+        "resend": {
+            # DB value preferred; .env value used as fallback. Show source so user
+            # knows where to rotate ("database" means it's settable from this UI).
+            "webhook_secret_db_set": bool((rc.resend_webhook_secret or "").strip()),
+            "webhook_secret_env_set": bool((settings_obj.resend_webhook_secret or "").strip()),
+            "webhook_secret_source":
+                "database" if (rc.resend_webhook_secret or "").strip()
+                else ("env" if (settings_obj.resend_webhook_secret or "").strip() else "none"),
+            "webhook_secret_masked": mask_key((rc.resend_webhook_secret or "").strip() or settings_obj.resend_webhook_secret),
         },
         "messaging": {
             "direction": (rc.messaging_direction or "").strip(),
@@ -135,6 +147,8 @@ async def update_runtime_config(
         await set_blooio_api_key(db, req.blooio_api_key)
     if req.blooio_signing_secret is not None:
         await set_blooio_signing_secret(db, req.blooio_signing_secret)
+    if req.resend_webhook_secret is not None:
+        await set_resend_webhook_secret(db, req.resend_webhook_secret)
     if req.messaging_direction is not None:
         await set_messaging_direction(db, req.messaging_direction)
 

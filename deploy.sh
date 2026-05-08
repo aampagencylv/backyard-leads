@@ -55,6 +55,7 @@ ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_company_doma
 ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_send_cap
 ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_onboarding
 ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_email_reply_tokens
+ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_resend_webhook_secret
 ExecStart=/opt/backyard-leads/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=5

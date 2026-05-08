@@ -60,12 +60,25 @@ def _extract_reply_token(to_addresses: list[str]) -> Optional[str]:
     return None
 
 
-def _verify_signature(raw_body: bytes, signature_header: str) -> bool:
+async def _resolve_resend_webhook_secret() -> str:
+    """DB-first lookup with env fallback so Steve can rotate from Settings UI
+    without SSHing in. We do this in an async helper instead of a sync read so
+    the runtime_config table query plays nicely with FastAPI's event loop."""
+    try:
+        from app.runtime_config import get_resend_webhook_secret
+        async with async_session() as db:
+            return await get_resend_webhook_secret(db)
+    except Exception:
+        # Bootstrap path during initial deploy when the column might not yet
+        # exist — fall back to env so the webhook still works.
+        return (settings.resend_webhook_secret or "").strip()
+
+
+def _verify_signature(raw_body: bytes, signature_header: str, secret: str) -> bool:
     """Resend webhook signature uses Svix-style format (same vendor for
     both outbound + inbound webhooks). Defense-in-depth: if the secret
     isn't configured (early dev), we accept everything; once it's set,
     we reject anything that doesn't carry a valid HMAC."""
-    secret = settings.resend_webhook_secret
     if not secret or not signature_header:
         return not bool(secret)  # accept when secret unset, reject when set+missing-sig
     try:
@@ -90,7 +103,8 @@ async def email_inbound(request: Request):
     HMAC-verified via settings.resend_webhook_secret."""
     raw = await request.body()
     sig_header = request.headers.get("svix-signature") or request.headers.get("resend-signature") or ""
-    if not _verify_signature(raw, sig_header):
+    secret = await _resolve_resend_webhook_secret()
+    if not _verify_signature(raw, sig_header, secret):
         return JSONResponse({"ok": False, "error": "bad signature"}, status_code=401)
 
     try:

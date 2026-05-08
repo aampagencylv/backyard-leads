@@ -816,6 +816,19 @@
                             <div id="blooio-signing-secret-current" style="font-size:11px;color:#888;margin-top:4px"></div>
                         </div>
                     </div>
+
+                    <!-- Resend (inbound webhook secret — for token-based reply catching) -->
+                    <div style="margin-top:24px;padding-top:16px;border-top:1px solid #eee">
+                        <h4 style="font-size:14px;margin-bottom:6px">Resend Inbound <span id="resend-webhook-status" style="font-size:11px;font-weight:400;color:#888"></span></h4>
+                        <p style="font-size:12px;color:#888;margin-bottom:8px">Signing secret that HMAC-verifies replies coming back from Resend Inbound at <code>r-&lt;token&gt;@go.backyardmarketingpros.com</code>. Generate a new one in <a href="https://resend.com/webhooks" target="_blank" rel="noreferrer">Resend → Webhooks</a> when rotating. Saves to the database (preferred) and overrides the env value.</p>
+                        <div class="form-group">
+                            <div style="display:flex;gap:6px">
+                                <input type="password" id="settings-resend-webhook-secret" placeholder="whsec_..." autocomplete="off" style="flex:1">
+                                <button class="btn btn-secondary btn-sm" onclick="saveResendWebhookSecret()">Save</button>
+                            </div>
+                            <div id="resend-webhook-current" style="font-size:11px;color:#888;margin-top:4px"></div>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Messaging Tone & Direction (org-wide AI prompt) -->
@@ -3075,7 +3088,7 @@
                             <div class="contact-card-meta">
                                 ${c.title ? escapeHtml(c.title) + ' · ' : ''}
                                 ${c.email ? `<a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a>` : '<em>no email</em>'}
-                                ${c.email && !c.unsubscribed_at && c.email_status !== 'invalid' && c.email_status !== 'bounced' ? ` · <a onclick="event.stopPropagation();openAdhocComposer(${c.id})" style="color:var(--bmp-orange);cursor:pointer;text-decoration:none;border-bottom:1px dotted var(--bmp-orange)" title="Send a one-off email">📧 Email</a>` : ''}
+                                ${c.email && !c.unsubscribed_at ? ` · <a onclick="event.stopPropagation();openAdhocComposer(${c.id})" style="color:var(--bmp-orange);cursor:pointer;text-decoration:none;border-bottom:1px dotted var(--bmp-orange)" title="Send a one-off email">📧 Email</a>` : ''}
                                 ${c.phone ? ` · <a class="call-link" onclick="event.stopPropagation();callContact(${c.id})">${escapeHtml(c.phone)}</a>${renderPhoneTypeBadge(c)}` : ''}
                                 ${c.phone && !c.do_not_text && c.phone_type !== 'landline' ? ` · <a class="sms-link" onclick="event.stopPropagation();openSmsComposer(${c.id})" style="color:#0b93f6;cursor:pointer;text-decoration:none;border-bottom:1px dotted #0b93f6" title="iMessage via Blooio">💬 Message</a>` : ''}
                                 ${c.unsubscribed_at ? ' · <span style="color:#c0392b">UNSUBSCRIBED (email)</span>' : ''}
@@ -4697,6 +4710,32 @@
                     ? `HMAC verification active. Forged inbound webhooks are rejected with 401.`
                     : `Inbound webhooks accepted without verification — anyone who knows the URL can post.`;
             }
+
+            // Resend Inbound webhook signing secret
+            const rs = (cfg.resend || {});
+            const rsStatus = document.getElementById('resend-webhook-status');
+            const rsCurrent = document.getElementById('resend-webhook-current');
+            const rsInput = document.getElementById('settings-resend-webhook-secret');
+            if (rsInput) rsInput.value = '';
+            if (rsStatus) {
+                if (rs.webhook_secret_db_set || rs.webhook_secret_env_set) {
+                    rsStatus.textContent = `· ${rs.webhook_secret_masked} (${rs.webhook_secret_source})`;
+                    rsStatus.style.color = 'var(--bmp-green)';
+                } else {
+                    rsStatus.textContent = '· not set';
+                    rsStatus.style.color = '#c0392b';
+                }
+            }
+            if (rsCurrent) {
+                if (rs.webhook_secret_source === 'database') {
+                    rsCurrent.textContent = 'HMAC active — secret stored in DB. Paste a new secret here to rotate.';
+                } else if (rs.webhook_secret_source === 'env') {
+                    rsCurrent.textContent = 'HMAC active — secret loaded from .env. Save a new value here to switch to DB-managed (recommended for rotation).';
+                } else {
+                    rsCurrent.textContent = 'No secret set — replies are accepted without verification (insecure). Generate one in Resend → Webhooks and paste here.';
+                }
+            }
+
             // Messaging direction (org-wide tone/strategic angle)
             const msg = (cfg.messaging || {});
             const msgStatus = document.getElementById('messaging-direction-status');
@@ -4944,6 +4983,16 @@
                 body: JSON.stringify({ blooio_signing_secret: v }),
             });
             if (data) { toast('Signing secret saved — inbound webhooks now HMAC-verified'); loadRuntimeConfig(); }
+        }
+
+        async function saveResendWebhookSecret() {
+            const v = (document.getElementById('settings-resend-webhook-secret').value || '').trim();
+            if (!v) { toast('Paste the whsec_… secret first'); return; }
+            const data = await api('/api/runtime-config', {
+                method: 'PATCH',
+                body: JSON.stringify({ resend_webhook_secret: v }),
+            });
+            if (data) { toast('Resend webhook secret saved — reply catching now HMAC-verified from DB'); loadRuntimeConfig(); }
         }
 
         async function testBlooioConnection() {

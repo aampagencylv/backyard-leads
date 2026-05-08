@@ -361,6 +361,12 @@ class RuntimeConfig(Base):
     # accepts any request that knows the URL.
     blooio_signing_secret = Column(Text, nullable=True)
 
+    # Resend webhook signing secret (whsec_…) — used to HMAC-verify the inbound
+    # email webhook (/api/email/inbound) where prospect replies route after we
+    # set Reply-To: r-<token>@go.bymp.com. DB-first; falls back to
+    # settings.resend_webhook_secret env var if this is empty.
+    resend_webhook_secret = Column(Text, nullable=True)
+
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
 

@@ -124,6 +124,22 @@ async def set_blooio_signing_secret(db: AsyncSession, value: str) -> RuntimeConf
     return rc
 
 
+async def get_resend_webhook_secret(db: AsyncSession) -> str:
+    """DB value first, env fallback. Lets Steve rotate from Settings UI
+    without SSH; env stays as the bootstrap default."""
+    rc = await _get_or_create(db)
+    return (rc.resend_webhook_secret or "").strip() or (settings.resend_webhook_secret or "").strip()
+
+
+async def set_resend_webhook_secret(db: AsyncSession, value: str) -> RuntimeConfig:
+    rc = await _get_or_create(db)
+    rc.resend_webhook_secret = value.strip() or None
+    rc.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(rc)
+    return rc
+
+
 # ============================================================
 # Messaging tone / strategic direction (prepended to AI prompts)
 # ============================================================
