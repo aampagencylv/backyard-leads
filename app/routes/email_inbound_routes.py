@@ -155,7 +155,14 @@ async def email_inbound(request: Request):
 
     async with async_session() as db:
         ge = (await db.execute(
-            select(GeneratedEmail).where(GeneratedEmail.reply_token == token)
+            # Case-insensitive lookup: most mail providers normalize email
+            # local-parts to lowercase, so old urlsafe-base64 tokens (mixed
+            # case) wouldn't match a direct == comparison. New tokens use
+            # lowercase hex but we keep the case-insensitive match for
+            # back-compat with anything sent before the format switch.
+            select(GeneratedEmail).where(
+                GeneratedEmail.reply_token.ilike(token)
+            )
         )).scalar_one_or_none()
         if not ge:
             log.warning(f"[inbound] Token {token[:8]}… not found in DB — silent drop. From: {bare_from}")

@@ -114,16 +114,15 @@ def get_sender_info(first_name: str, full_name: str) -> dict:
 
 
 def generate_reply_token() -> str:
-    """27-char URL-safe token for the Reply-To routing address.
+    """32-char lowercase-hex token for the Reply-To routing address.
 
-    Stored on GeneratedEmail.reply_token. The recipient's reply hits
-    `r-<token>@inbound.bymp.com` → Resend Inbound webhook → we attribute
-    the reply to this exact email row.
-
-    20 random bytes encoded urlsafe-base64 = 27 chars. ~10^48 combinations,
-    indexable, fits in a typical email-address local-part."""
+    Email local-parts get normalized to lowercase by most mail providers
+    (Resend / SES / Postmark all do this). Mixed-case tokens like
+    `secrets.token_urlsafe(20)` round-trip through the wire as lowercase
+    and our DB lookup misses. Hex is always lowercase → no normalization
+    issue. 16 random bytes = 128 bits of entropy, plenty for a routing key."""
     import secrets
-    return secrets.token_urlsafe(20)
+    return secrets.token_hex(16)
 
 
 def reply_to_for_token(token: str) -> str:
