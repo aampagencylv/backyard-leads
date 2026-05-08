@@ -74,27 +74,66 @@ async def _resolve_resend_webhook_secret() -> str:
         return (settings.resend_webhook_secret or "").strip()
 
 
-def _verify_signature(raw_body: bytes, signature_header: str, secret: str) -> bool:
-    """Resend webhook signature uses Svix-style format (same vendor for
-    both outbound + inbound webhooks). Defense-in-depth: if the secret
-    isn't configured (early dev), we accept everything; once it's set,
-    we reject anything that doesn't carry a valid HMAC."""
-    if not secret or not signature_header:
-        return not bool(secret)  # accept when secret unset, reject when set+missing-sig
+def _verify_signature(raw_body: bytes, headers: dict, secret: str) -> bool:
+    """Verify a Resend (Svix) webhook.
+
+    Svix signs `{svix_id}.{svix_timestamp}.{body}` with HMAC-SHA256, where
+    the secret is the base64-decoded bytes following the `whsec_` prefix.
+    The svix-signature header can contain multiple space-separated
+    `v1,<base64sig>` pairs (for key rotation), and ANY of them matching
+    is sufficient.
+
+    Replay protection: reject signatures whose timestamp is more than
+    5 minutes off — protects against attacker resending an old request.
+
+    Defense-in-depth: if the secret isn't configured (early dev), accept
+    everything; once it's set, reject anything without a valid HMAC."""
+    if not secret:
+        return True  # secret unset → accept all (bootstrap mode)
+
+    sig_header = headers.get("svix-signature") or headers.get("resend-signature") or ""
+    msg_id = headers.get("svix-id") or headers.get("webhook-id") or ""
+    msg_ts = headers.get("svix-timestamp") or headers.get("webhook-timestamp") or ""
+    if not sig_header or not msg_id or not msg_ts:
+        return False
+
+    # Replay protection — 5 minute tolerance window
     try:
-        # Svix format: 'v1,base64sig v1,base64sig2'
-        # We compute HMAC-SHA256 of raw_body with the secret and compare.
-        # Defensive: tolerate the 'v1,' prefix and pick the first sig pair.
-        for token in signature_header.split():
-            if "," in token:
-                _, sig = token.split(",", 1)
-                expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).digest()
-                import base64
-                if hmac.compare_digest(base64.b64encode(expected).decode(), sig):
-                    return True
+        ts_int = int(msg_ts)
+        import time as _time
+        if abs(int(_time.time()) - ts_int) > 300:
+            return False
+    except ValueError:
         return False
+
+    # Decode the secret — Svix format is `whsec_<base64>`
+    import base64
+    raw_secret = secret
+    if raw_secret.startswith("whsec_"):
+        raw_secret = raw_secret[len("whsec_"):]
+    try:
+        secret_bytes = base64.b64decode(raw_secret)
     except Exception:
-        return False
+        # If decode fails (someone pasted a non-base64 secret), use raw bytes
+        # as a fallback. Real Svix secrets always decode cleanly.
+        secret_bytes = raw_secret.encode()
+
+    signed_payload = f"{msg_id}.{msg_ts}.".encode("utf-8") + raw_body
+    expected_sig = base64.b64encode(
+        hmac.new(secret_bytes, signed_payload, hashlib.sha256).digest()
+    ).decode()
+
+    # Header contains one or more space-separated tokens like `v1,<sig>`
+    for token in sig_header.split():
+        parts = token.split(",", 1)
+        if len(parts) != 2:
+            continue
+        version, candidate = parts
+        if version.strip() != "v1":
+            continue
+        if hmac.compare_digest(candidate.strip(), expected_sig):
+            return True
+    return False
 
 
 @router.post("/inbound")
@@ -102,9 +141,12 @@ async def email_inbound(request: Request):
     """Resend Inbound webhook receiver. Public — no auth. Optionally
     HMAC-verified via settings.resend_webhook_secret."""
     raw = await request.body()
-    sig_header = request.headers.get("svix-signature") or request.headers.get("resend-signature") or ""
+    # Pass the full headers dict so the verifier can read svix-id, svix-timestamp,
+    # and svix-signature — all three are needed for Svix's HMAC scheme.
     secret = await _resolve_resend_webhook_secret()
-    if not _verify_signature(raw, sig_header, secret):
+    # Lower-case header dict (Starlette already does this internally but be explicit)
+    hdrs = {k.lower(): v for k, v in request.headers.items()}
+    if not _verify_signature(raw, hdrs, secret):
         return JSONResponse({"ok": False, "error": "bad signature"}, status_code=401)
 
     try:
