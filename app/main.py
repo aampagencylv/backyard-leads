@@ -35,7 +35,8 @@ log = logging.getLogger("bmp")
 
 
 async def _sequence_engine_loop():
-    """Background tick: run the sequence engine every 60s + check snoozed deals."""
+    """Background tick: run the sequence engine every 60s + check snoozed
+    deals every 10 min + run the morning-brief tick every 15 min."""
     from app.services.sequence_engine import process_pending_steps
     tick_count = 0
     while True:
@@ -47,13 +48,26 @@ async def _sequence_engine_loop():
         except Exception as e:
             log.exception(f"sequence_engine tick failed: {e}")
 
-        # Check snoozed deals every 10 minutes (every 10th tick)
+        # Snoozed-deal wake check every 10 ticks (10 min)
         tick_count += 1
         if tick_count % 10 == 0:
             try:
                 await _wake_snoozed_deals()
             except Exception as e:
                 log.exception(f"snooze wake check failed: {e}")
+
+        # Morning-brief tick every 15 ticks (15 min). The tick itself
+        # iterates active users and only sends to those whose local time
+        # has just crossed their configured brief_hour.
+        if tick_count % 15 == 0:
+            try:
+                from app.services.morning_brief import run_morning_brief_tick
+                async with async_session() as db:
+                    sent_count = await run_morning_brief_tick(db)
+                if sent_count:
+                    log.info(f"morning_brief tick: {sent_count} brief(s) sent")
+            except Exception as e:
+                log.exception(f"morning_brief tick failed: {e}")
 
         await asyncio.sleep(60)
 

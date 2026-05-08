@@ -35,6 +35,15 @@ class User(Base):
     # 99 = skipped, 100 = completed. New users auto-start on first login until 99 or 100.
     onboarding_step = Column(Integer, nullable=False, default=0)
 
+    # Daily morning brief — TZ-aware delivery via the cron loop in main.py.
+    # brief_hour is local-time hour (0-23). We send when local time crosses
+    # that hour AND last_brief_sent_at is not today (UTC). Default 7am
+    # works for most US-based BDR workflows.
+    brief_enabled = Column(Boolean, default=True, nullable=False)
+    brief_hour = Column(Integer, default=7, nullable=False)
+    timezone = Column(String(80), default="America/Phoenix", nullable=False)
+    last_brief_sent_at = Column(DateTime, nullable=True)
+
     # Twilio Voice — per-rep phone number + SDK identity
     twilio_phone_number = Column(String(40), nullable=True)  # E.164 format, e.g. +17025551234
     twilio_identity = Column(String(80), nullable=True)      # SDK identity, e.g. "bmp_user_3"

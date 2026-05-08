@@ -511,6 +511,10 @@ def _profile_payload(user: User) -> dict:
         "send_from": sender["from_email"],
         "reply_to": sender["reply_to"],
         "signature_html": render_signature(user),
+        "brief_enabled": bool(getattr(user, "brief_enabled", True)),
+        "brief_hour": int(getattr(user, "brief_hour", 7) or 7),
+        "timezone": getattr(user, "timezone", None) or "America/Phoenix",
+        "last_brief_sent_at": user.last_brief_sent_at.isoformat() if getattr(user, "last_brief_sent_at", None) else None,
     }
 
 

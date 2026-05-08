@@ -883,6 +883,35 @@
                     </div>
                 </div>
 
+                <!-- Morning Brief — daily TZ-aware digest email -->
+                <div class="search-box" style="max-width:600px;margin-top:16px">
+                    <h3 style="margin:0 0 6px">☀️ Morning Brief</h3>
+                    <p style="font-size:12px;color:#888;margin-bottom:12px">A daily email digest at your local time. Covers what happened overnight, today's priorities, replies awaiting action, and a single AI-generated insight pulled from your pipeline data.</p>
+                    <div style="display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:center;font-size:13px">
+                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+                            <input type="checkbox" id="brief-enabled" onchange="saveBriefSettings()"> Enable daily brief
+                        </label>
+                        <span></span>
+                        <label style="color:#666">Send at</label>
+                        <select id="brief-hour" onchange="saveBriefSettings()" style="padding:6px;border:1px solid #ddd;border-radius:4px;width:140px">
+                            ${Array.from({length:24}, (_,h) => `<option value="${h}">${h===0?'12 AM':h<12?h+' AM':h===12?'12 PM':(h-12)+' PM'}</option>`).join('')}
+                        </select>
+                        <label style="color:#666">Timezone</label>
+                        <select id="brief-tz" onchange="saveBriefSettings()" style="padding:6px;border:1px solid #ddd;border-radius:4px;width:240px">
+                            <option value="America/Phoenix">Phoenix (MST, no DST)</option>
+                            <option value="America/Los_Angeles">Pacific (LA / Vegas DST)</option>
+                            <option value="America/Denver">Mountain (Denver, DST)</option>
+                            <option value="America/Chicago">Central (Chicago)</option>
+                            <option value="America/New_York">Eastern (NY)</option>
+                            <option value="Etc/UTC">UTC</option>
+                        </select>
+                    </div>
+                    <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+                        <button class="btn btn-secondary btn-sm" onclick="sendTestBrief()">Send a test now</button>
+                        <span id="brief-last-sent" style="font-size:11px;color:#888"></span>
+                    </div>
+                </div>
+
                 <!-- Notifications -->
                 <div class="search-box" style="max-width:600px;margin-top:16px">
                     <h3 style="margin:0 0 6px">Notifications <span id="notif-status" style="font-size:11px;font-weight:400;color:#888"></span></h3>
@@ -5198,6 +5227,20 @@
             document.getElementById('settings-reply-to').textContent = data.reply_to;
             document.getElementById('signature-preview').innerHTML = data.signature_html || '';
 
+            // Morning brief settings — populate from /me payload
+            const briefEnabled = document.getElementById('brief-enabled');
+            const briefHour = document.getElementById('brief-hour');
+            const briefTz = document.getElementById('brief-tz');
+            const briefLast = document.getElementById('brief-last-sent');
+            if (briefEnabled) briefEnabled.checked = !!data.brief_enabled;
+            if (briefHour) briefHour.value = String(data.brief_hour ?? 7);
+            if (briefTz) briefTz.value = data.timezone || 'America/Phoenix';
+            if (briefLast) {
+                briefLast.textContent = data.last_brief_sent_at
+                    ? `Last sent ${fmtRelative(data.last_brief_sent_at)}`
+                    : 'No brief sent yet';
+            }
+
             // Role-gated Settings panels:
             //   admin+         → team management, tenant-tier keys, AI tone, Twilio numbers
             //   super_admin    → everything above + platform credentials section
@@ -5325,6 +5368,29 @@
                             <th style="padding:6px 8px;text-align:right">Raw cost</th>
                         </tr></thead><tbody>${userRows}</tbody></table>`
                     : '<div style="color:#999;font-size:13px">No per-user data yet.</div>';
+            }
+        }
+
+        async function saveBriefSettings() {
+            const data = await api('/api/auth/me/brief-settings', {
+                method: 'PATCH',
+                body: JSON.stringify({
+                    brief_enabled: document.getElementById('brief-enabled').checked,
+                    brief_hour: parseInt(document.getElementById('brief-hour').value) || 7,
+                    timezone: document.getElementById('brief-tz').value,
+                }),
+            });
+            if (data) toast(data.brief_enabled ? '✅ Brief settings saved' : 'Brief disabled');
+        }
+
+        async function sendTestBrief() {
+            toast('Sending test brief…');
+            const data = await api('/api/auth/me/brief/test-send', { method: 'POST' });
+            if (data && data.sent) {
+                toast('✅ Test brief sent — check your inbox');
+                loadSettings();  // refresh "last sent" timestamp
+            } else {
+                toast('Could not send the brief. Check Resend logs.');
             }
         }
 

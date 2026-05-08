@@ -100,7 +100,66 @@ async def get_me(user: User = Depends(get_current_user)):
         "role": user.role,
         "sending_enabled": user.sending_enabled,
         "onboarding_step": user.onboarding_step,
+        "brief_enabled": user.brief_enabled,
+        "brief_hour": user.brief_hour,
+        "timezone": user.timezone,
+        "last_brief_sent_at": user.last_brief_sent_at.isoformat() if user.last_brief_sent_at else None,
     }
+
+
+# ============================================================
+# Morning brief — settings + preview + test-send
+# ============================================================
+
+class UpdateBriefSettingsRequest(BaseModel):
+    brief_enabled: Optional[bool] = None
+    brief_hour: Optional[int] = None
+    timezone: Optional[str] = None
+
+
+@router.patch("/me/brief-settings")
+async def update_brief_settings(
+    req: UpdateBriefSettingsRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Update the current user's morning brief preferences."""
+    if req.brief_enabled is not None:
+        user.brief_enabled = bool(req.brief_enabled)
+    if req.brief_hour is not None:
+        h = int(req.brief_hour)
+        if 0 <= h <= 23:
+            user.brief_hour = h
+    if req.timezone is not None:
+        # Validate it's a known IANA tz name
+        try:
+            from zoneinfo import ZoneInfo
+            ZoneInfo(req.timezone)
+            user.timezone = req.timezone
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"Unknown timezone: {req.timezone}")
+    await db.commit()
+    return {
+        "brief_enabled": user.brief_enabled,
+        "brief_hour": user.brief_hour,
+        "timezone": user.timezone,
+    }
+
+
+@router.post("/me/brief/test-send")
+async def test_send_brief(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Force-send a morning brief to the current user, ignoring the
+    'last_brief_sent_at' idempotency check. Used by the Settings UI's
+    "Send a test now" button."""
+    from app.services.morning_brief import send_brief
+    # Temporarily clear the stamp so send_brief doesn't no-op, then
+    # restore. Our actual check is in run_morning_brief_tick (cron path);
+    # send_brief itself doesn't check, so we just call it.
+    ok = await send_brief(db, user)
+    return {"sent": ok}
 
 
 class UpdateOnboardingRequest(BaseModel):
