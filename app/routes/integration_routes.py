@@ -117,9 +117,13 @@ async def revoke_api_key(
 
 KNOWN_EVENTS = (
     "company.created",
+    "company.merged",
+    "company.deleted",
     "contact.created",
     "email.replied",
     "meeting.booked",
+    "sequence.created",
+    "deal.stage_changed",
 )
 
 

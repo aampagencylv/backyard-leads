@@ -1410,6 +1410,18 @@ async def pursue_companies(
             db.add(Activity(company_id=company.id, user_id=user.id, activity_type="sequence_created",
                             content=f"Sequence created for {primary.full_name or primary.email or 'primary contact'} ({emails_created} emails)",
                             metadata_json=json.dumps({"contact_id": primary.id, "emails": emails_created})))
+            try:
+                from app.services.webhook_dispatch import dispatch_event
+                await dispatch_event(db, "sequence.created", {
+                    "contact_id": primary.id,
+                    "company_id": company.id,
+                    "company_name": company.name,
+                    "contact_email": primary.email,
+                    "step_count": emails_created,
+                    "kind": "pursue",
+                })
+            except Exception:
+                pass
 
             # Auto-generate AI Findability Audit
             audit_url = None
@@ -1929,6 +1941,35 @@ async def merge_companies(
 
     await db.commit()
     await db.refresh(keep)
+
+    # Audit log + outbound webhook
+    try:
+        from app.services.audit_log import record_audit
+        await record_audit(
+            db, actor=user, action="company.merged",
+            target_type="company", target_id=keep.id, target_label=keep.name,
+            metadata={
+                "kept_id": keep.id,
+                "merged_from_ids": req.merge_from_ids,
+                "merged_from_names": deleted_names,
+                "repoint_counts": repoint_counts,
+            },
+        )
+        await db.commit()
+    except Exception:
+        pass
+    try:
+        from app.services.webhook_dispatch import dispatch_event
+        await dispatch_event(db, "company.merged", {
+            "kept_id": keep.id,
+            "kept_name": keep.name,
+            "merged_from_ids": req.merge_from_ids,
+            "merged_from_names": deleted_names,
+            "repoint_counts": repoint_counts,
+        })
+    except Exception:
+        pass
+
     return {
         "kept_id": keep.id,
         "kept_name": keep.name,
@@ -2052,9 +2093,28 @@ async def bulk_company_action(
     elif req.action == "delete":
         # Cascading delete — Company has cascade='all, delete-orphan' on contacts,
         # deals, activities, tasks. company_tags FK cascades on the join.
+        # Audit + webhook fire BEFORE delete so we still have the row data.
         for cid in req.company_ids:
             row = (await db.execute(select(Company).where(Company.id == cid))).scalar_one_or_none()
             if row:
+                deleted_snapshot = {
+                    "id": row.id, "name": row.name, "website": row.website,
+                    "domain": row.domain, "city": row.city, "state": row.state,
+                }
+                try:
+                    from app.services.audit_log import record_audit
+                    await record_audit(
+                        db, actor=user, action="company.deleted",
+                        target_type="company", target_id=row.id, target_label=row.name,
+                        metadata=deleted_snapshot,
+                    )
+                except Exception:
+                    pass
+                try:
+                    from app.services.webhook_dispatch import dispatch_event
+                    await dispatch_event(db, "company.deleted", deleted_snapshot)
+                except Exception:
+                    pass
                 await db.delete(row)
                 affected += 1
 

@@ -185,6 +185,8 @@ async def update_deal(
     if req.value is not None and req.value != deal.value:
         changes.append(f"value: ${req.value:,.0f}")
         deal.value = req.value
+    stage_changed_from = None
+    stage_changed_to = None
     if req.stage is not None and req.stage != deal.stage:
         if req.stage not in PIPELINE_STAGES:
             raise HTTPException(status_code=400, detail=f"stage must be one of {PIPELINE_STAGES}")
@@ -194,6 +196,8 @@ async def update_deal(
         if req.stage in ("closed_won", "closed_lost"):
             deal.closed_at = datetime.now(timezone.utc)
         changes.append(f"stage: {old} → {req.stage}")
+        stage_changed_from = old
+        stage_changed_to = req.stage
     if req.probability is not None:
         deal.probability = max(0, min(100, req.probability))
     if req.expected_close_date is not None:
@@ -219,6 +223,27 @@ async def update_deal(
                         activity_type="deal_update", content="; ".join(changes)))
     await db.commit()
     await db.refresh(deal)
+
+    # Outbound webhook on stage change — drives Slack alerts on
+    # "deal moved to closed_won", Zapier integrations to update
+    # external billing systems, etc.
+    if stage_changed_to:
+        try:
+            from app.services.webhook_dispatch import dispatch_event
+            await dispatch_event(db, "deal.stage_changed", {
+                "deal_id": deal.id,
+                "company_id": deal.company_id,
+                "name": deal.name,
+                "from_stage": stage_changed_from,
+                "to_stage": stage_changed_to,
+                "value": deal.value,
+                "probability": deal.probability,
+                "package": deal.package,
+                "assigned_to": deal.assigned_to,
+            })
+        except Exception:
+            pass
+
     return _deal_to_dict(deal)
 
 

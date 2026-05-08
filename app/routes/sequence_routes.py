@@ -257,6 +257,20 @@ async def trigger_post_call_sequence(
         content=f"[Post-call] {created}-step follow-up sequence queued from call transcript",
     ))
     await db.commit()
+
+    try:
+        from app.services.webhook_dispatch import dispatch_event
+        await dispatch_event(db, "sequence.created", {
+            "contact_id": contact.id,
+            "company_id": company.id,
+            "company_name": company.name,
+            "step_count": created,
+            "first_send_at": base_time.isoformat(),
+            "kind": "post_call",
+        })
+    except Exception:
+        pass
+
     return {
         "created": created,
         "first_send_at": base_time.isoformat(),

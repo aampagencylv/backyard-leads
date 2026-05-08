@@ -482,6 +482,19 @@ async def generate_contact_sequence(
     if company.status == "new":
         company.status = "sequencing"
 
+    try:
+        from app.services.webhook_dispatch import dispatch_event
+        await dispatch_event(db, "sequence.created", {
+            "contact_id": contact.id,
+            "company_id": company.id,
+            "company_name": company.name,
+            "contact_email": contact.email,
+            "step_count": created,
+            "kind": "contact_outreach",
+        })
+    except Exception:
+        pass
+
     # Auto-add company to pipeline if no deal exists
     from app.models import Deal
     existing_deal = (await db.execute(

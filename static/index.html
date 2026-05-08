@@ -1029,6 +1029,67 @@ function verify(secret, rawBody, header) {
     "source": "iclosed"
   }
 }</pre>
+
+                        <h3 style="font-size:15px;margin-top:18px"><code>sequence.created</code></h3>
+                        <p style="font-size:12px;color:#666">Fires when a new outreach sequence is enrolled on a contact. <code>kind</code> identifies which path triggered it: <code>contact_outreach</code> (manual Start Sequence button), <code>pursue</code> (Companies → Pursue), <code>post_call</code> (auto-generated from a call transcript), <code>autopilot</code> (Auto Pilot campaign).</p>
+                        <pre class="dev-code">{
+  "event": "sequence.created",
+  "data": {
+    "contact_id": 88,
+    "company_id": 42,
+    "company_name": "Smith Pools",
+    "contact_email": "john@smithpools.com",
+    "step_count": 13,
+    "kind": "pursue"
+  }
+}</pre>
+
+                        <h3 style="font-size:15px;margin-top:18px"><code>deal.stage_changed</code></h3>
+                        <p style="font-size:12px;color:#666">Fires whenever a Deal moves between stages (manual edit, kanban drag, snooze/wake, won/lost). <code>from_stage</code> and <code>to_stage</code> are the canonical stage names: <code>in_sequence</code>, <code>prospecting</code>, <code>qualified</code>, <code>proposal</code>, <code>negotiation</code>, <code>closed_won</code>, <code>closed_lost</code>, <code>snoozed</code>.</p>
+                        <pre class="dev-code">{
+  "event": "deal.stage_changed",
+  "data": {
+    "deal_id": 91,
+    "company_id": 42,
+    "name": "Smith Pools — Pool Builder Package",
+    "from_stage": "qualified",
+    "to_stage": "proposal",
+    "value": 4200,
+    "probability": 50,
+    "package": "pool_builder",
+    "assigned_to": 3
+  }
+}</pre>
+
+                        <h3 style="font-size:15px;margin-top:18px"><code>company.merged</code></h3>
+                        <p style="font-size:12px;color:#666">Fires when an admin merges duplicate Company rows. Use to clean up downstream systems that referenced the merged-away IDs (any record pointing at <code>merged_from_ids</code> should be repointed to <code>kept_id</code>).</p>
+                        <pre class="dev-code">{
+  "event": "company.merged",
+  "data": {
+    "kept_id": 42,
+    "kept_name": "Smith Pools",
+    "merged_from_ids": [89, 102],
+    "merged_from_names": ["Smith Pools LLC", "Smith Pools - Las Vegas"],
+    "repoint_counts": {
+      "activities": 24, "contacts": 3, "deals": 2,
+      "generated_emails": 18, "tasks": 5
+    }
+  }
+}</pre>
+
+                        <h3 style="font-size:15px;margin-top:18px"><code>company.deleted</code></h3>
+                        <p style="font-size:12px;color:#666">Fires before a Company is hard-deleted (so the payload still has the row data). All child records cascade-delete on our side; if you mirror these companies in another system, this is your cue to delete them too.</p>
+                        <pre class="dev-code">{
+  "event": "company.deleted",
+  "data": {
+    "id": 42,
+    "name": "Smith Pools",
+    "website": "smithpools.com",
+    "domain": "smithpools.com",
+    "city": "Las Vegas",
+    "state": "NV"
+  }
+}</pre>
                     </div>
                 </div>
 
