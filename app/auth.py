@@ -76,3 +76,46 @@ async def require_sales_rep(user: User = Depends(get_current_user)) -> User:
     if user.role == "read_only":
         raise HTTPException(status_code=403, detail="Read-only accounts cannot perform this action")
     return user
+
+
+# ============================================================
+# Role-escalation guards
+# ============================================================
+# Admins manage operations: users, sequences, tenant settings.
+# Super_admins manage platform infrastructure: API keys, billing, the
+# admin layer above admins. The rules below stop an admin from
+# promoting themselves, modifying a super_admin, or otherwise climbing
+# the ladder.
+
+ROLE_ASSIGNABLE = {
+    "super_admin": {"super_admin", "admin", "sales_rep", "read_only"},
+    "admin":       {"admin", "sales_rep", "read_only"},  # NO super_admin
+    "sales_rep":   set(),
+    "read_only":   set(),
+}
+
+
+def role_assignable_by(actor: User) -> set[str]:
+    """Which roles can `actor` assign to other users?"""
+    return ROLE_ASSIGNABLE.get(actor.role, set())
+
+
+def can_modify_user(actor: User, target: User) -> tuple[bool, str]:
+    """Can `actor` modify `target` (role / sending / active flags / delete)?
+
+    Rules:
+      - super_admin can modify anyone
+      - admin can modify non-super_admin users only
+      - everyone else: cannot modify other users
+    """
+    if actor.id == target.id and actor.role in ("admin", "super_admin"):
+        # Self-edit allowed for own profile fields; the caller is responsible
+        # for blocking self-demotion / self-deletion separately.
+        return True, ""
+    if actor.role == "super_admin":
+        return True, ""
+    if actor.role == "admin":
+        if target.role == "super_admin":
+            return False, "Admins cannot modify a super admin account"
+        return True, ""
+    return False, "Insufficient privilege"

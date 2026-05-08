@@ -722,9 +722,12 @@
                     <p style="font-size:13px;color:#666;margin-bottom:16px">This is what your signature looks like. Edit your profile fields above to update it.</p>
                     <div id="signature-preview" style="background:#fff;border:1px solid #e5e7eb;border-radius:6px;padding:16px"></div>
                 </div>
-                <div class="search-box" style="max-width:600px;margin-top:16px">
-                    <h3>API Keys</h3>
-                    <p style="font-size:13px;color:#666;margin-bottom:16px">Org-level keys used by the prospector. Stored in the database (not the .env file), so you can rotate without SSH access. Empty value falls back to the server's environment variable.</p>
+                <!-- Tenant-tier settings (visible to admin + super_admin):
+                     enrichment provider keys, AI tone — operational config that
+                     team admins should be able to manage without escalating. -->
+                <div id="tenant-keys-section" class="search-box hidden" style="max-width:600px;margin-top:16px">
+                    <h3>Enrichment & AI Settings</h3>
+                    <p style="font-size:13px;color:#666;margin-bottom:16px">Provider keys and AI tone for your team. Stored in the database — rotate without SSH access. Empty value falls back to the server's environment variable.</p>
 
                     <div class="form-group">
                         <label>Netrows API Key
@@ -737,8 +740,17 @@
                         </div>
                         <div id="netrows-key-current" style="font-size:11px;color:#888;margin-top:4px"></div>
                     </div>
+                </div>
 
-                    <div style="margin-top:24px;padding-top:16px;border-top:1px solid #eee">
+                <!-- Platform-tier settings (super_admin only): carrier creds,
+                     webhook secrets, infrastructure keys. Touching these can
+                     affect billing / deliverability / compliance for the whole
+                     org, so they're locked above admin tier. -->
+                <div id="api-keys-section" class="search-box hidden" style="max-width:600px;margin-top:16px">
+                    <h3>Platform Credentials <span style="font-size:11px;font-weight:400;color:#888;margin-left:8px">🔒 super admin only</span></h3>
+                    <p style="font-size:13px;color:#666;margin-bottom:16px">Carrier credentials, webhooks, and infrastructure keys. Changing these affects billing / deliverability / compliance for the whole organization.</p>
+
+                    <div>
                         <h4 style="font-size:14px;margin-bottom:6px">Twilio Voice
                             <span id="twilio-overall-status" style="font-size:11px;font-weight:400;color:#888;margin-left:6px"></span>
                         </h4>
@@ -835,8 +847,9 @@
                     </div>
                 </div>
 
-                <!-- Messaging Tone & Direction (org-wide AI prompt) -->
-                <div class="search-box" style="max-width:600px;margin-top:16px">
+                <!-- Messaging Tone & Direction (org-wide AI prompt) — tenant-tier
+                     so admins can shape the team voice without escalating. -->
+                <div id="messaging-direction-section" class="search-box hidden" style="max-width:600px;margin-top:16px">
                     <h3 style="margin:0 0 6px">Messaging Tone & Direction <span id="messaging-direction-status" style="font-size:11px;font-weight:400;color:#888"></span></h3>
                     <p style="font-size:12px;color:#888;margin-bottom:8px">Org-wide strategic angle prepended to every AI generation (cold email, follow-ups, iMessage, post-call sequences). Default leads with AI findability / GEO / local SEO. Edit to refocus the team's voice — clear to revert to default.</p>
                     <div class="form-group">
@@ -4472,19 +4485,26 @@
             document.getElementById('settings-reply-to').textContent = data.reply_to;
             document.getElementById('signature-preview').innerHTML = data.signature_html || '';
 
-            // Show team management for admins + super_admins
-            if (currentUser && (currentUser.role === 'admin' || currentUser.role === 'super_admin')) {
-                document.getElementById('team-management-section').classList.remove('hidden');
-                loadTeamMembers();
-            }
+            // Role-gated Settings panels:
+            //   admin+         → team management, tenant-tier keys, AI tone, Twilio numbers
+            //   super_admin    → everything above + platform credentials section
+            const isAdminPlus = !!(currentUser && (currentUser.role === 'admin' || currentUser.role === 'super_admin'));
+            const isSuper = !!(currentUser && currentUser.role === 'super_admin');
 
-            // Show API keys section only for super_admins
+            const teamSection = document.getElementById('team-management-section');
+            if (teamSection) teamSection.classList.toggle('hidden', !isAdminPlus);
+            if (isAdminPlus) loadTeamMembers();
+
+            const tenantKeys = document.getElementById('tenant-keys-section');
+            if (tenantKeys) tenantKeys.classList.toggle('hidden', !isAdminPlus);
+
+            const messagingSection = document.getElementById('messaging-direction-section');
+            if (messagingSection) messagingSection.classList.toggle('hidden', !isAdminPlus);
+
             const apiKeysSection = document.getElementById('api-keys-section');
-            if (apiKeysSection) {
-                apiKeysSection.style.display = (currentUser && currentUser.role === 'super_admin') ? '' : 'none';
-            }
+            if (apiKeysSection) apiKeysSection.classList.toggle('hidden', !isSuper);
 
-            if (currentUser && currentUser.role === 'super_admin') loadRuntimeConfig();
+            if (isAdminPlus) loadRuntimeConfig();
 
             loadCreditsPanel();
         }
@@ -4655,6 +4675,14 @@
             const users = await api('/api/auth/users');
             if (!users) return;
             const panel = document.getElementById('team-members-list');
+            const isSuper = !!(currentUser && currentUser.role === 'super_admin');
+            // Admins can assign admin / sales_rep / read_only. Only super_admins
+            // can grant the super_admin role (and only to super_admin users
+            // already — preventing self-promotion via dropdown).
+            const assignable = isSuper
+                ? ['super_admin', 'admin', 'sales_rep', 'read_only']
+                : ['admin', 'sales_rep', 'read_only'];
+
             panel.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
                 <thead>
                     <tr style="text-align:left;border-bottom:1px solid #e0e0e0">
@@ -4666,24 +4694,40 @@
                     </tr>
                 </thead>
                 <tbody>
-                    ${users.map(u => `
-                        <tr style="border-bottom:1px solid #f5f5f5">
-                            <td style="padding:8px">${escapeHtml(u.name)}${!u.is_active ? ' <span style="font-size:9px;color:#c0392b">INACTIVE</span>' : ''}</td>
-                            <td style="padding:8px">${escapeHtml(u.email)}</td>
-                            <td style="padding:8px">
-                                <select onchange="updateUserRole(${u.id}, this.value)" style="padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px">
-                                    ${['super_admin','admin','sales_rep','read_only'].map(r => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${r.replace('_',' ')}</option>`).join('')}
-                                </select>
-                            </td>
-                            <td style="padding:8px">
-                                <input type="checkbox" ${u.sending_enabled ? 'checked' : ''} onchange="updateUserSending(${u.id}, this.checked)">
-                            </td>
-                            <td style="padding:8px">
-                                <button class="btn btn-secondary btn-xs" onclick="resetUserPassword(${u.id}, '${escapeHtml(u.email)}')">Reset PW</button>
-                                <button class="btn btn-secondary btn-xs" onclick="showReassignModal(${u.id}, '${escapeHtml(u.name)}')">Reassign</button>
-                            </td>
-                        </tr>
-                    `).join('')}
+                    ${users.map(u => {
+                        // Server-authoritative lock flag — true when current
+                        // user lacks privilege to modify this row. Belt-and-
+                        // suspenders against the backend gates below.
+                        const locked = !!u.locked;
+                        const lockBadge = locked
+                            ? ' <span title="You cannot modify this account" style="font-size:10px;color:#888">🔒</span>'
+                            : '';
+                        // For locked rows, render role + sending as read-only text.
+                        // Always include the user's CURRENT role in dropdown
+                        // options so it doesn't visually flip just because the
+                        // viewer can't grant it.
+                        const roleOptions = [...new Set([u.role, ...assignable])]
+                            .map(r => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${r.replace('_',' ')}</option>`).join('');
+                        const roleCell = locked
+                            ? `<span style="color:#888;font-size:12px">${u.role.replace('_',' ')}</span>`
+                            : `<select onchange="updateUserRole(${u.id}, this.value)" style="padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px">${roleOptions}</select>`;
+                        const sendCell = locked
+                            ? `<span style="color:#888;font-size:12px">${u.sending_enabled ? '✓' : '—'}</span>`
+                            : `<input type="checkbox" ${u.sending_enabled ? 'checked' : ''} onchange="updateUserSending(${u.id}, this.checked)">`;
+                        const actionsCell = locked
+                            ? `<span style="color:#888;font-size:11px">no actions</span>`
+                            : `<button class="btn btn-secondary btn-xs" onclick="resetUserPassword(${u.id}, '${escapeHtml(u.email)}')">Reset PW</button>
+                               <button class="btn btn-secondary btn-xs" onclick="showReassignModal(${u.id}, '${escapeHtml(u.name)}')">Reassign</button>`;
+                        return `
+                            <tr style="border-bottom:1px solid #f5f5f5${locked ? ';background:#fafafa' : ''}">
+                                <td style="padding:8px">${escapeHtml(u.name)}${!u.is_active ? ' <span style="font-size:9px;color:#c0392b">INACTIVE</span>' : ''}${lockBadge}</td>
+                                <td style="padding:8px">${escapeHtml(u.email)}</td>
+                                <td style="padding:8px">${roleCell}</td>
+                                <td style="padding:8px">${sendCell}</td>
+                                <td style="padding:8px">${actionsCell}</td>
+                            </tr>
+                        `;
+                    }).join('')}
                 </tbody>
             </table>`;
         }
@@ -4709,6 +4753,10 @@
 
         async function showInviteUserModal() {
             const root = document.getElementById('modal-root');
+            const isSuper = !!(currentUser && currentUser.role === 'super_admin');
+            const superOption = isSuper
+                ? '<option value="super_admin">Super Admin</option>'
+                : '';
             root.innerHTML = `
                 <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
                     <div class="modal-card" onclick="event.stopPropagation()" style="max-width:480px">
@@ -4725,6 +4773,7 @@
                                 <option value="sales_rep">Sales Rep</option>
                                 <option value="admin">Admin</option>
                                 <option value="read_only">Read Only</option>
+                                ${superOption}
                             </select>
                         </div>
                         <div class="modal-actions" style="display:flex;gap:8px;margin-top:16px">

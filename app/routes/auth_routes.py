@@ -7,7 +7,11 @@ from sqlalchemy import select, func
 from pydantic import BaseModel
 from app.database import get_db
 from app.models import User
-from app.auth import hash_password, verify_password, create_access_token, get_current_user, require_admin
+from app.auth import (
+    hash_password, verify_password, create_access_token,
+    get_current_user, require_admin,
+    can_modify_user, role_assignable_by,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -137,7 +141,11 @@ async def list_users(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_admin),
 ):
-    """List all users (admin only)."""
+    """List all users (admin only).
+
+    Each row carries a `locked` flag when the current user can't modify
+    that target — admins see super_admin accounts but can't edit them.
+    """
     result = await db.execute(select(User).order_by(User.created_at))
     users = result.scalars().all()
     return [
@@ -149,6 +157,9 @@ async def list_users(
             "sending_enabled": u.sending_enabled,
             "is_active": u.is_active,
             "created_at": u.created_at.isoformat() if u.created_at else None,
+            # True when the requesting user does NOT have privilege to
+            # modify this row. UI should show a lock icon + disable buttons.
+            "locked": not can_modify_user(user, u)[0],
         }
         for u in users
     ]
@@ -165,14 +176,31 @@ async def update_user_role(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_admin),
 ):
-    """Change a user's role (admin only)."""
+    """Change a user's role.
+    Admins cannot modify super_admins, cannot grant the super_admin role,
+    and cannot demote the last super_admin (which would lock the system
+    out of platform settings)."""
     if req.role not in ("super_admin", "admin", "sales_rep", "read_only"):
         raise HTTPException(status_code=400, detail="Invalid role")
 
-    result = await db.execute(select(User).where(User.id == user_id))
-    target = result.scalar_one_or_none()
+    target = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
+
+    allowed, reason = can_modify_user(user, target)
+    if not allowed:
+        raise HTTPException(status_code=403, detail=reason)
+    if req.role not in role_assignable_by(user):
+        raise HTTPException(status_code=403, detail=f"You don't have permission to assign the '{req.role}' role")
+
+    # Don't strand the system without a super_admin.
+    if target.role == "super_admin" and req.role != "super_admin":
+        remaining = (await db.execute(
+            select(func.count()).select_from(User)
+            .where(User.role == "super_admin", User.id != target.id, User.is_active == True)
+        )).scalar() or 0
+        if remaining == 0:
+            raise HTTPException(status_code=400, detail="Cannot demote the last active super admin")
 
     target.role = req.role
     await db.commit()
@@ -208,6 +236,9 @@ async def invite_user(
 
     if req.role not in ("super_admin", "admin", "sales_rep", "read_only"):
         raise HTTPException(status_code=400, detail="Invalid role")
+
+    if req.role not in role_assignable_by(user):
+        raise HTTPException(status_code=403, detail=f"You don't have permission to create a user with the '{req.role}' role")
 
     # Generate a temporary password
     import secrets
@@ -285,10 +316,16 @@ async def update_user(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_admin),
 ):
-    """Update any user's profile (admin only)."""
+    """Update any user's profile.
+    Admins cannot modify super_admins, cannot grant super_admin via this
+    endpoint, and cannot demote the last active super_admin."""
     target = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
+
+    allowed, reason = can_modify_user(user, target)
+    if not allowed:
+        raise HTTPException(status_code=403, detail=reason)
 
     if req.first_name is not None:
         target.first_name = req.first_name
@@ -296,11 +333,30 @@ async def update_user(
         target.last_name = req.last_name
     if req.nickname is not None:
         target.nickname = req.nickname
-    if req.role is not None and req.role in ("super_admin", "admin", "sales_rep", "read_only"):
+    if req.role is not None:
+        if req.role not in ("super_admin", "admin", "sales_rep", "read_only"):
+            raise HTTPException(status_code=400, detail="Invalid role")
+        if req.role not in role_assignable_by(user):
+            raise HTTPException(status_code=403, detail=f"You don't have permission to assign the '{req.role}' role")
+        if target.role == "super_admin" and req.role != "super_admin":
+            remaining = (await db.execute(
+                select(func.count()).select_from(User)
+                .where(User.role == "super_admin", User.id != target.id, User.is_active == True)
+            )).scalar() or 0
+            if remaining == 0:
+                raise HTTPException(status_code=400, detail="Cannot demote the last active super admin")
         target.role = req.role
     if req.sending_enabled is not None:
         target.sending_enabled = req.sending_enabled
     if req.is_active is not None:
+        # Don't deactivate the last active super_admin
+        if target.role == "super_admin" and req.is_active is False:
+            remaining = (await db.execute(
+                select(func.count()).select_from(User)
+                .where(User.role == "super_admin", User.id != target.id, User.is_active == True)
+            )).scalar() or 0
+            if remaining == 0:
+                raise HTTPException(status_code=400, detail="Cannot deactivate the last active super admin")
         target.is_active = req.is_active
 
     await db.commit()
@@ -415,6 +471,11 @@ async def reassign_user(
         raise HTTPException(status_code=404, detail="Source user not found")
     if not to_user:
         raise HTTPException(status_code=404, detail="Target user not found")
+
+    # Admins cannot redistribute work owned by a super_admin.
+    allowed, reason = can_modify_user(user, from_user)
+    if not allowed:
+        raise HTTPException(status_code=403, detail=reason)
 
     companies_result = await db.execute(
         update(Company).where(Company.assigned_to == req.from_user_id).values(assigned_to=req.to_user_id)
