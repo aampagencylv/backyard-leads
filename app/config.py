@@ -34,6 +34,17 @@ class Settings(BaseSettings):
     public_url: str = "https://prospector.backyardmarketingpros.com"
     bmp_postal_address: str = "Backyard Marketing Pros, Las Vegas, NV"  # CAN-SPAM requires a real postal address; override in .env
 
+    # Google OAuth — per-user Google Calendar integration for the native
+    # scheduler. Register a Web app in Google Cloud Console; authorized
+    # redirect URI must match `<public_url>/api/google/oauth/callback`.
+    # Required scopes (set on the consent screen):
+    #   - openid
+    #   - https://www.googleapis.com/auth/userinfo.email
+    #   - https://www.googleapis.com/auth/calendar.readonly
+    #   - https://www.googleapis.com/auth/calendar.events
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = ""
+
     class Config:
         env_file = ".env"
 

@@ -48,6 +48,20 @@ class User(Base):
     twilio_phone_number = Column(String(40), nullable=True)  # E.164 format, e.g. +17025551234
     twilio_identity = Column(String(80), nullable=True)      # SDK identity, e.g. "bmp_user_3"
 
+    # Google OAuth — per-user calendar integration for native scheduler.
+    # We only store the refresh_token long-term; access tokens are
+    # exchanged on demand and never persisted. `google_calendar_id` is
+    # the dedicated "BMP Discovery Calls" calendar we auto-create on
+    # first connect — booking events go there so disconnecting the
+    # integration doesn't touch the user's personal events.
+    google_email = Column(String(255), nullable=True)
+    google_refresh_token = Column(Text, nullable=True)
+    google_calendar_id = Column(String(255), nullable=True)
+    google_connected_at = Column(DateTime, nullable=True)
+    # Public booking slug — appears in booking URL /book/{slug}. Defaults
+    # to a kebab-case form of the user's first+last name on connect.
+    booking_slug = Column(String(80), nullable=True, unique=True, index=True)
+
     # Per-rep dial preferences
     # 'browser' = WebRTC via Twilio.Device (default; needs headset + good internet)
     # 'bridge'  = CallRail-style: Twilio rings personal_phone_number first, bridges to prospect

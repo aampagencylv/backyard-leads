@@ -1374,6 +1374,29 @@ function verify(secret, rawBody, header) {
                     </div>
                 </div>
 
+                <!-- Google Calendar — Phase 1 of native scheduler -->
+                <div class="search-box" style="max-width:600px;margin-top:16px">
+                    <h3 style="margin:0 0 6px">📅 Google Calendar <span id="google-cal-status" style="font-size:11px;font-weight:400;color:#888"></span></h3>
+                    <p style="font-size:12px;color:#888;margin-bottom:8px">Connect your Google Calendar so prospects can self-book discovery calls on your real availability. Booked calls land on a dedicated <strong>BMP Discovery Calls</strong> calendar — your personal calendar stays untouched.</p>
+                    <p style="font-size:11px;color:#888;margin-bottom:12px"><strong>Phase 1 (now):</strong> connect / disconnect Google. <strong>Phase 2 (next):</strong> set availability rules + recurring hours. <strong>Phase 3:</strong> public booking page at <code>/book/{your-slug}</code> + booking confirmation flow.</p>
+                    <div id="google-cal-not-connected" style="display:none">
+                        <button class="btn btn-primary btn-sm" onclick="connectGoogleCalendar()">🔌 Connect Google Calendar</button>
+                        <div id="google-cal-not-configured" style="display:none;margin-top:8px;padding:8px 10px;background:#fff5f0;border-radius:4px;font-size:11px;color:#c0392b">
+                            ⚠️ Google OAuth isn't configured on the server. Set <code>GOOGLE_OAUTH_CLIENT_ID</code> + <code>GOOGLE_OAUTH_CLIENT_SECRET</code> in <code>/opt/backyard-leads/.env</code> and restart the service. The redirect URI to register in Google Cloud Console is <code id="google-cal-redirect-uri"></code>.
+                        </div>
+                    </div>
+                    <div id="google-cal-connected" style="display:none">
+                        <div style="font-size:13px;line-height:1.7">
+                            <div><strong>Connected as:</strong> <span id="google-cal-email" style="color:#1b5e20"></span></div>
+                            <div id="google-cal-since" style="color:#888;font-size:11px"></div>
+                            <div style="margin-top:6px"><strong>Booking URL:</strong> <a id="google-cal-booking-link" target="_blank" rel="noopener" style="color:#0077B5"></a> <span style="font-size:10px;color:#888">(public page goes live in Phase 3)</span></div>
+                        </div>
+                        <div style="margin-top:10px">
+                            <button class="btn btn-secondary btn-sm" onclick="disconnectGoogleCalendar()">Disconnect</button>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Notifications -->
                 <div class="search-box" style="max-width:600px;margin-top:16px">
                     <h3 style="margin:0 0 6px">Notifications <span id="notif-status" style="font-size:11px;font-weight:400;color:#888"></span></h3>
@@ -6325,6 +6348,9 @@ hmac.compare_digest(expected, header)</pre>
                     : 'No brief sent yet';
             }
 
+            // Google Calendar — Phase 1 native scheduler
+            loadGoogleCalendarStatus();
+
             // Role-gated Settings panels:
             //   admin+         → team management, tenant-tier keys, AI tone, Twilio numbers
             //   super_admin    → everything above + platform credentials section
@@ -6486,6 +6512,85 @@ hmac.compare_digest(expected, header)</pre>
                 toast('Could not send the brief. Check Resend logs.');
             }
         }
+
+        // ============================================================
+        // Google Calendar (Phase 1 of native scheduler)
+        // ============================================================
+
+        async function loadGoogleCalendarStatus() {
+            const data = await api('/api/google/oauth/status');
+            if (!data) return;
+            const status = document.getElementById('google-cal-status');
+            const notConn = document.getElementById('google-cal-not-connected');
+            const conn = document.getElementById('google-cal-connected');
+            const notCfg = document.getElementById('google-cal-not-configured');
+            if (!data.configured) {
+                if (status) status.textContent = '· not configured';
+                if (status) status.style.color = '#c0392b';
+                if (notConn) notConn.style.display = '';
+                if (conn) conn.style.display = 'none';
+                if (notCfg) notCfg.style.display = '';
+                const redirEl = document.getElementById('google-cal-redirect-uri');
+                if (redirEl) redirEl.textContent = location.origin + '/api/google/oauth/callback';
+                return;
+            }
+            if (notCfg) notCfg.style.display = 'none';
+            if (data.connected) {
+                if (status) { status.textContent = '· connected'; status.style.color = '#1b5e20'; }
+                if (notConn) notConn.style.display = 'none';
+                if (conn) conn.style.display = '';
+                const emailEl = document.getElementById('google-cal-email');
+                const sinceEl = document.getElementById('google-cal-since');
+                const linkEl = document.getElementById('google-cal-booking-link');
+                if (emailEl) emailEl.textContent = data.google_email || '(unknown)';
+                if (sinceEl) sinceEl.textContent = data.connected_at ? `Connected ${fmtRelative(data.connected_at)}` : '';
+                if (linkEl && data.booking_url) {
+                    linkEl.href = data.booking_url;
+                    linkEl.textContent = data.booking_url;
+                }
+            } else {
+                if (status) { status.textContent = '· not connected'; status.style.color = '#888'; }
+                if (notConn) notConn.style.display = '';
+                if (conn) conn.style.display = 'none';
+            }
+        }
+
+        async function connectGoogleCalendar() {
+            // We can't 30x to Google directly because the browser
+            // strips Authorization on cross-origin redirects. So we
+            // fetch the consent URL as JSON, then navigate to it.
+            const data = await api('/api/google/oauth/start-url');
+            if (data && data.auth_url) {
+                window.location.href = data.auth_url;
+            } else {
+                toast('Could not start Google OAuth. Check server config.');
+            }
+        }
+
+        async function disconnectGoogleCalendar() {
+            if (!confirm('Disconnect Google Calendar? Your existing booking URL will stay valid but the page will show a "not connected" message until you reconnect.')) return;
+            const data = await api('/api/google/oauth/disconnect', { method: 'POST' });
+            if (data && data.disconnected) {
+                toast('Disconnected from Google.');
+                loadGoogleCalendarStatus();
+            }
+        }
+
+        // Detect ?google_oauth=connected after redirect from callback
+        function _checkGoogleOAuthRedirect() {
+            const hash = window.location.hash || '';
+            if (hash.includes('google_oauth=connected')) {
+                toast('✅ Google Calendar connected');
+                // Strip the param so a refresh doesn't re-toast
+                history.replaceState(null, '', '#settings');
+            } else if (hash.includes('google_oauth=error')) {
+                const reason = (hash.match(/reason=([^&]+)/) || [])[1] || 'unknown';
+                toast(`❌ Google OAuth failed: ${decodeURIComponent(reason)}`);
+                history.replaceState(null, '', '#settings');
+            }
+        }
+        try { _checkGoogleOAuthRedirect(); } catch (e) {}
+        window.addEventListener('hashchange', () => { try { _checkGoogleOAuthRedirect(); } catch (e) {} });
 
         async function changePassword() {
             const current = document.getElementById('settings-current-pw').value;

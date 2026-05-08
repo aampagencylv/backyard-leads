@@ -47,6 +47,7 @@ async def init_db():
         "scripts.migrate_api_keys_webhooks",
         "scripts.migrate_zoominfo",
         "scripts.migrate_tier2_netrows",
+        "scripts.migrate_google_oauth",
     ):
         try:
             mod = __import__(_migration_module, fromlist=["main"])

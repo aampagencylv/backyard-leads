@@ -30,6 +30,7 @@ from app.routes import (
     custom_field_routes,
     public_api,
     integration_routes,
+    google_oauth_routes,
 )
 
 
@@ -188,6 +189,7 @@ app.include_router(credit_routes.router)
 app.include_router(custom_field_routes.router)
 app.include_router(public_api.router)
 app.include_router(integration_routes.router)
+app.include_router(google_oauth_routes.router)
 
 # Serve static frontend
 app.mount("/static", StaticFiles(directory="static"), name="static")
