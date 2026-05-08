@@ -1364,74 +1364,94 @@
         // after each Next click so a refresh resumes mid-tour.
         // ============================================================
 
+        // Tour content — actually walks the user through each section.
+        // The tour engine reads `page` (showPage key) + optional `setup`
+        // (async hook to run before measuring the DOM, e.g. open a company)
+        // + `target` (CSS selector with comma-fallbacks) for the spotlight.
         const TOUR_STEPS = [
             {
-                target: 'a[onclick*="showPage(\'dashboard\')"]',
+                title: '👋 Welcome to Prospector',
+                text: "Quick 90-second tour of the platform. We'll walk through how to find leads, run multi-channel sequences, manage your pipeline, and use AI audit reports to book more discovery calls. Hit Next when you're ready.",
                 page: 'dashboard',
-                title: '👋 Welcome to your CRM',
-                text: "This is the Dashboard — your command center. KPIs, today's tasks, hot leads, pipeline by stage, and the activity feed all live here. Let's take a quick tour.",
+                target: '#kpi-strip, .kpi-strip',
             },
             {
-                target: 'a[onclick*="showPage(\'find\')"]',
-                page: 'dashboard',
-                title: '🔍 Step 2: Find Leads',
-                text: 'Search Google Maps for prospects by industry + location. Filter by review count to find established businesses that probably have a marketing budget.',
+                title: '🔍 Step 1 — Find Leads',
+                text: 'This is where prospecting starts. Pick a business type, drop in a city, and we scrape Google Maps for matching companies. Filter by review count to skip newcomers and the chains. Hit Search → results land in the table below.',
+                page: 'search',
+                target: '#search-keyword-select, #search-location, #page-search .search-box',
             },
             {
-                target: 'a[onclick*="showPage(\'companies\')"]',
+                title: '🏢 Step 2 — Companies',
+                text: "Every prospect you've found or imported lives here. Status filters, search, sort by lead score. Click any row to open the full record. The 'Add to Pipeline' action runs enrichment + finds contacts + generates an audit report + creates a deal — all in one click.",
                 page: 'companies',
-                title: '🏢 Step 3: Companies',
-                text: "Every prospect lives here. Found a good one? Click 'Add to Pipeline' on a company — that one click runs enrichment, finds contacts, generates an audit report, and creates a deal.",
+                target: '#page-companies .search-box, #companies-list, #page-companies table, #page-companies',
             },
             {
-                target: '#all-companies, #companies-list, .company-card',
-                page: 'companies',
-                title: '🗂 Step 4: Company Detail',
-                text: 'Click any company name to see its full record: enrichment data on the right, contacts + sequences in the middle, full timeline of every interaction. Three columns, no clicks to dig.',
+                title: '🗂 Step 3 — Company Detail',
+                text: 'Three-column layout: enrichment + scores on the left, contacts + multi-channel sequences in the middle, full activity timeline on the right. Everything you need to act on a prospect, no clicking deeper.',
+                setup: openFirstCompanyForTour,
+                target: '#page-company-detail',
             },
             {
-                target: '#all-companies, #companies-list',
-                page: 'companies',
-                title: '📨 Step 5: Sequences',
-                text: 'Each contact gets a 30-day multi-channel cadence: email + LinkedIn + iMessage + scheduled calls. Steps auto-fire on schedule. Replies, voicemails, and call-connects auto-pause the sequence so you never look spammy.',
+                title: '📨 Step 4 — Multi-Channel Sequences',
+                text: "Each contact runs a 30-day cadence: email + LinkedIn + iMessage + scheduled calls. Steps auto-fire on schedule. Replies, voicemails, and meeting-booked events auto-pause so you never look spammy. The sequence-step cards here color-code each channel — green=email, orange=call, blue=iMessage, purple=LinkedIn.",
+                target: '#sequence-panel, .sequence-step-card, #page-company-detail .panel',
             },
             {
-                target: 'a[onclick*="showPage(\'pipeline\')"]',
+                title: '🎯 Step 5 — AI Findability Audit',
+                text: "Your differentiator. Generate an audit on any company → host it under a unique URL → embed it in emails or iMessage. The competitor-comparison report is gated behind an iClosed booking — they have to schedule a call to unlock it. That gate is where most discovery calls come from.",
+                target: '[id^="audit-btn-"], #page-company-detail .btn-primary, #page-company-detail .panel',
+            },
+            {
+                title: '💼 Step 6 — Pipeline',
+                text: "Drag deals between stages. Cards show package, monthly value, and days in stage. The 'In Sequence' column is for active outreach — deals only get a dollar value once the prospect engages. Snooze any deal to drop it off the board until a future date — auto-creates a follow-up task on wake.",
                 page: 'pipeline',
-                title: '💼 Step 6: Pipeline',
-                text: "Drag deals between stages. Cards show package, monthly value, and days in stage. The 'In Sequence' column is for active outreach — deals only get a dollar value once the prospect actually engages.",
-            },
-            {
                 target: '#kanban',
-                page: 'pipeline',
-                title: '⏰ Step 7: Snooze',
-                text: "Not ready yet but worth coming back to? Snooze the deal — it disappears from your pipeline until the wake date, then auto-creates a follow-up task. No more 'I forgot to follow up' deals dying.",
             },
             {
-                target: 'a[onclick*="showPage(\'contacts\')"]',
-                page: 'contacts',
-                title: '👥 Step 8: Contacts',
-                text: 'Every contact across every company. Filter by phone-type, sequence status, hot-lead activity. Multi-select to bulk-message, bulk-call, or bulk-merge. The Power Dialer rips through a filtered list one call after another.',
-            },
-            {
-                target: 'a[onclick*="showPage(\'tasks\')"]',
+                title: '📅 Step 7 — Tasks',
+                text: 'My open / Team open with filter chips for Today, This Week, Overdue. Sequences auto-create tasks for call steps + LinkedIn touches. Engagement signals (replies, hot leads, page-views) also auto-create follow-up tasks so nothing falls through.',
                 page: 'tasks',
-                title: '📅 Step 9: Tasks',
-                text: 'My open / Team open with filter chips for Today, This Week, Overdue. Sequences create tasks for you automatically (call steps + manual LinkedIn). Auto-tasks appear when prospects engage — 3+ opens or any click triggers a follow-up.',
+                target: '#page-tasks .search-box, #page-tasks',
             },
             {
-                target: 'a[onclick*="showPage(\'dashboard\')"]',
+                title: '👥 Step 8 — Contacts',
+                text: 'Every contact across every company. Filter by phone-type, sequence status, hot-lead activity. Multi-select to bulk-message, bulk-call, or bulk-merge duplicates. The 📱 badge marks Twilio-validated mobiles — those are the ones to text and call first.',
+                page: 'contacts',
+                target: '#page-contacts .search-box, #page-contacts',
+            },
+            {
+                title: '✅ You\'re ready',
+                text: "That's the tour. Restart it any time from Settings → Product Tour. Now go find some leads — start with Find Leads in the side nav.",
                 page: 'dashboard',
-                title: '🎯 Step 10: Audit reports + GEO',
-                text: 'Your differentiator: AI-Findability + Local-SEO audit reports. Generate one from any company detail page → host it under a unique URL → embed in emails, iMessage, and the breakup sequence. Gated competitor comparison drives discovery-call bookings.',
+                target: 'a[data-page="search"]',
             },
         ];
+
+        // Tour helper — open the first available company so step 3 can
+        // actually show the company-detail layout. Falls back to the
+        // companies list if there are no companies yet.
+        async function openFirstCompanyForTour() {
+            try {
+                const list = await api('/api/companies?status=active&limit=1');
+                if (Array.isArray(list) && list.length > 0 && typeof openCompanyDetail === 'function') {
+                    openCompanyDetail(list[0].id);
+                    await new Promise(r => setTimeout(r, 600));
+                    return;
+                }
+                // No companies yet — stay on the companies list
+                if (typeof showPage === 'function') showPage('companies');
+            } catch (e) {
+                if (typeof showPage === 'function') showPage('companies');
+            }
+        }
 
         let _tourActiveStep = 0;
         let _tourEls = [];
 
         async function startTour(fromStep = 1) {
-            _tourActiveStep = Math.max(1, Math.min(10, fromStep));
+            _tourActiveStep = Math.max(1, Math.min(TOUR_STEPS.length, fromStep));
             await renderTourStep();
         }
 
@@ -1439,16 +1459,50 @@
             const stepData = TOUR_STEPS[_tourActiveStep - 1];
             if (!stepData) { return endTour(100); }
 
-            // Navigate to the right page if needed before placing the spotlight
+            // Navigate to the right page first. showPage swaps which page-*
+            // div is visible; we wait long enough for that page's data
+            // fetches to complete so the target selector finds something.
             if (stepData.page && typeof showPage === 'function') {
                 showPage(stepData.page);
-                // Give the page render a moment before measuring DOM
-                await new Promise(r => setTimeout(r, 350));
+                await new Promise(r => setTimeout(r, 500));
+            }
+
+            // Optional per-step setup hook — used by step 3 to open a
+            // specific company so the layout below is visible. Runs AFTER
+            // showPage so it can override the page if needed.
+            if (typeof stepData.setup === 'function') {
+                try {
+                    await stepData.setup();
+                } catch (e) { /* ignore; render whatever we have */ }
             }
 
             _clearTourOverlay();
-            const target = document.querySelector(stepData.target);
-            const rect = target ? target.getBoundingClientRect() : null;
+            // Selector may include comma-separated fallbacks. Take the
+            // first match that's actually visible (rect has size).
+            let target = null;
+            for (const sel of (stepData.target || '').split(',').map(s => s.trim()).filter(Boolean)) {
+                const el = document.querySelector(sel);
+                if (el) {
+                    const r = el.getBoundingClientRect();
+                    if (r.width > 0 && r.height > 0) {
+                        target = el;
+                        break;
+                    }
+                    // Last-resort: even if 0×0, hold the reference in case nothing else matches
+                    if (!target) target = el;
+                }
+            }
+            let rect = target ? target.getBoundingClientRect() : null;
+
+            // Scroll the highlight into view so the spotlight has something
+            // to spotlight. Skip when the target is fixed (sidebar nav).
+            if (target && rect && (rect.top < 60 || rect.bottom > window.innerHeight - 220)) {
+                try {
+                    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    await new Promise(r => setTimeout(r, 300));
+                    rect = target.getBoundingClientRect();
+                } catch (e) {}
+            }
 
             // Spotlight: four divs forming a hole around the target rect (or full overlay if target missing)
             const overlay = document.createElement('div');
@@ -1489,7 +1543,7 @@
             tip.style.left = `${tipLeft}px`;
             tip.innerHTML = `
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-                    <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:0.5px">Step ${_tourActiveStep} of 10</div>
+                    <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:0.5px">Step ${_tourActiveStep} of ${TOUR_STEPS.length}</div>
                     <div style="display:flex;gap:3px">${TOUR_STEPS.map((_, i) => `<span style="width:8px;height:8px;border-radius:50%;background:${i < _tourActiveStep ? 'var(--bmp-orange)' : '#ddd'}"></span>`).join('')}</div>
                 </div>
                 <h3 style="margin:0 0 8px;font-size:18px">${stepData.title}</h3>
@@ -1498,7 +1552,7 @@
                     <button class="btn btn-secondary btn-sm" onclick="skipTour()">Skip Tour</button>
                     <div style="display:flex;gap:6px">
                         ${_tourActiveStep > 1 ? '<button class="btn btn-secondary btn-sm" onclick="prevTourStep()">Back</button>' : ''}
-                        <button class="btn btn-primary btn-sm" onclick="nextTourStep()">${_tourActiveStep === 10 ? 'Finish' : 'Next →'}</button>
+                        <button class="btn btn-primary btn-sm" onclick="nextTourStep()">${_tourActiveStep === TOUR_STEPS.length ? 'Finish' : 'Next →'}</button>
                     </div>
                 </div>
             `;
@@ -1519,7 +1573,7 @@
         }
 
         async function nextTourStep() {
-            if (_tourActiveStep >= 10) return endTour(100);
+            if (_tourActiveStep >= TOUR_STEPS.length) return endTour(100);
             _tourActiveStep++;
             await api('/api/auth/me/onboarding', { method: 'PATCH', body: JSON.stringify({ step: _tourActiveStep }) });
             renderTourStep();
