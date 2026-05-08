@@ -1470,3 +1470,134 @@ async def merge_companies(
         "repoint_counts": repoint_counts,
         "backfilled_fields": backfilled,
     }
+
+
+# ============================================================
+# Bulk actions on Companies (admin) — assign / tag / enrich / status / delete
+# ============================================================
+
+class BulkCompanyActionRequest(BaseModel):
+    company_ids: list[int]
+    action: str        # 'assign' | 'add_tag' | 'remove_tag' | 'set_status' | 'enrich' | 'delete'
+    # Action-specific payload
+    user_id: Optional[int] = None        # for 'assign'
+    tag_id: Optional[int] = None         # for 'add_tag' / 'remove_tag'
+    status: Optional[str] = None         # for 'set_status'
+
+
+@router.post("/batch")
+async def bulk_company_action(
+    req: BulkCompanyActionRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Apply an action to many companies in one call. Admin/super_admin only.
+    Mirrors the Companies multi-select bar UX. Designed to handle 1-500 IDs
+    cleanly — beyond that, batch on the client side.
+
+    Actions:
+      - 'assign'      : set assigned_to = user_id
+      - 'add_tag'     : insert (company_id, tag_id) into company_tags (idempotent)
+      - 'remove_tag'  : delete that row
+      - 'set_status'  : update status field (validated against known set)
+      - 'enrich'      : fire enrich_company in the background for each (best-effort)
+      - 'delete'      : drop the company + cascade children (DESTRUCTIVE)
+    """
+    from sqlalchemy import text as sql_text
+
+    if user.role not in ("admin", "super_admin"):
+        raise HTTPException(status_code=403, detail="Admin only")
+    if not req.company_ids:
+        raise HTTPException(status_code=400, detail="company_ids must be non-empty")
+    if len(req.company_ids) > 500:
+        raise HTTPException(status_code=400, detail="Too many IDs in one batch (max 500)")
+
+    placeholders = ",".join(f":id{i}" for i in range(len(req.company_ids)))
+    id_params = {f"id{i}": v for i, v in enumerate(req.company_ids)}
+    affected = 0
+    errors: list[str] = []
+
+    if req.action == "assign":
+        # user_id may be None to unassign
+        result = await db.execute(
+            sql_text(f"UPDATE companies SET assigned_to = :uid WHERE id IN ({placeholders})"),
+            {"uid": req.user_id, **id_params},
+        )
+        affected = result.rowcount or 0
+        # Audit Activity per company
+        for cid in req.company_ids:
+            db.add(Activity(
+                company_id=cid, user_id=user.id,
+                activity_type="bulk_assigned",
+                content=f"Bulk assigned to user_id={req.user_id}" if req.user_id else "Bulk unassigned",
+            ))
+
+    elif req.action == "add_tag":
+        if not req.tag_id:
+            raise HTTPException(status_code=400, detail="tag_id required")
+        # INSERT OR IGNORE — composite PK (company_id, tag_id) auto-dedupes
+        await db.execute(
+            sql_text(f"""
+                INSERT OR IGNORE INTO company_tags (company_id, tag_id)
+                SELECT id, :tid FROM companies WHERE id IN ({placeholders})
+            """),
+            {"tid": req.tag_id, **id_params},
+        )
+        affected = len(req.company_ids)
+
+    elif req.action == "remove_tag":
+        if not req.tag_id:
+            raise HTTPException(status_code=400, detail="tag_id required")
+        result = await db.execute(
+            sql_text(f"DELETE FROM company_tags WHERE tag_id = :tid AND company_id IN ({placeholders})"),
+            {"tid": req.tag_id, **id_params},
+        )
+        affected = result.rowcount or 0
+
+    elif req.action == "set_status":
+        valid = {"new", "pursuing", "sequencing", "contacted", "replied", "qualified", "converted", "not_interested"}
+        if req.status not in valid:
+            raise HTTPException(status_code=400, detail=f"status must be one of {sorted(valid)}")
+        result = await db.execute(
+            sql_text(f"UPDATE companies SET status = :s WHERE id IN ({placeholders})"),
+            {"s": req.status, **id_params},
+        )
+        affected = result.rowcount or 0
+        for cid in req.company_ids:
+            db.add(Activity(
+                company_id=cid, user_id=user.id,
+                activity_type="status_change",
+                content=f"[Bulk] Status set to {req.status}",
+            ))
+
+    elif req.action == "enrich":
+        # Fire enrich for each — best-effort, errors don't block other rows.
+        # Synchronous for predictable resource use; if you bulk-enrich 100 it
+        # WILL take a minute. Future improvement: queue + background workers.
+        companies = (await db.execute(select(Company).where(Company.id.in_(req.company_ids)))).scalars().all()
+        for c in companies:
+            try:
+                await enrich_company(c.id, db=db, user=user)
+                affected += 1
+            except Exception as e:
+                errors.append(f"#{c.id}: {str(e)[:80]}")
+
+    elif req.action == "delete":
+        # Cascading delete — Company has cascade='all, delete-orphan' on contacts,
+        # deals, activities, tasks. company_tags FK cascades on the join.
+        for cid in req.company_ids:
+            row = (await db.execute(select(Company).where(Company.id == cid))).scalar_one_or_none()
+            if row:
+                await db.delete(row)
+                affected += 1
+
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown action: {req.action}")
+
+    await db.commit()
+    return {
+        "action": req.action,
+        "affected": affected,
+        "requested": len(req.company_ids),
+        "errors": errors,
+    }

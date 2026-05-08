@@ -2126,19 +2126,112 @@
             if (!bar) {
                 bar = document.createElement('div');
                 bar.id = 'merge-bar';
-                bar.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--bmp-green);color:white;padding:12px 18px;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.2);z-index:1000;display:none;align-items:center;gap:12px;font-size:14px';
+                bar.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--bmp-green);color:white;padding:12px 18px;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.2);z-index:1000;display:none;align-items:center;gap:8px;font-size:14px;flex-wrap:wrap;max-width:90vw';
                 document.body.appendChild(bar);
             }
-            if (_mergeSel.size < 2) {
+            if (_mergeSel.size < 1) {
                 bar.style.display = 'none';
                 return;
             }
             bar.style.display = 'flex';
+            const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.role === 'super_admin');
+            const mergeBtn = (isAdmin && _mergeSel.size >= 2)
+                ? `<button class="btn btn-sm" onclick="openMergeModal()" style="background:white;color:var(--bmp-green);font-weight:600">🔀 Merge</button>` : '';
+            const adminActions = isAdmin ? `
+                <button class="btn btn-sm" onclick="bulkCompanyAssign()" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.4)">👤 Assign</button>
+                <button class="btn btn-sm" onclick="bulkCompanyTag()" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.4)">🏷 Tag</button>
+                <button class="btn btn-sm" onclick="bulkCompanyStatus()" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.4)">🔄 Status</button>
+                <button class="btn btn-sm" onclick="bulkCompanyEnrich()" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.4)">🧪 Enrich</button>
+                <button class="btn btn-sm" onclick="bulkCompanyDelete()" style="background:#c0392b;color:white;font-weight:600">🗑 Delete</button>
+            ` : '';
             bar.innerHTML = `
-                <span><strong>${_mergeSel.size}</strong> companies selected</span>
-                <button class="btn btn-secondary btn-sm" onclick="openMergeModal()" style="background:white;color:var(--bmp-green);font-weight:600">Merge →</button>
-                <button class="btn btn-secondary btn-sm" onclick="clearMergeSelection()" style="background:transparent;color:white;border:1px solid white">Clear</button>
+                <span><strong>${_mergeSel.size}</strong> compan${_mergeSel.size === 1 ? 'y' : 'ies'} selected</span>
+                ${mergeBtn}
+                ${adminActions}
+                <button class="btn btn-sm" onclick="clearMergeSelection()" style="background:transparent;color:white;border:1px solid white">Clear</button>
             `;
+        }
+
+        // ============ Bulk company actions (admin) ============
+
+        async function _callBulkAction(payload, refreshAfter = true) {
+            const data = await api('/api/companies/batch', {
+                method: 'POST',
+                body: JSON.stringify({ company_ids: Array.from(_mergeSel), ...payload }),
+            });
+            if (data) {
+                const errs = (data.errors && data.errors.length) ? ` (${data.errors.length} errors)` : '';
+                toast(`✓ ${data.action}: ${data.affected}/${data.requested}${errs}`);
+                if (errs) console.warn('Bulk action errors:', data.errors);
+                if (refreshAfter) {
+                    _mergeSel.clear();
+                    if (typeof loadCompanies === 'function') loadCompanies('all');
+                }
+            }
+            return data;
+        }
+
+        async function bulkCompanyAssign() {
+            const users = await api('/api/auth/users') || [];
+            const choice = prompt(
+                `Assign ${_mergeSel.size} companies to which rep?\n\n` +
+                users.map((u, i) => `${i + 1}. ${u.full_name || u.email}`).join('\n') +
+                `\n\nEnter the number, or 0 to UNASSIGN. Cancel to abort.`
+            );
+            if (choice === null) return;
+            const idx = parseInt(choice, 10);
+            if (isNaN(idx) || idx < 0 || idx > users.length) { toast('Invalid choice'); return; }
+            const user_id = idx === 0 ? null : users[idx - 1].id;
+            await _callBulkAction({ action: 'assign', user_id });
+        }
+
+        async function bulkCompanyTag() {
+            const tags = await api('/api/crm/tags') || [];
+            if (!tags.length) { toast('No tags exist yet — create one first from the Companies page'); return; }
+            const choice = prompt(
+                `Tag ${_mergeSel.size} companies. Pick a tag:\n\n` +
+                tags.map((t, i) => `${i + 1}. ${t.name}`).join('\n') +
+                `\n\nEnter the number to ADD the tag.\nPrefix with - to REMOVE (e.g. -2).`
+            );
+            if (!choice) return;
+            const remove = choice.trim().startsWith('-');
+            const idx = parseInt(choice.replace(/^-/, ''), 10);
+            if (isNaN(idx) || idx < 1 || idx > tags.length) { toast('Invalid choice'); return; }
+            const tag_id = tags[idx - 1].id;
+            await _callBulkAction({ action: remove ? 'remove_tag' : 'add_tag', tag_id });
+        }
+
+        async function bulkCompanyStatus() {
+            const STATUSES = ['new', 'pursuing', 'sequencing', 'contacted', 'replied', 'qualified', 'converted', 'not_interested'];
+            const choice = prompt(
+                `Set status on ${_mergeSel.size} companies. Pick:\n\n` +
+                STATUSES.map((s, i) => `${i + 1}. ${s}`).join('\n')
+            );
+            if (!choice) return;
+            const idx = parseInt(choice, 10);
+            if (isNaN(idx) || idx < 1 || idx > STATUSES.length) { toast('Invalid choice'); return; }
+            await _callBulkAction({ action: 'set_status', status: STATUSES[idx - 1] });
+        }
+
+        async function bulkCompanyEnrich() {
+            if (!confirm(
+                `Enrich ${_mergeSel.size} companies?\n\n` +
+                `Each runs the website analysis + Apollo/Hunter pull. Roughly 5-15 sec per company. ` +
+                `This page will block until done — keep the tab open.`
+            )) return;
+            toast(`Enriching ${_mergeSel.size} companies — this may take a minute…`);
+            await _callBulkAction({ action: 'enrich' });
+        }
+
+        async function bulkCompanyDelete() {
+            if (!confirm(
+                `⚠️ Permanently delete ${_mergeSel.size} companies?\n\n` +
+                `This deletes the company AND all child data: contacts, deals, activities, ` +
+                `sequences, calls, tasks, page-views, tracking links. Cannot be undone.`
+            )) return;
+            // Double-confirm for >5 to avoid accidental mass deletes
+            if (_mergeSel.size > 5 && !confirm(`Confirm deletion of ${_mergeSel.size} companies?`)) return;
+            await _callBulkAction({ action: 'delete' });
         }
 
         function clearMergeSelection() {
