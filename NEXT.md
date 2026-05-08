@@ -1315,6 +1315,69 @@ The same tour system works for SaaS customers, but the steps would be slightly d
 
 ---
 
+## ✅ Shipped 2026-05-08 (continuing session — Steve stepped away with approval)
+
+Seven commits landed end-to-end. Order shipped:
+1. **Credit meter shim** (ca8fc50) — `credit_ledger` table, `credit_meter.meter()`,
+   `meter_standalone()`, idempotency-keyed dedupe, two-layer schema
+   (customer credits + raw vendor cost). Wired into Resend sends + Netrows + Hunter.
+2. **iClosed gate widget fix** (880fa4c) — replaced the phantom `book_call(slot_time="")`
+   integration with a real embedded iClosed iframe. Self-confirm "I've Scheduled"
+   button + email capture. `audit_reports.booked_at` + `booked_email` columns +
+   webhook stub at `/api/iclosed/webhook`.
+3. **iClosed everywhere** (4e07805) — signature falls back to org iClosed URL,
+   prominent CTA in audit report header + bottom (replaced "Let's Talk → /contact"),
+   Settings UI gets a "Use team iClosed link" quick button, webhook secured with
+   `?t=<secret>` shared-secret guard, idempotent migrations auto-run on startup.
+4. **AI gen + SMS metering** (9b0ca4e) — wired `meter_standalone` into all 5
+   `email_generator.py` AI calls + `call_transcription.py` summary call +
+   `twilio_sms.py` send + `blooio_messaging.py` iMessage send.
+5. **Twilio Lookup metering + eager populate** (cc4e61d) — `lookup_phone_type`
+   meters every call as `phone_lookup`. Manual contact create now eagerly fetches
+   `phone_type` so badge appears on next page load.
+6. **Reply sentiment classification (D1)** (61dc7fa) — every inbound reply gets
+   AI-classified into 6 sentiment buckets + a one-line gist. Background async
+   so webhook stays fast. Colored timeline badges + dashboard activity feed
+   integration.
+7. **Email verification hard gate (D4)** (5f4babd) — `email_validation.ensure_email_validated()`
+   gates every send (sequence engine + manual). Caches Hunter result on
+   `contact.email_status`. Fail-open policy when Hunter is down.
+
+### Operator follow-ups Steve should handle on next deploy
+1. `./scripts/deploy.sh` — picks up all seven commits.
+2. (Optional) Add to systemd `ExecStartPre` chain on VPS:
+   ```
+   ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_credit_ledger
+   ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_audit_booked
+   ExecStartPre=/opt/backyard-leads/venv/bin/python -m scripts.migrate_reply_sentiment
+   ```
+   `init_db()` already auto-runs the audit_booked + reply_sentiment migrations
+   on lifespan startup, so this is belt-and-suspenders. credit_ledger is a
+   brand-new table created by `Base.metadata.create_all`, no migration needed.
+3. Set `ICLOSED_WEBHOOK_SECRET=<long-random>` in `/opt/backyard-leads/.env`.
+4. In iClosed: change webhook URL from `/api/iclosed/webhook` to
+   `/api/iclosed/webhook?t=<that-same-secret>`.
+5. Smoke-test: send any email → check Settings → Credits & Usage panel
+   shows the row. Run an enrichment → confirm Netrows/Hunter rows appear.
+   Visit any audit report → confirm new "Schedule a Discovery Call" button.
+   Reply to an outreach email → confirm the timeline shows a colored
+   sentiment badge ~10 seconds after the reply lands.
+
+### Next session — locked priority list
+- **Lead scoring v2** — fit (firmographics) × intent (engagement + sentiment + line_type).
+  Replaces the "3+ opens" Hot Leads heuristic with a real model. Phone-type and
+  reply sentiment data are now flowing, so this is the right time. Est. 1-2 hours.
+- **God Mode** — campaigns model already supports `business_types` + `locations` as
+  JSON lists; runner currently caps at one location per pair. Lift the cap +
+  add per-target weights + add the morning-brief generator for overnight runs.
+- **Apollo BYO-key adapter** — first SaaS-only provider. Refactor existing
+  Netrows/Hunter into adapter pattern, add Apollo class. Multi-day lift.
+- **Morning brief** — TZ-aware 7am cron, per-user digest. Needs God Mode in place
+  so the "while you slept" section has data to summarize.
+- **AI chatbot** — Sonnet tool-use widget. Multi-day lift.
+
+---
+
 ## 🎯 SaaS-readiness initiatives (locked 2026-05-08 with Steve)
 
 After the strategic review, Steve picked these for the build queue. Order is
