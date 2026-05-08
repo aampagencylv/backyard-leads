@@ -144,6 +144,15 @@ class Company(Base):
     # Annual revenue waits on ZoomInfo integration. When the BYO key
     # adapter ships, this column populates from /api/v1/organizations/...
 
+    # Cached enrichment payloads from Netrows premium endpoints.
+    # JSON-serialized; parsed at render time so schema doesn't churn
+    # whenever Netrows adds a field. TTL: 30 days (firmographics) /
+    # 7 days (Instagram posts — these turn over faster).
+    company_insights_json = Column(Text, nullable=True)
+    insights_fetched_at = Column(DateTime, nullable=True)
+    instagram_posts_json = Column(Text, nullable=True)
+    instagram_posts_fetched_at = Column(DateTime, nullable=True)
+
     # Google Maps reviews cache (Netrows /google-maps/reviews)
     google_place_id = Column(String(80), nullable=True)
     reviews_json = Column(Text, nullable=True)  # JSON array of reviews with owner_reply parsed out

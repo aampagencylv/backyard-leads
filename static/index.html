@@ -3134,6 +3134,45 @@
                             </div>
                         </div>
 
+                        ${d.company_insights ? `
+                        <div class="panel">
+                            <h3 style="font-size:14px">Insights <span style="font-size:10px;font-weight:400;color:#888">Netrows premium</span></h3>
+                            <div style="font-size:12px;line-height:1.7">
+                                ${d.company_insights.revenue_range ? `<div><strong>Revenue:</strong> ${escapeHtml(d.company_insights.revenue_range)}</div>` : ''}
+                                ${d.company_insights.funding_stage ? `<div><strong>Funding:</strong> ${escapeHtml(d.company_insights.funding_stage)}</div>` : ''}
+                                ${d.company_insights.headcount_growth_pct != null ? `<div><strong>Headcount growth:</strong> ${(d.company_insights.headcount_growth_pct >= 0 ? '+' : '') + d.company_insights.headcount_growth_pct}%</div>` : ''}
+                                ${(d.company_insights.technologies || []).length ? `<div style="margin-top:6px"><strong>Tech stack:</strong> <span style="color:#666">${d.company_insights.technologies.slice(0, 12).map(escapeHtml).join(', ')}${d.company_insights.technologies.length > 12 ? ` (+${d.company_insights.technologies.length - 12} more)` : ''}</span></div>` : ''}
+                                ${(d.company_insights.growth_signals || []).length ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #eee"><strong>Growth signals:</strong><ul style="margin:4px 0 0;padding-left:18px">${d.company_insights.growth_signals.map(g => `<li>${escapeHtml(g)}</li>`).join('')}</ul></div>` : ''}
+                                <div style="margin-top:6px;font-size:11px;color:#888">
+                                    ${d.insights_fetched_at ? `Updated ${fmtRelative(d.insights_fetched_at)}` : ''}
+                                    <button class="btn btn-secondary btn-xs" style="margin-left:8px" onclick="refreshCompanyInsights(${d.id})">↻ Refresh</button>
+                                </div>
+                            </div>
+                        </div>
+                        ` : ''}
+
+                        ${d.instagram_posts && d.instagram_posts.length ? `
+                        <div class="panel">
+                            <h3 style="font-size:14px">Recent Instagram Posts <span style="font-size:10px;font-weight:400;color:#888">${d.instagram_posts.length}</span></h3>
+                            <p style="font-size:11px;color:#888;margin-bottom:8px">Personalization fodder. Reference a post in your cold open and reply rates jump.</p>
+                            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
+                                ${d.instagram_posts.slice(0, 9).map(p => `
+                                    <a href="${escapeHtml(p.url || '#')}" target="_blank" rel="noopener" style="text-decoration:none;color:inherit;display:block">
+                                        ${p.thumbnail_url
+                                            ? `<img src="${escapeHtml(p.thumbnail_url)}" alt="" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;background:#eee" loading="lazy">`
+                                            : `<div style="width:100%;aspect-ratio:1;background:#f0f0f0;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#888;font-size:10px">${escapeHtml(p.media_type || 'post')}</div>`}
+                                        ${p.caption ? `<div style="font-size:10px;color:#555;margin-top:3px;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${escapeHtml(p.caption.slice(0, 80))}</div>` : ''}
+                                        ${(p.likes != null || p.comments != null) ? `<div style="font-size:9px;color:#888;margin-top:1px">${p.likes != null ? `❤️ ${p.likes}` : ''}${p.likes != null && p.comments != null ? ' · ' : ''}${p.comments != null ? `💬 ${p.comments}` : ''}</div>` : ''}
+                                    </a>
+                                `).join('')}
+                            </div>
+                            <div style="margin-top:8px;font-size:11px;color:#888">
+                                ${d.instagram_posts_fetched_at ? `Updated ${fmtRelative(d.instagram_posts_fetched_at)}` : ''}
+                                <button class="btn btn-secondary btn-xs" style="margin-left:8px" onclick="refreshInstagramPosts(${d.id})">↻ Refresh</button>
+                            </div>
+                        </div>
+                        ` : ''}
+
                         ${d.sos && d.sos.found ? `
                         <div class="panel">
                             <h3 style="font-size:14px">Public Records <span style="font-size:10px;font-weight:400;color:#888">${escapeHtml(d.sos.state)} SoS</span></h3>
@@ -3979,6 +4018,24 @@
             if (data) {
                 toast(`Audit complete! Grade: ${data.overall_grade} | AI Score: ${data.ai_findability_score}/100`);
                 if (data.url) window.open(data.url, '_blank');
+                openCompanyDetail(companyId);
+            }
+        }
+
+        async function refreshInstagramPosts(companyId) {
+            toast('Pulling latest Instagram posts…');
+            const data = await api(`/api/companies/${companyId}/refresh-instagram-posts`, { method: 'POST' });
+            if (data && data.count != null) {
+                toast(data.count ? `${data.count} post${data.count === 1 ? '' : 's'} loaded` : 'No posts found');
+                openCompanyDetail(companyId);
+            }
+        }
+
+        async function refreshCompanyInsights(companyId) {
+            toast('Refreshing company insights…');
+            const data = await api(`/api/companies/${companyId}/refresh-insights`, { method: 'POST' });
+            if (data) {
+                toast(data.found ? 'Insights updated' : 'No data returned (domain not in Netrows DB)');
                 openCompanyDetail(companyId);
             }
         }

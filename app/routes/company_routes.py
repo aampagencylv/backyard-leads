@@ -677,6 +677,10 @@ async def get_company_full(
         "tiktok_url": company.tiktok_url,
         "custom_fields": json.loads(company.custom_fields_json) if company.custom_fields_json else {},
         "sos": sos_payload,
+        "company_insights": json.loads(company.company_insights_json) if company.company_insights_json else None,
+        "insights_fetched_at": company.insights_fetched_at.isoformat() if company.insights_fetched_at else None,
+        "instagram_posts": json.loads(company.instagram_posts_json) if company.instagram_posts_json else None,
+        "instagram_posts_fetched_at": company.instagram_posts_fetched_at.isoformat() if company.instagram_posts_fetched_at else None,
         "assigned_to": company.assigned_to,
         "assigned_name": assigned_name,
         "tags": tag_list,
@@ -890,6 +894,82 @@ async def enrich_company(
         except Exception:
             pass
 
+    # Phase 2 enrichment: Netrows premium endpoints
+    # /companies/insights — deeper firmographics (revenue range, funding,
+    # tech stack, growth signals). Domain-keyed; auto-fires when we have
+    # a Netrows API key. Cached on Company.company_insights_json.
+    insights_data = None
+    try:
+        from app.services.netrows_enrichment import company_insights as _netrows_insights
+        nr_key = await get_netrows_api_key(db)
+        if nr_key and (company.website or company.domain):
+            ci = await _netrows_insights(company.website or company.domain, nr_key)
+            if ci is not None:
+                # Store the raw payload + a curated summary for fast UI render
+                payload = {
+                    "revenue_range": ci.revenue_range,
+                    "funding_stage": ci.funding_stage,
+                    "technologies": ci.technologies[:30],
+                    "growth_signals": ci.growth_signals[:10],
+                    "headcount_growth_pct": ci.headcount_growth_pct,
+                    "raw": ci.raw_payload,
+                }
+                company.company_insights_json = json.dumps(payload, default=str)
+                company.insights_fetched_at = datetime.now(timezone.utc)
+                insights_data = payload
+                try:
+                    await meter(
+                        db, action_type="enrich_netrows",
+                        idempotency_key=make_idem_key("enrich_netrows", company_id, "insights"),
+                        user_id=user.id, action_ref=f"company:{company_id}",
+                        raw_cost_override_usd=0.055,  # premium endpoint, ~10 credits
+                        metadata={"endpoint": "companies/insights"},
+                    )
+                except Exception:
+                    pass
+    except Exception as e:
+        insights_data = {"error": str(e)[:200]}
+
+    # /instagram/user/posts — recent IG posts for personalization.
+    # Only fires when company.instagram_url was scraped from website_intel.
+    # 7-day cache TTL since IG posts turn over fast.
+    instagram_data = None
+    try:
+        if company.instagram_url:
+            stale = (
+                not company.instagram_posts_fetched_at or
+                (datetime.now(timezone.utc) - (
+                    company.instagram_posts_fetched_at if company.instagram_posts_fetched_at.tzinfo
+                    else company.instagram_posts_fetched_at.replace(tzinfo=timezone.utc)
+                )).days >= 7
+            )
+            if stale:
+                from app.services.netrows_enrichment import instagram_recent_posts as _netrows_ig
+                nr_key = await get_netrows_api_key(db)
+                if nr_key:
+                    posts = await _netrows_ig(company.instagram_url, nr_key, limit=9)
+                    if posts:
+                        payload = [{
+                            "caption": p.caption, "posted_at": p.posted_at,
+                            "url": p.url, "likes": p.likes, "comments": p.comments,
+                            "media_type": p.media_type, "thumbnail_url": p.thumbnail_url,
+                        } for p in posts]
+                        company.instagram_posts_json = json.dumps(payload, default=str)
+                        company.instagram_posts_fetched_at = datetime.now(timezone.utc)
+                        instagram_data = payload
+                        try:
+                            await meter(
+                                db, action_type="enrich_netrows",
+                                idempotency_key=make_idem_key("enrich_netrows", company_id, "instagram"),
+                                user_id=user.id, action_ref=f"company:{company_id}",
+                                raw_cost_override_usd=0.0055,
+                                metadata={"endpoint": "instagram/user/posts"},
+                            )
+                        except Exception:
+                            pass
+    except Exception as e:
+        instagram_data = {"error": str(e)[:200]}
+
     # Phase 2 enrichment: Secretary of State lookup (currently FL only;
     # AZ + NV pending). Free public-record data — registered agent +
     # officers + filing date + active status. Cached 30 days; only
@@ -1054,6 +1134,8 @@ async def enrich_company(
         "hunter": hunter_data,
         "apollo": apollo_data,
         "sos": sos_data,
+        "insights": insights_data,
+        "instagram": instagram_data,
         "waterfall": {
             "providers_called": waterfall_result.providers_called,
             "errors": waterfall_result.errors,
@@ -1561,6 +1643,104 @@ async def refresh_reviews(
         "owner_replies_count": owner_replies,
         "fetched_at": company.reviews_fetched_at.isoformat(),
     }
+
+
+@router.post("/{company_id}/refresh-instagram-posts")
+async def refresh_instagram_posts(
+    company_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Force-refresh Instagram posts for a company. Skips the 7-day TTL
+    check the auto-fetch path uses. Useful when the BDR wants the latest
+    posts for personalization right now."""
+    company = (await db.execute(select(Company).where(Company.id == company_id))).scalar_one_or_none()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    if not company.instagram_url:
+        raise HTTPException(status_code=400, detail="No Instagram URL on this company. Add one or re-enrich to scrape it from the website.")
+    nr_key = await get_netrows_api_key(db)
+    if not nr_key:
+        raise HTTPException(status_code=400, detail="Netrows API key not configured")
+
+    from app.services.netrows_enrichment import instagram_recent_posts as _ig
+    from app.services.credit_meter import meter, make_idem_key
+
+    posts = await _ig(company.instagram_url, nr_key, limit=9)
+    if not posts:
+        return {"count": 0, "message": "No Instagram posts found (private profile or invalid handle)"}
+    payload = [{
+        "caption": p.caption, "posted_at": p.posted_at,
+        "url": p.url, "likes": p.likes, "comments": p.comments,
+        "media_type": p.media_type, "thumbnail_url": p.thumbnail_url,
+    } for p in posts]
+    company.instagram_posts_json = json.dumps(payload, default=str)
+    company.instagram_posts_fetched_at = datetime.now(timezone.utc)
+    try:
+        await meter(
+            db, action_type="enrich_netrows",
+            idempotency_key=make_idem_key("enrich_netrows", company_id, "instagram_manual",
+                                          datetime.now(timezone.utc).timestamp()),
+            user_id=user.id, action_ref=f"company:{company_id}",
+            raw_cost_override_usd=0.0055,
+            metadata={"endpoint": "instagram/user/posts", "trigger": "manual"},
+        )
+    except Exception:
+        pass
+    await db.commit()
+    return {
+        "count": len(posts),
+        "fetched_at": company.instagram_posts_fetched_at.isoformat(),
+        "posts": payload,
+    }
+
+
+@router.post("/{company_id}/refresh-insights")
+async def refresh_company_insights(
+    company_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Force-refresh Netrows /companies/insights for a company. Premium
+    endpoint — deeper firmographics + tech stack + growth signals."""
+    company = (await db.execute(select(Company).where(Company.id == company_id))).scalar_one_or_none()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    if not (company.website or company.domain):
+        raise HTTPException(status_code=400, detail="Company has no website / domain to look up")
+    nr_key = await get_netrows_api_key(db)
+    if not nr_key:
+        raise HTTPException(status_code=400, detail="Netrows API key not configured")
+
+    from app.services.netrows_enrichment import company_insights as _insights
+    from app.services.credit_meter import meter, make_idem_key
+
+    ci = await _insights(company.website or company.domain, nr_key)
+    if ci is None:
+        return {"found": False, "message": "Insights endpoint returned no data — domain may not be in Netrows' database"}
+    payload = {
+        "revenue_range": ci.revenue_range,
+        "funding_stage": ci.funding_stage,
+        "technologies": ci.technologies[:30],
+        "growth_signals": ci.growth_signals[:10],
+        "headcount_growth_pct": ci.headcount_growth_pct,
+        "raw": ci.raw_payload,
+    }
+    company.company_insights_json = json.dumps(payload, default=str)
+    company.insights_fetched_at = datetime.now(timezone.utc)
+    try:
+        await meter(
+            db, action_type="enrich_netrows",
+            idempotency_key=make_idem_key("enrich_netrows", company_id, "insights_manual",
+                                          datetime.now(timezone.utc).timestamp()),
+            user_id=user.id, action_ref=f"company:{company_id}",
+            raw_cost_override_usd=0.055,
+            metadata={"endpoint": "companies/insights", "trigger": "manual"},
+        )
+    except Exception:
+        pass
+    await db.commit()
+    return {"found": True, "fetched_at": company.insights_fetched_at.isoformat(), **payload}
 
 
 def _summarize(analysis) -> str:
