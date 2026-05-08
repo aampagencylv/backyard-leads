@@ -64,12 +64,19 @@ async def send_email(
         headers["List-Unsubscribe"] = f"<{unsub_url}>"
         headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
 
+    # Wrap the Reply-To with the sender's display name so the recipient's email
+    # client shows "Steven Edwards" instead of the raw r-<token>@go.bymp.com
+    # address when they hit Reply. The token is still in the address for routing,
+    # but it's tucked behind the human name. Most clients (Gmail, Apple Mail,
+    # Outlook, etc.) honor the display name in Reply-To headers.
+    reply_to_value = f"{from_name} <{reply_to_email}>" if from_name else reply_to_email
+
     payload = {
         "from": from_address,
         "to": [to_email],
         "subject": subject,
         "html": html_body,
-        "reply_to": reply_to_email,
+        "reply_to": reply_to_value,
         "headers": headers,
         "tags": [
             {"name": "company_id", "value": str(company_id)},
