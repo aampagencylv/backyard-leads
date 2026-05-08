@@ -145,6 +145,13 @@ async def _handle_email(db: AsyncSession, step: GeneratedEmail, contact: Contact
         return False, "DEFER_SEND_CAP"
 
     sender = get_sender_info(sender_user.first_name, sender_user.full_name)
+    # Token-based Reply-To: when the prospect replies, the address routes
+    # through our /api/email/inbound webhook → auto-pause + log + forward.
+    # Generate the token now if missing (idempotent on re-send).
+    from app.services.email_sender import generate_reply_token, reply_to_for_token
+    if not step.reply_token:
+        step.reply_token = generate_reply_token()
+    sender["reply_to"] = reply_to_for_token(step.reply_token)
     # Wrap any URLs in the body + signature through /t/{token} for click tracking
     from app.services.tracking import wrap_html_links
     try:
@@ -177,6 +184,7 @@ async def _handle_email(db: AsyncSession, step: GeneratedEmail, contact: Contact
         return False, f"Resend rejected: {result.get('error', 'unknown')}"
     # Stamp the sender so future cap-checks count this email correctly
     step.sent_by_user_id = sender_user.id
+    # Note: step.reply_token was set BEFORE the send (see compute_reply_to call above)
     db.add(Activity(
         company_id=company.id, contact_id=contact.id, user_id=sender_user.id,
         activity_type="email_sent",

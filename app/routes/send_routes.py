@@ -62,6 +62,11 @@ async def send_single_email(
         raise HTTPException(status_code=403, detail="Sending is disabled for your account. Enable it in Settings.")
 
     sender = get_sender_info(user.first_name, user.full_name)
+    # Token-based Reply-To so prospect replies route through our inbound webhook
+    from app.services.email_sender import generate_reply_token, reply_to_for_token
+    if not email.reply_token:
+        email.reply_token = generate_reply_token()
+    sender["reply_to"] = reply_to_for_token(email.reply_token)
     from app.services.tracking import wrap_html_links
     tracked_body = await wrap_html_links(
         db, email.body, contact_id=contact.id, company_id=company.id, email_id=email.id, label="body_link",
@@ -141,6 +146,10 @@ async def send_next_in_sequence(
         raise HTTPException(status_code=403, detail="Sending is disabled for your account.")
 
     sender = get_sender_info(user.first_name, user.full_name)
+    from app.services.email_sender import generate_reply_token, reply_to_for_token
+    if not email.reply_token:
+        email.reply_token = generate_reply_token()
+    sender["reply_to"] = reply_to_for_token(email.reply_token)
     from app.services.tracking import wrap_html_links
     tracked_body = await wrap_html_links(
         db, email.body, contact_id=contact.id, company_id=company.id, email_id=email.id, label="body_link",
@@ -811,6 +820,9 @@ async def send_adhoc_email(
     await db.flush()
 
     sender = get_sender_info(user.first_name, user.full_name)
+    from app.services.email_sender import generate_reply_token, reply_to_for_token
+    ge.reply_token = generate_reply_token()
+    sender["reply_to"] = reply_to_for_token(ge.reply_token)
     from app.services.tracking import wrap_html_links
     tracked_body = await wrap_html_links(
         db, clean_body, contact_id=contact.id, company_id=company.id, email_id=ge.id, label="body_link",

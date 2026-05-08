@@ -270,6 +270,13 @@ class GeneratedEmail(Base):
     # cap today, the engine defers their pending steps to tomorrow 8am.
     sent_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
 
+    # Token used in the Reply-To address (`r-<token>@inbound.bymp.com`) so when
+    # the prospect replies, the inbound webhook can attribute the reply back to
+    # this exact email row. Generated at insert time. Tokens never expire — they
+    # remain valid as long as the row exists, so a months-late reply still
+    # threads correctly.
+    reply_token = Column(String(40), unique=True, index=True, nullable=True)
+
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     contact = relationship("Contact", back_populates="emails")

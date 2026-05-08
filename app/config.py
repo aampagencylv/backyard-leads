@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     resend_webhook_secret: str = ""
     send_domain: str = "go.backyardmarketingpros.com"
     reply_domain: str = "backyardmarketingpros.com"
+    # Reply-To token routing — Reply-To becomes `r-<token>@<inbound_reply_domain>`.
+    # Resend Inbound catches every email at this domain via catch-all and POSTs to
+    # /api/email/inbound. Empty/legacy mode = fall back to user@reply_domain.
+    inbound_reply_domain: str = "inbound.backyardmarketingpros.com"
     public_url: str = "https://prospector.backyardmarketingpros.com"
     bmp_postal_address: str = "Backyard Marketing Pros, Las Vegas, NV"  # CAN-SPAM requires a real postal address; override in .env
 

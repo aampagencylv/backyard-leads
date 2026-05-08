@@ -104,3 +104,26 @@ def get_sender_info(first_name: str, full_name: str) -> dict:
         "from_email": f"{fn}@{settings.send_domain}",
         "reply_to": f"{fn}@{settings.reply_domain}",
     }
+
+
+def generate_reply_token() -> str:
+    """27-char URL-safe token for the Reply-To routing address.
+
+    Stored on GeneratedEmail.reply_token. The recipient's reply hits
+    `r-<token>@inbound.bymp.com` → Resend Inbound webhook → we attribute
+    the reply to this exact email row.
+
+    20 random bytes encoded urlsafe-base64 = 27 chars. ~10^48 combinations,
+    indexable, fits in a typical email-address local-part."""
+    import secrets
+    return secrets.token_urlsafe(20)
+
+
+def reply_to_for_token(token: str) -> str:
+    """Build the Reply-To address for a given token.
+
+    `r-` prefix is what the inbound webhook parser splits on to extract
+    the token. Keeps the local-part visually identifiable as a system
+    address so a savvy prospect can see what's going on if they look,
+    but doesn't reveal anything sensitive."""
+    return f"r-{token}@{settings.inbound_reply_domain}"

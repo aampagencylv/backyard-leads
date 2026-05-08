@@ -95,35 +95,109 @@
 
 ## 🟢 Backlog — ranked by ROI
 
-### 🔥 Next priority: Missive Integration
+### 🔥 Inbox capture — TWO-PRONGED APPROACH (locked 2026-05-08)
 
-**Phase 1 — Missive webhook (1-2 days):**
-- Missive webhook receiver at `/api/missive/webhook`
-- When email arrives from a known contact → auto-log to CRM timeline
-- Auto-pause the active sequence for that contact
-- Auto-set company status to "replied"
-- Zero BDR behavior change — just works in background
+After discussion, the original Missive Phase 1 webhook plan was REPLACED with
+a more reliable, inbox-tool-agnostic design. The new approach combines:
 
-**Phase 2 — Missive sidebar app (1 week):**
-- Sidebar app hosted at `/missive-sidebar`
-- Shows company/contact card when BDR opens an email
-- Sequence status, deal info, problems found
-- "Mark Replied" / "Add Note" / "Open in CRM" buttons
-- BDR sees CRM context without leaving Missive
+**A. Token-based reply catching** (SHIPPED — code-side; awaits DNS + Resend Inbound configuration)
+**B. Missive sidebar app** (Phase 2 — next session) — for active capture when BDR initiates from Missive
 
-**Phase 3 — Full Missive send integration (future):**
-- Send FROM Missive instead of Resend
-- Sequence creates draft in Missive, BDR reviews and sends
-- Full two-way sync — every email in/out logged
-- Eliminates Resend dependency for sending
+The BCC log address pattern was rejected — too noisy (captures internal emails,
+vendor threads, support, etc.) without explicit BDR intent.
 
-**Architecture:**
-```
-Outbound: Prospector → Resend → steve@go.backyardmarketingpros.com → Prospect
-Reply:    Prospect → steve@backyardmarketingpros.com → Missive → Webhook → Prospector
-Sidebar:  Missive iframe → prospector.backyardmarketingpros.com/missive-sidebar
-```
+---
+
+#### A. Token-based reply catching — SHIPPED, AWAITING SETUP
+
+Every outgoing email now has `Reply-To: r-<token>@inbound.bymp.com`. Resend
+Inbound catches all mail at that subdomain via catch-all routing and POSTs to
+`/api/email/inbound`. The webhook:
+
+1. Extracts the token from the `To`/`Cc` list
+2. Looks up the GeneratedEmail row by reply_token
+3. Logs an `email_replied` Activity (or `email_auto_response` if it looks like
+   an OOO/bounce — heuristic match on From + Subject)
+4. Auto-pauses the contact's sequence
+5. Bumps company.status → 'replied'
+6. Forwards the message to the BDR's actual inbox (`user@bymp.com` → Missive)
+   with Reply-To set to the prospect's real email so follow-up replies in this
+   thread happen normally inside Missive
+
+Works regardless of inbox tool — the BDR's choice of Missive vs. Gmail vs.
+Outlook doesn't matter. Critical for the SaaS plan.
+
+**Setup steps Steve needs to do (5-10 min):**
+
+1. **Create Resend Inbound domain**:
+   - Resend dashboard → Domains → Add domain → `inbound.backyardmarketingpros.com`
+   - Choose "Receiving" mode. Resend will give you the MX record value
+     (something like `inbound-smtp.resend.com` or similar).
+
+2. **Add MX record at SiteGround DNS**:
+   - DNS Manager → Add MX record
+   - Host: `inbound` (creates `inbound.backyardmarketingpros.com`)
+   - Value: the MX target Resend gave you
+   - Priority: 10
+   - TTL: 3600
+   - Save. Propagation usually <5 min.
+
+3. **Create Resend Inbound route**:
+   - Resend dashboard → Inbound → Create Route
+   - Match pattern: `*@inbound.backyardmarketingpros.com` (catch-all)
+   - Webhook URL: `https://prospector.backyardmarketingpros.com/api/email/inbound`
+   - Save the signing secret it generates → paste into platform `.env` as
+     `RESEND_WEBHOOK_SECRET=<the secret>` (next to the existing webhook
+     secret if you have one, else create the env var). Restart the service.
+   - Without the secret, the webhook accepts any payload (fine for testing,
+     bad for prod). Set it before going live.
+
+4. **Test it**: send yourself a test sequence email. Reply from a different
+   email address. Within ~30 seconds you should see:
+   - `email_replied` Activity on the contact's timeline
+   - The contact's sequence auto-paused
+   - The reply forwarded to your Missive inbox with the prospect's email as
+     Reply-To (so when you hit Reply in Missive, it goes to them, not back
+     through us)
+
+5. **Watch for**: auto-responders / OOO replies should log as
+   `email_auto_response` (different icon, doesn't pause sequence). Tune the
+   detection heuristic in `email_inbound_routes._looks_like_auto_response()`
+   if you see false positives.
+
+---
+
+#### B. Missive sidebar app — Phase 2 (next session, ~1 week)
+
+For ACTIVE capture when the BDR initiates a conversation from inside Missive
+(not a reply to one of our outbound sequences). This is the use case the
+original Missive Phase 1 plan tried to solve via webhooks; the sidebar
+approach is cleaner because the BDR explicitly clicks "Add to CRM" instead
+of automation guessing what's CRM-worthy.
+
+- Hosted at `https://prospector.backyardmarketingpros.com/missive-sidebar`
+- Embedded in Missive as an iframe (Missive supports custom sidebar apps via
+  their integrations marketplace OR via direct iframe URL config)
+- Shows company/contact card matched on the email's From address
+- If contact NOT found: shows "Add to CRM" button → creates Contact + Company
+  (using our domain-dedupe helper) + logs initial `email_sent` Activity
+- If contact FOUND: shows sequence status, deal info, latest activities, with
+  buttons: "Add Note" / "Open in CRM" / "Start Sequence" / "Pause Sequence"
+- Authentication: shared secret + Missive's iframe-postMessage protocol so
+  the sidebar knows which user is viewing it (Missive passes the current
+  user's email as a query param)
+
 Missive API docs: missiveapp.com/help/api
+Missive integration / sidebar docs: missiveapp.com/help/integrations
+
+---
+
+#### C. (Deferred) Full Missive send integration
+
+Send FROM Missive instead of Resend, with the sequence creating drafts in
+Missive that the BDR reviews + sends. Eliminates Resend dependency. Big lift,
+significantly Missive-vendor-locked. Park indefinitely; revisit if Resend
+becomes a constraint.
 
 ### 🔥 Twilio — full HubSpot Calling replacement [IN PROGRESS]
 
