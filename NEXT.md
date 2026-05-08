@@ -1315,6 +1315,107 @@ The same tour system works for SaaS customers, but the steps would be slightly d
 
 ---
 
+## 📅 SaaS feature: Native scheduler (Calendly-style, BYO Google Calendar)
+
+Steve's idea while we shipped iClosed: many future SaaS tenants won't
+already have iClosed (or won't want to pay for Calendly). The platform
+should ship with a native scheduling option — pick a time slot, drop on
+the user's Google Calendar, send a confirmation email — so they can
+self-serve without a third-party subscription.
+
+**Inspiration / reference (NOT a direct adoption — just for shape):**
+https://github.com/stefanodecillis/slotty — open-source Calendly clone
+in TS/React + a small Node API, MIT licensed. Worth reading for:
+  - The slot generation algorithm (recurring availability rules → free
+    slots within a window, accounting for existing calendar events)
+  - The booking confirmation flow (event creation, email send, ICS attach)
+  - The public booking page UX
+
+**Architecture for OUR build:**
+
+We don't need Slotty's UI directly — we already have a brand-styled
+gate page (the iClosed embed) that we can swap to a native calendar
+when the tenant chooses "Native Scheduler" instead of "iClosed". Core
+pieces we'd own:
+
+1. **Google OAuth flow**
+   - Add Google as the second auth provider (after email/password)
+   - Scopes: `calendar.readonly`, `calendar.events` (write our own events
+     under a dedicated "BMP Bookings" calendar so we don't pollute the
+     user's primary calendar)
+   - Refresh-token storage on User: `google_refresh_token`,
+     `google_calendar_id` (the dedicated calendar's id)
+   - Token rotation handled server-side; user never sees raw tokens
+
+2. **Per-user availability config**
+   - New `scheduling_config` table: user_id, timezone, default_slot_minutes
+     (15/30/45/60), buffer_before_minutes, buffer_after_minutes,
+     min_lead_time_hours, max_advance_days, daily_limit
+   - Recurring availability rules: weekday → list of (start_time, end_time)
+     spans (e.g. Mon-Fri 9am-5pm with a 12-1 break)
+   - Date-specific overrides: hold-out dates, vacation, special hours
+   - "What we charge for the call" — optional event title prefix /
+     description template
+
+3. **Public booking endpoint**
+   - GET /book/{user_slug}?slot_minutes=30 → branded page with calendar
+     grid, available slots derived from (availability rules) - (existing
+     Google Calendar events) - (already-booked slots in our DB)
+   - Slot generation runs server-side per-request; no caching beyond
+     5 min (calendars change fast)
+   - Form: name + email + phone + custom message
+   - Submit → POST /book/{user_slug}/confirm → creates Google Calendar
+     event + sends ICS-attached confirmation email + creates Activity
+     in CRM (mirrors the iClosed webhook flow)
+
+4. **Per-tenant scheduler choice**
+   - New `Settings.scheduler_choice` field: 'iclosed' | 'native_google'
+     | 'cal_com' (future) | 'none'
+   - When 'native_google': the Settings UI shows the Google OAuth
+     connect button + availability config form
+   - When 'iclosed': the existing iClosed booking URL field stays
+   - The competitor-report gate page picks the right embed at render
+     time based on tenant's choice
+
+5. **Calendar sync direction**
+   - **Read** the user's primary calendar to find busy/free
+   - **Write** booked events to a dedicated "BMP Discovery Calls"
+     calendar (auto-created on first connect) so:
+     - The user can see all bookings in one place
+     - Disconnecting the integration doesn't delete their personal events
+     - We can rebuild state from our DB if Google disconnects
+
+**Cost model (SaaS):**
+  - Google Calendar API is free (high quota — 1M reads/day per user)
+  - Email send goes through Resend (already metered)
+  - No per-booking fee on our side
+  - Tenant wins by avoiding Calendly's $12/user/mo
+
+**Compliance:**
+  - GDPR: invitee email captured on the booking form, store with
+    explicit "I agree to be contacted" checkbox
+  - Google OAuth verification — eventually need to go through the
+    formal review process for `calendar.events` scope when we hit
+    100+ tenants. Pre-verification works fine for early SaaS users
+    (Google shows a warning screen; users click through)
+
+**Where this slots in priority:**
+  - After SoS scrapers, after billing layer, but before public Beta
+  - Multi-week build (~2-3 weeks for production-quality):
+    - Week 1: Google OAuth + token storage + dedicated calendar create
+    - Week 2: Availability rules engine + slot generation
+    - Week 3: Public booking page + confirmation flow + tenant
+      scheduler-choice toggle
+
+**Open questions to resolve before starting:**
+  - Do we want Cal.com as a third option? (open-source, self-hosted
+    or BYO-key — could be the "power user" tier)
+  - Round-robin team scheduling (multi-host events) — defer to v2
+  - Webhook to other CRMs when a booking happens — fits naturally
+    with our future Zapier integration
+
+---
+
 ## 🏛️ Enrichment Phase 2: Secretary of State adapters (locked 2026-05-08)
 
 Steve's idea while shipping the enrichment waterfall: SoS data is a
