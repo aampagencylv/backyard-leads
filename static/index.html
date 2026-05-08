@@ -1035,6 +1035,29 @@
                     </div>
                 </div>
 
+                <!-- Audit Log (admin+ only).
+                     Append-only record of privileged actions. SOC2 /
+                     enterprise table-stakes — admins can answer "who did
+                     what when" without grep'ing journalctl. -->
+                <div id="audit-log-section" class="search-box hidden" style="max-width:900px;margin-top:16px">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                        <h3 style="margin:0">🔍 Audit Log</h3>
+                        <div style="display:flex;gap:6px">
+                            <select id="audit-action-filter" onchange="loadAuditLog()" style="padding:4px 8px;font-size:12px;border:1px solid #ddd;border-radius:4px">
+                                <option value="">All actions</option>
+                                <option value="user.invited">user.invited</option>
+                                <option value="user.role_changed">user.role_changed</option>
+                                <option value="user.updated">user.updated</option>
+                                <option value="user.reassigned">user.reassigned</option>
+                                <option value="runtime_config.updated">runtime_config.updated</option>
+                            </select>
+                            <button class="btn btn-secondary btn-sm" onclick="loadAuditLog()">↻</button>
+                        </div>
+                    </div>
+                    <p style="font-size:12px;color:#888;margin-bottom:10px">Append-only record of privileged actions across user management + runtime config. Last 100 entries shown; filter to drill in.</p>
+                    <div id="audit-log-list"></div>
+                </div>
+
                 <!-- Additional Information / Tenant-defined fields (admin+ only).
                      User-facing label is "Additional Information" since these
                      are arbitrary tenant-shaped data, not engineering "custom
@@ -4245,6 +4268,62 @@
             }
         }
 
+        // ============ Audit Log ============
+        async function loadAuditLog() {
+            const action = document.getElementById('audit-action-filter')?.value || '';
+            const params = new URLSearchParams();
+            params.set('limit', '100');
+            if (action) params.set('action', action);
+            const rows = await api(`/api/auth/audit-log?${params.toString()}`);
+            const panel = document.getElementById('audit-log-list');
+            if (!panel) return;
+            if (!rows || rows.length === 0) {
+                panel.innerHTML = '<div style="font-size:13px;color:#888;padding:12px">No audit entries yet — privileged actions (user invites, role changes, config updates) will appear here.</div>';
+                return;
+            }
+            const actionColor = (a) => {
+                if (a.includes('role_changed')) return '#bf360c';
+                if (a.includes('runtime_config')) return '#7a5c00';
+                if (a.includes('reassigned') || a.includes('deleted')) return '#c0392b';
+                return '#1B5E20';
+            };
+            const fmtMeta = (m) => {
+                if (!m) return '';
+                if (typeof m === 'object') return Object.entries(m).map(([k, v]) =>
+                    `<span style="color:#666"><strong>${escapeHtml(k)}:</strong> ${escapeHtml(typeof v === 'object' ? JSON.stringify(v) : String(v))}</span>`
+                ).join(' · ');
+                return escapeHtml(String(m));
+            };
+            panel.innerHTML = `
+                <table style="width:100%;font-size:12px;border-collapse:collapse">
+                    <thead><tr style="background:#fafafa;text-align:left">
+                        <th style="padding:6px 8px">When</th>
+                        <th style="padding:6px 8px">Who</th>
+                        <th style="padding:6px 8px">Action</th>
+                        <th style="padding:6px 8px">Target</th>
+                        <th style="padding:6px 8px">Details</th>
+                    </tr></thead>
+                    <tbody>
+                    ${rows.map(r => `
+                        <tr style="border-top:1px solid #f0f0f0">
+                            <td style="padding:6px 8px;color:#888;white-space:nowrap" title="${escapeHtml(r.created_at)}">${fmtRelative(r.created_at)}</td>
+                            <td style="padding:6px 8px">
+                                <div>${escapeHtml(r.actor_email || '(system)')}</div>
+                                ${r.actor_role ? `<div style="font-size:10px;color:#888">${escapeHtml(r.actor_role)}</div>` : ''}
+                            </td>
+                            <td style="padding:6px 8px"><code style="font-size:11px;color:${actionColor(r.action)};font-weight:600">${escapeHtml(r.action)}</code></td>
+                            <td style="padding:6px 8px">
+                                ${r.target_label ? `<div>${escapeHtml(r.target_label)}</div>` : '<span style="color:#bbb">—</span>'}
+                                ${r.target_type ? `<div style="font-size:10px;color:#888">${escapeHtml(r.target_type)}${r.target_id ? ` #${r.target_id}` : ''}</div>` : ''}
+                            </td>
+                            <td style="padding:6px 8px;font-size:11px">${fmtMeta(r.metadata) || ''}</td>
+                        </tr>
+                    `).join('')}
+                    </tbody>
+                </table>
+            `;
+        }
+
         // ============ Custom Fields ============
         // Definitions are admin-managed (Settings → Custom Fields).
         // Values live on Company.custom_fields / Contact.custom_fields and
@@ -5429,6 +5508,10 @@
                 _customFieldsTab = 'company';
                 loadCustomFieldsList();
             }
+
+            const auditSection = document.getElementById('audit-log-section');
+            if (auditSection) auditSection.classList.toggle('hidden', !isAdminPlus);
+            if (isAdminPlus) loadAuditLog();
 
             if (isAdminPlus) loadRuntimeConfig();
 

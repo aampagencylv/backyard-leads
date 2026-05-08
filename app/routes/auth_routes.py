@@ -1,12 +1,13 @@
 from __future__ import annotations
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from pydantic import BaseModel
 from app.database import get_db
 from app.models import User
+from app.services.audit_log import record_audit
 from app.auth import (
     hash_password, verify_password, create_access_token,
     get_current_user, require_admin,
@@ -232,6 +233,7 @@ class UpdateUserRoleRequest(BaseModel):
 async def update_user_role(
     user_id: int,
     req: UpdateUserRoleRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_admin),
 ):
@@ -261,7 +263,13 @@ async def update_user_role(
         if remaining == 0:
             raise HTTPException(status_code=400, detail="Cannot demote the last active super admin")
 
+    old_role = target.role
     target.role = req.role
+    await record_audit(
+        db, actor=user, action="user.role_changed",
+        target_type="user", target_id=target.id, target_label=target.email,
+        metadata={"from": old_role, "to": req.role}, request=request,
+    )
     await db.commit()
     return {"id": target.id, "name": target.full_name, "role": target.role}
 
@@ -277,6 +285,7 @@ class InviteUserRequest(BaseModel):
 @router.post("/users/invite")
 async def invite_user(
     req: InviteUserRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_admin),
 ):
@@ -348,6 +357,12 @@ async def invite_user(
     except Exception:
         pass
 
+    await record_audit(
+        db, actor=user, action="user.invited",
+        target_type="user", target_id=new_user.id, target_label=new_user.email,
+        metadata={"role": new_user.role, "welcome_email_sent": email_sent}, request=request,
+    )
+    await db.commit()
     return {
         "id": new_user.id,
         "email": new_user.email,
@@ -372,6 +387,7 @@ class UpdateUserRequest(BaseModel):
 async def update_user(
     user_id: int,
     req: UpdateUserRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_admin),
 ):
@@ -418,6 +434,18 @@ async def update_user(
                 raise HTTPException(status_code=400, detail="Cannot deactivate the last active super admin")
         target.is_active = req.is_active
 
+    # Audit summary — only logs the fields the request actually touched
+    changed = {}
+    for field_name in ("first_name", "last_name", "nickname", "role", "sending_enabled", "is_active"):
+        val = getattr(req, field_name)
+        if val is not None:
+            changed[field_name] = val
+    if changed:
+        await record_audit(
+            db, actor=user, action="user.updated",
+            target_type="user", target_id=target.id, target_label=target.email,
+            metadata=changed, request=request,
+        )
     await db.commit()
     return {
         "id": target.id,
@@ -507,6 +535,51 @@ async def forgot_password(
     return {"message": "If that email exists, a reset link has been sent."}
 
 
+# ============ Audit log (admin+ visible) ============
+
+@router.get("/audit-log")
+async def list_audit_log(
+    limit: int = 100,
+    offset: int = 0,
+    actor_user_id: Optional[int] = None,
+    action: Optional[str] = None,
+    target_type: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    """List audit log entries, newest first. Admin+ only.
+    Filter knobs let admins answer 'what did Linda do this week' /
+    'who changed a role' / 'all runtime_config edits' without grep."""
+    from app.models import AuditLogEntry
+    q = select(AuditLogEntry).order_by(AuditLogEntry.created_at.desc())
+    if actor_user_id is not None:
+        q = q.where(AuditLogEntry.actor_user_id == actor_user_id)
+    if action:
+        q = q.where(AuditLogEntry.action == action)
+    if target_type:
+        q = q.where(AuditLogEntry.target_type == target_type)
+    q = q.limit(min(max(limit, 1), 500)).offset(max(offset, 0))
+    rows = (await db.execute(q)).scalars().all()
+    import json as _json
+    return [
+        {
+            "id": r.id,
+            "actor_user_id": r.actor_user_id,
+            "actor_email": r.actor_email,
+            "actor_role": r.actor_role,
+            "action": r.action,
+            "target_type": r.target_type,
+            "target_id": r.target_id,
+            "target_label": r.target_label,
+            "metadata": _json.loads(r.metadata_json) if r.metadata_json else None,
+            "ip_address": r.ip_address,
+            "user_agent": r.user_agent,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in rows
+    ]
+
+
 # ============ BDR Reassignment ============
 
 class ReassignRequest(BaseModel):
@@ -517,6 +590,7 @@ class ReassignRequest(BaseModel):
 @router.post("/users/reassign")
 async def reassign_user(
     req: ReassignRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_admin),
 ):
@@ -554,6 +628,18 @@ async def reassign_user(
 
     await db.commit()
 
+    await record_audit(
+        db, actor=user, action="user.reassigned",
+        target_type="user", target_id=from_user.id, target_label=from_user.email,
+        metadata={
+            "to_user_id": to_user.id,
+            "to_email": to_user.email,
+            "companies_moved": companies_result.rowcount,
+            "deals_moved": deals_result.rowcount,
+            "tasks_moved": tasks_result.rowcount,
+        }, request=request,
+    )
+    await db.commit()
     return {
         "from": from_user.full_name,
         "to": to_user.full_name,

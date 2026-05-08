@@ -762,6 +762,55 @@ class CampaignRun(Base):
     summary_json = Column(Text, nullable=True)  # Per-target breakdown for the brief
 
 
+class AuditLogEntry(Base):
+    """Immutable record of privileged actions across the platform.
+
+    Captured for security review + SOC2 / enterprise compliance:
+      - User management (invite, role change, deactivate, password reset,
+        reassign companies/deals/tasks)
+      - Runtime config changes (API key rotation, AI tone edit,
+        webhook secret updates)
+      - Destructive company actions (delete, merge)
+      - Campaign / sequence start + pause + stop
+
+    Denormalized fields (actor_email, target_label) preserve the row's
+    meaning even after the actor or target is deleted. Append-only —
+    never updated, never deleted.
+
+    Indexed on (created_at), (actor_user_id), (action) for the most
+    common admin queries: "what did Linda do this week", "who changed
+    a role", "what happened on this date".
+    """
+    __tablename__ = "audit_log"
+
+    id = Column(Integer, primary_key=True, index=True)
+    actor_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    actor_email = Column(String(255), nullable=True)   # Snapshot of actor's email at time of action
+    actor_role = Column(String(20), nullable=True)     # Snapshot of actor's role at time of action
+
+    # Action verb in dotted form: 'user.invited', 'user.role_changed',
+    # 'runtime_config.updated', 'company.merged', etc.
+    action = Column(String(80), nullable=False, index=True)
+
+    # What was acted on. target_type maps to a model name; target_id is
+    # the row's primary key when applicable; target_label is a human
+    # snapshot (email, name, etc.) that survives the row's deletion.
+    target_type = Column(String(40), nullable=True, index=True)
+    target_id = Column(Integer, nullable=True)
+    target_label = Column(String(255), nullable=True)
+
+    # Context — JSON dict. For role changes: {"from": "sales_rep", "to": "admin"}.
+    # For runtime_config: {"field": "twilio_account_sid", "before_set": True}.
+    # NEVER stores the actual secret values — only mask presence/absence.
+    metadata_json = Column(Text, nullable=True)
+
+    # Request fingerprint
+    ip_address = Column(String(64), nullable=True)
+    user_agent = Column(String(300), nullable=True)
+
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+
+
 class CreditLedger(Base):
     """Per-action ledger of every billable thing we do.
 

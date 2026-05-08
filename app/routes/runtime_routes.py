@@ -11,6 +11,8 @@ from pydantic import BaseModel
 from app.database import get_db
 from app.models import User
 from app.auth import get_current_user
+from app.services.audit_log import record_audit
+from fastapi import Request
 from app.runtime_config import (
     _get_or_create,
     set_netrows_api_key,
@@ -167,6 +169,7 @@ async def get_messaging_default(
 @router.patch("/runtime-config")
 async def update_runtime_config(
     req: UpdateRuntimeConfigRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -224,6 +227,28 @@ async def update_runtime_config(
         if req.resend_webhook_secret is not None:
             await set_resend_webhook_secret(db, req.resend_webhook_secret)
 
+    # Audit summary — record which fields were touched, never the values
+    touched_fields = []
+    for field_name in (
+        "netrows_api_key", "twilio_account_sid", "twilio_auth_token",
+        "twilio_api_key_sid", "twilio_api_key_secret", "twilio_twiml_app_sid",
+        "deepgram_api_key", "blooio_api_key", "blooio_signing_secret",
+        "resend_webhook_secret", "messaging_direction", "apollo_api_key",
+    ):
+        val = getattr(req, field_name)
+        if val is not None:
+            touched_fields.append({
+                "field": field_name,
+                "set": bool(val.strip()) if isinstance(val, str) else bool(val),
+            })
+    if touched_fields:
+        await record_audit(
+            db, actor=user, action="runtime_config.updated",
+            target_type="runtime_config", target_id=1, target_label="org config",
+            metadata={"changes": touched_fields}, request=request,
+        )
+
     from app.config import settings
     rc = await _get_or_create(db)
+    await db.commit()
     return _payload(rc, settings, include_platform=is_super)
