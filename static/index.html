@@ -390,6 +390,7 @@
                 <a data-page="tasks" onclick="showPage('tasks')">Tasks <span id="nav-tasks-count" class="nav-badge"></span></a>
                 <a data-page="autopilot" onclick="showPage('autopilot')" style="margin-top:12px;border-top:1px solid rgba(255,255,255,0.1);padding-top:12px">Auto Pilot</a>
                 <a href="#" onclick="event.preventDefault();openStandaloneDialer()" style="color:var(--bmp-orange)">Dial a Number</a>
+                <a data-page="developer" id="nav-developer" onclick="showPage('developer')" class="hidden">Developer</a>
                 <a data-page="settings" onclick="showPage('settings')">Settings</a>
             </nav>
             <div class="sidebar-user">
@@ -699,6 +700,406 @@
                 </div>
                 <div id="campaigns-list"></div>
             </div>
+
+            <!-- Developer / API documentation. Admin-only nav visibility
+                 + admin-only page-show check. Customers / sales reps don't
+                 need to see API docs they can't act on (creating keys
+                 happens in Settings → 🔑 API Keys & Webhooks; this page
+                 is the reference doc for whoever's wiring an integration). -->
+            <div id="page-developer" class="hidden">
+                <div class="page-header" style="margin-bottom:16px">
+                    <h1 style="margin:0">Developer</h1>
+                    <p style="font-size:13px;color:#666;margin-top:4px">Push data into Prospector via REST. Receive event notifications via signed webhooks. Set up keys + webhook subscriptions in <a href="#" onclick="showPage('settings');return false" style="color:var(--bmp-green)">Settings → 🔑 API Keys & Webhooks</a>.</p>
+                </div>
+
+                <!-- Docs nav tabs -->
+                <div style="display:flex;gap:6px;margin-bottom:16px;border-bottom:1px solid #e0e0e0;padding-bottom:8px;flex-wrap:wrap">
+                    <button class="btn btn-secondary btn-sm dev-tab" data-tab="quickstart" onclick="switchDevTab('quickstart')">Quick Start</button>
+                    <button class="btn btn-secondary btn-sm dev-tab" data-tab="auth" onclick="switchDevTab('auth')">Authentication</button>
+                    <button class="btn btn-secondary btn-sm dev-tab" data-tab="companies" onclick="switchDevTab('companies')">Companies API</button>
+                    <button class="btn btn-secondary btn-sm dev-tab" data-tab="contacts" onclick="switchDevTab('contacts')">Contacts API</button>
+                    <button class="btn btn-secondary btn-sm dev-tab" data-tab="webhooks" onclick="switchDevTab('webhooks')">Webhooks</button>
+                    <button class="btn btn-secondary btn-sm dev-tab" data-tab="events" onclick="switchDevTab('events')">Event Reference</button>
+                    <button class="btn btn-secondary btn-sm dev-tab" data-tab="errors" onclick="switchDevTab('errors')">Errors & Limits</button>
+                </div>
+
+                <!-- Quick Start -->
+                <div class="dev-content" id="dev-tab-quickstart">
+                    <div class="search-box" style="max-width:880px">
+                        <h2 style="margin-top:0">Quick Start (3 steps)</h2>
+
+                        <h3 style="margin-top:18px;font-size:15px">1. Generate an API key</h3>
+                        <p>Open <a href="#" onclick="showPage('settings');return false" style="color:var(--bmp-green)">Settings → 🔑 API Keys & Webhooks → + New Key</a>. Save the plaintext (<code>pk_live_...</code>) — it's shown once, then SHA-256-hashed at rest.</p>
+
+                        <h3 style="margin-top:18px;font-size:15px">2. Push a company in</h3>
+                        <pre class="dev-code">curl -X POST https://prospector.backyardmarketingpros.com/api/v1/companies \
+  -H "X-API-Key: pk_live_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Smith Pools",
+    "website": "smithpools.com",
+    "phone": "+17025551234",
+    "city": "Las Vegas",
+    "state": "NV",
+    "business_type": "pool builders"
+  }'</pre>
+                        <p style="font-size:12px;color:#666">Response includes <code>created: true|false</code> — duplicate domains upsert into the existing record without overwriting populated fields.</p>
+
+                        <h3 style="margin-top:18px;font-size:15px">3. Subscribe to events (webhooks)</h3>
+                        <p>Settings → + New Webhook. Paste your endpoint URL, check <code>email.replied</code> + <code>meeting.booked</code> (or any subset), save the signing secret. We'll POST every matching event with HMAC-SHA256 in <code>X-Webhook-Signature</code>.</p>
+
+                        <h3 style="margin-top:18px;font-size:15px">Test the wiring without real data</h3>
+                        <p>Use the Test button on each webhook in Settings to fire a synthetic <code>webhook.test</code> event. Use webhook.site or ngrok during development.</p>
+                    </div>
+                </div>
+
+                <!-- Auth -->
+                <div class="dev-content hidden" id="dev-tab-auth">
+                    <div class="search-box" style="max-width:880px">
+                        <h2 style="margin-top:0">Authentication</h2>
+                        <p>Every <code>/api/v1/*</code> request requires the <code>X-API-Key</code> header.</p>
+                        <pre class="dev-code">X-API-Key: pk_live_YOUR_KEY</pre>
+
+                        <h3 style="font-size:15px;margin-top:18px">Key format</h3>
+                        <p><code>pk_live_</code> + 64 hex characters (32 random bytes). Generated in Settings, shown once at creation, SHA-256-hashed at rest. We never store the plaintext.</p>
+
+                        <h3 style="font-size:15px;margin-top:18px">Scoping</h3>
+                        <p>Keys inherit their owner's role + scoping:</p>
+                        <ul>
+                            <li><strong>sales_rep</strong> keys see only the rep's assigned companies/contacts/deals</li>
+                            <li><strong>admin / super_admin</strong> keys see everything in the org</li>
+                        </ul>
+
+                        <h3 style="font-size:15px;margin-top:18px">Revocation</h3>
+                        <p>Revoke any key from Settings — soft-delete (preserves audit trail of when the key was used). Revoked keys 401 immediately on the next request.</p>
+
+                        <h3 style="font-size:15px;margin-top:18px">Rate limits</h3>
+                        <p>v1 is uncapped — we'll add per-key throttling if any single key starts hammering the API. Until then, please be reasonable: a few req/sec is fine, sustained 100+ req/sec will get noticed.</p>
+                    </div>
+                </div>
+
+                <!-- Companies API -->
+                <div class="dev-content hidden" id="dev-tab-companies">
+                    <div class="search-box" style="max-width:880px">
+                        <h2 style="margin-top:0">Companies API</h2>
+                        <p style="color:#666">Base path: <code>https://prospector.backyardmarketingpros.com/api/v1/companies</code></p>
+
+                        <h3 style="font-size:15px;margin-top:18px">List companies</h3>
+                        <pre class="dev-code">GET /api/v1/companies?limit=50&offset=0&status=active&search=pools</pre>
+                        <p style="font-size:12px">Query params: <code>limit</code> (1-200, default 50), <code>offset</code>, <code>status</code> (new/active/sequencing/...), <code>search</code> (matches name + website).</p>
+
+                        <h3 style="font-size:15px;margin-top:18px">Get one</h3>
+                        <pre class="dev-code">GET /api/v1/companies/{id}</pre>
+
+                        <h3 style="font-size:15px;margin-top:18px">Create / upsert</h3>
+                        <pre class="dev-code">POST /api/v1/companies
+{
+  "name": "Smith Pools",
+  "website": "smithpools.com",
+  "phone": "+17025551234",
+  "address": "123 Lake Mead Blvd",
+  "city": "Las Vegas",
+  "state": "NV",
+  "business_type": "pool builders",
+  "custom_fields": {
+    "pool_type": "fiberglass",
+    "service_radius_miles": 50
+  }
+}</pre>
+                        <p style="font-size:12px">Upsert by canonical domain when <code>website</code> is set + an existing record matches. Existing fields are preserved (never clobbered) on the second write.</p>
+                        <p style="font-size:12px">Response: <code>{"created": true|false, "company": {...}}</code>. <code>created: true</code> fires the <code>company.created</code> webhook event.</p>
+
+                        <h3 style="font-size:15px;margin-top:18px">Update</h3>
+                        <pre class="dev-code">PATCH /api/v1/companies/{id}
+{
+  "phone": "+17025559999",
+  "status": "qualified",
+  "custom_fields": {"pool_type": "concrete"}
+}</pre>
+                        <p style="font-size:12px">Custom field values: only keys matching active <strong>Additional Information</strong> definitions (Settings → Additional Information Fields) are accepted. Empty string deletes the key.</p>
+
+                        <h3 style="font-size:15px;margin-top:18px">Response shape</h3>
+                        <pre class="dev-code">{
+  "id": 42,
+  "name": "Smith Pools",
+  "website": "smithpools.com",
+  "domain": "smithpools.com",
+  "phone": "+17025551234",
+  "address": "...",
+  "city": "Las Vegas",
+  "state": "NV",
+  "rating": 4.6,
+  "review_count": 47,
+  "business_type": "pool builders",
+  "status": "active",
+  "industry": "Construction",
+  "employee_count": 12,
+  "company_size": "11-50",
+  "founded": "2008",
+  "linkedin_url": "https://linkedin.com/company/smith-pools",
+  "facebook_url": "https://facebook.com/smithpools",
+  "instagram_url": "https://instagram.com/smithpools",
+  "youtube_url": null,
+  "tiktok_url": null,
+  "lead_score": 78,
+  "lead_score_tier": "hot",
+  "custom_fields": {"pool_type": "fiberglass"},
+  "assigned_to": 3,
+  "created_at": "2026-05-08T19:42:11+00:00"
+}</pre>
+                    </div>
+                </div>
+
+                <!-- Contacts API -->
+                <div class="dev-content hidden" id="dev-tab-contacts">
+                    <div class="search-box" style="max-width:880px">
+                        <h2 style="margin-top:0">Contacts API</h2>
+                        <p style="color:#666">Base path: <code>/api/v1/contacts</code></p>
+
+                        <h3 style="font-size:15px;margin-top:18px">Create / upsert</h3>
+                        <p>Either <code>company_id</code> OR <code>company_domain</code> is required. Upserts by email within that company.</p>
+                        <pre class="dev-code">POST /api/v1/contacts
+{
+  "company_domain": "smithpools.com",
+  "first_name": "John",
+  "last_name": "Smith",
+  "email": "john@smithpools.com",
+  "phone": "+17025550100",
+  "title": "Owner",
+  "linkedin_url": "https://linkedin.com/in/johnsmith",
+  "is_primary": true,
+  "custom_fields": {
+    "personal_email_alt": "john@gmail.com"
+  }
+}</pre>
+
+                        <h3 style="font-size:15px;margin-top:18px">Get one</h3>
+                        <pre class="dev-code">GET /api/v1/contacts/{id}</pre>
+
+                        <h3 style="font-size:15px;margin-top:18px">Update</h3>
+                        <pre class="dev-code">PATCH /api/v1/contacts/{id}
+{
+  "title": "CEO",
+  "phone": "+17025550101",
+  "custom_fields": {"linkedin_premium": true}
+}</pre>
+                        <p style="font-size:12px;color:#666">Same custom-field rules as Companies API — only active definitions accepted, empty string deletes the key.</p>
+                    </div>
+                </div>
+
+                <!-- Webhooks -->
+                <div class="dev-content hidden" id="dev-tab-webhooks">
+                    <div class="search-box" style="max-width:880px">
+                        <h2 style="margin-top:0">Webhooks</h2>
+                        <p>Outbound HTTP POSTs to your endpoint when subscribed events fire. Signed with HMAC-SHA256 so you can verify requests came from us.</p>
+
+                        <h3 style="font-size:15px;margin-top:18px">Setup</h3>
+                        <ol>
+                            <li>Settings → + New Webhook → paste your URL, check the events you want</li>
+                            <li>Copy the signing secret (shown once) into your endpoint config</li>
+                            <li>Verify signatures on every request</li>
+                        </ol>
+
+                        <h3 style="font-size:15px;margin-top:18px">Headers we send</h3>
+                        <pre class="dev-code">Content-Type:        application/json
+X-Webhook-Event:     company.created
+X-Webhook-Signature: sha256=&lt;hex_hmac_of_raw_body&gt;
+X-Webhook-Delivery:  &lt;random_token&gt;
+User-Agent:          BMP-Prospector-Webhooks/1.0</pre>
+                        <p style="font-size:12px"><strong>X-Webhook-Delivery</strong> is unique per attempt — store it on your end + dedupe so retries don't double-process.</p>
+
+                        <h3 style="font-size:15px;margin-top:18px">Verify the signature (Python)</h3>
+                        <pre class="dev-code">import hmac, hashlib
+
+def verify(secret: str, raw_body: bytes, header: str) -> bool:
+    expected = "sha256=" + hmac.new(
+        secret.encode(), raw_body, hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected, header)
+
+# In your endpoint:
+sig = request.headers["X-Webhook-Signature"]
+if not verify(MY_WEBHOOK_SECRET, request.body_raw, sig):
+    return 401, "bad signature"</pre>
+
+                        <h3 style="font-size:15px;margin-top:18px">Verify the signature (Node.js)</h3>
+                        <pre class="dev-code">const crypto = require('crypto');
+
+function verify(secret, rawBody, header) {
+  const expected = 'sha256=' + crypto
+    .createHmac('sha256', secret)
+    .update(rawBody)
+    .digest('hex');
+  return crypto.timingSafeEqual(
+    Buffer.from(expected), Buffer.from(header)
+  );
+}</pre>
+
+                        <h3 style="font-size:15px;margin-top:18px">Body shape (every event)</h3>
+                        <pre class="dev-code">{
+  "event": "company.created",
+  "delivery_id": "abc123_unique_per_attempt",
+  "occurred_at": "2026-05-08T19:42:11+00:00",
+  "data": { ... event-specific payload ... }
+}</pre>
+
+                        <h3 style="font-size:15px;margin-top:18px">Delivery + retry</h3>
+                        <p>v1 is best-effort: 10s timeout, single attempt. Failed deliveries are visible in Settings → Webhooks (last status, last error, failure count). Retry queue lands in v2.</p>
+                        <p>Respond with any <code>2xx</code> to acknowledge. <code>4xx</code> / <code>5xx</code> / network errors bump the failure counter; we don't auto-disable.</p>
+
+                        <h3 style="font-size:15px;margin-top:18px">Test without real events</h3>
+                        <p>Settings → Webhooks → Test (per webhook). Fires a synthetic <code>webhook.test</code> event with a token + your email. Use it to verify signature handling end-to-end.</p>
+                    </div>
+                </div>
+
+                <!-- Event Reference -->
+                <div class="dev-content hidden" id="dev-tab-events">
+                    <div class="search-box" style="max-width:880px">
+                        <h2 style="margin-top:0">Event Reference (v1)</h2>
+                        <p>Subscribe by name. Empty event list on a webhook = receive ALL events.</p>
+
+                        <h3 style="font-size:15px;margin-top:18px"><code>company.created</code></h3>
+                        <p style="font-size:12px;color:#666">Fires when a new Company row is created. Upserts of existing companies do <strong>not</strong> fire this — only true inserts.</p>
+                        <pre class="dev-code">{
+  "event": "company.created",
+  "delivery_id": "...",
+  "occurred_at": "...",
+  "data": {
+    "id": 42,
+    "name": "Smith Pools",
+    "website": "smithpools.com",
+    "domain": "smithpools.com",
+    "phone": "+17025551234",
+    "city": "Las Vegas",
+    "state": "NV",
+    "business_type": "pool builders",
+    "status": "new",
+    "lead_score": 0,
+    "lead_score_tier": "cold",
+    "custom_fields": {},
+    "created_at": "..."
+  }
+}</pre>
+
+                        <h3 style="font-size:15px;margin-top:18px"><code>contact.created</code></h3>
+                        <p style="font-size:12px;color:#666">Fires when a new Contact row is created. Same dedup rule as company.created — true inserts only.</p>
+                        <pre class="dev-code">{
+  "event": "contact.created",
+  "data": {
+    "id": 88,
+    "company_id": 42,
+    "first_name": "John", "last_name": "Smith",
+    "title": "Owner",
+    "email": "john@smithpools.com",
+    "phone": "+17025550100",
+    "phone_type": "mobile",
+    "linkedin_url": "...",
+    "is_primary": true,
+    "email_status": "valid",
+    "custom_fields": {}
+  }
+}</pre>
+
+                        <h3 style="font-size:15px;margin-top:18px"><code>email.replied</code></h3>
+                        <p style="font-size:12px;color:#666">Fires when a real prospect reply lands (auto-responses + OOO are skipped). Sentiment classification fires async after this — sentiment is NOT in the event payload because it's not classified yet at fire time.</p>
+                        <pre class="dev-code">{
+  "event": "email.replied",
+  "data": {
+    "activity_id": 1234,
+    "company_id": 42,
+    "contact_id": 88,
+    "from_email": "john@smithpools.com",
+    "subject": "Re: Quick question about your site",
+    "preview": "[Reply] Re: Quick question — I'd be interested...",
+    "received_at": "..."
+  }
+}</pre>
+
+                        <h3 style="font-size:15px;margin-top:18px"><code>meeting.booked</code></h3>
+                        <p style="font-size:12px;color:#666">Fires when iClosed confirms a real booking via the iClosed webhook. Includes the scheduled time when iClosed provides it.</p>
+                        <pre class="dev-code">{
+  "event": "meeting.booked",
+  "data": {
+    "report_id": 17,
+    "company_id": 42,
+    "company_name": "Smith Pools",
+    "booked_email": "john@smithpools.com",
+    "invitee_name": "John Smith",
+    "scheduled_at": "2026-05-12T15:00:00-07:00",
+    "source": "iclosed"
+  }
+}</pre>
+                    </div>
+                </div>
+
+                <!-- Errors & Limits -->
+                <div class="dev-content hidden" id="dev-tab-errors">
+                    <div class="search-box" style="max-width:880px">
+                        <h2 style="margin-top:0">Errors & Limits</h2>
+
+                        <h3 style="font-size:15px;margin-top:18px">Error format</h3>
+                        <p>FastAPI standard:</p>
+                        <pre class="dev-code">{ "detail": "Invalid or revoked API key" }</pre>
+
+                        <h3 style="font-size:15px;margin-top:18px">Status codes</h3>
+                        <table style="width:100%;font-size:13px;border-collapse:collapse">
+                            <thead><tr style="background:#fafafa;text-align:left">
+                                <th style="padding:6px 8px">Code</th><th style="padding:6px 8px">Meaning</th>
+                            </tr></thead>
+                            <tbody>
+                                <tr style="border-top:1px solid #f0f0f0"><td style="padding:6px 8px"><code>200</code></td><td style="padding:6px 8px">Success on GET / PATCH</td></tr>
+                                <tr style="border-top:1px solid #f0f0f0"><td style="padding:6px 8px"><code>201</code></td><td style="padding:6px 8px">Success on POST creating a new record</td></tr>
+                                <tr style="border-top:1px solid #f0f0f0"><td style="padding:6px 8px"><code>400</code></td><td style="padding:6px 8px">Validation error (missing required fields, bad URL, unknown event name, etc.)</td></tr>
+                                <tr style="border-top:1px solid #f0f0f0"><td style="padding:6px 8px"><code>401</code></td><td style="padding:6px 8px">Missing or invalid X-API-Key header, or revoked key</td></tr>
+                                <tr style="border-top:1px solid #f0f0f0"><td style="padding:6px 8px"><code>403</code></td><td style="padding:6px 8px">Authenticated but the resource is outside your scoping</td></tr>
+                                <tr style="border-top:1px solid #f0f0f0"><td style="padding:6px 8px"><code>404</code></td><td style="padding:6px 8px">Record not found OR exists but you don't have permission</td></tr>
+                                <tr style="border-top:1px solid #f0f0f0"><td style="padding:6px 8px"><code>500</code></td><td style="padding:6px 8px">Internal — never your fault, ping us if you see one</td></tr>
+                            </tbody>
+                        </table>
+
+                        <h3 style="font-size:15px;margin-top:18px">Limits (v1)</h3>
+                        <ul>
+                            <li><strong>Pagination:</strong> limit max 200 per request, offset-based</li>
+                            <li><strong>Rate limit:</strong> none enforced; please be reasonable. We'll add per-key throttling if abuse appears.</li>
+                            <li><strong>Webhook timeout:</strong> 10s per delivery attempt</li>
+                            <li><strong>Custom fields:</strong> only keys matching active definitions are accepted; unknown keys silently dropped</li>
+                            <li><strong>Body size:</strong> no enforced limit, but POSTs larger than 1MB will be rejected by nginx</li>
+                        </ul>
+
+                        <h3 style="font-size:15px;margin-top:18px">Coming in v2</h3>
+                        <ul>
+                            <li>Webhook retry queue (currently single-attempt)</li>
+                            <li>Per-key rate limiting</li>
+                            <li>Cursor-based pagination</li>
+                            <li>More events: <code>sequence.completed</code>, <code>deal.stage_changed</code>, <code>company.updated</code></li>
+                            <li>Native Zapier app (currently you can use Zapier's generic Webhooks-by-Zapier integration)</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <style>
+                .dev-code {
+                    background: #1f2326;
+                    color: #e6e6e6;
+                    padding: 14px 16px;
+                    border-radius: 6px;
+                    font-size: 12px;
+                    overflow-x: auto;
+                    margin: 8px 0;
+                    line-height: 1.55;
+                    white-space: pre-wrap;
+                }
+                .dev-content code {
+                    background: #f4f4f4;
+                    padding: 1px 5px;
+                    border-radius: 3px;
+                    font-size: 12px;
+                }
+                .dev-tab.active {
+                    background: var(--bmp-green);
+                    color: white;
+                }
+            </style>
 
             <div id="page-settings" class="hidden">
                 <div class="page-header"><h1>Settings</h1></div>
@@ -1346,6 +1747,9 @@
                     refreshNavBadges();
                     startNotificationPoller();
                     if (user.role === 'admin' || user.role === 'super_admin') initAdminRepFilters();
+                    // Show admin-only nav items (Developer docs page)
+                    const navDev = document.getElementById('nav-developer');
+                    if (navDev) navDev.classList.toggle('hidden', !(user.role === 'admin' || user.role === 'super_admin'));
                     // Auto-start the product tour for new users — onboarding_step 0 = never seen,
                     // 99 = skipped, 100 = completed. Anything between starts mid-tour.
                     if (typeof user.onboarding_step === 'number' && user.onboarding_step < 99) {
@@ -1772,6 +2176,26 @@
             if (page === 'tasks') loadTasks('mine');
             if (page === 'settings') loadSettings();
             if (page === 'autopilot') loadCampaigns();
+            if (page === 'developer') {
+                // Admin-only — refuse the visit if a sales_rep deep-links here
+                if (!currentUser || (currentUser.role !== 'admin' && currentUser.role !== 'super_admin')) {
+                    target.classList.add('hidden');
+                    showPage('dashboard');
+                    toast('Developer docs are admin-only');
+                    return;
+                }
+                // Default to Quick Start tab on first open
+                if (!document.querySelector('.dev-tab.active')) switchDevTab('quickstart');
+            }
+        }
+
+        function switchDevTab(tabName) {
+            document.querySelectorAll('.dev-tab').forEach(b => {
+                b.classList.toggle('active', b.dataset.tab === tabName);
+            });
+            document.querySelectorAll('.dev-content').forEach(el => {
+                el.classList.toggle('hidden', el.id !== `dev-tab-${tabName}`);
+            });
         }
 
         async function refreshNavBadges() {
