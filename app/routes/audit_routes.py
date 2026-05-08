@@ -284,11 +284,12 @@ async def request_competitor_comparison(
     .blurred {{ filter: blur(8px); pointer-events: none; user-select: none; opacity: 0.6; padding: 20px; background: white; border-radius: 12px; margin-bottom: 24px; }}
     .blurred table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
     .blurred td, .blurred th {{ padding: 8px; border-bottom: 1px solid #eee; }}
-    .gate {{ background: white; border-radius: 12px; padding: 24px; box-shadow: 0 4px 24px rgba(0,0,0,0.08); }}
-    .gate h2 {{ color: #1B5E20; margin-bottom: 4px; text-align: center; }}
-    .gate p.lede {{ color: #666; font-size: 14px; margin-bottom: 18px; text-align: center; }}
-    .iclosed-frame {{ width: 100%; height: 1300px; border: 0; border-radius: 8px; background: #fafafa; }}
-    .status-row {{ margin-top: 12px; padding: 12px; text-align: center; font-size: 13px; color: #666; }}
+    .gate {{ background: white; border-radius: 12px; padding: 0; box-shadow: 0 4px 24px rgba(0,0,0,0.08); overflow: hidden; }}
+    .gate-header {{ padding: 24px 24px 16px 24px; }}
+    .gate-header h2 {{ color: #1B5E20; margin-bottom: 4px; text-align: center; }}
+    .gate-header p.lede {{ color: #666; font-size: 14px; text-align: center; margin: 0; }}
+    .iclosed-frame {{ width: 100%; height: 1300px; border: 0; display: block; background: transparent; }}
+    .status-row {{ padding: 14px 24px 20px; text-align: center; font-size: 13px; color: #666; border-top: 1px solid #f0f0f0; }}
     .status-row .pulse {{ display: inline-block; width: 8px; height: 8px; background: #FF723F; border-radius: 50%; margin-right: 6px; animation: pulse 1.5s ease-in-out infinite; vertical-align: middle; }}
     .escape-link {{ display: block; margin-top: 8px; font-size: 12px; color: #888; text-decoration: underline; cursor: pointer; }}
     .escape-link:hover {{ color: #555; }}
@@ -320,11 +321,14 @@ async def request_competitor_comparison(
     </div>
 
     <!-- Gate: iClosed booking widget. Scheduling IS the gate.
-         No duplicate email form — once iClosed fires its webhook with the
-         booked email, the polling JS below auto-unlocks this page. -->
+         The iframe runs edge-to-edge inside the white card so the page
+         reads as one unified booking surface (header → widget → status)
+         instead of looking like a frame nested in a frame. -->
     <div class="gate" id="gate-form">
-        <h2>Schedule a quick 15-minute call to unlock</h2>
-        <p class="lede">Pick a time below — we'll walk through where you're winning, where competitors are pulling ahead, and the fastest fixes.</p>
+        <div class="gate-header">
+            <h2>Schedule a quick 15-minute call to unlock</h2>
+            <p class="lede">Pick a time below — we'll walk through where you're winning, where competitors are pulling ahead, and the fastest fixes.</p>
+        </div>
         <iframe class="iclosed-frame"
                 src="{booking_url}"
                 allow="fullscreen *"
