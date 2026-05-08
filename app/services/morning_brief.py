@@ -467,26 +467,81 @@ def render_brief_html(brief: BriefData, public_url: str) -> str:
 # Send — wraps everything together
 # ============================================================
 
+def _brief_subject(brief: BriefData) -> str:
+    o = brief.overnight or {}
+    if o.get("replies_overnight"):
+        n = o["replies_overnight"]
+        return f"☀️ {n} reply{'' if n == 1 else 'ies'} to act on this morning"
+    if o.get("contacts_enrolled_overnight"):
+        return f"☀️ {o['contacts_enrolled_overnight']} contacts enrolled overnight"
+    return "Your morning brief"
+
+
+def _html_to_text(html: str) -> str:
+    """Cheap plaintext alternative — Gmail / Outlook prefer multipart
+    messages and downgrade us to spam more readily without one. Strips
+    tags + collapses whitespace; doesn't try to be pretty."""
+    import re as _re
+    txt = _re.sub(r"<style[^>]*>.*?</style>", "", html, flags=_re.S | _re.I)
+    txt = _re.sub(r"<script[^>]*>.*?</script>", "", txt, flags=_re.S | _re.I)
+    txt = _re.sub(r"<[^>]+>", " ", txt)
+    txt = _re.sub(r"&nbsp;", " ", txt)
+    txt = _re.sub(r"&amp;", "&", txt)
+    txt = _re.sub(r"&lt;", "<", txt)
+    txt = _re.sub(r"&gt;", ">", txt)
+    txt = _re.sub(r"&#x[0-9A-Fa-f]+;|&#[0-9]+;", "", txt)
+    txt = _re.sub(r"\s+", " ", txt).strip()
+    return txt[:3500]
+
+
 async def send_brief(db: AsyncSession, user: User) -> bool:
-    """Build + render + send + stamp. Returns True if Resend accepted."""
+    """Build + render + send + stamp. Returns True if Resend accepted.
+
+    Deliverability hardening (matches the normal outbound-email path):
+      - From-line uses the user's first-name local-part instead of
+        'noreply@' — Gmail Promotions filters love 'noreply'
+      - List-Unsubscribe + List-Unsubscribe-Post headers signal
+        legitimate transactional / opted-in mail
+      - Plain-text alternative for clients that downgrade or score
+        HTML-only as promotional
+      - X-Entity-Ref-ID + custom tags for Resend logs filtering
+    """
     if not settings.resend_api_key or not user.email:
+        log.warning(f"send_brief skipped for user {user.id}: missing api_key or email")
         return False
     public_url = settings.public_url.rstrip("/")
     brief = await build_brief(db, user)
     html = render_brief_html(brief, public_url)
+    text_alt = _html_to_text(html)
 
-    subject = "Your morning brief"
-    o = brief.overnight
-    if o.get("replies_overnight"):
-        subject = f"☀️ {o['replies_overnight']} reply" + ("ies" if o["replies_overnight"] != 1 else "y") + " to act on this morning"
-    elif o.get("contacts_enrolled_overnight"):
-        subject = f"☀️ {o['contacts_enrolled_overnight']} contacts enrolled overnight"
+    subject = _brief_subject(brief)
+
+    # First-name@send_domain looks like a real person, not a robot.
+    # Falls back to 'team' if the user has no first name set.
+    fn = (user.first_name or "").strip().lower()
+    if not fn and user.full_name:
+        fn = user.full_name.strip().split()[0].lower()
+    fn = fn or "team"
+    from_local = fn.replace(" ", "")
+    from_address = f"{user.first_name or 'BMP'} from BMP <{from_local}@{settings.send_domain}>"
+
+    # List-Unsubscribe — surfaces native Gmail/Outlook unsubscribe button
+    # AND tells filters this is well-behaved automated mail. Points at a
+    # generic settings page; the brief itself is opt-out via Settings.
+    unsub_url = f"{public_url}/?page=settings"
 
     payload = {
-        "from": f"BMP Brief <noreply@{settings.send_domain}>",
+        "from": from_address,
         "to": [user.email],
+        "reply_to": user.email,  # they hit Reply, it goes to themselves; safe
         "subject": subject,
         "html": html,
+        "text": text_alt,
+        "headers": {
+            "List-Unsubscribe": f"<{unsub_url}>",
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+            "X-Entity-Ref-ID": f"morning-brief-{user.id}-{datetime.now(timezone.utc).date().isoformat()}",
+        },
         "tags": [
             {"name": "kind", "value": "morning_brief"},
             {"name": "user_id", "value": str(user.id)},
@@ -503,6 +558,7 @@ async def send_brief(db: AsyncSession, user: User) -> bool:
                 json=payload,
             )
         if r.status_code in (200, 201):
+            log.info(f"morning brief sent → user {user.id} ({user.email})")
             user.last_brief_sent_at = datetime.now(timezone.utc)
             await db.commit()
             try:
@@ -517,7 +573,7 @@ async def send_brief(db: AsyncSession, user: User) -> bool:
             except Exception:
                 pass
             return True
-        log.warning(f"Resend rejected morning brief for user {user.id}: {r.text[:200]}")
+        log.warning(f"Resend rejected morning brief for user {user.id}: {r.status_code} — {r.text[:300]}")
         return False
     except Exception as e:
         log.warning(f"send_brief failed for user {user.id}: {e}")
