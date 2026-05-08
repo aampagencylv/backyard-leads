@@ -128,12 +128,21 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# CORS: restrict to our own surfaces. Auth uses Bearer tokens in localStorage,
+# not cookies, so we don't need allow_credentials. The only cross-origin caller
+# is the bymp.com WVT snippet hitting /api/track/pageview — bymp.com is in the
+# allow list. Inbound webhooks (Blooio / Resend / Twilio) are server-to-server
+# and don't go through CORS.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=[
+        "https://prospector.backyardmarketingpros.com",
+        "https://backyardmarketingpros.com",
+        "https://www.backyardmarketingpros.com",
+    ],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
 )
 
 # API routes

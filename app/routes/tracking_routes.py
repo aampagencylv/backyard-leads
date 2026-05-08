@@ -10,6 +10,8 @@ Keep it under ~30ms by avoiding any unnecessary DB joins.
 """
 from __future__ import annotations
 import json
+import time
+from collections import deque
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Request
@@ -23,6 +25,50 @@ from app.config import settings
 
 
 router = APIRouter(tags=["tracking"])
+
+
+# ============================================================
+# Per-IP rate limiter for the public beacon endpoint.
+#
+# Sliding window: keeps the last N timestamps per IP, refuses if the count
+# inside the window is over the limit. Lives in-process — fine for our
+# single-process deploy. If we ever scale out, swap for Redis-backed.
+#
+# Defaults sized for legitimate use: 60 events / 60 seconds. A typical
+# session is < 20 pageviews + a handful of action events; this cushions
+# bursts but blocks anything trying to spray the table.
+# ============================================================
+
+_RATE_WINDOW_SEC = 60
+_RATE_MAX_PER_WINDOW = 60
+_rate_buckets: dict[str, deque] = {}
+
+
+def _check_rate_limit(ip: str) -> bool:
+    """Return True if request is allowed, False if rate-limited."""
+    if not ip:
+        return True  # can't bucket without an IP — fail open
+    now = time.monotonic()
+    cutoff = now - _RATE_WINDOW_SEC
+    bucket = _rate_buckets.get(ip)
+    if bucket is None:
+        bucket = deque(maxlen=_RATE_MAX_PER_WINDOW * 2)
+        _rate_buckets[ip] = bucket
+    # Drop expired entries
+    while bucket and bucket[0] < cutoff:
+        bucket.popleft()
+    if len(bucket) >= _RATE_MAX_PER_WINDOW:
+        return False
+    bucket.append(now)
+    # Periodic GC: every ~5000 requests across all IPs, drop empty buckets
+    if len(_rate_buckets) > 1000 and len(_rate_buckets) % 100 == 0:
+        for k in list(_rate_buckets.keys()):
+            b = _rate_buckets[k]
+            while b and b[0] < cutoff:
+                b.popleft()
+            if not b:
+                del _rate_buckets[k]
+    return True
 
 
 @router.get("/t/{token}")
@@ -79,9 +125,14 @@ async def track_click(token: str, request: Request):
     # the snippet cross-origin — query string is the bridge.
     sep = "&" if "?" in link.destination_url else "?"
     response = RedirectResponse(url=f"{link.destination_url}{sep}bmp_id={token}", status_code=302)
+    # Defense in depth on the prospector-domain cookie. Nothing actually reads
+    # it — the bymp.com snippet picks the token off ?bmp_id= in the URL and
+    # writes its OWN bmp_visitor cookie on bymp.com (which DOES need to be
+    # JS-readable). So locking this one down to Secure + HttpOnly costs us
+    # nothing and removes the cookie from any cross-site script's reach.
     response.set_cookie(
         key="bmp_visitor", value=token, max_age=31_536_000, path="/",
-        samesite="lax", secure=False, httponly=False,
+        samesite="lax", secure=True, httponly=True,
     )
     return response
 
@@ -174,20 +225,27 @@ try{
 """
 
 
+_TRACK_JS_HEADERS = {
+    "Cache-Control": "public, max-age=300",  # 5 min — short so changes propagate fast
+    "Access-Control-Allow-Origin": "*",       # readable from any origin
+    "X-Content-Type-Options": "nosniff",
+}
+
+
 @router.get("/track.js")
 async def track_snippet():
     """The JS snippet to embed on backyardmarketingpros.com. Drop this in
     a single <script src="https://prospector.backyardmarketingpros.com/track.js" async></script>
     tag and every page view from a tracked visitor lands on the timeline."""
     js = _TRACK_SNIPPET.replace("__API__", settings.public_url.rstrip("/"))
-    return Response(
-        content=js,
-        media_type="application/javascript",
-        headers={
-            "Cache-Control": "public, max-age=300",  # 5 min — short so changes propagate fast
-            "Access-Control-Allow-Origin": "*",  # readable from any origin
-        },
-    )
+    return Response(content=js, media_type="application/javascript", headers=_TRACK_JS_HEADERS)
+
+
+@router.head("/track.js")
+async def track_snippet_head():
+    """HEAD handler so link-checkers, monitoring, and HTTP probes don't get
+    a 405. Returns the same headers as GET, no body."""
+    return Response(status_code=200, media_type="application/javascript", headers=_TRACK_JS_HEADERS)
 
 
 @router.post("/api/track/pageview")
@@ -204,6 +262,16 @@ async def track_pageview(req: Request):
         (BDR can scan the timeline; spamming on every Calendly link click would
         be noisy)
     """
+    # Rate-limit by IP — 60 events / 60 sec sliding window. Cheap defense
+    # against someone spraying the public endpoint to fill page_views.
+    client_ip = (req.headers.get("x-forwarded-for") or "").split(",")[0].strip() or (req.client.host if req.client else "")
+    if not _check_rate_limit(client_ip):
+        return JSONResponse(
+            {"ok": False, "error": "rate_limited"},
+            status_code=429,
+            headers={"Access-Control-Allow-Origin": "*", "Retry-After": str(_RATE_WINDOW_SEC)},
+        )
+
     try:
         raw = await req.body()
         data = json.loads(raw or b"{}")

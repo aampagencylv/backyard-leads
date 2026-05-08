@@ -56,6 +56,12 @@ async def recent(
         except ValueError:
             pass  # malformed → fall back to 5-minute lookback
 
+    # Multi-tenant scoping: a sales_rep should only get popups for THEIR
+    # companies. Admins + super_admins still see everything (pre-existing
+    # convention from app/scoping.py — keeps cross-team visibility for
+    # supervisors). We join Company on the activity to filter by ownership
+    # rather than reusing scope_companies because Activity ↔ Company is via
+    # company_id only, not a relationship that scope_companies expects.
     q = (
         select(Activity)
         .where(
@@ -65,6 +71,8 @@ async def recent(
         .order_by(Activity.created_at.desc())
         .limit(limit)
     )
+    if user.role not in ("admin", "super_admin"):
+        q = q.join(Company, Activity.company_id == Company.id).where(Company.assigned_to == user.id)
     rows = (await db.execute(q)).scalars().all()
 
     # Pull contact + company names in one batch each

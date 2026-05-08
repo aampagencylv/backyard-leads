@@ -548,13 +548,7 @@ When prospect clicks "See Your Competitive Comparison" in the audit report:
   - **Bulk delete** (admin) — checkbox multi-select like the Companies page
   - **Merge contacts** — same pattern as Merge Company. Mirror the schema: a `POST /api/contacts/merge` that re-points all child rows (Activities, GeneratedEmails, TrackingLinks, PageViews, Tasks via task.contact_id, hot_lead Activities) to the kept contact, unions notes, deletes duplicates. Useful for: same person on two companies, multiple email addresses for one person, etc.
   - Multi-select bar mirrors the Companies merge bar — sticky bottom-center, shows N selected with Merge / Delete / Clear actions
-- [ ] **Calendly/iClosed-style scheduling tool**, integrated with Google Calendar:
-  - Reads BDR availability from Google Calendar
-  - Configurable buffer / meeting length / windows per user
-  - Public booking page (e.g. `/book/{user-slug}`) with branded layout
-  - Auto-creates the event on both calendars + emails confirmation
-  - Should embeddable in emails (link), appear in the contact card actions, and be the destination of post-call sequence "calendar nudge" steps
-  - This replaces iClosed for our team
+- [x] **Calendly/iClosed-style scheduling tool** — DROPPED 2026-05-07. iClosed integration shipped (commit `990fc26`) and covers the BMP use case. Revisit only if iClosed becomes a constraint or we want full ownership for the SaaS version.
 
 ### Security + code-cleanup followups (from end-of-session audit, 2026-05-06)
 - [x] Merge Company endpoint admin-gated (was open to all roles — fixed in same session)
