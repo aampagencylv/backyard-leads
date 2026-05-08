@@ -118,6 +118,13 @@
         .contact-card-header h4 { font-size: 14px; margin: 0; }
         .contact-card-meta { font-size: 12px; color: #666; margin: 4px 0 0; }
         .contact-card-meta a { color: var(--bmp-orange); text-decoration: none; }
+        /* Ad-hoc composer: empty-state hint on the contenteditable body */
+        [contenteditable][data-placeholder]:empty:before {
+            content: attr(data-placeholder);
+            color: #aaa;
+            pointer-events: none;
+        }
+        [contenteditable] a { color: var(--bmp-orange); }
         .contact-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
         .contact-card .sequence-toggle { font-size: 11px; color: var(--bmp-green); cursor: pointer; user-select: none; margin-top: 8px; }
         .contact-card .sequence-toggle:hover { text-decoration: underline; }
@@ -2450,6 +2457,7 @@
                                     ${c.title ? `<div style="font-size:11px;color:#888">${escapeHtml(c.title)}</div>` : ''}
                                     ${c.email ? `<div style="font-size:11px;color:var(--bmp-orange)">${escapeHtml(c.email)}</div>` : '<div style="font-size:11px;color:#ccc">no email</div>'}
                                     ${c.phone ? `<div style="font-size:11px"><a class="call-link" onclick="event.stopPropagation();callContact(${c.id})">${escapeHtml(c.phone)}</a>${renderPhoneTypeBadge(c)}${c.do_not_text ? ` · <span style="color:#c0392b">opted out</span>` : (c.phone_type === 'landline' ? '' : ` · <a class="sms-link" onclick="event.stopPropagation();openSmsComposer(${c.id})" style="color:#0b93f6;cursor:pointer;text-decoration:none;border-bottom:1px dotted #0b93f6" title="iMessage via Blooio">💬 Message</a>`)}</div>` : ''}
+                                    ${c.email && !c.unsubscribed_at ? `<div style="font-size:11px"><a onclick="event.stopPropagation();openAdhocComposer(${c.id})" style="color:var(--bmp-orange);cursor:pointer;text-decoration:none;border-bottom:1px dotted var(--bmp-orange)" title="Send a one-off email">📧 Send Email</a></div>` : ''}
                                     ${c.emails.length > 0 ? `<div style="font-size:10px;color:var(--bmp-green);margin-top:2px">${c.emails.filter(e=>e.is_sent).length}/${c.emails.length} steps sent</div>` : ''}
                                 </div>
                             `).join('')}
@@ -2706,6 +2714,7 @@
                             <div class="contact-card-meta">
                                 ${c.title ? escapeHtml(c.title) + ' · ' : ''}
                                 ${c.email ? `<a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a>` : '<em>no email</em>'}
+                                ${c.email && !c.unsubscribed_at && c.email_status !== 'invalid' && c.email_status !== 'bounced' ? ` · <a onclick="event.stopPropagation();openAdhocComposer(${c.id})" style="color:var(--bmp-orange);cursor:pointer;text-decoration:none;border-bottom:1px dotted var(--bmp-orange)" title="Send a one-off email">📧 Email</a>` : ''}
                                 ${c.phone ? ` · <a class="call-link" onclick="event.stopPropagation();callContact(${c.id})">${escapeHtml(c.phone)}</a>${renderPhoneTypeBadge(c)}` : ''}
                                 ${c.phone && !c.do_not_text && c.phone_type !== 'landline' ? ` · <a class="sms-link" onclick="event.stopPropagation();openSmsComposer(${c.id})" style="color:#0b93f6;cursor:pointer;text-decoration:none;border-bottom:1px dotted #0b93f6" title="iMessage via Blooio">💬 Message</a>` : ''}
                                 ${c.unsubscribed_at ? ' · <span style="color:#c0392b">UNSUBSCRIBED (email)</span>' : ''}
@@ -5040,6 +5049,191 @@
         // call sites. Both endpoints below now route through Blooio (iMessage),
         // not Twilio SMS. The dormant Twilio SMS path stays for a future fallback.
         // ============================================================
+        // ============================================================
+        // Ad-hoc email composer — one-off send outside any sequence
+        //
+        // Use case: BDR talked to a prospect on the phone, wants to fire a
+        // personalized follow-up that doesn't fit a sequence step. Rich text
+        // via contenteditable (bold, italic, link, lists). Server sanitizes
+        // the HTML, wraps URLs for click tracking, sends via the same Resend
+        // path the engine uses, persists as a GeneratedEmail row marked
+        // step_type='adhoc' so replies pause sequences correctly.
+        // ============================================================
+
+        async function openAdhocComposer(contactId) {
+            const c = await api(`/api/contacts/${contactId}`);
+            if (!c) return;
+            if (c.unsubscribed_at) { toast('Contact has unsubscribed.'); return; }
+            if (c.email_status === 'invalid' || c.email_status === 'bounced') {
+                if (!confirm(`This contact's email is marked ${c.email_status}. Send anyway?`)) return;
+            }
+            if (!c.email) { toast('Contact has no email address. Add one first.'); return; }
+
+            // Suggested subject lines based on common post-call scenarios
+            const firstName = (c.first_name || c.name || '').split(' ')[0] || 'there';
+            const subjects = [
+                'great chatting earlier',
+                `following up on our call`,
+                `the [topic] thing you mentioned`,
+                'next steps',
+            ];
+
+            const root = document.getElementById('modal-root');
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="adhocConfirmClose()">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:640px">
+                        <div style="display:flex;gap:12px;align-items:center;margin-bottom:10px">
+                            <div style="width:36px;height:36px;border-radius:50%;background:var(--bmp-orange);color:white;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px">${escapeHtml(((c.first_name||'?')[0] + (c.last_name||'')[0] || '?').toUpperCase())}</div>
+                            <div style="flex:1;min-width:0">
+                                <div style="font-weight:600">${escapeHtml(c.name || c.email)}</div>
+                                <div style="font-size:11px;color:#888">${escapeHtml(c.email)}${c.title ? ' · ' + escapeHtml(c.title) : ''}</div>
+                            </div>
+                        </div>
+
+                        <div style="font-size:11px;color:#888;text-transform:uppercase;font-weight:600;margin-bottom:4px">Subject</div>
+                        <input id="adhoc-subject" type="text" placeholder="${escapeHtml(subjects[0])}" style="width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px;margin-bottom:8px">
+                        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+                            ${subjects.map(s => `<button class="btn btn-secondary btn-xs" onclick="document.getElementById('adhoc-subject').value=${JSON.stringify(s).replace(/'/g,"\\'")}; document.getElementById('adhoc-subject').focus()">${escapeHtml(s)}</button>`).join('')}
+                        </div>
+
+                        <div style="font-size:11px;color:#888;text-transform:uppercase;font-weight:600;margin-bottom:4px;display:flex;justify-content:space-between;align-items:center">
+                            <span>Body</span>
+                            <span style="font-weight:400;text-transform:none;font-size:10px;color:#aaa">URLs auto-tracked · signature auto-appended</span>
+                        </div>
+                        <!-- Toolbar -->
+                        <div style="display:flex;gap:2px;border:1px solid #ddd;border-bottom:none;border-radius:6px 6px 0 0;background:#fafafa;padding:4px">
+                            <button type="button" onclick="adhocFormat('bold')" title="Bold (Cmd+B)" style="border:none;background:transparent;cursor:pointer;padding:4px 10px;font-weight:700;font-size:13px;border-radius:3px">B</button>
+                            <button type="button" onclick="adhocFormat('italic')" title="Italic (Cmd+I)" style="border:none;background:transparent;cursor:pointer;padding:4px 10px;font-style:italic;font-size:13px;border-radius:3px">I</button>
+                            <button type="button" onclick="adhocFormat('underline')" title="Underline" style="border:none;background:transparent;cursor:pointer;padding:4px 10px;text-decoration:underline;font-size:13px;border-radius:3px">U</button>
+                            <span style="border-left:1px solid #ddd;margin:2px 4px"></span>
+                            <button type="button" onclick="adhocInsertLink()" title="Insert link" style="border:none;background:transparent;cursor:pointer;padding:4px 10px;font-size:13px;border-radius:3px">🔗 Link</button>
+                            <button type="button" onclick="adhocFormat('insertUnorderedList')" title="Bullet list" style="border:none;background:transparent;cursor:pointer;padding:4px 10px;font-size:13px;border-radius:3px">•</button>
+                            <button type="button" onclick="adhocFormat('insertOrderedList')" title="Numbered list" style="border:none;background:transparent;cursor:pointer;padding:4px 10px;font-size:13px;border-radius:3px">1.</button>
+                            <span style="border-left:1px solid #ddd;margin:2px 4px"></span>
+                            <button type="button" onclick="adhocFormat('removeFormat')" title="Clear formatting" style="border:none;background:transparent;cursor:pointer;padding:4px 10px;font-size:11px;color:#888;border-radius:3px">✕</button>
+                        </div>
+                        <!-- Editable body -->
+                        <div id="adhoc-body" contenteditable="true"
+                             style="border:1px solid #ddd;border-radius:0 0 6px 6px;padding:12px;min-height:160px;max-height:340px;overflow-y:auto;font-size:14px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;line-height:1.55;outline:none;background:white"
+                             oninput="adhocUpdateCount()"
+                             onkeydown="adhocOnKey(event)"
+                             data-placeholder="Hi ${escapeHtml(firstName)} —"></div>
+                        <div id="adhoc-count" style="font-size:11px;color:#888;text-align:right;margin-top:4px">0 words</div>
+
+                        <div id="adhoc-error" style="display:none;font-size:12px;color:#c0392b;background:#fdecec;border-radius:6px;padding:8px 10px;margin-top:8px"></div>
+
+                        <div class="modal-actions" style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end;align-items:center">
+                            <span style="font-size:11px;color:#888;margin-right:auto">Sends from <code>${escapeHtml(currentUser?.email || '')}</code></span>
+                            <button class="btn btn-secondary" id="adhoc-cancel-btn" onclick="document.getElementById('modal-root').innerHTML=''">Cancel</button>
+                            <button class="btn btn-primary" id="adhoc-send-btn" onclick="sendAdhocEmail(${c.id})">Send Email</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            // Empty-state placeholder (CSS-only via :empty selector won't work in
+            // contenteditable, so we wire it manually):
+            const ed = document.getElementById('adhoc-body');
+            if (ed) ed.focus();
+        }
+
+        function adhocConfirmClose() {
+            const ed = document.getElementById('adhoc-body');
+            const subj = document.getElementById('adhoc-subject');
+            const hasContent = (ed && ed.innerText.trim()) || (subj && subj.value.trim());
+            if (hasContent && !confirm('Discard this draft?')) return;
+            document.getElementById('modal-root').innerHTML = '';
+        }
+
+        function adhocFormat(cmd) {
+            // execCommand is technically deprecated but still works in every
+            // browser and is the simplest way to wire a contenteditable toolbar.
+            // We sanitize server-side anyway, so any markup quirks get cleaned up.
+            document.execCommand(cmd, false, null);
+            const ed = document.getElementById('adhoc-body');
+            if (ed) ed.focus();
+        }
+
+        function adhocInsertLink() {
+            const url = prompt('Link URL (https:// or mailto:)');
+            if (!url) return;
+            // Light validation — server will strip anything malformed anyway
+            const safe = url.trim();
+            if (!/^(https?:\/\/|mailto:|tel:)/i.test(safe)) {
+                toast('Link must start with http://, https://, mailto:, or tel:');
+                return;
+            }
+            document.execCommand('createLink', false, safe);
+        }
+
+        function adhocOnKey(ev) {
+            // Cmd/Ctrl+Enter sends. Cmd/Ctrl+B/I/U use the browser's native
+            // execCommand bindings already — we don't need to handle those.
+            if ((ev.metaKey || ev.ctrlKey) && ev.key === 'Enter') {
+                ev.preventDefault();
+                const sendBtn = document.getElementById('adhoc-send-btn');
+                if (sendBtn) sendBtn.click();
+            }
+        }
+
+        function adhocUpdateCount() {
+            const ed = document.getElementById('adhoc-body');
+            const el = document.getElementById('adhoc-count');
+            if (!ed || !el) return;
+            const text = (ed.innerText || '').trim();
+            const words = text ? text.split(/\s+/).length : 0;
+            el.textContent = `${words} word${words === 1 ? '' : 's'}`;
+        }
+
+        async function sendAdhocEmail(contactId) {
+            const subj = (document.getElementById('adhoc-subject').value || '').trim();
+            const ed = document.getElementById('adhoc-body');
+            const html = ed ? ed.innerHTML.trim() : '';
+            const text = ed ? ed.innerText.trim() : '';
+            const errEl = document.getElementById('adhoc-error');
+            const sendBtn = document.getElementById('adhoc-send-btn');
+            const cancelBtn = document.getElementById('adhoc-cancel-btn');
+            if (errEl) errEl.style.display = 'none';
+            if (!subj) {
+                if (errEl) { errEl.textContent = 'Subject is required.'; errEl.style.display = 'block'; }
+                return;
+            }
+            if (!text) {
+                if (errEl) { errEl.textContent = 'Body is empty.'; errEl.style.display = 'block'; }
+                return;
+            }
+            if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Sending…'; }
+            if (cancelBtn) cancelBtn.disabled = true;
+
+            try {
+                const res = await fetch('/api/send/adhoc', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                    body: JSON.stringify({ contact_id: contactId, subject: subj, html_body: html }),
+                });
+                if (res.status === 401) { logout(); return; }
+                let json = null;
+                try { json = await res.json(); } catch (e) {}
+                if (!res.ok) {
+                    const detail = (json && json.detail) || `HTTP ${res.status}`;
+                    if (errEl) { errEl.textContent = `Send failed — ${detail}`; errEl.style.display = 'block'; }
+                    return;
+                }
+                toast(`✓ Email sent to ${json.sent_to || 'contact'}`);
+                document.getElementById('modal-root').innerHTML = '';
+                // Refresh in place if on company detail; otherwise leave the list alone
+                const page = document.getElementById('page-company-detail');
+                if (page && !page.classList.contains('hidden')) {
+                    const c = await api(`/api/contacts/${contactId}`);
+                    if (c && c.company_id) openCompanyDetail(c.company_id);
+                }
+            } catch (e) {
+                if (errEl) { errEl.textContent = `Network error — ${e.message}`; errEl.style.display = 'block'; }
+            } finally {
+                if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Send Email'; }
+                if (cancelBtn) cancelBtn.disabled = false;
+            }
+        }
+
         async function openSmsComposer(contactId) {
             const c = await api(`/api/contacts/${contactId}`);
             if (!c) return;

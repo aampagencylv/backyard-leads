@@ -729,3 +729,130 @@ async def resend_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         await db.commit()
 
     return {"status": "ok", "event": event_type, "company_id": company_id}
+
+
+# ============================================================
+# Ad-hoc one-off email — outside any sequence
+# ============================================================
+#
+# Use case: a BDR talks to a prospect on the phone and wants to fire a
+# personalized follow-up that doesn't fit the templated sequence. Composer
+# accepts rich-text HTML from the contenteditable editor on the frontend;
+# we sanitize, wrap URLs through /t/{token} for click tracking, send via
+# the same Resend path, and persist a GeneratedEmail row marked as 'adhoc'
+# so the email lives in the contact's history (replies attribute back, the
+# auto-pause-on-reply listener still works).
+# ============================================================
+
+class SendAdHocEmailRequest(BaseModel):
+    contact_id: int
+    subject: str
+    html_body: str  # raw innerHTML from the rich-text editor
+    sequence_label: Optional[str] = None  # if BDR also wants to associate it with a labeled sequence (rare)
+
+
+@router.post("/adhoc")
+async def send_adhoc_email(
+    req: SendAdHocEmailRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Send a one-off custom email to a contact. Sanitizes the HTML body,
+    wraps URLs for click tracking, persists as a GeneratedEmail row with
+    step_type='adhoc' (so replies/clicks/opens flow through the existing
+    listeners), and logs an email_sent Activity."""
+    contact = (await db.execute(select(Contact).where(Contact.id == req.contact_id))).scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    if not contact.email:
+        raise HTTPException(status_code=400, detail="Contact has no email address.")
+    if contact.unsubscribed_at:
+        raise HTTPException(status_code=400, detail="Contact has unsubscribed.")
+    if contact.email_status == "invalid":
+        raise HTTPException(status_code=400, detail="Contact email is marked invalid. Verify or update before sending.")
+
+    company = (await db.execute(select(Company).where(Company.id == contact.company_id))).scalar_one_or_none()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    if not settings.resend_api_key:
+        raise HTTPException(status_code=500, detail="Resend API key not configured")
+    if not user.sending_enabled:
+        raise HTTPException(status_code=403, detail="Sending is disabled for your account.")
+
+    subject = (req.subject or "").strip()
+    if not subject:
+        raise HTTPException(status_code=400, detail="Subject is required")
+
+    from app.services.html_sanitize import sanitize_email_html
+    clean_body = sanitize_email_html(req.html_body or "")
+    if not clean_body:
+        raise HTTPException(status_code=400, detail="Body is empty after sanitization")
+
+    # Persist a GeneratedEmail row first so we have an email_id for tracking +
+    # the Resend webhook can attribute opens/clicks/replies back to a row.
+    ge = GeneratedEmail(
+        contact_id=contact.id,
+        company_id=company.id,
+        step_type="adhoc",
+        email_type="adhoc",
+        subject=subject,
+        body=clean_body,  # store the sanitized HTML so resend / regen later sees what went out
+        sequence_order=0,
+        send_delay_days=0,
+        scheduled_send_at=datetime.now(timezone.utc),
+        is_sent=False,  # flipped to True after Resend confirms
+        auto_execute=False,
+        sequence_label=(req.sequence_label or "adhoc"),
+    )
+    db.add(ge)
+    await db.flush()
+
+    sender = get_sender_info(user.first_name, user.full_name)
+    from app.services.tracking import wrap_html_links
+    tracked_body = await wrap_html_links(
+        db, clean_body, contact_id=contact.id, company_id=company.id, email_id=ge.id, label="body_link",
+    )
+    sig_html = render_signature(user)
+    tracked_signature = await wrap_html_links(
+        db, sig_html, contact_id=contact.id, company_id=company.id, email_id=ge.id, label="signature_link",
+    )
+
+    result = await send_email(
+        to_email=contact.email,
+        subject=subject,
+        body=tracked_body,
+        from_name=sender["from_name"],
+        from_firstname=sender["from_firstname"],
+        reply_to_email=sender["reply_to"],
+        company_id=company.id,
+        contact_id=contact.id,
+        email_id=ge.id,
+        signature_html=tracked_signature,
+        unsubscribe_token=contact.unsubscribe_token,
+    )
+
+    if not result.get("success"):
+        # Roll back the GeneratedEmail row so a failed send doesn't leave a
+        # ghost in the contact's history.
+        await db.delete(ge)
+        await db.commit()
+        raise HTTPException(status_code=502, detail=f"Failed to send: {result.get('error', 'unknown')}")
+
+    ge.is_sent = True
+    ge.sent_at = datetime.now(timezone.utc)
+    db.add(Activity(
+        company_id=company.id, contact_id=contact.id, user_id=user.id,
+        activity_type="email_sent",
+        content=f"[Ad-hoc] Sent: {subject}",
+    ))
+    await db.commit()
+    return {
+        "success": True,
+        "email_id": ge.id,
+        "resend_id": result.get("resend_id"),
+        "sent_to": contact.email,
+        "from": sender["from_email"],
+        "reply_to": sender["reply_to"],
+        "subject": subject,
+    }
