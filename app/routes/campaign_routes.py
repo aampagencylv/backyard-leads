@@ -636,6 +636,425 @@ async def _execute_batch(campaign_id: int, db: AsyncSession, user: User):
 
 
 # ============================================================
+# God Mode runner — multi-target concurrent execution per tick
+# ============================================================
+# Replaces the legacy "advance current_location_index by 1 each tick"
+# model with one that processes every active CampaignTarget per cron
+# tick, allocating the daily prospect cap across targets by weight and
+# tracking per-target spend, cursors, and exhaustion.
+
+async def _process_business_through_pipeline(
+    db: AsyncSession,
+    campaign: Campaign,
+    business_type: str,
+    biz,
+    team: list,
+    now: datetime,
+) -> str:
+    """Take one Maps result through dedup → enrich → qualify → assign →
+    sequence-gen. Returns a status string the caller uses to update
+    counters. Caller is responsible for committing after the return.
+
+    Returns one of:
+      'enrolled', 'skipped_filters', 'skipped_dedup',
+      'skipped_not_qualified', 'skipped_no_contact', 'enriched_no_seq',
+      'error'
+    """
+    rc = biz.review_count or 0
+    rating = biz.rating or 0
+    if rc < campaign.min_reviews or rc > campaign.max_reviews:
+        return "skipped_filters"
+    if rating < campaign.min_rating:
+        return "skipped_filters"
+    if campaign.must_have_website and not biz.website:
+        return "skipped_filters"
+
+    # Dedup — check if this business already exists in CRM
+    existing = await _find_existing_company(db, biz.name, biz.website, biz.phone)
+    if existing:
+        if existing.status != "new":
+            last_contact = existing.updated_at or existing.created_at
+            if last_contact and (now - last_contact).days < campaign.contact_cooldown_days:
+                return "skipped_dedup"
+        team_ids = [m.id for m in team]
+        if existing.assigned_to and existing.assigned_to not in team_ids:
+            return "skipped_dedup"
+        company = existing
+    else:
+        company = Company(
+            name=biz.name, phone=biz.phone, website=biz.website,
+            address=biz.address, city=biz.city, state=biz.state,
+            rating=biz.rating, review_count=biz.review_count,
+            business_type=business_type,
+        )
+        db.add(company)
+        await db.flush()
+        campaign.total_prospects_found += 1
+
+    # Enrich if not already
+    if not company.enriched and company.website:
+        try:
+            analysis = await analyze_website(company.website)
+            company.enriched = True
+            company.has_blog = analysis.has_blog
+            company.has_social_links = analysis.has_social_links
+            company.has_ssl = analysis.has_ssl
+            company.site_speed_score = analysis.load_time_seconds
+            company.tech_stack = json.dumps(analysis.tech_stack)
+            company.problems_found = json.dumps(analysis.problems)
+            company.enrichment_summary = _summarize_problems(analysis)
+
+            nr_key = await get_netrows_api_key(db)
+            if nr_key:
+                try:
+                    ce = await netrows_company_enrich(company.website, nr_key)
+                    if ce and ce.employee_count:
+                        company.employee_count = ce.employee_count
+                    if ce and ce.industry:
+                        company.industry = ce.industry
+                except Exception:
+                    pass
+
+            try:
+                seo = await analyze_local_seo(company.website, company.name, business_type)
+                existing_probs = json.loads(company.problems_found) if company.problems_found else []
+                for f in seo.findings:
+                    existing_probs.append({
+                        "type": f"seo_{f['issue'].lower().replace(' ', '_')[:30]}",
+                        "severity": f["category"],
+                        "detail": f["detail"],
+                        "angle": f["talking_point"],
+                    })
+                company.problems_found = json.dumps(existing_probs)
+                company.enrichment_summary = (company.enrichment_summary or "") + f" Local SEO: {seo.score}/100 | AI Visibility: {seo.ai_visibility_score}/100."
+            except Exception:
+                pass
+
+            if nr_key:
+                try:
+                    nr = await netrows_find_decision_makers(company.website, nr_key)
+                    for dm in nr.decision_makers:
+                        await _ensure_contact(db, company.id, dm.full_name, dm.email, dm.job_title, None, dm.linkedin_url)
+                except Exception:
+                    pass
+
+            if settings.hunter_api_key:
+                try:
+                    hunter = await hunter_search(company.website, settings.hunter_api_key)
+                    for hc in hunter.contacts:
+                        if hc.email:
+                            full = f"{hc.first_name or ''} {hc.last_name or ''}".strip()
+                            await _ensure_contact(db, company.id, full, hc.email, hc.position, None, None)
+                except Exception:
+                    pass
+
+            await db.flush()
+        except Exception as e:
+            _log(db, campaign.id, "error", f"Enrich failed for {company.name}: {str(e)[:80]}", company_id=company.id)
+            return "error"
+
+    # Qualify
+    problems = json.loads(company.problems_found) if company.problems_found else []
+    if len(problems) < campaign.min_problems:
+        _log(db, campaign.id, "skipped",
+             f"Not qualified: {company.name} ({len(problems)} problems, need {campaign.min_problems})",
+             company_id=company.id)
+        return "skipped_not_qualified"
+
+    # Primary contact
+    contacts_result = await db.execute(
+        select(Contact).where(Contact.company_id == company.id, Contact.email.isnot(None), Contact.email != "")
+        .order_by(Contact.is_primary.desc())
+    )
+    primary_contact = contacts_result.scalars().first()
+    if campaign.contact_required and not primary_contact:
+        _log(db, campaign.id, "skipped", f"No contact email: {company.name}", company_id=company.id)
+        return "skipped_no_contact"
+
+    # Round-robin assign
+    assign_idx = campaign.last_assigned_index % len(team)
+    assigned_user = team[assign_idx]
+    campaign.last_assigned_index = assign_idx + 1
+    company.assigned_to = assigned_user.id
+    company.status = "pursuing"
+    campaign.total_qualified += 1
+
+    # Create deal if missing
+    existing_deal = await db.execute(select(Deal).where(Deal.company_id == company.id))
+    if not existing_deal.scalars().first():
+        from app.routes.deal_routes import recommend_package
+        pkg = recommend_package(company.employee_count)
+        deal = Deal(
+            company_id=company.id,
+            name=f"{company.name} — {business_type}",
+            value=0, package=pkg, contract_months=6,
+            stage="in_sequence", probability=0,
+            assigned_to=assigned_user.id,
+        )
+        db.add(deal)
+
+    # Sequence gen
+    if not primary_contact:
+        return "enriched_no_seq"
+
+    existing_emails = await db.execute(
+        select(GeneratedEmail).where(GeneratedEmail.contact_id == primary_contact.id)
+    )
+    if existing_emails.scalars().first():
+        return "enrolled"  # already enrolled; treat as success without re-genning
+
+    try:
+        first_subject = None
+        seq_now = datetime.now(timezone.utc)
+        for step in SEQUENCE_SCHEDULE:
+            stype = step.get("step_type", "email")
+            if stype == "linkedin":
+                msg_type = "connect" if "connect" in step["type"] else "message"
+                email_data = await generate_linkedin_message(
+                    business_name=company.name, business_type=business_type,
+                    problems=problems, contact_name=primary_contact.full_name,
+                    message_type=msg_type,
+                )
+            elif step["type"] == "cold":
+                email_data = await generate_cold_email(
+                    business_name=company.name, business_type=business_type,
+                    website=company.website or "", problems=problems,
+                    contact_name=primary_contact.full_name,
+                    location=f"{company.city}, {company.state}" if company.city else None,
+                )
+                first_subject = email_data["subject"]
+            else:
+                email_data = await generate_follow_up(
+                    business_name=company.name, business_type=business_type,
+                    problems=problems, previous_email_subject=first_subject or company.name,
+                    follow_up_number=step["order"] - 1,
+                    contact_name=primary_contact.full_name,
+                )
+            gen_step = GeneratedEmail(
+                company_id=company.id, contact_id=primary_contact.id,
+                step_type=stype, subject=email_data["subject"], body=email_data["body"],
+                email_type=step["type"], sequence_order=step["order"],
+                send_delay_days=step["delay_days"],
+                scheduled_send_at=seq_now + timedelta(days=step["delay_days"]),
+                problems_referenced=json.dumps(problems[:2]),
+            )
+            db.add(gen_step)
+            await db.flush()
+            if stype != "email":
+                db.add(Task(
+                    company_id=company.id, contact_id=primary_contact.id,
+                    user_id=assigned_user.id,
+                    description=f"{stype.title()}: {email_data['subject']}",
+                    due_date=seq_now + timedelta(days=step["delay_days"]),
+                ))
+
+        company.email_generated = True
+        company.status = "sequencing"
+        campaign.total_sequences_created += 1
+
+        db.add(Activity(
+            company_id=company.id, contact_id=primary_contact.id,
+            user_id=assigned_user.id, activity_type="sequence_created",
+            content=f"Auto Pilot: Sequence created for {primary_contact.full_name} — Campaign: {campaign.name}",
+        ))
+        _log(db, campaign.id, "sequence_created",
+             f"Sequence for {primary_contact.full_name} at {company.name} (assigned to {assigned_user.full_name})",
+             company_id=company.id, contact_id=primary_contact.id)
+        return "enrolled"
+    except Exception as e:
+        _log(db, campaign.id, "error", f"Sequence generation failed for {company.name}: {str(e)[:80]}", company_id=company.id)
+        return "enriched_no_seq"
+
+
+async def _execute_god_mode_batch(campaign_id: int, db: AsyncSession) -> dict:
+    """God Mode batch execution — processes ALL active CampaignTargets in
+    one tick. Replaces the legacy single-pair runner that advanced
+    current_location_index one slot at a time.
+
+    Per-target daily allowance is (weight / sum_active_weights) * campaign.max_prospects_per_day.
+    Each target keeps its own counters and cursor; campaigns only finish when EVERY target is exhausted.
+
+    Writes a CampaignRun row summarizing the tick — drives the future morning brief.
+    """
+    campaign = (await db.execute(select(Campaign).where(Campaign.id == campaign_id))).scalar_one_or_none()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if campaign.status != "running":
+        return {"status": campaign.status, "message": f"Campaign is {campaign.status}"}
+
+    now = datetime.now(timezone.utc)
+
+    # Reset campaign-level daily counter at UTC midnight
+    if not campaign.last_daily_reset or (now - campaign.last_daily_reset).days >= 1:
+        campaign.prospects_today = 0
+        campaign.last_daily_reset = now
+
+    if campaign.prospects_today >= campaign.max_prospects_per_day:
+        return {"status": "daily_cap_reached", "prospects_today": campaign.prospects_today}
+
+    # Load active targets. Legacy campaigns may have none yet — sync from
+    # the cross product before bailing.
+    targets = (await db.execute(
+        select(CampaignTarget).where(
+            CampaignTarget.campaign_id == campaign.id,
+            CampaignTarget.status == "active",
+        )
+    )).scalars().all()
+    if not targets:
+        await _sync_campaign_targets(db, campaign)
+        targets = (await db.execute(
+            select(CampaignTarget).where(
+                CampaignTarget.campaign_id == campaign.id,
+                CampaignTarget.status == "active",
+            )
+        )).scalars().all()
+
+    if not targets:
+        campaign.status = "completed"
+        await db.commit()
+        return {"status": "completed", "message": "No active targets"}
+
+    # Reset per-target daily counters at UTC midnight
+    for t in targets:
+        if not t.last_daily_reset or (now - t.last_daily_reset).days >= 1:
+            t.enrolled_today = 0
+            t.last_daily_reset = now
+
+    # Round-robin team
+    team = (await db.execute(
+        select(User)
+        .join(campaign_members, User.id == campaign_members.c.user_id)
+        .where(campaign_members.c.campaign_id == campaign.id)
+    )).scalars().all()
+    if not team:
+        raise HTTPException(status_code=400, detail="Campaign has no team members assigned")
+
+    # Per-target allowance based on weight share. Cap at campaign-wide remaining.
+    total_weight = sum(t.weight for t in targets) or 1
+    remaining_total = campaign.max_prospects_per_day - campaign.prospects_today
+
+    # Open a CampaignRun for this tick
+    run = CampaignRun(campaign_id=campaign.id, started_at=now)
+    db.add(run)
+    await db.flush()
+
+    summary_total = {
+        "targets_processed": 0,
+        "contacts_enrolled": 0,
+        "skipped_dedup": 0,
+        "skipped_filters": 0,
+        "skipped_not_qualified": 0,
+        "skipped_no_contact": 0,
+    }
+    per_target_summaries = []
+
+    for target in targets:
+        if remaining_total <= 0:
+            break
+
+        share = max(1, int((target.weight / total_weight) * campaign.max_prospects_per_day))
+        target_allowance = max(0, share - target.enrolled_today)
+        target_allowance = min(target_allowance, remaining_total)
+        if target_allowance <= 0:
+            continue
+
+        target_counters = {
+            "vertical": target.vertical, "location": target.location,
+            "searched": 0, "enrolled": 0, "skipped_dedup": 0,
+            "skipped_filters": 0, "skipped_not_qualified": 0, "skipped_no_contact": 0,
+            "errors": 0,
+        }
+
+        # Search Maps for this target's pair
+        if not settings.google_maps_api_key:
+            _log(db, campaign.id, "error", "Google Maps API key not configured")
+            break
+
+        try:
+            businesses = await search_businesses(
+                keyword=target.vertical, location=target.location,
+                api_key=settings.google_maps_api_key, max_results=40,
+            )
+        except Exception as e:
+            _log(db, campaign.id, "error", f"Search failed for {target.vertical} in {target.location}: {str(e)[:80]}")
+            target_counters["errors"] += 1
+            per_target_summaries.append(target_counters)
+            continue
+
+        target_counters["searched"] = len(businesses)
+        campaign.total_locations_searched += 1
+        _log(db, campaign.id, "searched", f"Searching: {target.vertical} in {target.location} ({len(businesses)} results)")
+
+        for biz in businesses:
+            if target_counters["enrolled"] >= target_allowance:
+                break
+            try:
+                outcome = await _process_business_through_pipeline(db, campaign, target.vertical, biz, team, now)
+            except Exception as e:
+                _log(db, campaign.id, "error", f"Pipeline error on {biz.name}: {str(e)[:80]}")
+                outcome = "error"
+
+            if outcome == "enrolled":
+                target_counters["enrolled"] += 1
+                campaign.prospects_today += 1
+                target.enrolled_today += 1
+                target.contacts_enrolled += 1
+                remaining_total -= 1
+                await db.commit()
+            elif outcome == "skipped_dedup":
+                target_counters["skipped_dedup"] += 1
+            elif outcome == "skipped_filters":
+                target_counters["skipped_filters"] += 1
+            elif outcome == "skipped_not_qualified":
+                target_counters["skipped_not_qualified"] += 1
+            elif outcome == "skipped_no_contact":
+                target_counters["skipped_no_contact"] += 1
+            elif outcome == "error":
+                target_counters["errors"] += 1
+
+        # Update target meta
+        target.last_run_at = now
+        if target_counters["enrolled"] == 0:
+            target.consecutive_empty_runs += 1
+            if target.consecutive_empty_runs >= 3:
+                target.status = "exhausted"
+                target.paused_reason = "no_new_results_3_runs"
+                _log(db, campaign.id, "exhausted",
+                     f"Target exhausted: {target.vertical} in {target.location} (3 ticks with 0 enrolled)")
+        else:
+            target.consecutive_empty_runs = 0
+
+        per_target_summaries.append(target_counters)
+        summary_total["targets_processed"] += 1
+        for k in ("skipped_dedup", "skipped_filters", "skipped_not_qualified", "skipped_no_contact"):
+            summary_total[k] += target_counters[k]
+        summary_total["contacts_enrolled"] += target_counters["enrolled"]
+
+    # Finalize run row
+    run.finished_at = datetime.now(timezone.utc)
+    run.targets_processed = summary_total["targets_processed"]
+    run.contacts_enrolled = summary_total["contacts_enrolled"]
+    run.summary_json = json.dumps(per_target_summaries)
+
+    # Campaign completion: all targets exhausted
+    active_remaining = sum(1 for t in targets if t.status == "active")
+    if active_remaining == 0:
+        campaign.status = "completed"
+        _log(db, campaign.id, "completed", "All targets exhausted — campaign complete")
+
+    campaign.last_run_at = now
+    await db.commit()
+
+    return {
+        "status": campaign.status,
+        "prospects_today": campaign.prospects_today,
+        "targets_processed": summary_total["targets_processed"],
+        "contacts_enrolled": summary_total["contacts_enrolled"],
+        "skipped": {k: v for k, v in summary_total.items() if k.startswith("skipped_")},
+        "per_target": per_target_summaries,
+    }
+
+
 # ============================================================
 # Internal cron endpoint — no auth, localhost only
 # ============================================================
@@ -650,25 +1069,22 @@ async def run_campaign_batch_internal(
 ):
     """
     Same as run-batch but without auth. Only accessible from localhost (cron).
+    Cron uses the God Mode runner which iterates all active CampaignTargets
+    per tick (concurrent multi-vertical / multi-geo). The UI manual-batch
+    button still uses the legacy single-pair runner for now until God Mode
+    is verified in prod.
     """
     client_host = request.client.host if request.client else ""
     if client_host not in ("127.0.0.1", "::1", "localhost"):
         raise HTTPException(status_code=403, detail="Internal endpoint — localhost only")
 
-    # Get the campaign creator to use as the acting user
     campaign = (await db.execute(select(Campaign).where(Campaign.id == campaign_id))).scalar_one_or_none()
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
     if campaign.status != "running":
         return {"status": campaign.status, "message": f"Campaign is {campaign.status}"}
 
-    creator = (await db.execute(select(User).where(User.id == campaign.created_by))).scalar_one_or_none()
-    if not creator:
-        raise HTTPException(status_code=500, detail="Campaign creator not found")
-
-    # Fake the request as the creator and delegate to the main function
-    # We import and call run_campaign_batch's logic directly
-    return await _execute_batch(campaign_id, db, creator)
+    return await _execute_god_mode_batch(campaign_id, db)
 
 
 # ============================================================
