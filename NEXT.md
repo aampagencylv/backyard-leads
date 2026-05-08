@@ -618,38 +618,42 @@ When prospect clicks "See Your Competitive Comparison" in the audit report:
 - [ ] **UI** to add/remove monitored profiles (LinkedIn or X) per Contact + per Company
 - [ ] **Auto-task** when a monitored prospect changes role/company → "Follow up with X — they just became CMO"
 
-### 🔥 NEXT SESSION (2026-05-07 plan, locked with Steve)
-- [ ] **Missive Phase 1** — webhook receiver at `/api/missive/webhook`. Inbound email from Missive → match to a contact → log to timeline + auto-pause sequence. Highest ROI of the new builds because Missive replies are currently invisible to the engine.
+### ✅ Shipped 2026-05-08 session
+- [x] **Inbox capture Phase A — Token-based reply catching** with Resend Inbound (replaces the original Missive Phase 1 webhook plan; better because inbox-tool-agnostic). Display name on Reply-To. Svix HMAC verification via Resend's signing secret. Body fetched via `/emails/inbound/{id}`. Signature stripped for timeline preview. Full body stashed in metadata + `📄 Full reply` expand button. Signature mining auto-enriches contact phone (mobile preferred) + LinkedIn URL when fields are empty. Settings panel for rotating the webhook secret.
+- [x] **Security cleanup batch** — `/t/{token}` cookie Secure+HttpOnly, restricted CORS, rate limit on `/api/track/pageview`, HEAD `/track.js`, notifications scoped to assigned reps.
+- [x] **Contacts page** — sort/filter/merge with phone-type, opted-out, hot-lead, city/state, tag filters; bulk delete + bulk merge with admin gating; sticky multi-select action bar.
+- [x] **Ad-hoc email composer** — 📧 Email button on contact cards; rich-text contenteditable; sends via Resend with click-tracking.
+- [x] **Companies bulk actions** — assign / tag / status / enrich / delete via the existing multi-select bar; admin-gated.
+- [x] **Onboarding walkthrough** — 10-step guided product tour with vanilla JS overlay + spotlight; auto-starts on first login; Settings → Restart Tour button.
+- [x] **Item 1 dedupe Company by website domain** — `domain` column on Company + canonical `normalize_domain()` helper + dedupe at create + on CSV upload.
+- [x] **Lost-reason dropdown** on `closed_lost` deals — 7 canned options + free-text notes; combined into single column.
+- [x] **Send caps per sender per day** — 50/day default (env-overrideable); engine defers to next-morning when cap hit.
+- [x] **Sequence step card visual identity** — channel-colored left rails (📧 green / 💼 LinkedIn-blue / 📞 orange / 💬 iMessage-blue), numbered circle badge, white card + shadow, DONE pill on sent steps.
+
+### 🔥 NEXT SESSION (locked 2026-05-08 with Steve)
+- [ ] **Missive sidebar app (Inbox capture Phase B)** — for ACTIVE capture when BDR initiates a conversation from inside Missive. Hosted at `/missive-sidebar`, embedded as an iframe. Shows company/contact card matched on the email's From address. If contact NOT found: "Add to CRM" button → creates Contact + Company (using domain dedupe) + logs initial Activity. If contact FOUND: shows sequence status, deal info, latest activities, with buttons "Add Note" / "Open in CRM" / "Start Sequence" / "Pause Sequence". Auth via shared secret + Missive's iframe-postMessage protocol.
 - [ ] **Google OAuth** — for two reasons:
   - Send email from the user's Gmail account (replaces Resend for those who want native Gmail send)
-  - Read calendar availability (precondition for the scheduling tool below)
+  - Read calendar availability (handy if iClosed ever needs replacement)
   - Probably wire `Sign in with Google` for user auth too while we're in there
-- [ ] **Ad-hoc email composer (one-off send, outside any sequence)** — Steve confirmed (2026-05-07): for the case where a BDR talks to a prospect on the phone and needs to fire a custom follow-up that doesn't fit any existing sequence step. Should include light formatting (bold/italic/links/lists — not a full WYSIWYG, just the essentials). Likely a 📧 button on the contact card next to the call/message links → opens a composer modal pre-filled with To / signature / suggested templates, with a rich-text body. Sends through the same Resend path the sequence engine uses; logs an `email_sent` Activity to the timeline. Should also auto-wrap URLs through `/t/{token}` (Phase 1 click tracking) so we know if they read it.
-- [ ] **"Pause / Resume / Send next" controls on existing sequences are already there**; only the new ad-hoc composer is needed for the one-off case.
-- [ ] **Contacts page — full sort/filter/delete/merge**:
-  - **Sort**: name, company, created date, last-activity, email status, sequence status
-  - **Filter**: company, tag, has email / no email (existing) + has phone / no phone, phone-type (mobile/landline/voip), opted out, sequence status (active/paused/none), hot-lead in last 30 min, owner, city/state
-  - **Bulk delete** (admin) — checkbox multi-select like the Companies page
-  - **Merge contacts** — same pattern as Merge Company. Mirror the schema: a `POST /api/contacts/merge` that re-points all child rows (Activities, GeneratedEmails, TrackingLinks, PageViews, Tasks via task.contact_id, hot_lead Activities) to the kept contact, unions notes, deletes duplicates. Useful for: same person on two companies, multiple email addresses for one person, etc.
-  - Multi-select bar mirrors the Companies merge bar — sticky bottom-center, shows N selected with Merge / Delete / Clear actions
-- [x] **Calendly/iClosed-style scheduling tool** — DROPPED 2026-05-07. iClosed integration shipped (commit `990fc26`) and covers the BMP use case. Revisit only if iClosed becomes a constraint or we want full ownership for the SaaS version.
 
 ### Security + code-cleanup followups (from end-of-session audit, 2026-05-06)
 - [x] Merge Company endpoint admin-gated (was open to all roles — fixed in same session)
-- [ ] **`Set-Cookie` flags on /t/{token} redirect** — currently `secure=False, httponly=False`. The cookie is set on prospector.* and isn't actually read by anything (the bymp.com snippet sets its OWN cookie via `document.cookie='bmp_visitor='+id`). Either remove the prospector cookie entirely OR flip it to `secure=True, httponly=True` for defense-in-depth.
-- [ ] **CORS posture** — `app/main.py` currently uses `allow_origins=["*"]` with `allow_credentials=True`. Browsers reject `*` + credentials per spec, so the credentials line is effectively dead, but it's a smell. Restrict to `https://prospector.backyardmarketingpros.com` + `https://backyardmarketingpros.com` and keep credentials off — we use Bearer tokens in localStorage, not cookies, so credentialed CORS is unnecessary.
-- [ ] **Rate limiting on /api/track/pageview** — public, unauth'd, no rate cap. Mitigation in place: unknown `visitor_token`s create dangling rows that don't surface anywhere, but a malicious actor could fill the page_views table. Add a simple per-IP token-bucket (slowapi or homebrew). Low priority.
-- [ ] **Notifications endpoint scope** — `/api/notifications/recent` returns ALL hot-lead / reply activities to every authed user. For the BMP team this is intentional (full visibility) but should eventually filter by `Company.assigned_to == user.email` for larger teams.
+- [x] `Set-Cookie` flags on /t/{token} redirect — Secure + HttpOnly (shipped 2026-05-07)
+- [x] CORS posture — restricted allow_origins, dropped allow_credentials (shipped 2026-05-07)
+- [x] Rate limiting on /api/track/pageview — 60/60s sliding window per IP (shipped 2026-05-07)
+- [x] Notifications endpoint scope — sales_rep filtered to assigned companies (shipped 2026-05-07)
+- [x] HEAD method on /track.js — returns 200 with same headers as GET (shipped 2026-05-07)
 - [ ] **Split company_routes.py** — 1241 lines and growing. Move merge + enrich + pursue + reviews into separate modules under `app/routes/companies/`.
-- [ ] **HEAD method on /track.js** — currently 405; harmless (browsers GET, not HEAD), but link-checkers / monitoring tools will alert.
 - [ ] **Dormant Twilio SMS code** in `app/services/twilio_sms.py` + `/api/twilio/sms/*` endpoints. Kept on purpose (might re-enable as a fallback channel) but worth re-evaluating in a few months — if we never need it, delete.
 
 ### Compliance / hygiene
-- [ ] **Send caps per domain per day** (deliverability protection — limit ~50/sender/day)
-- [ ] **Lost-reason capture** on closed_lost deals (dropdown: not interested / wrong fit / went w/ competitor / no budget / no response / other)
+- [x] Send caps per domain per day (shipped 2026-05-08)
+- [x] Lost-reason capture on closed_lost deals (shipped 2026-05-08, dropdown)
+- [x] Dedupe Company creation by website domain (shipped 2026-05-08)
 - [ ] **Bounce auto-handling** is partially wired; ensure UI shows BOUNCED contacts clearly and prompts for alternate email
-- [ ] **Dedupe Company creation by website domain** — Steve hit a real case (2026-05-07): two `AAMP Agency` rows existed in the DB with the same website (`https://aamp.agency`), one from manual Add Company and one from a Find Leads/pursue flow. Resulted in split data (contacts on one, sequences on the other, tracker pageviews on a third combination). Fix: at company creation time, normalize the website to a domain and look up an existing Company by `website ILIKE` or by the normalized domain — if a match exists, return that one instead of inserting a duplicate. Same for the "Add Contact" flow if it auto-creates a company.
 - [ ] **Merge UX gap**: Companies list defaults to hiding `status=new` (raw scrape) rows, so a duplicate where one row is in `new` and another is in `sequencing` can't be merged from the UI — checkboxes only render on the Companies list. Either (a) make duplicates always visible in a "Possible duplicates" panel, or (b) add a "Merge into existing company..." action on the company-detail page that lets you pick another company by name/search. Steve hit this with the AAMP duplicate (2026-05-07); manually merged via API call.
+- [ ] **Auto-response false-positive tuning** — the inbound webhook detects bounces / OOO replies via heuristic (mailer-daemon@, "out of office", etc.). Watch for false positives once real prospects start replying; tune `_looks_like_auto_response` in `email_inbound_routes.py` if needed.
 
 ### UX polish
 - [ ] **Mobile PWA** polish — currently desktop-first
