@@ -1,14 +1,7 @@
 # Next Steps & Punch List
 
 > Living doc. Pick up here at the start of each session. Pull `git pull --ff-only origin main` first.
-> Last updated by the agent on 2026-05-05 — overnight defensive pass while the user slept.
-
-## Overnight pass (added after the user said goodnight)
-- ✅ Fresh tarball backup at `/root/backups/backyard-leads-20260506-*.tar.gz`
-- ✅ Daily backup cron installed (`/usr/local/bin/backup-backyard-leads.sh`, 03:00 UTC, 14-day retention, uses sqlite online .backup)
-- ✅ README.md committed — repo overview, architecture, ops notes, "where the bodies are buried"
-- ✅ Tasks page filter chips — Today / This Week / Overdue / Team Open beyond just My Open
-- ⏸️ Held off on email-validation pre-send and Apollo cleanup — touch the send pipeline; want user awake to test
+> Last updated 2026-05-08 (post-audit cleanup — many "backlog" items were already shipped).
 
 ---
 
@@ -61,545 +54,93 @@
 | 1 | **Subscribe to Netrows Starter** (€49/mo) | Trial credits exhausted; nothing fires until you upgrade |
 | 2 | **Rotate the `pk_live_*` API key** in chat history → paste new one in **Settings → API Keys** | Original key was shared in our conversation |
 | 3 | **Set real BMP postal address** in `/opt/backyard-leads/.env` (`BMP_POSTAL_ADDRESS=...`) | CAN-SPAM requirement; placeholder is "Backyard Marketing Pros, Las Vegas, NV" |
-| 4 | **Gmail forwarding rule → /api/send/webhook/resend** for auto-pause-on-reply | When a prospect replies, the rest of their sequence auto-pauses |
-
----
-
-## ✅ Completed this session (2026-05-06)
-
-1. User access levels (admin/sales_rep/read_only) + admin user management
-2. Apollo cleanup — removed entirely, Netrows + Hunter is the enrichment chain
-3. Email validation pre-send — Hunter /v2/email-verifier, blocks sending to invalid
-4. Saved views / filter presets — backend ready, frontend dropdowns pending
-5. Start Sequence button on Contacts page
-6. AI visibility / GEO checks — llms.txt, FAQ schema, content citability, E-E-A-T
-7. Company size enrichment via Netrows /companies/by-domain + /companies/details
-8. Review range filters (min + max) on Find Leads page
-9. De-prioritized basic SEO checks (SSL, H1, meta → low severity)
-10. Personal email tone — first name only, no sign-off, casual
-11. Auto Pilot campaigns — full campaign system with cron automation
-12. Multi-channel sequences — email + LinkedIn steps, reschedule, add/insert steps
-13. Manual company creation + CSV upload with auto-enrich + auto-sequence
-14. Admin user invites with welcome email
-15. Password reset + change password
-16. Company filtering (city search, sort, qualify/unqualify)
-17. Three-column company detail (contacts left, sequence center, info right)
-18. Tag management (create, add, remove on companies)
-19. Delete/regenerate sequence buttons
-20. LinkedIn links on contact cards
-21. BMP package system (Foundation/Essential/Growth/Scale) with auto-recommendation
-22. MRR/ARR forecast with pipeline stage probabilities
-23. Company Intel panel (LinkedIn company data, Google rating, enrichment summary)
+| 4 | **Configure Resend Inbound webhook** + paste `RESEND_WEBHOOK_SECRET` into VPS `.env` | Token-based reply catching is code-complete but accepts any payload until the secret is set; details in Phase A operator setup below |
+| 5 | **Set `ICLOSED_WEBHOOK_SECRET`** in VPS `.env` + update iClosed dashboard webhook URL to include `?t=<secret>` | Authoritative booking confirmation for the gated competitor report |
+| 6 | **Confirm each rep has `twilio_phone_number` assigned** under User → Edit | TwiML refuses to record calls without it — symptoms = no waveform appears on call activities |
 
 ---
 
 ## 🟢 Backlog — ranked by ROI
 
-### 🔥 Inbox capture — TWO-PRONGED APPROACH (locked 2026-05-08)
-
-After discussion, the original Missive Phase 1 webhook plan was REPLACED with
-a more reliable, inbox-tool-agnostic design. The new approach combines:
-
-**A. Token-based reply catching** (SHIPPED — code-side; awaits DNS + Resend Inbound configuration)
-**B. Missive sidebar app** (Phase 2 — next session) — for active capture when BDR initiates from Missive
-
-The BCC log address pattern was rejected — too noisy (captures internal emails,
-vendor threads, support, etc.) without explicit BDR intent.
-
----
-
-#### A. Token-based reply catching — SHIPPED, AWAITING SETUP
-
-Every outgoing email now has `Reply-To: r-<token>@inbound.bymp.com`. Resend
-Inbound catches all mail at that subdomain via catch-all routing and POSTs to
-`/api/email/inbound`. The webhook:
-
-1. Extracts the token from the `To`/`Cc` list
-2. Looks up the GeneratedEmail row by reply_token
-3. Logs an `email_replied` Activity (or `email_auto_response` if it looks like
-   an OOO/bounce — heuristic match on From + Subject)
-4. Auto-pauses the contact's sequence
-5. Bumps company.status → 'replied'
-6. Forwards the message to the BDR's actual inbox (`user@bymp.com` → Missive)
-   with Reply-To set to the prospect's real email so follow-up replies in this
-   thread happen normally inside Missive
-
-Works regardless of inbox tool — the BDR's choice of Missive vs. Gmail vs.
-Outlook doesn't matter. Critical for the SaaS plan.
-
-**Setup steps Steve needs to do (~5 min):**
-
-> Update 2026-05-08: The existing `go.backyardmarketingpros.com` domain in
-> Resend ALREADY has Receiving enabled (Steve confirmed via screenshot —
-> MX → inbound-smtp.us-east-1.amazonaws.com is verified). So there's no
-> new DNS or new domain to add. We just configure the webhook destination
-> in Resend's dashboard.
-
-1. **In Resend dashboard, configure the inbound webhook:**
-   - Look for either: (a) `Webhooks` in the left nav, or (b) `go.backyardmarketingpros.com` → Configuration tab → Inbound section. Resend has rearranged this UI a couple of times.
-   - Add a new webhook for the `email.received` event scoped to
-     `go.backyardmarketingpros.com`.
-   - Endpoint URL: `https://prospector.backyardmarketingpros.com/api/email/inbound`
-   - Save the signing secret Resend generates.
-
-2. **Paste the signing secret into the platform `.env`**:
-   ```bash
-   ssh vps "echo 'RESEND_WEBHOOK_SECRET=<the-secret-from-resend>' >> /opt/backyard-leads/.env && systemctl restart backyard-leads"
-   ```
-   Without this, the webhook accepts any payload (fine for testing, bad for
-   prod — anyone who knew the URL could forge fake replies).
-
-3. **Test it**: send yourself a test sequence email. Reply from a different
-   email address. Within ~30 seconds you should see:
-   - `email_replied` Activity on the contact's timeline
-   - The contact's sequence auto-paused
-   - The reply forwarded to your Missive inbox with the prospect's email as
-     Reply-To (so when you hit Reply in Missive, it goes to them, not back
-     through us)
-
-4. **Watch for**: auto-responders / OOO replies should log as
-   `email_auto_response` (different icon, doesn't pause sequence). Tune the
-   detection heuristic in `email_inbound_routes._looks_like_auto_response()`
-   if you see false positives.
-
-4. **Test it**: send yourself a test sequence email. Reply from a different
-   email address. Within ~30 seconds you should see:
-   - `email_replied` Activity on the contact's timeline
-   - The contact's sequence auto-paused
-   - The reply forwarded to your Missive inbox with the prospect's email as
-     Reply-To (so when you hit Reply in Missive, it goes to them, not back
-     through us)
-
-5. **Watch for**: auto-responders / OOO replies should log as
-   `email_auto_response` (different icon, doesn't pause sequence). Tune the
-   detection heuristic in `email_inbound_routes._looks_like_auto_response()`
-   if you see false positives.
-
----
-
-#### B. Missive sidebar app — Phase 2 (next session, ~1 week)
-
-For ACTIVE capture when the BDR initiates a conversation from inside Missive
-(not a reply to one of our outbound sequences). This is the use case the
-original Missive Phase 1 plan tried to solve via webhooks; the sidebar
-approach is cleaner because the BDR explicitly clicks "Add to CRM" instead
-of automation guessing what's CRM-worthy.
-
-- Hosted at `https://prospector.backyardmarketingpros.com/missive-sidebar`
-- Embedded in Missive as an iframe (Missive supports custom sidebar apps via
-  their integrations marketplace OR via direct iframe URL config)
-- Shows company/contact card matched on the email's From address
-- If contact NOT found: shows "Add to CRM" button → creates Contact + Company
-  (using our domain-dedupe helper) + logs initial `email_sent` Activity
-- If contact FOUND: shows sequence status, deal info, latest activities, with
-  buttons: "Add Note" / "Open in CRM" / "Start Sequence" / "Pause Sequence"
-- Authentication: shared secret + Missive's iframe-postMessage protocol so
-  the sidebar knows which user is viewing it (Missive passes the current
-  user's email as a query param)
-
-Missive API docs: missiveapp.com/help/api
-Missive integration / sidebar docs: missiveapp.com/help/integrations
-
----
-
-#### C. (Deferred) Full Missive send integration
-
-Send FROM Missive instead of Resend, with the sequence creating drafts in
-Missive that the BDR reviews + sends. Eliminates Resend dependency. Big lift,
-significantly Missive-vendor-locked. Park indefinitely; revisit if Resend
-becomes a constraint.
-
-### 🔥 Twilio — full HubSpot Calling replacement [IN PROGRESS]
-
-**Locked decisions (2026-05-06):**
-- Per-rep numbers (better caller ID, ~$1.15/mo each)
-- Admin UI to buy + assign + release numbers
-- Inbound voicemail when rep offline → same pipeline as calls
-- **Whisper + Claude for transcripts and call takeaways** (4.5× cheaper than
-  Twilio Voice Intelligence; we control the prompt so "call takeaways" /
-  coaching suggestions are exactly what we want)
-- Browser-only dialer in Phase 1; native mobile app deferred
-- Power dialer (Phase 5) human-initiated only (TCPA)
-- HubSpot stays parallel during ~3-week transition
-
-**Voice Intelligence vs Whisper+Claude rationale:** The only thing VI does
-that Whisper can't is real-time live coaching DURING the call (e.g. "ask
-a question, you've been monologuing for 90 sec"). For post-call review
-with AI takeaways, custom Claude prompts beat VI's pre-built operators
-on flexibility AND cost. If real-time live coaching becomes important
-later, we can layer VI on top.
-
-**Goal:** retire HubSpot Sales Hub for calling. Team dials from inside our
-CRM, every call lands on the contact's timeline with recording, transcript,
-and AI summary, and inbound calls route to the right rep automatically.
-SMS is folded in last — calls are the primary unlock.
-
-**Why now:** HubSpot Sales Hub Pro is ~$100/seat/mo. Twilio direct is
-~$10/seat/mo all-in. At 5 reps that's $450/mo saved AND we keep all the
-data inside our own CRM instead of HubSpot's silo.
-
-**Pricing math (Twilio direct):**
-- Voice: $0.013/min outbound, $0.0085/min inbound
-- Phone numbers: $1.15/mo each (per rep)
-- Recordings: $0.0025/min stored
-- Transcription: $0.05/min (Twilio Voice Intelligence) OR ~$0.006/min via
-  Whisper (post-call upload). Whisper is 10× cheaper but lags real-time.
-- For 500 calls/mo @ 3 min avg = ~$25 talk + $5/rep numbers + $4 recording =
-  **≈ $40/mo for 5 reps**, vs $500 on HubSpot.
-
-**Architecture:**
-```
-Browser (BDR)  ←→  Twilio Voice SDK (WebRTC)  ←→  Twilio Voice
-                                                       ↓
-                                                 Recording + Transcript
-                                                       ↓
-                                              Webhook → /api/twilio/voice/*
-                                                       ↓
-                                       Activity row + Recording URL +
-                                       AI Summary on contact timeline
-```
-
-#### Phase 1 — Foundation (½ day)
-- Twilio account + first phone number for testing
-- Buy `+1-702-XXX` Vegas-area-code numbers per rep (better connect rate)
-- Add to config: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_API_KEY`,
-  `TWILIO_API_SECRET`, `TWILIO_TWIML_APP_SID`. Stored in `runtime_config`
-  table so the team rotates from Settings UI without SSH.
-- Each rep's `User` model gets `twilio_phone_number` (their assigned caller
-  ID) + `twilio_identity` (used for SDK auth). Migration:
-  `migrate_twilio_fields.py`.
-
-#### Phase 2 — Click-to-call (the core HubSpot replacement, ~2 days)
-**Browser dialer:** Twilio Voice JavaScript SDK, no phone hardware needed.
-- New `Dialer` modal — appears when BDR clicks any phone number on a
-  Contact card or in the Companies list.
-- Modal shows: contact photo / name / title / company, recent activity
-  (last 3 timeline entries), sequence status, deal stage + value.
-- Live controls: Mute · Hold · Hangup · Transfer · Keypad (DTMF).
-- During call: textarea for live notes, outcome dropdown
-  (connected · voicemail · no answer · wrong number · gatekeeper · declined).
-- After call: auto-saves Activity (`activity_type='call'`, content = notes,
-  metadata = {duration, outcome, recording_url, direction}).
-
-**Endpoints:**
-- `POST /api/twilio/voice/token` → returns ephemeral SDK access token
-  scoped to the BDR's Twilio identity (5-min TTL, refreshed on demand).
-- `POST /api/twilio/voice/twiml` → TwiML endpoint Twilio hits when SDK
-  initiates a call; returns `<Dial callerId="..." record="record-from-answer">`.
-- `POST /api/twilio/voice/status` → status callback receiver (ringing,
-  in-progress, completed). Logs duration + direction.
-- `POST /api/twilio/voice/recording` → recording-complete webhook. Stores
-  URL on the Activity, kicks off transcription job.
-
-**Schema additions:**
-```sql
-ALTER TABLE activities ADD COLUMN twilio_call_sid VARCHAR(50);
-ALTER TABLE activities ADD COLUMN call_duration_seconds INTEGER;
-ALTER TABLE activities ADD COLUMN call_direction VARCHAR(20);  -- inbound/outbound
-ALTER TABLE activities ADD COLUMN call_outcome VARCHAR(40);    -- connected/voicemail/etc
-ALTER TABLE activities ADD COLUMN recording_url VARCHAR(500);
-ALTER TABLE activities ADD COLUMN transcript TEXT;
-ALTER TABLE activities ADD COLUMN call_summary TEXT;            -- AI-generated
-```
-
-#### Phase 3 — Recording + transcription + AI summary (1 day)
-- Record everything by default (`record="record-from-answer-dual"` for
-  separate channels per side — better transcription).
-- 2-party consent compliance: TwiML plays a brief disclosure before
-  connecting ("This call may be recorded for quality and training")
-  — required in Nevada, California, and 11 other states.
-- Post-call worker downloads recording, sends to Whisper for transcript
-  (cheaper than Twilio Voice Intelligence, 10× difference).
-- Anthropic Claude (Sonnet 4) summarizes: outcome, next steps, sentiment,
-  any commitments or objections. Saved on the Activity.
-- Timeline entry shows: "📞 15 min call with Bret @ Cacti Landscapes
-  — connected · scheduled demo for Tue 2pm" with [▶ Play] + [📄 Transcript]
-  + [✨ Summary] buttons.
-
-#### Phase 4 — Inbound routing (1 day)
-- Each rep's number forwards to their Twilio identity (their browser).
-- When offline, Twilio sends to voicemail with custom greeting.
-- Voicemail recording → same pipeline as outbound (transcript + summary).
-- Inbound call lookup: if `From` number matches a known Contact, the
-  Dialer modal pops on the rep's screen WITH the contact's CRM record
-  pre-loaded. (HubSpot has this; we should match it.)
-- Unknown caller → modal shows the number with "Add as new contact" CTA.
-
-#### Phase 5 — Reporting + power dialer (1-2 days)
-- **Calls per rep per day** (chart on dashboard)
-- **Connect rate** = connected / dialed (industry benchmark: 5-15% cold)
-- **Average talk time**
-- **Outcome funnel**: dialed → connected → demo-booked → closed
-- **Power dialer mode**: feed a saved view (e.g. "Stale deals · stage=qualified")
-  to the dialer. Auto-advances to next contact when call ends; one-click
-  log + dial next.
-
-#### Phase 6 — Messaging — PIVOTED to Blooio iMessage [SHIPPED 2026-05-06]
-- **Outbound iMessage via Blooio** (`POST /api/blooio/send`). Sends from
-  BMP's dedicated 305 number. Falls back to RCS / SMS automatically when
-  the recipient isn't on iMessage — no parallel paths to maintain.
-- **Why Blooio over Twilio SMS**: 3-4× higher response rates for B2B cold
-  outreach in iPhone-heavy markets, and skips the A2P 10DLC compliance
-  burden entirely (no brand registration, no campaign approval, no
-  unregistered-traffic surcharge).
-- **GHL coexistence**: the same Blooio account also runs an unrelated GHL
-  integration. Inbound webhook handler filters by "is the From number a
-  known BMP Contact?" — unknown senders return 200 OK and are silently
-  ignored, so the GHL integration sees its own traffic untouched. The
-  webhook self-registration endpoint (`POST /api/blooio/webhook/setup`,
-  admin-only) is idempotent and never modifies other webhooks on the
-  account.
-- **Inbound handling** (matches email-reply behavior):
-  - `message.received` → log Activity `imessage_received`, auto-pause the
-    contact's email sequence, bump company status to `replied`
-  - STOP keyword → set `Contact.do_not_text=True`, log `sms_opt_out`
-  - START keyword → restore opt-in, log `sms_opt_in`
-  - `message.delivered` / `message.read` / `message.failed` → update the
-    matching `imessage_sent` Activity's metadata
-- **Twilio SMS code is dormant, not deleted** — `app/services/twilio_sms.py`
-  + the `/api/twilio/sms/*` endpoints stay in tree as a future fallback
-  channel if we ever need a Blooio-independent path. STOP/START keyword
-  helpers live there and are imported by Blooio's inbound handler.
-- **Sequence integration**: "Step type: SMS" sequence step now sends via
-  Blooio (when wired up by the sequence-engine task — currently still
-  email-only).
-- TCPA compliance: STOP keyword auto-honored. Send-window enforcement
-  (8am-9pm local time) is built but currently bypassed for human-initiated
-  sends from the composer; will be re-enabled when sequences trigger
-  auto-sends.
-
-#### Compliance / risk
-- **2-party consent recording disclosure** (Phase 3). Required in NV, CA,
-  FL, IL, MD, MA, MT, NH, PA, WA, CT, DE.
-- **DNC list check** before dialing (Twilio has a National DNC API).
-- **Call hours** respect (8am-9pm local time of the dialed number; we
-  already store contact timezone via Google Maps).
-- **TCPA** for any auto-dialer behavior — Phase 5 power dialer must be
-  human-initiated, not auto-fire.
-
-#### Migration path off HubSpot
-1. Phase 1+2 ship → invite one rep to dual-tool for a week (HubSpot for
-   inbound, Twilio for outbound)
-2. Phase 4 ships → port HubSpot inbound number to Twilio
-3. Phase 5 reporting parity → shut off HubSpot Sales Hub seats
-4. Estimated 3-4 weeks total to complete switchover
-
-#### Endpoint summary
-```
-POST /api/twilio/voice/token            (BDR's browser fetches token)
-POST /api/twilio/voice/twiml            (TwiML for outbound dial)
-POST /api/twilio/voice/status           (status callbacks)
-POST /api/twilio/voice/recording        (recording-complete)
-POST /api/twilio/voice/inbound          (inbound call routing)
-POST /api/twilio/sms/inbound            (Phase 6 — DORMANT)
-GET  /api/blooio/test                   (Phase 6 — connection test)
-POST /api/blooio/send                   (Phase 6 — outbound iMessage)
-GET  /api/blooio/capability             (Phase 6 — Enterprise plan only)
-POST /api/blooio/inbound                (Phase 6 — Blooio webhook receiver)
-POST /api/blooio/webhook/setup          (Phase 6 — admin: register webhook)
-POST /api/contacts/{id}/call            (initiate from UI)
-GET  /api/twilio/numbers                (admin: list available numbers)
-POST /api/twilio/numbers/buy            (admin: purchase a number)
-PATCH /api/users/{id}/twilio            (admin: assign number to rep)
-GET  /api/dashboard/calls               (per-rep daily call stats)
-```
-
-### Sequence engine — Call steps + conditional skip logic
-**Note from Steve, mid-Twilio build:** once Twilio is fully wired
-(through Phase 6 / SMS), come back here and extend the sequence
-engine.
-
-**1. Call steps (creates a BDR task, doesn't auto-dial)**
-New `type='call'` step. When the sequence reaches it, we create a
-Task on the assigned BDR with contact info + a suggested talk-track.
-Sequence advances when the BDR completes the call (via dialer Save
-& Close OR by manually marking the Task complete).
-
-Default cadence: 2-3 call steps across a 21-day sequence. Rough
-draft below — exact spacing to be refined when we sit down to build:
-  Day 0:  Email #1   (cold)
-  Day 1:  Call #1     (warm follow-up after the email)
-  Day 3:  Email #2   (follow-up)
-  Day 5:  LinkedIn    (skip if no URL — see #2)
-  Day 7:  Call #2
-  Day 10: Email #3
-  Day 14: Call #3     (final attempt)
-  Day 21: Email #4   (breakup)
-
-**2. Conditional step skipping** — general "skip if missing" logic:
-  - LinkedIn step       → skip if `contact.linkedin_url` is null
-  - SMS step (Phase 6)  → skip if `contact.phone` is null
-  - Call step           → skip if `contact.phone` is null
-                          OR contact has a do_not_call flag set
-  - Email step          → skip if `contact.email` is null
-                          OR `contact.unsubscribed_at` is set
-                          (already partially handled)
-
-Implementation sketch:
-  - `GeneratedEmail` / sequence-step rows gain a `skip_if` column
-    (JSON array: `["no_linkedin"]`, `["no_phone"]`, etc.).
-  - Sequence executor checks contact state at runtime; if the
-    condition matches, skip and log an Activity ("Skipped LinkedIn
-    step — no URL on file") instead of failing.
-  - Generation-time logic should also decide what to include
-    initially. Cleanest: omit the LinkedIn step entirely when there's
-    no URL at sequence-creation time, so the rep doesn't see a
-    "skipped" entry on every cadence cycle.
-  - Existing LinkedIn-step-creation needs updating to apply this.
-
-**3. Multi-channel default template**
-Once #1 + #2 are in place, swap the current default sequence for
-the multi-channel one above. Keep an email-only "minimal" template
-option for low-priority contacts or follow-on outreach.
-
----
-
-### 🔥 Website Visitor Tracking (email-to-site intelligence)
-
-Track when a prospect clicks through from an email to backyardmarketingpros.com, then track every page they visit. Auto-alert BDRs when a prospect is actively browsing.
-
-**Three components:**
-
-**1. Tracking Links (wrap URLs in outgoing emails):**
-- `TrackingLink` model: token, contact_id, email_id, destination_url, clicked_at
-- `GET /t/{token}` — public redirect endpoint, logs click, sets cookie, redirects
-- Auto-wrap URLs in generated emails during sequence creation
-- Signature links (website, Calendly) also get wrapped
-
-**2. JavaScript Snippet (install on backyardmarketingpros.com):**
-```html
-<script>
-(function(){
-  var API='https://prospector.backyardmarketingpros.com/api/track';
-  var p=new URLSearchParams(location.search);
-  var id=p.get('bmp_id');
-  if(id) document.cookie='bmp_visitor='+id+';path=/;max-age=31536000;SameSite=Lax';
-  var m=document.cookie.match(/bmp_visitor=([^;]+)/);
-  if(m) navigator.sendBeacon(API+'/pageview',JSON.stringify({
-    visitor_id:m[1], url:location.href, title:document.title, referrer:document.referrer
-  }));
-})();
-</script>
-```
-- ~15 lines, no dependencies, non-blocking beacon
-- Drops first-party cookie on first tracked visit
-- Every subsequent page view tracked back to the contact
-
-**3. Hot Lead Detection (server-side):**
-- `PageView` model: visitor_token, contact_id, company_id, url, page_title, session_id
-- Session grouping: page views within 30 min = one session
-- 3+ pages in a session = auto-create "hot lead" task for assigned BDR
-- Pricing page visit = highest priority signal
-- "Hot Leads" section on dashboard: contacts active on site in last 30 min
-- Timeline entries: "Brett Utter visited /pricing at 2:34pm"
-
-**API endpoints:**
-- `GET /t/{token}` — tracking link redirect (public)
-- `POST /api/track/pageview` — JS beacon receiver (public, CORS)
-- `GET /api/track/activity/{company_id}` — site visits for a company
-- `GET /api/track/hot-leads` — contacts on site in last 30 min
-- `POST /api/track/generate-link` — create tracking link
-
-**Build phases:**
-- Phase 1 (half day): Tracking links + click logging + auto-wrap in emails
-- Phase 2 (half day): JS snippet + page view tracking + timeline entries
-- Phase 3 (1 day): Hot lead detection + auto-tasks + dashboard section
-
----
-
-### 🔥 iClosed Integration — Gated Competitor Report + Scheduling
-
-**Context:** Competitor report is gated behind scheduling a call. Prospect sees a blurred preview, must book to unlock. Uses iClosed API instead of Calendly.
-
-**API:** `https://developer.iclosed.io/` — Bearer token auth (`iclosed_<key>`)
-- `GET /v1/events/timeSlots` — get available slots
-- `POST /v1/eventCalls` — book a call
-- `POST /v1/contacts` — create/upsert contact
-- Webhooks for real-time booking notifications
-
-**Gate page flow (/report/{token}/compare):**
-1. Background starts generating competitor report immediately
-2. Page shows blurred comparison table preview
-3. Below blur: "Schedule a 15-min call to walk through your results"
-4. iClosed booking widget embedded (or custom form that calls iClosed API)
-5. When prospect submits (name, phone, email, picks time):
-   - Creates/upserts contact in iClosed
-   - Books the call via `POST /v1/eventCalls`
-   - Updates contact in Prospector CRM (phone number, email)
-   - Un-gates the report — full comparison displayed
-   - BDR gets URGENT notification with phone number + meeting time
-   - Activity logged: "Brett booked a call for Tue 2pm to review competitor report"
-6. Repeat visits (after booking) show the full report immediately
-
-**Why iClosed over Calendly:** Team already uses it, has API for programmatic booking, can create contacts and log outcomes, webhooks for real-time notification.
-
----
-
-### 🔥 Conditional Sequence Logic (if/then for channels)
-
-**Problem:** Sequences include LinkedIn and SMS steps, but many contacts don't have LinkedIn URLs or cell phones. Sending to channels we don't have data for is pointless.
-
-**Solution:** Skip conditions already exist on GeneratedEmail model (`skip_if_json`, `auto_execute`). Need to wire them properly:
-
-**Rules:**
-- SMS/iMessage step → skip if no phone number (`skip_if: ['no_phone']`)
-- SMS/iMessage step → skip if phone_type = 'landline' (`skip_if: ['landline']`)
-- LinkedIn step → skip if no linkedin_url (`skip_if: ['no_linkedin']`)
-- Email step → skip if no email (`skip_if: ['no_email']`)
-- Any step → skip if contact unsubscribed/opted out
-
-**Dynamic channel addition:**
-- When a phone number is ADDED to a contact after sequence was created:
-  - Check if there are skipped SMS steps → un-skip them (clear `skipped_at`)
-  - Or: auto-insert a new SMS step if the sequence didn't have one
-- Same for LinkedIn URL — adding it could trigger adding a LinkedIn step
-
-**Implementation:**
-- Sequence engine already evaluates `skip_if_json` — just need to populate it during sequence generation
-- Add a contact update hook: when phone/LinkedIn is updated, check for skipped steps
-
----
-
-### Custom Fields for Companies + Contacts
-
-**Company custom fields:**
-- Total annual revenue (number)
-- Notes (text, unlimited)
-- Facebook URL
-- Instagram URL
-- Twitter/X URL
-- Source (how we found them — Google Maps, referral, upload, manual)
-- Industry sub-category
-
-**Contact custom fields:**
-- Cell phone (separate from office phone)
-- Personal email (separate from work email)
-- Facebook URL
-- Notes
-- Preferred contact method (email, phone, text, LinkedIn)
-- Best time to call
-
-**Implementation options:**
-1. **JSON blob** — `custom_fields_json TEXT` on Company and Contact. Flexible, no migrations needed for new fields. Query with JSON functions.
-2. **Dedicated columns** — one migration per field but better indexing/filtering.
-3. **EAV table** — `custom_field_values(entity_type, entity_id, field_name, field_value)`. Most flexible but hardest to query.
-
-**Recommendation:** Hybrid — dedicated columns for the most-used fields (revenue, cell phone, social URLs, notes) and a JSON blob for ad-hoc custom fields users create in the UI.
-
-**Netrows enrichment for social URLs:**
-- `/companies/details` sometimes returns social links
-- Facebook, Instagram, Twitter could auto-populate during enrichment
-
----
-
-### Automated Competitor Comparison Report
-When prospect clicks "See Your Competitive Comparison" in the audit report:
-1. System automatically runs audits on the top 3 SERP competitors (we already have them from DataForSEO)
-2. Generates a branded comparison report: side-by-side scores (AI Findability, Citability, Local SEO, Domain Authority, Keywords)
-3. Shows what competitors do better (FAQ schema, llms.txt, more backlinks, etc.)
-4. Hosted at /report/{token}/competitors as a follow-up to the original audit
-5. BDR gets notified when it's ready and sends the link
-6. Could auto-send via email sequence if configured
+> **Audit cleanup 2026-05-08:** the queue below was found to overstate open
+> work by ~6 sections. Removed: items confirmed shipped via code audit
+> (call recording + transcription + waveform, lead scorer v2, sequence-
+> engine call steps + skip-if logic, website visitor tracking, iClosed
+> gated competitor report, conditional-sequence logic, custom fields,
+> auto-competitor-comparison generator). Git history preserves the
+> original design notes for each.
+
+### 🔥 Inbox capture (Phase A SHIPPED, Phase B locked for next)
+
+**A. Token-based reply catching** — SHIPPED. Reply-To rewriting, Resend
+Inbound webhook → `/api/email/inbound`, signature mining, auto-enrich,
+sequence auto-pause. Awaits operator setup (see Action items above).
+
+**B. Missive sidebar app** — locked for next session. Hosted at
+`/missive-sidebar`, iframe-embedded. Matches company/contact on From
+address; "Add to CRM" if not found, full card + actions if found.
+
+**Phase A operator setup** (only thing remaining for inbound replies):
+1. In Resend dashboard, add an `email.received` webhook for
+   `go.backyardmarketingpros.com` → POST to
+   `https://prospector.backyardmarketingpros.com/api/email/inbound`. Save
+   the signing secret Resend generates.
+2. `ssh vps "echo 'RESEND_WEBHOOK_SECRET=<secret>' >> /opt/backyard-leads/.env && systemctl restart backyard-leads"`
+   (without this the webhook accepts any payload).
+3. Smoke test: reply to a test sequence email, watch for `email_replied`
+   Activity within ~30 sec, sequence auto-pause, forwarded copy in Missive.
+
+**Phase C — Full Missive send integration (deferred indefinitely).** Park
+unless Resend becomes a constraint.
+
+### Twilio HubSpot Calling replacement — Phase 5 only (Phases 1-4 + 6 SHIPPED)
+
+Phases 1-4 (per-rep numbers, browser dialer, recording + Deepgram
+transcription + Claude summary, inbound routing with voicemail) are live.
+Phase 6 (Blooio iMessage) shipped 2026-05-06.
+
+**Phase 5 — reporting + power dialer (1-2 days, OPEN):**
+- Calls per rep per day chart on dashboard
+- Connect rate = connected / dialed
+- Average talk time + outcome funnel (dialed → connected → demo-booked → closed)
+- Power dialer mode: feed saved view to dialer, auto-advance on call-end,
+  one-click log + dial-next. Human-initiated only (TCPA).
+
+Compliance still applies: 2-party consent disclosure (already wired in
+TwiML), DNC list check before dialing (TODO before power dialer ships),
+call-hours enforcement, TCPA — power dialer must stay human-initiated.
+
+**Operator note:** if you're not seeing a waveform on a call, check that
+the rep has `twilio_phone_number` assigned on their User record — TwiML
+refuses to record without a verified caller ID.
+
+### ✅ Verified shipped (audit 2026-05-08)
+
+These were all listed as open in the prior backlog but a code audit
+confirmed they're live. Each retains its design history in git.
+
+- **Sequence engine — call steps + conditional skip logic** —
+  `DEFAULT_SEQUENCE` in `app/services/sequence_engine.py` includes
+  email/linkedin/call/imessage step types with `skip_if` populated;
+  engine evaluates conditions at runtime.
+- **Website visitor tracking** — `/t/{token}` redirect, `/track.js`,
+  `/api/track/pageview`, install snippet box in Settings. Outbound
+  URLs in sequence emails are auto-wrapped.
+- **iClosed gated competitor report** — full state machine on
+  `/report/{token}/compare` and `/report/{token}/competitors`;
+  background generator runs SERP audit + side-by-side comparison;
+  auto-emails when ready; webhook flips `booked_at`.
+- **Conditional sequence logic** — `skip_if_json` populated at
+  generation, evaluated at execute time.
+- **Custom fields (companies + contacts)** — hybrid model: dedicated
+  columns for socials/revenue + JSON blob for tenant-defined fields,
+  with API stable keys for Zapier.
+- **Automated competitor comparison report** —
+  `_generate_competitor_report_bg` audits the top 3 SERP competitors
+  via DataForSEO and renders branded comparison HTML.
+- **Lead scoring v2 (fit × intent)** — `app/services/lead_scorer.py`
+  with sentiment-weighted intent + decay; wired into dashboard Hot
+  Leads.
 
 ### Other high-value items
 - [ ] **Dashboard MRR/ARR cards** — wire forecast API to dashboard KPI strip
@@ -630,12 +171,23 @@ When prospect clicks "See Your Competitive Comparison" in the audit report:
 - [x] **Send caps per sender per day** — 50/day default (env-overrideable); engine defers to next-morning when cap hit.
 - [x] **Sequence step card visual identity** — channel-colored left rails (📧 green / 💼 LinkedIn-blue / 📞 orange / 💬 iMessage-blue), numbered circle badge, white card + shadow, DONE pill on sent steps.
 
-### 🔥 NEXT SESSION (locked 2026-05-08 with Steve)
-- [ ] **Missive sidebar app (Inbox capture Phase B)** — for ACTIVE capture when BDR initiates a conversation from inside Missive. Hosted at `/missive-sidebar`, embedded as an iframe. Shows company/contact card matched on the email's From address. If contact NOT found: "Add to CRM" button → creates Contact + Company (using domain dedupe) + logs initial Activity. If contact FOUND: shows sequence status, deal info, latest activities, with buttons "Add Note" / "Open in CRM" / "Start Sequence" / "Pause Sequence". Auth via shared secret + Missive's iframe-postMessage protocol.
-- [ ] **Google OAuth** — for two reasons:
-  - Send email from the user's Gmail account (replaces Resend for those who want native Gmail send)
-  - Read calendar availability (handy if iClosed ever needs replacement)
-  - Probably wire `Sign in with Google` for user auth too while we're in there
+### 🔥 ACTIVE QUEUE (locked 2026-05-08, post-audit)
+1. **Tier 2 Netrows endpoints** — IN PROGRESS this session. ~3 hr.
+2. **Calendly-style native scheduler + Google OAuth** — built together
+   since OAuth is required for calendar reads. Native scheduler design
+   already lives in [Native scheduler](#-saas-feature-native-scheduler-calendly-style-byo-google-calendar)
+   below; OAuth scope covers (a) Gmail send for users who prefer it
+   over Resend, (b) calendar availability reads, (c) Sign-in-with-Google
+   for user auth.
+3. **Missive sidebar app (Inbox capture Phase B)** — hosted at
+   `/missive-sidebar`, iframe-embedded, matches company/contact on
+   From address. "Add to CRM" if not found, full card + actions if
+   found. Auth via shared secret + Missive's iframe-postMessage.
+4. **Twilio Phase 5** — power dialer + per-rep call reporting.
+5. **AI chatbot widget** — design in [§ AI chatbot](#-ai-chatbot-ask-bmp--conversational-query-widget) below.
+6. **Tier 3 Netrows Radar** — deferred; not needed for current customers.
+7. **Blooio iMessage SaaS add-on** — slots in once the billing layer
+   exists; design in [§ Blooio iMessage](#-saas-add-on-blooio-imessage-locked-2026-05-08) below.
 
 ### Security + code-cleanup followups (from end-of-session audit, 2026-05-06)
 - [x] Merge Company endpoint admin-gated (was open to all roles — fixed in same session)
