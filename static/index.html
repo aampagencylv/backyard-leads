@@ -3035,6 +3035,7 @@
                                         <div style="display:flex;gap:3px;flex-shrink:0">
                                             ${c.linkedin_url ? `<a href="${escapeHtml(c.linkedin_url)}" target="_blank" onclick="event.stopPropagation()" style="color:#0077B5;font-size:11px;text-decoration:none" title="LinkedIn">in</a>` : ''}
                                             <button class="btn btn-secondary btn-xs" onclick="event.stopPropagation();editContact(${c.id})" style="padding:2px 5px;font-size:10px">Edit</button>
+                                            <button class="btn btn-secondary btn-xs" onclick="event.stopPropagation();editContactCustomFields(${c.id})" style="padding:2px 5px;font-size:10px" title="Additional Information">ⓘ</button>
                                         </div>
                                     </div>
                                     ${c.title ? `<div style="font-size:11px;color:#888">${escapeHtml(c.title)}</div>` : ''}
@@ -3872,6 +3873,57 @@
                 body: JSON.stringify(values),
             });
             if (data) { toast('Contact added.'); openCompanyDetail(companyId); }
+        }
+
+        // Open a clean modal for editing a contact's Additional Information
+        // (custom fields). Autosave on blur — same UX pattern as the
+        // company-detail panel. Empty submission = field cleared.
+        async function editContactCustomFields(contactId) {
+            const c = await api(`/api/contacts/${contactId}`);
+            if (!c) return;
+            const defs = (await getCustomFieldDefs('contact')).filter(d => d.is_active);
+            if (defs.length === 0) {
+                toast('No additional fields defined yet. Add them in Settings → Additional Information.');
+                return;
+            }
+            const cf = c.custom_fields || {};
+            const inputFor = (def) => {
+                const v = cf[def.key] != null ? cf[def.key] : '';
+                const common = `id="cfval-contact-${escapeHtml(def.key)}" data-key="${escapeHtml(def.key)}" data-contactid="${contactId}" onblur="saveContactCustomField(${contactId}, this.dataset.key, this.value)"`;
+                if (def.field_type === 'textarea') {
+                    return `<textarea ${common} rows="2" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">${escapeHtml(String(v))}</textarea>`;
+                }
+                let inputType = 'text';
+                if (['number', 'url', 'email', 'date'].includes(def.field_type)) inputType = def.field_type;
+                else if (def.field_type === 'phone') inputType = 'tel';
+                return `<input type="${inputType}" value="${escapeHtml(String(v))}" ${common} style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">`;
+            };
+            const root = document.getElementById('modal-root');
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:480px">
+                        <h2>Additional Information</h2>
+                        <p style="font-size:12px;color:#666;margin-bottom:14px">${escapeHtml(c.name || c.email || 'Contact')} — autosaves as you tab between fields.</p>
+                        ${defs.map(def => `
+                            <div class="form-group">
+                                <label>${escapeHtml(def.label)}</label>
+                                ${inputFor(def)}
+                                ${def.helper_text ? `<div style="font-size:11px;color:#888;margin-top:2px">${escapeHtml(def.helper_text)}</div>` : ''}
+                            </div>
+                        `).join('')}
+                        <div class="modal-actions" style="display:flex;justify-content:flex-end;margin-top:14px">
+                            <button class="btn btn-primary" onclick="document.getElementById('modal-root').innerHTML=''">Done</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function saveContactCustomField(contactId, key, value) {
+            await api(`/api/custom-fields/values/contact/${contactId}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ values: { [key]: value } }),
+            });
         }
 
         async function editContact(contactId) {

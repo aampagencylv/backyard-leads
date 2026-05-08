@@ -531,6 +531,7 @@ def _contact_summary(c: Contact) -> dict:
         "phone_carrier": c.phone_carrier,
         "recent_posts": json.loads(c.recent_posts_json) if c.recent_posts_json else [],
         "posts_fetched_at": c.posts_fetched_at.isoformat() if c.posts_fetched_at else None,
+        "custom_fields": json.loads(c.custom_fields_json) if c.custom_fields_json else {},
         "created_at": c.created_at.isoformat() if c.created_at else None,
     }
 
