@@ -3713,12 +3713,22 @@ function verify(secret, rawBody, header) {
                             <h3 style="font-size:14px">Public Records <span style="font-size:10px;font-weight:400;color:#888">${escapeHtml(d.sos.state)} SoS</span></h3>
                             <div style="font-size:12px;line-height:1.7">
                                 ${d.sos.legal_name ? `<div><strong>Legal:</strong> ${escapeHtml(d.sos.legal_name)}</div>` : ''}
+                                ${d.sos.dba_names && d.sos.dba_names.length ? `<div><strong>DBA:</strong> ${d.sos.dba_names.map(n => `<span style="display:inline-block;background:#f0f4f8;border-radius:3px;padding:1px 6px;font-size:11px;margin-right:4px">${escapeHtml(n)}</span>`).join('')}</div>` : ''}
                                 ${d.sos.document_number ? `<div><strong>Doc #:</strong> <code style="font-size:11px">${escapeHtml(d.sos.document_number)}</code></div>` : ''}
                                 ${d.sos.entity_type ? `<div><strong>Type:</strong> ${escapeHtml(d.sos.entity_type)}</div>` : ''}
-                                ${d.sos.filing_date ? `<div><strong>Filed:</strong> ${escapeHtml(d.sos.filing_date)}</div>` : ''}
+                                ${d.sos.filing_date ? `<div><strong>Filed:</strong> ${escapeHtml(d.sos.filing_date)}${typeof d.sos.years_in_business === 'number' ? ` <span style="display:inline-block;background:#e8f4ea;color:#1b5e20;border-radius:3px;padding:1px 6px;font-size:10px;margin-left:4px">${d.sos.years_in_business} yr${d.sos.years_in_business === 1 ? '' : 's'} in business</span>` : ''}</div>` : ''}
                                 ${d.sos.status ? `<div><strong>Status:</strong> <span style="color:${d.sos.status === 'active' ? '#1b5e20' : '#c0392b'};text-transform:capitalize">${escapeHtml(d.sos.status)}</span></div>` : ''}
+                                ${d.sos.last_annual_report_date ? (() => {
+                                    const dt = new Date(d.sos.last_annual_report_date + 'T00:00:00');
+                                    const ageDays = Math.floor((Date.now() - dt.getTime()) / 86400000);
+                                    const stale = ageDays > 540;  // >18 months = likely zombie
+                                    const warn = ageDays > 365;
+                                    const color = stale ? '#c0392b' : (warn ? '#f39c12' : '#1b5e20');
+                                    const label = stale ? 'stale' : (warn ? 'aging' : 'current');
+                                    return `<div><strong>Last Annual Report:</strong> ${escapeHtml(d.sos.last_annual_report_date)} <span style="display:inline-block;background:${color}1a;color:${color};border-radius:3px;padding:1px 6px;font-size:10px;margin-left:4px">${label}</span></div>`;
+                                })() : ''}
                                 ${d.sos.registered_agent_name ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #eee"><strong>Registered Agent:</strong><br>${escapeHtml(d.sos.registered_agent_name)}${d.sos.registered_agent_address ? `<br><span style="color:#666;font-size:11px">${escapeHtml(d.sos.registered_agent_address)}</span>` : ''}</div>` : ''}
-                                ${d.sos.officers && d.sos.officers.length ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #eee"><strong>Officers (${d.sos.officers.length}):</strong><ul style="margin:4px 0 0;padding-left:18px">${d.sos.officers.map(o => `<li>${escapeHtml(o.name)} <span style="color:#888;font-size:11px">${escapeHtml(o.title)}</span></li>`).join('')}</ul></div>` : ''}
+                                ${d.sos.officers && d.sos.officers.length ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #eee"><strong>Officers (${d.sos.officers.length}):</strong><ul style="margin:4px 0 0;padding-left:18px">${d.sos.officers.map(o => `<li>${escapeHtml(o.name)} <span style="color:#888;font-size:11px">${escapeHtml(o.title)}</span>${o.address ? `<div style="color:#666;font-size:11px;margin-left:0;margin-top:2px">📍 ${escapeHtml(o.address)}</div>` : ''}</li>`).join('')}</ul></div>` : ''}
                                 ${d.sos.raw_url ? `<div style="margin-top:8px;font-size:11px"><a href="${escapeHtml(d.sos.raw_url)}" target="_blank" style="color:#0077B5">View on ${escapeHtml(d.sos.state)} SoS site →</a></div>` : ''}
                             </div>
                         </div>

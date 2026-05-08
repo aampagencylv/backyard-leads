@@ -50,6 +50,7 @@ USER_AGENT = "BackyardMarketingPros-Prospector/1.0 (sales@backyardmarketingpros.
 class SoSOfficer:
     name: str
     title: str = ""
+    address: Optional[str] = None  # Personal/principal address — feeds skip-trace → cell phone
 
 
 @dataclass
@@ -66,12 +67,53 @@ class SoSResult:
     registered_agent_name: Optional[str] = None
     registered_agent_address: Optional[str] = None
     officers: list[SoSOfficer] = field(default_factory=list)
+    last_annual_report_date: Optional[str] = None  # YYYY-MM-DD; operational-health filter
+    dba_names: list[str] = field(default_factory=list)  # Trade names / fictitious names — join key to brand
+    years_in_business: Optional[int] = None  # Derived from filing_date for lead scoring
     raw_url: Optional[str] = None
     error: Optional[str] = None
 
     def to_payload(self) -> dict:
         d = asdict(self)
         return d
+
+
+def _derive_years_in_business(filing_date: Optional[str]) -> Optional[int]:
+    """filing_date is YYYY-MM-DD. Returns whole years from filing → today."""
+    if not filing_date:
+        return None
+    try:
+        f = datetime.strptime(filing_date[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        delta = datetime.now(timezone.utc) - f
+        years = delta.days // 365
+        return years if years >= 0 else None
+    except Exception:
+        return None
+
+
+def _log_field_coverage(state: str, result: "SoSResult") -> None:
+    """Per-state per-field coverage telemetry. Logs which Tier-1 fields
+    we got — aggregated across calls, this tells us which state parsers
+    need tightening and which states reliably expose which fields.
+    Logged at INFO so we can grep prod logs after the first ~50 calls."""
+    if not result.found:
+        return
+    fields = {
+        "doc": bool(result.document_number),
+        "name": bool(result.legal_name),
+        "filed": bool(result.filing_date),
+        "yib": result.years_in_business is not None,
+        "status": bool(result.status),
+        "type": bool(result.entity_type),
+        "principal_addr": bool(result.principal_address),
+        "agent_name": bool(result.registered_agent_name),
+        "agent_addr": bool(result.registered_agent_address),
+        "officers": len(result.officers),
+        "officer_addrs": sum(1 for o in result.officers if o.address),
+        "last_annual": bool(result.last_annual_report_date),
+        "dbas": len(result.dba_names),
+    }
+    log.info(f"sos_coverage state={state} {fields}")
 
 
 # ============================================================
@@ -274,22 +316,55 @@ def _parse_florida_detail(html: str, url: str) -> SoSResult:
             result.registered_agent_address = " ".join(ra_block[1:])[:300] or None
 
     # Officers — labeled "Officer/Director Detail" with each officer
-    # appearing as <Title> <Name> <Address> blocks. We just capture
-    # title + name (addresses often duplicate the principal address).
+    # appearing as <Title> <Name>\n<Address> blocks. We capture
+    # title + name + address; the personal address is the skip-trace
+    # seed for cell-phone lookups (the highest-value SoS field for
+    # owner-operator SMBs like backyard pros).
     od_match = re.search(r"Officer/Director Detail.*?(?=\n\nAnnual Reports|\Z)", text, re.S)
     if od_match:
         block = od_match.group(0)
-        # Look for "Title <TITLE>\n\n<NAME>" patterns
-        for m in re.finditer(r"Title\s+([A-Z]+)\s*\n+([A-Z][A-Z, ]+)", block):
+        # Capture: Title token, name line, then up-to-3 lines of address
+        # before the next "Title" or section break.
+        title_map = {"P": "President", "VP": "Vice President", "D": "Director",
+                     "MGR": "Manager", "MGRM": "Managing Member", "T": "Treasurer",
+                     "S": "Secretary", "AGRM": "Authorized Member", "CEO": "CEO",
+                     "CFO": "CFO", "COO": "COO", "AMBR": "Authorized Member"}
+        # Greedy enough to grab address lines, lazy enough to stop at
+        # the next "Title" marker or end of section.
+        for m in re.finditer(
+            r"Title\s+([A-Z]+)\s*\n+([A-Z][A-Z, ]+)\s*\n+((?:[^\n]+\n){0,4}?)(?=Title\s+[A-Z]+|\Z)",
+            block,
+        ):
             title_token = m.group(1).strip()
             name = m.group(2).strip().rstrip(",")
-            if name and title_token:
-                # Sunbiz uses single-token titles like 'P', 'VP', 'D', 'MGR'
-                title_map = {"P": "President", "VP": "Vice President", "D": "Director",
-                             "MGR": "Manager", "MGRM": "Managing Member", "T": "Treasurer",
-                             "S": "Secretary", "AGRM": "Authorized Member"}
-                pretty_title = title_map.get(title_token, title_token.title())
-                result.officers.append(SoSOfficer(name=name.title(), title=pretty_title))
+            addr_block = m.group(3)
+            if not (name and title_token):
+                continue
+            pretty_title = title_map.get(title_token, title_token.title())
+            # Address lines until we hit something that looks like a
+            # state/zip (last line) — keep first 3 non-empty lines.
+            lines = [ln.strip() for ln in addr_block.splitlines() if ln.strip()]
+            address = ", ".join(lines[:3]) if lines else None
+            if address:
+                # Drop accidental "Title X" or stray bracket text
+                if re.match(r"^Title\s+", address):
+                    address = None
+            result.officers.append(SoSOfficer(name=name.title(), title=pretty_title, address=address))
+
+    # Last annual report — Sunbiz lists "Annual Reports" with a table
+    # of years + filed dates. Grab the most recent.
+    ar_match = re.search(r"Annual Reports.*?(?=Document Images|\Z)", text, re.S)
+    if ar_match:
+        # Lines look like: "2024  04/15/2024  ..."
+        dates = re.findall(r"\b(\d{2})/(\d{2})/(\d{4})\b", ar_match.group(0))
+        if dates:
+            # Pick the latest date
+            parsed = sorted({(int(y), int(m), int(d)) for m, d, y in dates}, reverse=True)
+            y, m, d = parsed[0]
+            result.last_annual_report_date = f"{y:04d}-{m:02d}-{d:02d}"
+
+    # Years in business — derived from filing_date
+    result.years_in_business = _derive_years_in_business(result.filing_date)
 
     return result
 
@@ -443,7 +518,7 @@ def _parse_arizona_detail(data: dict, entity_number: str) -> SoSResult:
             joined = ", ".join(p.strip() for p in parts if isinstance(p, str) and p.strip())
             result.registered_agent_address = joined[:300] or None
 
-    # Officers / members / managers
+    # Officers / members / managers — capture address too
     officer_lists = []
     for key in ("officers", "members", "managers", "directors", "principals"):
         v = data.get(key)
@@ -463,8 +538,66 @@ def _parse_arizona_detail(data: dict, entity_number: str) -> SoSResult:
             if sig in seen:
                 continue
             seen.add(sig)
-            result.officers.append(SoSOfficer(name=nm, title=ttl))
+            # Address can be string or {street1, city, state, zip}
+            addr_val = o.get("address") or o.get("mailingAddress") or o.get("homeAddress")
+            addr_str: Optional[str] = None
+            if isinstance(addr_val, str):
+                addr_str = addr_val.strip()[:300] or None
+            elif isinstance(addr_val, dict):
+                parts = [addr_val.get("street1"), addr_val.get("street2"),
+                         addr_val.get("city"), addr_val.get("state"),
+                         addr_val.get("zip") or addr_val.get("postalCode")]
+                joined = ", ".join(p.strip() for p in parts if isinstance(p, str) and p.strip())
+                addr_str = joined[:300] or None
+            result.officers.append(SoSOfficer(name=nm, title=ttl, address=addr_str))
 
+    # Last annual report — AZCC exposes annual report list under
+    # several possible keys depending on entity type.
+    annual_dates: list[str] = []
+    for key in ("annualReports", "annualReportFilings", "filings"):
+        v = data.get(key)
+        if isinstance(v, list):
+            for entry in v:
+                if not isinstance(entry, dict):
+                    continue
+                # Filter to annual-report-type filings if we're using a
+                # generic 'filings' list
+                if key == "filings":
+                    ftype = (entry.get("type") or entry.get("filingType") or "").lower()
+                    if "annual" not in ftype:
+                        continue
+                dt = (entry.get("filedDate") or entry.get("filingDate")
+                      or entry.get("date") or entry.get("submitDate"))
+                if isinstance(dt, str) and dt:
+                    annual_dates.append(dt)
+    if annual_dates:
+        # Normalize each, keep the latest
+        normalized: list[str] = []
+        for raw in annual_dates:
+            m = re.match(r"^(\d{2})/(\d{2})/(\d{4})$", raw)
+            if m:
+                normalized.append(f"{m.group(3)}-{m.group(1)}-{m.group(2)}")
+                continue
+            m2 = re.match(r"^(\d{4})-(\d{2})-(\d{2})", raw)
+            if m2:
+                normalized.append(m2.group(0))
+        if normalized:
+            result.last_annual_report_date = max(normalized)
+
+    # DBAs / trade names — AZCC sometimes exposes these under
+    # 'tradeNames' or 'doingBusinessAs'.
+    for key in ("tradeNames", "doingBusinessAs", "dbaNames"):
+        v = data.get(key)
+        if isinstance(v, list):
+            for entry in v:
+                if isinstance(entry, str) and entry.strip():
+                    result.dba_names.append(entry.strip()[:200])
+                elif isinstance(entry, dict):
+                    nm = (entry.get("name") or entry.get("tradeName") or "").strip()
+                    if nm:
+                        result.dba_names.append(nm[:200])
+
+    result.years_in_business = _derive_years_in_business(result.filing_date)
     return result
 
 
@@ -657,17 +790,56 @@ def _parse_nevada_detail(html: str, url: str) -> SoSResult:
     if pa:
         result.principal_address = " ".join(line.strip() for line in pa.group(1).splitlines() if line.strip())[:300]
 
-    # Officers / Managers / Members — Nevada lists each with role
+    # Officers / Managers / Members — capture address too. NV pages
+    # typically render: "Title: <Title>\nName: <Name>\nAddress 1: <line>\n
+    # Address 2: <line>\nCity, State, Zip: <line>".
     for label in ("Officers", "Managers", "Members"):
-        sec = re.search(rf"{label}[:\s]*\n+(.{{0,2000}}?)(?:Officers|Managers|Members|Annual List|Stock|\Z)", text, re.S)
+        sec = re.search(
+            rf"{label}[:\s]*\n+(.{{0,3000}}?)(?:\n\s*(?:Officers|Managers|Members|Annual List|Stock|\Z))",
+            text, re.S,
+        )
         if not sec:
             continue
-        for m in re.finditer(r"(?:Title|Position)[:\s]+([A-Za-z /]+)\s*\n+(?:Name[:\s]+)?([A-Z][A-Za-z, .\-']+)", sec.group(1)):
+        block = sec.group(1)
+        # Each officer block: title + name + (optional) address lines
+        for m in re.finditer(
+            r"(?:Title|Position)[:\s]+([A-Za-z /]+)\s*\n+"
+            r"(?:Name[:\s]+)?([A-Z][A-Za-z, .\-']+)"
+            r"(?:\s*\n+((?:Address[^\n]*\n+|City[^\n]*\n+|[0-9][^\n]*\n+){0,4}))?",
+            block,
+        ):
             ttl = m.group(1).strip()
             nm = m.group(2).strip().rstrip(",")
-            if nm:
-                result.officers.append(SoSOfficer(name=nm, title=ttl or label.rstrip("s")))
+            addr_block = m.group(3) or ""
+            if not nm:
+                continue
+            # Strip "Address 1:" / "City, State, Zip:" labels
+            addr_lines: list[str] = []
+            for raw in addr_block.splitlines():
+                ln = raw.strip()
+                if not ln:
+                    continue
+                ln = re.sub(r"^(?:Address\s*\d*|City,?\s*State,?\s*Zip)[:\s]+", "", ln, flags=re.I)
+                if ln:
+                    addr_lines.append(ln)
+            address = ", ".join(addr_lines[:3])[:300] or None
+            result.officers.append(SoSOfficer(name=nm, title=ttl or label.rstrip("s"), address=address))
 
+    # Last annual report — NV pages have an "Annual List" section
+    # listing recent annual filings with dates.
+    al = re.search(r"Annual List[^\n]*\n+(.{0,2000}?)(?:Stock|Officers|Managers|Members|\Z)", text, re.S)
+    if al:
+        dates = re.findall(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b", al.group(1))
+        if dates:
+            parsed = sorted({(int(y), int(m), int(d)) for m, d, y in dates}, reverse=True)
+            y, m, d = parsed[0]
+            result.last_annual_report_date = f"{y:04d}-{m:02d}-{d:02d}"
+
+    # DBAs — NV maintains separate "trade name" filings, not usually on
+    # entity detail pages. Left empty for now; standalone DBA search
+    # can ship as a follow-up if useful.
+
+    result.years_in_business = _derive_years_in_business(result.filing_date)
     return result
 
 
@@ -700,6 +872,7 @@ async def lookup_florida(db: AsyncSession, company_name: str) -> SoSResult:
     if cached is not None:
         return cached
     result = await _lookup_florida_uncached(company_name)
+    _log_field_coverage("FL", result)
     try:
         await _save_cache(db, "FL", company_name, result)
     except Exception:
@@ -712,6 +885,7 @@ async def lookup_arizona(db: AsyncSession, company_name: str) -> SoSResult:
     if cached is not None:
         return cached
     result = await _lookup_arizona_uncached(company_name)
+    _log_field_coverage("AZ", result)
     try:
         await _save_cache(db, "AZ", company_name, result)
     except Exception:
@@ -724,6 +898,7 @@ async def lookup_nevada(db: AsyncSession, company_name: str) -> SoSResult:
     if cached is not None:
         return cached
     result = await _lookup_nevada_uncached(company_name)
+    _log_field_coverage("NV", result)
     try:
         await _save_cache(db, "NV", company_name, result)
     except Exception:
