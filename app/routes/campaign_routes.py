@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from app.database import get_db
 from app.models import (
-    User, Company, Contact, Deal, Campaign, CampaignLog,
+    User, Company, Contact, Deal, Campaign, CampaignLog, CampaignTarget, CampaignRun,
     GeneratedEmail, Activity, Task, campaign_members,
 )
 from app.auth import get_current_user, require_admin
@@ -32,6 +32,51 @@ from app.services.email_generator import generate_cold_email, generate_follow_up
 import secrets
 
 router = APIRouter(prefix="/api/campaigns", tags=["campaigns"])
+
+
+async def _sync_campaign_targets(db: AsyncSession, campaign: Campaign) -> None:
+    """Reconcile CampaignTarget rows against the campaign's current
+    business_types × locations cross product.
+
+    - New (vertical, location) pair → fresh CampaignTarget at status='active'
+    - Existing pair still in the cross product → leave as-is (preserves
+      cursor + counters across edits)
+    - Pair no longer in the cross product → status='paused' with a
+      'removed_from_config' reason (kept for history; not deleted so
+      the morning brief can still summarize past activity)
+
+    Called from the create endpoint and (when added) any future update
+    endpoint that touches business_types/locations.
+    """
+    business_types = json.loads(campaign.business_types) if campaign.business_types else []
+    locations = json.loads(campaign.locations) if campaign.locations else []
+    desired_pairs = {(bt, loc) for bt in business_types for loc in locations}
+
+    existing_rows = (await db.execute(
+        select(CampaignTarget).where(CampaignTarget.campaign_id == campaign.id)
+    )).scalars().all()
+    existing_pairs = {(r.vertical, r.location): r for r in existing_rows}
+
+    # Pause pairs that are no longer in the desired set
+    for pair, row in existing_pairs.items():
+        if pair not in desired_pairs and row.status != "paused":
+            row.status = "paused"
+            row.paused_reason = "removed_from_config"
+
+    # Create new pairs (or unpause if the user added a previously-removed pair back)
+    for pair in desired_pairs:
+        existing = existing_pairs.get(pair)
+        if existing is None:
+            db.add(CampaignTarget(
+                campaign_id=campaign.id,
+                vertical=pair[0],
+                location=pair[1],
+            ))
+        elif existing.status == "paused" and existing.paused_reason == "removed_from_config":
+            existing.status = "active"
+            existing.paused_reason = None
+
+    await db.commit()
 
 
 SEQUENCE_SCHEDULE = [
@@ -136,6 +181,10 @@ async def create_campaign(
 
     await db.commit()
     await db.refresh(campaign)
+
+    # God Mode: spawn one CampaignTarget per (vertical, location) pair
+    # so the runner can iterate them concurrently with their own cursors.
+    await _sync_campaign_targets(db, campaign)
 
     return {"id": campaign.id, "name": campaign.name, "status": campaign.status}
 

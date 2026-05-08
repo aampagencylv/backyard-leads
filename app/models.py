@@ -578,6 +578,80 @@ class CampaignLog(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+class CampaignTarget(Base):
+    """One (vertical, geo) pair inside a Campaign. God Mode treats every
+    pair as its own concurrent producer with its own scrape cursor,
+    pacing, weights, and counters — instead of marching through a single
+    cross-product index one tick at a time.
+
+    Sync rule: when Campaign.business_types or Campaign.locations changes,
+    the cross-product is re-derived. New pairs get a fresh CampaignTarget;
+    pairs that no longer exist are paused (kept for history, not deleted).
+    """
+    __tablename__ = "campaign_targets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    campaign_id = Column(Integer, ForeignKey("campaigns.id"), nullable=False, index=True)
+
+    vertical = Column(String(255), nullable=False)
+    location = Column(String(255), nullable=False)
+
+    # Budget allocation: each target gets (weight / sum_active_weights) of
+    # the campaign's daily prospect cap. Default 1 = round-robin.
+    weight = Column(Integer, default=1, nullable=False)
+
+    # active = picked up on every tick. paused = manually halted (or pair
+    # was removed from the campaign config). exhausted = N consecutive
+    # ticks returned no new results — auto-paused, surface in the brief.
+    status = Column(String(20), default="active", nullable=False, index=True)
+
+    # Lifetime counters
+    contacts_enrolled = Column(Integer, default=0, nullable=False)
+    sends_made = Column(Integer, default=0, nullable=False)
+    replies_received = Column(Integer, default=0, nullable=False)
+    credits_spent = Column(Float, default=0.0, nullable=False)
+
+    # Today's counters — reset at UTC midnight via the runner's daily-reset check
+    enrolled_today = Column(Integer, default=0, nullable=False)
+    last_daily_reset = Column(DateTime, nullable=True)
+
+    # Cursor: how far into Google Maps results we've scrolled. Each tick
+    # advances; we never re-scrape the same offset on the same target.
+    scrape_cursor = Column(Integer, default=0, nullable=False)
+
+    # Pacing + exhaustion detection
+    last_run_at = Column(DateTime, nullable=True)
+    consecutive_empty_runs = Column(Integer, default=0, nullable=False)
+
+    paused_reason = Column(String(255), nullable=True)
+
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class CampaignRun(Base):
+    """One row per cron tick — what God Mode did during this batch.
+    Drives the morning brief: 'while you slept, X targets ran, Y contacts
+    enrolled, Z credits spent.' Also useful for debugging slow ticks."""
+    __tablename__ = "campaign_runs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    campaign_id = Column(Integer, ForeignKey("campaigns.id"), nullable=False, index=True)
+
+    started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    finished_at = Column(DateTime, nullable=True)
+
+    targets_processed = Column(Integer, default=0, nullable=False)
+    contacts_enrolled = Column(Integer, default=0, nullable=False)
+    sends_made = Column(Integer, default=0, nullable=False)
+    replies_received = Column(Integer, default=0, nullable=False)
+    credits_spent = Column(Float, default=0.0, nullable=False)
+
+    error = Column(Text, nullable=True)
+    summary_json = Column(Text, nullable=True)  # Per-target breakdown for the brief
+
+
 class CreditLedger(Base):
     """Per-action ledger of every billable thing we do.
 
