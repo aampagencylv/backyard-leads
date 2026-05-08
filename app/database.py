@@ -44,6 +44,7 @@ async def init_db():
         "scripts.migrate_netrows_extras",
         "scripts.migrate_contact_linkedin_profile",
         "scripts.migrate_audit_log",
+        "scripts.migrate_api_keys_webhooks",
     ):
         try:
             mod = __import__(_migration_module, fromlist=["main"])

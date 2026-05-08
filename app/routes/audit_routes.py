@@ -746,6 +746,21 @@ async def iclosed_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         import asyncio as _asyncio
         _asyncio.create_task(_generate_competitor_report_bg(report.id))
 
+    # Outbound webhook to any customer endpoints subscribed to meeting.booked
+    try:
+        from app.services.webhook_dispatch import dispatch_event
+        await dispatch_event(db, "meeting.booked", {
+            "report_id": report.id,
+            "company_id": company.id if company else None,
+            "company_name": company.name if company else None,
+            "booked_email": booked_email,
+            "invitee_name": invitee_name,
+            "scheduled_at": scheduled_at,
+            "source": "iclosed",
+        })
+    except Exception:
+        pass
+
     return {"ok": True, "report_id": report.id, "matched_email": booked_email}
 
 

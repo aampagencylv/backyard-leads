@@ -326,6 +326,23 @@ async def email_inbound(request: Request):
             reply_activity.id, body_for_log, subject,
         ))
 
+    # Outbound webhooks — notify subscribed customer endpoints. Real
+    # replies only (skip auto-responses); fire-and-forget.
+    if not is_auto_response:
+        try:
+            from app.services.webhook_dispatch import dispatch_event
+            await dispatch_event(db, "email.replied", {
+                "activity_id": reply_activity.id,
+                "company_id": ge.company_id,
+                "contact_id": ge.contact_id,
+                "from_email": bare_from,
+                "subject": subject,
+                "preview": body_preview,
+                "received_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception:
+            pass
+
     return {"ok": True, "token_matched": token[:8] + "…", "auto_response": is_auto_response}
 
 

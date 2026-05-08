@@ -762,6 +762,59 @@ class CampaignRun(Base):
     summary_json = Column(Text, nullable=True)  # Per-target breakdown for the brief
 
 
+class ApiKey(Base):
+    """Personal API key — one per integration / external system. Owner
+    is the User who created it; calls authenticated with this key act
+    as that user (inheriting their role + scoping). Plaintext key is
+    shown ONCE at creation; only the SHA-256 hash is stored.
+
+    Format: 'pk_live_' + 64-char hex (32 random bytes).
+    Header for auth: X-API-Key: pk_live_<hex>
+    """
+    __tablename__ = "api_keys"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    name = Column(String(80), nullable=False)
+    # SHA-256 of plaintext, hex-encoded. Index gives O(1) lookup on auth.
+    key_hash = Column(String(64), unique=True, index=True, nullable=False)
+    # First 12 chars of plaintext ('pk_live_AB1...') — shown in Settings
+    # so users can recognize which key they're rotating without revealing
+    # the full secret.
+    key_prefix = Column(String(20), nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    last_used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class Webhook(Base):
+    """Outbound webhook subscription. When a subscribed event fires,
+    the platform POSTs the event payload to `url` with HMAC-SHA256
+    signature in X-Webhook-Signature header.
+
+    Events (v1): company.created, contact.created, email.replied,
+                 meeting.booked.
+    More events lazily added as customers ask for them.
+    """
+    __tablename__ = "webhooks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    name = Column(String(80), nullable=False)
+    url = Column(String(500), nullable=False)
+    # HMAC signing secret — generated server-side, shown once.
+    # Customers store it in their endpoint to verify signatures.
+    secret = Column(String(80), nullable=False)
+    # JSON list of subscribed event names. Empty = all events.
+    events_json = Column(Text, nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    last_delivery_at = Column(DateTime, nullable=True)
+    last_delivery_status = Column(Integer, nullable=True)  # HTTP status code
+    last_delivery_error = Column(String(300), nullable=True)
+    failure_count = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
 class AuditLogEntry(Base):
     """Immutable record of privileged actions across the platform.
 

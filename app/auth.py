@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -69,6 +69,39 @@ async def require_admin(user: User = Depends(get_current_user)) -> User:
     if user.role not in ("admin", "super_admin"):
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
+
+
+async def get_user_from_api_key(
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """Authenticate a request via the X-API-Key header. Used on the
+    public /api/v1/* surface. The plaintext key arrives in the header,
+    we hash it with SHA-256 and look up the matching api_keys row."""
+    from fastapi import Request as _R, HTTPException as _HE
+    from app.models import ApiKey
+    import hashlib
+    if request is None:
+        raise _HE(status_code=401, detail="Missing X-API-Key header")
+    key = request.headers.get("X-API-Key") or request.headers.get("x-api-key")
+    if not key or not key.strip():
+        raise _HE(status_code=401, detail="Missing X-API-Key header", headers={"WWW-Authenticate": "ApiKey"})
+    key_hash = hashlib.sha256(key.strip().encode()).hexdigest()
+    row = (await db.execute(
+        select(ApiKey).where(ApiKey.key_hash == key_hash, ApiKey.is_active == True)
+    )).scalar_one_or_none()
+    if not row:
+        raise _HE(status_code=401, detail="Invalid or revoked API key", headers={"WWW-Authenticate": "ApiKey"})
+    user_row = (await db.execute(select(User).where(User.id == row.user_id))).scalar_one_or_none()
+    if not user_row or not user_row.is_active:
+        raise _HE(status_code=401, detail="API key owner is inactive")
+    # Stamp last_used_at lazily — fire-and-forget so it doesn't block hot-path
+    try:
+        row.last_used_at = datetime.now(timezone.utc)
+        await db.commit()
+    except Exception:
+        pass
+    return user_row
 
 
 async def require_sales_rep(user: User = Depends(get_current_user)) -> User:

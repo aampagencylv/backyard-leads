@@ -1035,6 +1035,31 @@
                     </div>
                 </div>
 
+                <!-- Integrations: API keys + outbound webhooks.
+                     Visible to all logged-in users (each manages their own
+                     keys + hooks); admins additionally see everyone's. -->
+                <div id="integrations-section" class="search-box" style="max-width:900px;margin-top:16px">
+                    <h3 style="margin:0 0 6px">🔑 API Keys & Webhooks</h3>
+                    <p style="font-size:12px;color:#666;margin-bottom:12px">Push companies + contacts into Prospector via the public REST API. Receive event notifications via webhooks. Reference docs: <code>/api/v1/companies</code>, <code>/api/v1/contacts</code> with <code>X-API-Key: pk_live_...</code>.</p>
+
+                    <div style="margin-bottom:18px">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                            <strong style="font-size:13px">API Keys</strong>
+                            <button class="btn btn-primary btn-sm" onclick="showCreateApiKeyModal()">+ New Key</button>
+                        </div>
+                        <div id="api-keys-list" style="font-size:12px"></div>
+                    </div>
+
+                    <div>
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                            <strong style="font-size:13px">Webhooks</strong>
+                            <button class="btn btn-primary btn-sm" onclick="showCreateWebhookModal()">+ New Webhook</button>
+                        </div>
+                        <div style="font-size:11px;color:#888;margin-bottom:6px">Outbound POSTs to your URL when subscribed events fire. Body is signed with HMAC-SHA256 in <code>X-Webhook-Signature: sha256=&lt;hex&gt;</code>.</div>
+                        <div id="webhooks-list" style="font-size:12px"></div>
+                    </div>
+                </div>
+
                 <!-- Audit Log (admin+ only).
                      Append-only record of privileged actions. SOC2 /
                      enterprise table-stakes — admins can answer "who did
@@ -4279,6 +4304,213 @@
             }
         }
 
+        // ============ Integrations: API Keys + Webhooks ============
+        async function loadApiKeys() {
+            const rows = await api('/api/integrations/api-keys');
+            const panel = document.getElementById('api-keys-list');
+            if (!panel) return;
+            if (!rows || rows.length === 0) {
+                panel.innerHTML = '<div style="color:#888;padding:8px">No API keys yet. Click + New Key to create one.</div>';
+                return;
+            }
+            panel.innerHTML = `
+                <table style="width:100%;border-collapse:collapse">
+                    <thead><tr style="background:#fafafa;text-align:left">
+                        <th style="padding:6px 8px">Name</th>
+                        <th style="padding:6px 8px">Key</th>
+                        <th style="padding:6px 8px">Last Used</th>
+                        <th style="padding:6px 8px">Status</th>
+                        <th style="padding:6px 8px"></th>
+                    </tr></thead>
+                    <tbody>
+                    ${rows.map(k => `
+                        <tr style="border-top:1px solid #f0f0f0;${k.is_active ? '' : 'opacity:0.5'}">
+                            <td style="padding:6px 8px"><strong>${escapeHtml(k.name)}</strong></td>
+                            <td style="padding:6px 8px"><code style="font-size:11px;color:#666">${escapeHtml(k.key_prefix)}</code></td>
+                            <td style="padding:6px 8px;color:#888">${k.last_used_at ? fmtRelative(k.last_used_at) : '<span style="color:#bbb">never</span>'}</td>
+                            <td style="padding:6px 8px">${k.is_active ? '<span style="color:var(--bmp-green)">active</span>' : '<span style="color:#c0392b">revoked</span>'}</td>
+                            <td style="padding:6px 8px;text-align:right">
+                                ${k.is_active ? `<button class="btn btn-secondary btn-xs" onclick="revokeApiKey(${k.id})">Revoke</button>` : ''}
+                            </td>
+                        </tr>
+                    `).join('')}
+                    </tbody>
+                </table>
+            `;
+        }
+
+        function showCreateApiKeyModal() {
+            const root = document.getElementById('modal-root');
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:520px">
+                        <h2>New API Key</h2>
+                        <p style="font-size:13px;color:#666;margin-bottom:12px">Used for the public REST API at <code>/api/v1/*</code>. The plaintext key is shown <strong>once</strong> — save it before closing this dialog.</p>
+                        <div class="form-group">
+                            <label>Label (e.g. 'Zapier integration', 'CSV import script')</label>
+                            <input type="text" id="api-key-name" maxlength="80" placeholder="What is this key for?">
+                        </div>
+                        <div class="modal-actions" style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+                            <button class="btn btn-secondary" onclick="document.getElementById('modal-root').innerHTML=''">Cancel</button>
+                            <button class="btn btn-primary" onclick="submitNewApiKey()">Generate Key</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function submitNewApiKey() {
+            const name = document.getElementById('api-key-name').value.trim();
+            if (!name) { toast('Label is required'); return; }
+            const data = await api('/api/integrations/api-keys', {
+                method: 'POST', body: JSON.stringify({ name }),
+            });
+            if (!data || !data.plaintext_key) return;
+            const root = document.getElementById('modal-root');
+            root.innerHTML = `
+                <div class="modal-backdrop">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:560px">
+                        <h2>✅ Key Created</h2>
+                        <p style="font-size:13px;color:#bf360c;margin-bottom:12px"><strong>Save this now</strong> — it will not be shown again.</p>
+                        <div style="background:#f8f9fa;padding:12px;border-radius:6px;font-family:monospace;font-size:13px;word-break:break-all;border:1px solid #e0e0e0;margin-bottom:12px" id="new-key-display">${escapeHtml(data.plaintext_key)}</div>
+                        <button class="btn btn-secondary btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('new-key-display').textContent);toast('Copied')">📋 Copy to clipboard</button>
+                        <p style="font-size:12px;color:#666;margin:14px 0 8px"><strong>Usage:</strong></p>
+                        <pre style="background:#1f2326;color:#e6e6e6;padding:10px 12px;border-radius:6px;font-size:11px;overflow-x:auto;margin:0">curl -H "X-API-Key: ${escapeHtml(data.plaintext_key.slice(0, 24))}..." \\\\
+  https://prospector.backyardmarketingpros.com/api/v1/companies</pre>
+                        <div class="modal-actions" style="display:flex;justify-content:flex-end;margin-top:14px">
+                            <button class="btn btn-primary" onclick="document.getElementById('modal-root').innerHTML='';loadApiKeys()">I've saved it — Done</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function revokeApiKey(keyId) {
+            if (!confirm('Revoke this API key? Any integration using it will start failing immediately.')) return;
+            await api(`/api/integrations/api-keys/${keyId}`, { method: 'DELETE' });
+            toast('Key revoked');
+            loadApiKeys();
+        }
+
+        async function loadWebhooks() {
+            const rows = await api('/api/integrations/webhooks');
+            const panel = document.getElementById('webhooks-list');
+            if (!panel) return;
+            if (!rows || rows.length === 0) {
+                panel.innerHTML = '<div style="color:#888;padding:8px">No webhooks yet. Click + New Webhook to subscribe to event notifications.</div>';
+                return;
+            }
+            panel.innerHTML = rows.map(w => {
+                const statusBadge = w.last_delivery_status == null
+                    ? '<span style="color:#888">no deliveries yet</span>'
+                    : (w.last_delivery_status >= 200 && w.last_delivery_status < 300)
+                        ? `<span style="color:var(--bmp-green)">last: ${w.last_delivery_status} OK</span>`
+                        : `<span style="color:#c0392b">last: ${w.last_delivery_status || 'failed'} (${w.failure_count} fails)</span>`;
+                const events = w.events.length ? w.events.join(', ') : 'all events';
+                return `
+                    <div style="border:1px solid #eee;border-radius:6px;padding:10px;margin-bottom:8px;${w.is_active ? '' : 'opacity:0.5'}">
+                        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+                            <div style="flex:1;min-width:0">
+                                <div><strong>${escapeHtml(w.name)}</strong> ${w.is_active ? '' : '<span style="font-size:10px;color:#888">(disabled)</span>'}</div>
+                                <div style="font-family:monospace;font-size:11px;color:#0077B5;word-break:break-all;margin-top:2px">${escapeHtml(w.url)}</div>
+                                <div style="font-size:11px;color:#666;margin-top:3px">Events: ${escapeHtml(events)} · ${statusBadge}</div>
+                                ${w.last_delivery_error ? `<div style="font-size:11px;color:#c0392b;margin-top:2px">Last error: ${escapeHtml(w.last_delivery_error)}</div>` : ''}
+                            </div>
+                            <div style="display:flex;gap:4px;flex-shrink:0">
+                                <button class="btn btn-secondary btn-xs" onclick="testWebhook(${w.id})">Test</button>
+                                <button class="btn btn-secondary btn-xs" onclick="toggleWebhookActive(${w.id}, ${!w.is_active})">${w.is_active ? 'Disable' : 'Enable'}</button>
+                                <button class="btn btn-secondary btn-xs" onclick="deleteWebhook(${w.id})">Delete</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function showCreateWebhookModal() {
+            const known = await api('/api/integrations/known-events');
+            const events = (known && known.events) || [];
+            const root = document.getElementById('modal-root');
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:540px">
+                        <h2>New Webhook</h2>
+                        <p style="font-size:13px;color:#666;margin-bottom:12px">We'll POST event payloads to your URL with HMAC-SHA256 signature in <code>X-Webhook-Signature</code>. The signing secret is shown once after creation.</p>
+                        <div class="form-group">
+                            <label>Label</label>
+                            <input type="text" id="wh-name" maxlength="80" placeholder="e.g. 'My CRM sync', 'Slack alerts'">
+                        </div>
+                        <div class="form-group">
+                            <label>URL</label>
+                            <input type="url" id="wh-url" placeholder="https://your-endpoint.example.com/webhook">
+                        </div>
+                        <div class="form-group">
+                            <label>Events (leave all unchecked = subscribe to ALL events)</label>
+                            <div style="display:flex;flex-direction:column;gap:4px">
+                                ${events.map(e => `<label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" value="${e}" class="wh-event-cb"> <code>${e}</code></label>`).join('')}
+                            </div>
+                        </div>
+                        <div class="modal-actions" style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+                            <button class="btn btn-secondary" onclick="document.getElementById('modal-root').innerHTML=''">Cancel</button>
+                            <button class="btn btn-primary" onclick="submitNewWebhook()">Create Webhook</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function submitNewWebhook() {
+            const name = document.getElementById('wh-name').value.trim();
+            const url = document.getElementById('wh-url').value.trim();
+            const events = Array.from(document.querySelectorAll('.wh-event-cb:checked')).map(c => c.value);
+            if (!name || !url) { toast('Label and URL are required'); return; }
+            const data = await api('/api/integrations/webhooks', {
+                method: 'POST',
+                body: JSON.stringify({ name, url, events }),
+            });
+            if (!data || !data.secret) return;
+            const root = document.getElementById('modal-root');
+            root.innerHTML = `
+                <div class="modal-backdrop">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:560px">
+                        <h2>✅ Webhook Created</h2>
+                        <p style="font-size:13px;color:#bf360c;margin-bottom:12px"><strong>Save the signing secret now</strong> — won't be shown again.</p>
+                        <div style="font-size:12px;color:#666;margin-bottom:4px">Signing secret:</div>
+                        <div id="new-secret-display" style="background:#f8f9fa;padding:12px;border-radius:6px;font-family:monospace;font-size:13px;word-break:break-all;border:1px solid #e0e0e0;margin-bottom:8px">${escapeHtml(data.secret)}</div>
+                        <button class="btn btn-secondary btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('new-secret-display').textContent);toast('Copied')">📋 Copy</button>
+                        <p style="font-size:12px;color:#666;margin:14px 0 6px"><strong>Verify on your end:</strong></p>
+                        <pre style="background:#1f2326;color:#e6e6e6;padding:10px;border-radius:6px;font-size:11px;overflow-x:auto;margin:0">expected = "sha256=" + hmac_sha256(secret, raw_body).hex()
+header   = req.headers["X-Webhook-Signature"]
+hmac.compare_digest(expected, header)</pre>
+                        <div class="modal-actions" style="display:flex;justify-content:flex-end;margin-top:14px">
+                            <button class="btn btn-primary" onclick="document.getElementById('modal-root').innerHTML='';loadWebhooks()">Done</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function testWebhook(webhookId) {
+            await api(`/api/integrations/webhooks/${webhookId}/test`, { method: 'POST' });
+            toast('Test event queued — check your endpoint logs');
+            setTimeout(loadWebhooks, 2000);  // refresh delivery status after the async POST lands
+        }
+
+        async function toggleWebhookActive(webhookId, makeActive) {
+            await api(`/api/integrations/webhooks/${webhookId}`, {
+                method: 'PATCH', body: JSON.stringify({ is_active: makeActive }),
+            });
+            toast(makeActive ? 'Webhook enabled' : 'Webhook disabled');
+            loadWebhooks();
+        }
+
+        async function deleteWebhook(webhookId) {
+            if (!confirm('Delete this webhook? Future events will not be delivered to this URL.')) return;
+            await api(`/api/integrations/webhooks/${webhookId}`, { method: 'DELETE' });
+            toast('Webhook deleted');
+            loadWebhooks();
+        }
+
         // ============ Audit Log ============
         async function loadAuditLog() {
             const action = document.getElementById('audit-action-filter')?.value || '';
@@ -5523,6 +5755,11 @@
             const auditSection = document.getElementById('audit-log-section');
             if (auditSection) auditSection.classList.toggle('hidden', !isAdminPlus);
             if (isAdminPlus) loadAuditLog();
+
+            // Integrations panel — visible to everyone (each user manages
+            // their own keys + hooks; admins see all)
+            loadApiKeys();
+            loadWebhooks();
 
             if (isAdminPlus) loadRuntimeConfig();
 
