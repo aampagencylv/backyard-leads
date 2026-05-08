@@ -495,6 +495,15 @@ async def _execute_batch(campaign_id: int, db: AsyncSession, user: User):
                 company.tech_stack = json.dumps(analysis.tech_stack)
                 company.problems_found = json.dumps(analysis.problems)
                 company.enrichment_summary = _summarize_problems(analysis)
+                _su = analysis.social_urls or {}
+                if _su.get("facebook") and not company.facebook_url:
+                    company.facebook_url = _su["facebook"][:500]
+                if _su.get("instagram") and not company.instagram_url:
+                    company.instagram_url = _su["instagram"][:500]
+                if _su.get("youtube") and not company.youtube_url:
+                    company.youtube_url = _su["youtube"][:500]
+                if _su.get("tiktok") and not company.tiktok_url:
+                    company.tiktok_url = _su["tiktok"][:500]
 
                 # Company enrichment
                 nr_key = await get_netrows_api_key(db)
@@ -779,6 +788,15 @@ async def _process_business_through_pipeline(
             company.tech_stack = json.dumps(analysis.tech_stack)
             company.problems_found = json.dumps(analysis.problems)
             company.enrichment_summary = _summarize_problems(analysis)
+            _su = analysis.social_urls or {}
+            if _su.get("facebook") and not company.facebook_url:
+                company.facebook_url = _su["facebook"][:500]
+            if _su.get("instagram") and not company.instagram_url:
+                company.instagram_url = _su["instagram"][:500]
+            if _su.get("youtube") and not company.youtube_url:
+                company.youtube_url = _su["youtube"][:500]
+            if _su.get("tiktok") and not company.tiktok_url:
+                company.tiktok_url = _su["tiktok"][:500]
 
             nr_key = await get_netrows_api_key(db)
             if nr_key:

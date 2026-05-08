@@ -611,6 +611,13 @@ async def get_company_full(
         "company_description": company.company_description,
         "specialties": company.specialties,
         "follower_count": company.follower_count,
+        # First-class social profile URLs auto-scraped from website_intel.
+        # Manually editable via PATCH /companies/{id} (treats them as
+        # standard string fields).
+        "facebook_url": company.facebook_url,
+        "instagram_url": company.instagram_url,
+        "youtube_url": company.youtube_url,
+        "tiktok_url": company.tiktok_url,
         "custom_fields": json.loads(company.custom_fields_json) if company.custom_fields_json else {},
         "assigned_to": company.assigned_to,
         "assigned_name": assigned_name,
@@ -748,6 +755,19 @@ async def enrich_company(
     company.tech_stack = json.dumps(analysis.tech_stack)
     company.problems_found = json.dumps(analysis.problems)
     company.enrichment_summary = _summarize(analysis)
+
+    # Auto-populate first-class social URL columns from the website scrape.
+    # First-write-wins so manual edits via PATCH /companies/{id} aren't
+    # clobbered by a later re-enrichment pass.
+    su = analysis.social_urls or {}
+    if su.get("facebook") and not company.facebook_url:
+        company.facebook_url = su["facebook"][:500]
+    if su.get("instagram") and not company.instagram_url:
+        company.instagram_url = su["instagram"][:500]
+    if su.get("youtube") and not company.youtube_url:
+        company.youtube_url = su["youtube"][:500]
+    if su.get("tiktok") and not company.tiktok_url:
+        company.tiktok_url = su["tiktok"][:500]
 
     # Contact discovery — runs through the EnrichmentWaterfall: Apollo (BYO,
     # if configured) → Netrows decision-makers → Hunter. Each provider
@@ -1022,6 +1042,16 @@ async def pursue_companies(
                 company.tech_stack = json.dumps(analysis.tech_stack)
                 company.problems_found = json.dumps(analysis.problems)
                 company.enrichment_summary = _summarize(analysis)
+                # Auto-populate first-class social URL columns
+                _su = analysis.social_urls or {}
+                if _su.get("facebook") and not company.facebook_url:
+                    company.facebook_url = _su["facebook"][:500]
+                if _su.get("instagram") and not company.instagram_url:
+                    company.instagram_url = _su["instagram"][:500]
+                if _su.get("youtube") and not company.youtube_url:
+                    company.youtube_url = _su["youtube"][:500]
+                if _su.get("tiktok") and not company.tiktok_url:
+                    company.tiktok_url = _su["tiktok"][:500]
 
                 # Netrows decision-maker first (verified owner emails for SMB)
                 if await get_netrows_api_key(db):
@@ -1378,6 +1408,10 @@ def _company_summary(c: Company) -> dict:
         "company_description": c.company_description,
         "specialties": c.specialties,
         "follower_count": c.follower_count,
+        "facebook_url": c.facebook_url,
+        "instagram_url": c.instagram_url,
+        "youtube_url": c.youtube_url,
+        "tiktok_url": c.tiktok_url,
         # Lead score v2 (cached). Recomputed lazily on /companies/{id}/full
         # reads when stale; the dashboard hot-leads sweep also forces a
         # refresh for any company with new engagement activity.

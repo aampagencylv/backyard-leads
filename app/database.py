@@ -38,6 +38,7 @@ async def init_db():
         "scripts.migrate_lead_score",
         "scripts.migrate_campaign_targets",
         "scripts.migrate_custom_fields",
+        "scripts.migrate_company_socials",  # ordering matters: must run AFTER migrate_custom_fields
     ):
         try:
             mod = __import__(_migration_module, fromlist=["main"])

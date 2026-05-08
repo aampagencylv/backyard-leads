@@ -124,6 +124,17 @@ class Company(Base):
     specialties = Column(String(500), nullable=True)
     follower_count = Column(Integer, nullable=True)
 
+    # Social profiles auto-scraped from the company's website during enrichment
+    # (website_intel._check_social). First-class columns rather than custom
+    # fields because every business potentially has these and they're
+    # platform-derivable, not tenant-specific data entry.
+    facebook_url = Column(String(500), nullable=True)
+    instagram_url = Column(String(500), nullable=True)
+    youtube_url = Column(String(500), nullable=True)
+    tiktok_url = Column(String(500), nullable=True)
+    # Annual revenue waits on ZoomInfo integration. When the BYO key
+    # adapter ships, this column populates from /api/v1/organizations/...
+
     # Google Maps reviews cache (Netrows /google-maps/reviews)
     google_place_id = Column(String(80), nullable=True)
     reviews_json = Column(Text, nullable=True)  # JSON array of reviews with owner_reply parsed out

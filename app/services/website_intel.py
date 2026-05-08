@@ -21,6 +21,9 @@ class WebsiteAnalysis:
     has_blog: bool = False
     has_social_links: bool = False
     social_platforms: list[str] = field(default_factory=list)
+    # Map of platform → first profile URL found in the page. Populated by
+    # _check_social. Drives Company.facebook_url / instagram_url / etc.
+    social_urls: dict = field(default_factory=dict)
     has_reviews_page: bool = False
     has_contact_form: bool = False
     has_online_booking: bool = False
@@ -204,14 +207,37 @@ def _check_social(soup: BeautifulSoup, html: str, analysis: WebsiteAnalysis):
         "nextdoor.com": "Nextdoor",
     }
 
+    # Map our normalized platform key → ordered list of domain matches.
+    # We capture the FIRST href that hits each platform (most sites put
+    # the canonical profile in the header/footer; subsequent matches are
+    # usually share-button links to a specific post).
+    platform_keys = {
+        "facebook.com": "facebook",
+        "instagram.com": "instagram",
+        "twitter.com": "twitter",
+        "x.com": "twitter",
+        "youtube.com": "youtube",
+        "tiktok.com": "tiktok",
+        "linkedin.com": "linkedin",
+        "nextdoor.com": "nextdoor",
+    }
+
     links = soup.find_all("a", href=True)
     for link in links:
-        href = link["href"].lower()
+        href_raw = link["href"]
+        href = href_raw.lower()
         for domain, name in social_domains.items():
             if domain in href:
                 analysis.has_social_links = True
                 if name not in analysis.social_platforms:
                     analysis.social_platforms.append(name)
+                # First-write-wins capture of the canonical profile URL
+                pk = platform_keys.get(domain)
+                if pk and pk not in analysis.social_urls:
+                    # Skip share-intent URLs ("sharer.php", "intent/tweet", etc.)
+                    if "sharer" in href or "share" in href or "intent" in href:
+                        continue
+                    analysis.social_urls[pk] = href_raw.strip()
 
     if not analysis.has_social_links:
         analysis.problems.append({
