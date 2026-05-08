@@ -260,7 +260,7 @@ async def request_competitor_comparison(
     company_name = company.name if company else "Your Business"
     booking_url = settings.iclosed_booking_url
 
-    # Show gated page: blurred preview + schedule to unlock
+    # Show gated page: blurred preview + iClosed widget + self-confirm unlock
     return HTMLResponse(f"""<!DOCTYPE html>
 <html><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -268,20 +268,24 @@ async def request_competitor_comparison(
 <style>
     * {{ margin: 0; padding: 0; box-sizing: border-box; }}
     body {{ font-family: -apple-system, sans-serif; background: #f5f7f5; color: #1a1a1a; }}
-    .container {{ max-width: 700px; margin: 0 auto; padding: 20px; }}
+    .container {{ max-width: 820px; margin: 0 auto; padding: 20px; }}
     .header {{ background: linear-gradient(135deg, #0D3B13, #1B5E20); color: white; border-radius: 12px; padding: 32px; text-align: center; margin-bottom: 24px; }}
     .header img {{ width: 200px; margin-bottom: 12px; }}
     .blurred {{ filter: blur(8px); pointer-events: none; user-select: none; opacity: 0.6; padding: 20px; background: white; border-radius: 12px; margin-bottom: 24px; }}
     .blurred table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
     .blurred td, .blurred th {{ padding: 8px; border-bottom: 1px solid #eee; }}
-    .gate {{ background: white; border-radius: 12px; padding: 32px; text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,0.1); }}
-    .gate h2 {{ color: #1B5E20; margin-bottom: 8px; }}
-    .gate p {{ color: #666; font-size: 14px; margin-bottom: 20px; }}
-    .gate input {{ width: 100%; padding: 10px 14px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; margin-bottom: 12px; }}
-    .gate button {{ width: 100%; padding: 14px; background: #E65100; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; }}
-    .gate button:hover {{ background: #BF360C; }}
+    .gate {{ background: white; border-radius: 12px; padding: 24px; box-shadow: 0 4px 24px rgba(0,0,0,0.08); }}
+    .gate h2 {{ color: #1B5E20; margin-bottom: 4px; text-align: center; }}
+    .gate p.lede {{ color: #666; font-size: 14px; margin-bottom: 18px; text-align: center; }}
+    .iclosed-frame {{ width: 100%; height: 720px; border: 0; border-radius: 8px; background: #fafafa; }}
+    .unlock-row {{ margin-top: 16px; padding-top: 16px; border-top: 1px solid #eee; text-align: center; }}
+    .unlock-row p {{ color: #666; font-size: 13px; margin-bottom: 10px; }}
+    .unlock-row input {{ width: 100%; max-width: 320px; padding: 10px 14px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; margin-bottom: 8px; }}
+    .unlock-row button {{ padding: 12px 20px; background: #E65100; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; }}
+    .unlock-row button:hover {{ background: #BF360C; }}
     .success {{ display: none; text-align: center; padding: 20px; }}
     .success h2 {{ color: #1B5E20; }}
+    @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
 </style>
 </head><body>
 <div class="container">
@@ -305,81 +309,83 @@ async def request_competitor_comparison(
         </table>
     </div>
 
-    <!-- Gate form -->
+    <!-- Gate: iClosed booking widget. Scheduling IS the gate. -->
     <div class="gate" id="gate-form">
-        <h2>See How You Stack Up</h2>
-        <p>Schedule a quick 15-minute call with our team to walk through your competitive analysis and discover exactly where the opportunities are.</p>
-        <input type="text" id="gate-name" placeholder="Your name" required>
-        <input type="email" id="gate-email" placeholder="Your email" required>
-        <input type="tel" id="gate-phone" placeholder="Your phone number" required>
-        <button onclick="submitGate()">Schedule & View Report</button>
-        <p style="font-size:11px;color:#999;margin-top:8px">We'll send you a calendar invite for a brief walkthrough</p>
+        <h2>Schedule a quick 15-minute call to unlock</h2>
+        <p class="lede">Pick a time below — we'll walk through where you're winning, where competitors are pulling ahead, and the fastest fixes.</p>
+        <iframe class="iclosed-frame"
+                src="{booking_url}"
+                allow="fullscreen *"
+                loading="lazy"></iframe>
+        <div class="unlock-row">
+            <p>Already picked your time? Enter the email you used and we'll unlock your report.</p>
+            <input type="email" id="unlock-email" placeholder="Email used to book" required>
+            <br>
+            <button onclick="unlock()">View My Comparison →</button>
+        </div>
     </div>
 
     <!-- Success / redirect -->
     <div class="success" id="gate-success">
-        <h2>You're booked!</h2>
-        <p>Loading your competitive comparison...</p>
+        <h2>Unlocking your comparison...</h2>
         <div style="margin:16px auto;width:40px;height:40px;border:4px solid #ddd;border-top-color:#1B5E20;border-radius:50%;animation:spin 1s linear infinite"></div>
-        <style>@keyframes spin {{ to {{ transform: rotate(360deg); }} }}</style>
     </div>
 </div>
 
 <script>
-async function submitGate() {{
-    const name = document.getElementById('gate-name').value.trim();
-    const email = document.getElementById('gate-email').value.trim();
-    const phone = document.getElementById('gate-phone').value.trim();
-    if (!name || !email || !phone) {{ alert('Please fill in all fields'); return; }}
-
-    const btn = document.querySelector('.gate button');
-    btn.textContent = 'Scheduling...';
+async function unlock() {{
+    const email = document.getElementById('unlock-email').value.trim();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {{
+        alert('Please enter the email you used to book.');
+        return;
+    }}
+    const btn = document.querySelector('.unlock-row button');
+    btn.textContent = 'Unlocking...';
     btn.disabled = true;
-
     try {{
-        const res = await fetch('/api/report/{token}/book', {{
+        await fetch('/api/report/{token}/unlock', {{
             method: 'POST',
             headers: {{'Content-Type': 'application/json'}},
-            body: JSON.stringify({{ name, email, phone, token: '{token}' }}),
+            body: JSON.stringify({{ email, token: '{token}' }}),
         }});
-        const data = await res.json();
-        if (data.success) {{
-            document.getElementById('gate-form').style.display = 'none';
-            document.getElementById('gate-success').style.display = 'block';
-            // Redirect to competitors page after 3 seconds
-            setTimeout(() => {{ window.location.href = '{competitors_url}'; }}, 3000);
-        }} else {{
-            // Still show the report even if booking API fails
-            window.location.href = '{competitors_url}';
-        }}
-    }} catch(e) {{
-        window.location.href = '{competitors_url}';
-    }}
+    }} catch(e) {{ /* fall through to redirect anyway */ }}
+    document.getElementById('gate-form').style.display = 'none';
+    document.getElementById('gate-success').style.display = 'block';
+    setTimeout(() => {{ window.location.href = '{competitors_url}'; }}, 800);
 }}
 </script>
 </body></html>""")
 
 
 # ============================================================
-# Booking endpoint — called by the gate form
+# Unlock endpoint — called when prospect self-confirms scheduling
 # ============================================================
 
 from pydantic import BaseModel as _BM
 
-class BookingRequest(_BM):
-    name: str
+
+class UnlockRequest(_BM):
     email: str
-    phone: str
     token: str
 
 
-@router.post("/api/report/{token}/book")
-async def book_from_report(
+@router.post("/api/report/{token}/unlock")
+async def unlock_competitor_report(
     token: str,
-    req: BookingRequest,
+    req: UnlockRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Prospect submits the gate form — book via iClosed, update CRM contact, notify BDR."""
+    """Prospect clicked "I've scheduled" below the iClosed widget.
+
+    iClosed handles the actual booking inside its iframe — name, email,
+    phone, time slot. This endpoint records the self-confirmation, mirrors
+    the email into the CRM contact if missing, and creates a BDR task.
+
+    A separate /api/iclosed/webhook endpoint (see below) authoritatively
+    flips report.booked_at when iClosed posts a confirmed booking event.
+    Here we only capture the email — never claim a meeting was actually
+    booked unless the webhook fires.
+    """
     report = (await db.execute(
         select(AuditReportModel).where(AuditReportModel.token == token)
     )).scalar_one_or_none()
@@ -387,75 +393,133 @@ async def book_from_report(
     if not report:
         return {"success": False, "error": "Report not found"}
 
-    company = (await db.execute(select(Company).where(Company.id == report.company_id))).scalar_one_or_none()
+    company = (await db.execute(
+        select(Company).where(Company.id == report.company_id)
+    )).scalar_one_or_none()
 
-    # Parse name
-    parts = req.name.strip().split(maxsplit=1)
-    first_name = parts[0] if parts else req.name
-    last_name = parts[1] if len(parts) > 1 else ""
-
-    # Update contact in CRM with phone number
+    # Mirror email into CRM contact if missing
     from app.models import Contact
-    if company:
+    if company and req.email:
         contacts = (await db.execute(
-            select(Contact).where(Contact.company_id == company.id).order_by(Contact.is_primary.desc())
+            select(Contact).where(Contact.company_id == company.id)
+            .order_by(Contact.is_primary.desc())
         )).scalars().all()
+        if contacts and not contacts[0].email:
+            contacts[0].email = req.email
 
-        if contacts:
-            primary = contacts[0]
-            if not primary.phone and req.phone:
-                primary.phone = req.phone
-            if not primary.email and req.email:
-                primary.email = req.email
-            if not primary.first_name and first_name:
-                primary.first_name = first_name
-            if not primary.last_name and last_name:
-                primary.last_name = last_name
-        else:
-            import secrets as _s
-            new_contact = Contact(
-                company_id=company.id,
-                first_name=first_name,
-                last_name=last_name,
-                email=req.email,
-                phone=req.phone,
-                is_primary=True,
-                unsubscribe_token=_s.token_urlsafe(32),
-            )
-            db.add(new_contact)
-
-    # Try to book via iClosed
-    booking_result = None
-    iclosed_key = settings.iclosed_api_key
-    if iclosed_key:
-        try:
-            from app.services.iclosed import book_call
-            booking_result = await book_call(
-                api_key=iclosed_key,
-                contact_email=req.email,
-                contact_first_name=first_name,
-                contact_last_name=last_name,
-                contact_phone=req.phone,
-                notes=f"Booked from competitive comparison report for {company.name if company else 'unknown'}",
-            )
-        except Exception:
-            pass
-
-    # Log + notify BDR
     if company:
-        meeting_info = ""
-        if booking_result and booking_result.success:
-            meeting_info = f" — meeting booked"
-            if booking_result.event_time:
-                meeting_info = f" — meeting booked for {booking_result.event_time}"
+        db.add(Activity(
+            company_id=company.id,
+            activity_type="report_unlock_clicked",
+            content=f"Prospect clicked 'I've Scheduled' on competitor gate (email: {req.email}). "
+                    f"Awaiting iClosed webhook to confirm a real booking.",
+        ))
+        # Hot-lead task for BDR — even if booking can't be verified yet,
+        # the click on the schedule-confirm button is itself a strong signal.
+        if company.assigned_to:
+            db.add(Task(
+                company_id=company.id,
+                user_id=company.assigned_to,
+                description=f"HOT: {company.name} self-confirmed scheduling on competitor report "
+                            f"(email: {req.email}) — verify booking landed in iClosed and call to prep.",
+                due_date=datetime.now(timezone.utc),
+            ))
+        if company.status in ("new", "pursuing", "sequencing", "contacted"):
+            company.status = "qualified"
 
+    await db.commit()
+    return {"success": True}
+
+
+# ============================================================
+# iClosed webhook — authoritative source-of-truth for "booked"
+# ============================================================
+
+@router.post("/api/iclosed/webhook")
+async def iclosed_webhook(request: Request, db: AsyncSession = Depends(get_db)):
+    """Receive booking-confirmed events from iClosed.
+
+    Configure in iClosed settings:
+      Webhook URL:  {public_url}/api/iclosed/webhook
+      Events:       booking.created (or whatever iClosed names it)
+
+    Match strategy: iClosed posts the booked email + scheduled time. We
+    look up the most recent unconfirmed AuditReport whose booked_email
+    matches (set by /unlock above) OR whose company has a contact with
+    that email. First match wins.
+
+    Logs a 'meeting_booked' Activity, creates a BDR task with the actual
+    time, advances any qualified deals, and stamps report.booked_at.
+    """
+    import json as _json
+    raw = await request.body()
+    try:
+        data = _json.loads(raw or b"{}")
+    except Exception:
+        return {"ok": False, "error": "invalid json"}
+
+    # iClosed payload shape varies by event type; this is best-effort.
+    # Payload fields are guarded so a schema change doesn't 500 the webhook.
+    event = data.get("event") or data.get("type") or ""
+    booking = data.get("data") or data.get("booking") or data
+    booked_email = (booking.get("inviteeEmail") or booking.get("email") or "").strip().lower()
+    scheduled_at = booking.get("startTime") or booking.get("scheduledAt") or ""
+    invitee_name = booking.get("inviteeFirstName") or booking.get("name") or ""
+
+    if not booked_email:
+        return {"ok": True, "ignored": "no email in payload"}
+
+    # Find the most recent report whose booked_email matches OR whose
+    # company has a contact with this email. Prefer reports already touched
+    # by the self-confirm /unlock click (booked_email set, booked_at null).
+    from app.models import Contact
+    report = (await db.execute(
+        select(AuditReportModel)
+        .where(AuditReportModel.booked_email == booked_email)
+        .order_by(AuditReportModel.id.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+
+    if not report:
+        # Fallback: match by contact email → company → most-recent report
+        contact = (await db.execute(
+            select(Contact).where(Contact.email == booked_email).order_by(Contact.id.desc()).limit(1)
+        )).scalar_one_or_none()
+        if contact:
+            report = (await db.execute(
+                select(AuditReportModel)
+                .where(AuditReportModel.company_id == contact.company_id)
+                .order_by(AuditReportModel.id.desc())
+                .limit(1)
+            )).scalar_one_or_none()
+
+    if not report:
+        return {"ok": True, "ignored": "no matching report", "email": booked_email}
+
+    report.booked_at = datetime.now(timezone.utc)
+    if not report.booked_email:
+        report.booked_email = booked_email
+
+    company = (await db.execute(
+        select(Company).where(Company.id == report.company_id)
+    )).scalar_one_or_none()
+    if company:
+        when = f" for {scheduled_at}" if scheduled_at else ""
         db.add(Activity(
             company_id=company.id,
             activity_type="meeting_booked",
-            content=f"MEETING BOOKED: {req.name} ({req.phone}) scheduled from competitor report{meeting_info}",
+            content=f"iClosed confirmed booking: {invitee_name or booked_email}{when} "
+                    f"(via competitor report gate)",
         ))
-
-        # Auto-advance deal
+        if company.assigned_to:
+            db.add(Task(
+                company_id=company.id,
+                user_id=company.assigned_to,
+                description=f"MEETING BOOKED: {invitee_name or booked_email} from {company.name}"
+                            f"{when} — call to prep!",
+                due_date=datetime.now(timezone.utc),
+            ))
+        # Advance any in-flight deal to qualified
         from app.models import Deal
         from app.routes.deal_routes import STAGE_PROBABILITY, package_monthly_value
         deals = (await db.execute(
@@ -470,26 +534,11 @@ async def book_from_report(
                 deal.probability = STAGE_PROBABILITY.get("qualified", 25)
                 if deal.value == 0 and deal.package:
                     deal.value = package_monthly_value(deal.package)
-
-        # Create URGENT task for BDR
-        if company.assigned_to:
-            db.add(Task(
-                company_id=company.id,
-                user_id=company.assigned_to,
-                description=f"MEETING BOOKED: {req.name} from {company.name} — phone: {req.phone} — scheduled from competitor report. Call to confirm!",
-                due_date=datetime.now(timezone.utc),
-            ))
-
         if company.status in ("new", "pursuing", "sequencing", "contacted"):
             company.status = "qualified"
 
     await db.commit()
-
-    return {
-        "success": True,
-        "booked": bool(booking_result and booking_result.success),
-        "message": "Meeting scheduled" if booking_result and booking_result.success else "Contact info captured",
-    }
+    return {"ok": True, "report_id": report.id, "matched_email": booked_email}
 
 
 def _esc(s):

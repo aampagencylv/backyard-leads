@@ -606,3 +606,9 @@ class AuditReportModel(Base):
     view_count = Column(Integer, default=0)
     last_viewed_at = Column(DateTime, nullable=True)
     generated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    # Set when prospect schedules via the iClosed widget on the gate page.
+    # Source priority: iClosed webhook > prospect self-confirm via the
+    # "I've Scheduled" button. nullable means: not booked yet.
+    booked_at = Column(DateTime, nullable=True)
+    booked_email = Column(String(255), nullable=True)
