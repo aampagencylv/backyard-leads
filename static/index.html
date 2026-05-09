@@ -1185,16 +1185,26 @@ function verify(secret, rawBody, header) {
 
                 <!-- Tab strip -->
                 <div style="border-bottom:1px solid #e6e6e6;margin-bottom:18px;display:flex;gap:6px">
-                    <button class="cal-tab" data-tab="upcoming" onclick="switchCalTab('upcoming')" style="background:transparent;border:0;padding:10px 16px;font-size:13px;cursor:pointer;color:#666;border-bottom:3px solid transparent;font-weight:500">Upcoming</button>
-                    <button class="cal-tab active" data-tab="settings" onclick="switchCalTab('settings')" style="background:transparent;border:0;padding:10px 16px;font-size:13px;cursor:pointer;color:var(--bmp-orange);border-bottom:3px solid var(--bmp-orange);font-weight:600">Settings</button>
+                    <button class="cal-tab active" data-tab="upcoming" onclick="switchCalTab('upcoming')" style="background:transparent;border:0;padding:10px 16px;font-size:13px;cursor:pointer;color:var(--bmp-orange);border-bottom:3px solid var(--bmp-orange);font-weight:600">Upcoming</button>
+                    <button class="cal-tab" data-tab="settings" onclick="switchCalTab('settings')" style="background:transparent;border:0;padding:10px 16px;font-size:13px;cursor:pointer;color:#666;border-bottom:3px solid transparent;font-weight:500">Settings</button>
                 </div>
 
-                <!-- Upcoming tab (placeholder for the list view that ships next) -->
+                <!-- Upcoming tab — confirmed bookings in the next 30 days -->
                 <div id="cal-tab-upcoming" class="cal-tab-pane" style="display:none">
-                    <div class="search-box" style="max-width:760px;text-align:center;padding:32px 20px">
-                        <p style="font-size:14px;color:#888;margin:0 0 6px">Upcoming bookings list ships next.</p>
-                        <p style="font-size:12px;color:#999;margin:0">For now, click a slot to book on the public page or check Google Calendar directly.</p>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+                        <span id="cal-upcoming-count" style="font-size:13px;color:#666"></span>
+                        <div style="display:flex;gap:6px;align-items:center">
+                            <select id="cal-upcoming-window" onchange="loadUpcomingBookings()" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px">
+                                <option value="7">Next 7 days</option>
+                                <option value="14">Next 14 days</option>
+                                <option value="30" selected>Next 30 days</option>
+                                <option value="60">Next 60 days</option>
+                                <option value="180">Next 6 months</option>
+                            </select>
+                            <button class="btn btn-secondary btn-sm" onclick="loadUpcomingBookings()" title="Refresh">↻</button>
+                        </div>
                     </div>
+                    <div id="cal-upcoming-list"></div>
                 </div>
 
                 <!-- Settings tab — connection + availability + page customization -->
@@ -6867,7 +6877,10 @@ hmac.compare_digest(expected, header)</pre>
         // + booking-page wording + calendar picker dropdown. Tab state
         // defaults to Settings since the Upcoming list view ships next.
         function loadCalendarPage() {
-            switchCalTab('settings');  // landing tab
+            // Land on Upcoming by default — that's the screen reps want
+            // when they hit the Calendar link in the sidebar (what's on
+            // my plate today?). Settings is one click away.
+            switchCalTab('upcoming');
             loadGoogleCalendarStatus();
         }
 
@@ -6882,6 +6895,96 @@ hmac.compare_digest(expected, header)</pre>
             document.querySelectorAll('.cal-tab-pane').forEach(p => {
                 p.style.display = p.id === `cal-tab-${tab}` ? '' : 'none';
             });
+            if (tab === 'upcoming') loadUpcomingBookings();
+        }
+
+        async function loadUpcomingBookings() {
+            const list = document.getElementById('cal-upcoming-list');
+            const countEl = document.getElementById('cal-upcoming-count');
+            if (!list) return;
+            const days = parseInt(document.getElementById('cal-upcoming-window')?.value || '30', 10);
+            list.innerHTML = '<div style="color:#888;font-size:12px;padding:14px;text-align:center">Loading…</div>';
+            const data = await api(`/api/me/scheduling/upcoming?days=${days}`);
+            if (!data) {
+                list.innerHTML = '<div class="search-box" style="text-align:center;padding:24px;color:#888;font-size:13px">Could not load bookings. Make sure Google Calendar is connected.</div>';
+                if (countEl) countEl.textContent = '';
+                return;
+            }
+            const bookings = data.bookings || [];
+            if (countEl) countEl.textContent = `${bookings.length} booking${bookings.length === 1 ? '' : 's'} in the next ${days} day${days === 1 ? '' : 's'} · times shown in your local TZ`;
+            if (!bookings.length) {
+                list.innerHTML = `<div class="search-box" style="text-align:center;padding:32px 20px">
+                    <div style="font-size:32px;margin-bottom:8px">📅</div>
+                    <p style="font-size:14px;color:#666;margin:0 0 4px;font-weight:500">No bookings yet</p>
+                    <p style="font-size:12px;color:#999;margin:0">Share your booking URL or use 📅 Schedule on a contact card to get one on the books.</p>
+                </div>`;
+                return;
+            }
+            // Group by local day
+            const byDay = {};
+            for (const b of bookings) {
+                const d = new Date(b.starts_at_utc);
+                const dayKey = d.toLocaleDateString('en-CA');  // YYYY-MM-DD in local TZ
+                if (!byDay[dayKey]) byDay[dayKey] = [];
+                byDay[dayKey].push(b);
+            }
+            const days_sorted = Object.keys(byDay).sort();
+            const today = new Date().toLocaleDateString('en-CA');
+            const tomorrowDt = new Date(); tomorrowDt.setDate(tomorrowDt.getDate() + 1);
+            const tomorrow = tomorrowDt.toLocaleDateString('en-CA');
+            list.innerHTML = days_sorted.map(d => {
+                const dt = new Date(d + 'T00:00:00');
+                let label = dt.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+                if (d === today) label = `Today · ${label}`;
+                else if (d === tomorrow) label = `Tomorrow · ${label}`;
+                return `<div style="margin-bottom:18px">
+                    <h4 style="font-size:12px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:0.6px;margin:0 0 8px;padding-bottom:4px;border-bottom:1px solid #eee">${escapeHtml(label)}</h4>
+                    <div style="display:flex;flex-direction:column;gap:8px">
+                        ${byDay[d].map(b => _renderUpcomingBookingRow(b)).join('')}
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        function _renderUpcomingBookingRow(b) {
+            const start = new Date(b.starts_at_utc);
+            const end = new Date(b.ends_at_utc);
+            const tStart = start.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+            const tEnd = end.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+            const minsAway = Math.round((start.getTime() - Date.now()) / 60000);
+            let statusBadge = '';
+            if (minsAway < 0 && minsAway > -120) {
+                statusBadge = '<span style="background:#fff3cd;color:#c0392b;font-size:10px;padding:1px 6px;border-radius:3px;font-weight:600;margin-left:6px">IN PROGRESS</span>';
+            } else if (minsAway >= 0 && minsAway < 60) {
+                statusBadge = `<span style="background:#FFF8F0;color:var(--bmp-orange);font-size:10px;padding:1px 6px;border-radius:3px;font-weight:600;margin-left:6px">in ${minsAway}m</span>`;
+            }
+            const meetBtn = b.google_meet_link
+                ? `<a href="${escapeHtml(b.google_meet_link)}" target="_blank" rel="noopener" style="background:#1a73e8;color:white;text-decoration:none;font-size:11px;padding:5px 10px;border-radius:4px;font-weight:500;white-space:nowrap">📹 Join Meet</a>`
+                : '';
+            const eventBtn = b.google_event_link
+                ? `<a href="${escapeHtml(b.google_event_link)}" target="_blank" rel="noopener" style="font-size:11px;color:#0077B5;text-decoration:none;white-space:nowrap" title="Open in Google Calendar">↗ Calendar</a>`
+                : '';
+            const companyLink = b.company_id
+                ? `<a href="#" onclick="event.preventDefault();openCompanyDetail(${b.company_id})" style="color:var(--bmp-green);text-decoration:none">${escapeHtml(b.company_name || 'View company')}</a>`
+                : '';
+            return `<div class="search-box" style="padding:10px 14px;display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap">
+                <div style="min-width:90px;font-weight:600;font-size:13px;color:#333;line-height:1.4">
+                    ${escapeHtml(tStart)}<br><span style="font-weight:400;font-size:11px;color:#888">→ ${escapeHtml(tEnd)}</span>
+                </div>
+                <div style="flex:1;min-width:180px">
+                    <div style="font-size:13px;color:#222">
+                        <strong>${escapeHtml(b.prospect_name || b.prospect_email)}</strong>${statusBadge}
+                    </div>
+                    <div style="font-size:12px;color:#666;margin-top:1px">
+                        ${escapeHtml(b.prospect_email || '')}${b.prospect_phone ? ' · ' + escapeHtml(b.prospect_phone) : ''}
+                    </div>
+                    ${companyLink ? `<div style="font-size:11px;margin-top:2px">${companyLink}</div>` : ''}
+                </div>
+                <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                    ${meetBtn}
+                    ${eventBtn}
+                </div>
+            </div>`;
         }
 
         async function copyBookingLink() {

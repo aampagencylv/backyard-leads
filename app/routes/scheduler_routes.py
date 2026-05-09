@@ -262,6 +262,62 @@ async def patch_my_scheduling_config(
     return _config_payload(c)
 
 
+@host_router.get("/upcoming")
+async def upcoming_bookings(
+    days: int = 30,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the rep's confirmed bookings starting in the next N
+    days. Includes prospect info, matched company/contact, Google
+    event link, and (when applicable) the Meet link. Used by the
+    Calendar page's Upcoming tab + future morning-brief / dashboard
+    widgets."""
+    days = max(1, min(180, int(days or 30)))
+    now = datetime.now(timezone.utc)
+    end = now + timedelta(days=days)
+    rows = (await db.execute(
+        select(Booking).where(
+            Booking.host_user_id == user.id,
+            Booking.status == "confirmed",
+            Booking.starts_at >= now - timedelta(hours=2),  # include in-progress
+            Booking.starts_at < end,
+        ).order_by(Booking.starts_at.asc())
+    )).scalars().all()
+    # Pull company names in one go for context
+    company_ids = {b.company_id for b in rows if b.company_id}
+    companies = {}
+    if company_ids:
+        cm = (await db.execute(
+            select(Company).where(Company.id.in_(company_ids))
+        )).scalars().all()
+        companies = {c.id: c for c in cm}
+    payload = []
+    for b in rows:
+        s = b.starts_at if b.starts_at.tzinfo else b.starts_at.replace(tzinfo=timezone.utc)
+        e = b.ends_at if b.ends_at.tzinfo else b.ends_at.replace(tzinfo=timezone.utc)
+        comp = companies.get(b.company_id) if b.company_id else None
+        payload.append({
+            "id": b.id,
+            "starts_at_utc": s.isoformat(),
+            "ends_at_utc": e.isoformat(),
+            "duration_minutes": int((e - s).total_seconds() // 60),
+            "prospect_name": b.prospect_name,
+            "prospect_email": b.prospect_email,
+            "prospect_phone": b.prospect_phone,
+            "company_id": b.company_id,
+            "company_name": comp.name if comp else None,
+            "contact_id": b.contact_id,
+            "google_event_link": b.google_event_link,
+            "google_meet_link": b.google_meet_link,
+        })
+    return {
+        "host_timezone": user.timezone or "America/Phoenix",
+        "count": len(payload),
+        "bookings": payload,
+    }
+
+
 @host_router.get("/preview")
 async def preview_my_slots(
     days: int = 7,
