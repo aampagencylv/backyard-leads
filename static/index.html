@@ -1315,11 +1315,15 @@ function verify(secret, rawBody, header) {
                         </div>
 
                         <div style="border-top:1px solid #f0f0f0;padding-top:14px;margin-bottom:14px">
-                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:10px;flex-wrap:wrap">
                                 <h4 style="margin:0;font-size:13px;color:#444">📝 Intake questions</h4>
-                                <button class="btn btn-secondary btn-xs" onclick="addBookingQuestion()">+ Add question</button>
+                                <div style="display:flex;gap:8px;align-items:center">
+                                    <span id="sched-q-save-status" style="font-size:11px;color:#888"></span>
+                                    <button class="btn btn-primary btn-xs" onclick="saveBookingQuestionsNow()">💾 Save</button>
+                                    <button class="btn btn-secondary btn-xs" onclick="addBookingQuestion()">+ Add question</button>
+                                </div>
                             </div>
-                            <p style="font-size:11px;color:#888;margin:0 0 10px">Name, email, phone, and a free-form message are always shown. Add questions below to qualify leads (Calendly-style).</p>
+                            <p style="font-size:11px;color:#888;margin:0 0 10px">Name, email, phone, and a free-form message are always shown. Add questions below to qualify leads (Calendly-style). Changes auto-save when you click outside a field, but you can hit <strong>Save</strong> any time.</p>
                             <div id="sched-questions-list" style="display:flex;flex-direction:column;gap:10px"></div>
                         </div>
 
@@ -6934,6 +6938,12 @@ hmac.compare_digest(expected, header)</pre>
                         status.style.color = '#1b5e20';
                         setTimeout(() => { if (status.textContent === '✓ saved') status.textContent = ''; }, 1500);
                     }
+                    const qStatus = document.getElementById('sched-q-save-status');
+                    if (qStatus) {
+                        qStatus.textContent = '✓ saved';
+                        qStatus.style.color = '#1b5e20';
+                        setTimeout(() => { if (qStatus.textContent === '✓ saved') qStatus.textContent = ''; }, 1500);
+                    }
                 }
             }, 300);
         }
@@ -6975,17 +6985,21 @@ hmac.compare_digest(expected, header)</pre>
             }
             list.innerHTML = _schedQuestions.map((q, i) => {
                 const optsBlock = q.type === 'single_select'
-                    ? `<div style="margin-top:6px"><label style="font-size:11px;color:#666;display:block;margin-bottom:3px">Options (one per line)</label><textarea data-qfield="options" data-qidx="${i}" rows="3" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:12px;font-family:inherit" oninput="updateQuestionField(${i},'options',this.value)" onblur="saveSchedulingConfig()">${escapeHtml((q.options || []).join('\n'))}</textarea></div>`
+                    ? `<div style="margin-top:8px;padding:8px;background:white;border:1px dashed #ddd;border-radius:6px">
+                        <label style="font-size:11px;color:#666;display:block;margin-bottom:3px"><strong>Options</strong> — one per line (e.g. Below $1M / $1M-$3M / $3M+)</label>
+                        <textarea data-qfield="options" data-qidx="${i}" rows="3" placeholder="Below $1,000,000\n$1,000,001 - $3,000,000\n$3,000,001 - $10,000,000\n$10,000,001 or more" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:12px;font-family:inherit;box-sizing:border-box" oninput="updateQuestionField(${i},'options',this.value)" onblur="saveSchedulingConfig()">${escapeHtml((q.options || []).join('\n'))}</textarea>
+                        ${(q.options || []).length === 0 ? '<div style="font-size:11px;color:#c0392b;margin-top:4px">⚠️ Single-select questions need at least one option to save.</div>' : ''}
+                    </div>`
                     : '';
                 return `<div style="border:1px solid #e6e6e6;border-radius:8px;padding:12px;background:#fafafa">
-                    <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
-                        <select onchange="updateQuestionField(${i},'type',this.value);saveSchedulingConfig()" style="padding:5px;border:1px solid #ddd;border-radius:4px;font-size:11px">
+                    <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+                        <select onchange="updateQuestionType(${i},this.value)" style="padding:5px;border:1px solid #ddd;border-radius:4px;font-size:11px">
                             <option value="short_text"${q.type === 'short_text' ? ' selected' : ''}>Short text</option>
                             <option value="long_text"${q.type === 'long_text' ? ' selected' : ''}>Long text</option>
                             <option value="url"${q.type === 'url' ? ' selected' : ''}>URL</option>
                             <option value="single_select"${q.type === 'single_select' ? ' selected' : ''}>Single select</option>
                         </select>
-                        <input value="${escapeHtml(q.label || '')}" placeholder="Question text (e.g. Company Name)" oninput="updateQuestionField(${i},'label',this.value)" onblur="saveSchedulingConfig()" style="flex:1;padding:5px 7px;border:1px solid #ddd;border-radius:4px;font-size:12px">
+                        <input value="${escapeHtml(q.label || '')}" placeholder="Question text (e.g. Company Name)" oninput="updateQuestionField(${i},'label',this.value)" onblur="saveSchedulingConfig()" style="flex:1;min-width:140px;padding:5px 7px;border:1px solid #ddd;border-radius:4px;font-size:12px">
                         <label style="font-size:11px;color:#666;display:flex;align-items:center;gap:3px;white-space:nowrap"><input type="checkbox" ${q.required ? 'checked' : ''} onchange="updateQuestionField(${i},'required',this.checked);saveSchedulingConfig()"> req</label>
                         <button type="button" onclick="moveQuestion(${i},-1)" ${i === 0 ? 'disabled' : ''} title="Up" style="background:transparent;border:0;cursor:pointer;color:#666;padding:3px 5px;font-size:13px">↑</button>
                         <button type="button" onclick="moveQuestion(${i},1)" ${i === _schedQuestions.length - 1 ? 'disabled' : ''} title="Down" style="background:transparent;border:0;cursor:pointer;color:#666;padding:3px 5px;font-size:13px">↓</button>
@@ -6996,10 +7010,77 @@ hmac.compare_digest(expected, header)</pre>
             }).join('');
         }
 
+        // Re-render needed because switching to single_select adds an
+        // options textarea below the row that isn't in the DOM otherwise.
+        function updateQuestionType(idx, value) {
+            const q = _schedQuestions[idx];
+            if (!q) return;
+            q.type = value;
+            // Clear options when switching AWAY from single_select so
+            // we don't carry stale data; pre-seed empty array when
+            // switching INTO single_select so the textarea has shape.
+            if (value !== 'single_select') q.options = [];
+            else if (!Array.isArray(q.options)) q.options = [];
+            _renderBookingQuestions();
+            saveSchedulingConfig();
+        }
+
         function addBookingQuestion() {
             _schedQuestions.push({ type: 'short_text', label: '', required: false, options: [], position: _schedQuestions.length });
             _renderBookingQuestions();
-            // No save until they type a label — empty labels get filtered server-side
+            // No auto-save here — empty labels get filtered server-side
+            // anyway. Save fires when the user blurs the label or hits
+            // the Save button.
+        }
+
+        // Explicit-save flow with prominent inline feedback. Bypasses the
+        // 300ms debounce in saveSchedulingConfig — useful when the user
+        // wants reassurance that what they typed is persisted.
+        async function saveBookingQuestionsNow() {
+            const status = document.getElementById('sched-q-save-status');
+            if (status) { status.textContent = 'Saving…'; status.style.color = '#888'; }
+            const num = id => { const el = document.getElementById(id); return el ? parseInt(el.value, 10) : null; };
+            const txt = id => { const el = document.getElementById(id); return el ? el.value : null; };
+            const data = await api('/api/me/scheduling/config', {
+                method: 'PATCH',
+                body: JSON.stringify({
+                    rules: _schedRules,
+                    slot_minutes: num('sched-slot-minutes'),
+                    buffer_after_minutes: num('sched-buffer-after'),
+                    min_lead_time_hours: num('sched-min-lead'),
+                    max_advance_days: num('sched-max-advance'),
+                    daily_limit: num('sched-daily-limit'),
+                    meeting_title: txt('sched-meeting-title'),
+                    meeting_description: txt('sched-meeting-desc'),
+                    page_headline: txt('sched-page-headline'),
+                    page_intro: txt('sched-page-intro'),
+                    meeting_type: txt('sched-meeting-type'),
+                    meeting_location_details: txt('sched-meeting-loc-details'),
+                    questions: _schedQuestions,
+                }),
+            });
+            if (data) {
+                // Server filters out invalid questions (empty label,
+                // single_select with no options, etc.). Reflect what
+                // actually persisted so the user sees if anything got
+                // dropped.
+                const beforeCount = _schedQuestions.length;
+                _schedQuestions = (data.questions || []).slice();
+                _renderBookingQuestions();
+                if (status) {
+                    if (data.questions.length < beforeCount) {
+                        status.textContent = `✓ Saved (${beforeCount - data.questions.length} dropped — empty label or no options)`;
+                        status.style.color = '#f39c12';
+                    } else {
+                        status.textContent = `✓ Saved (${data.questions.length} question${data.questions.length === 1 ? '' : 's'})`;
+                        status.style.color = '#1b5e20';
+                    }
+                    setTimeout(() => { if (status.textContent.startsWith('✓')) status.textContent = ''; }, 3500);
+                }
+            } else if (status) {
+                status.textContent = '✗ Save failed';
+                status.style.color = '#c0392b';
+            }
         }
 
         function removeQuestion(idx) {
