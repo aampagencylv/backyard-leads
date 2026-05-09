@@ -4271,7 +4271,6 @@ function verify(secret, rawBody, header) {
                                 ${c.title ? escapeHtml(c.title) + ' · ' : ''}
                                 ${c.email ? `<a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a>` : '<em>no email</em>'}
                                 ${c.email && !c.unsubscribed_at ? ` · <a onclick="event.stopPropagation();openAdhocComposer(${c.id})" style="color:var(--bmp-orange);cursor:pointer;text-decoration:none;border-bottom:1px dotted var(--bmp-orange)" title="Send a one-off email">📧 Email</a>` : ''}
-                                ${c.email ? ` · <a onclick="event.stopPropagation();openScheduleModal(${c.id})" style="color:#1a73e8;cursor:pointer;text-decoration:none;border-bottom:1px dotted #1a73e8" title="Pick a time on your calendar and send the invite">📅 Schedule</a>` : ''}
                                 ${c.phone ? ` · <a class="call-link" onclick="event.stopPropagation();callContact(${c.id})">${escapeHtml(c.phone)}</a>${renderPhoneTypeBadge(c)}` : ''}
                                 ${c.phone && !c.do_not_text && c.phone_type !== 'landline' ? ` · <a class="sms-link" onclick="event.stopPropagation();openSmsComposer(${c.id})" style="color:#0b93f6;cursor:pointer;text-decoration:none;border-bottom:1px dotted #0b93f6" title="iMessage via Blooio">💬 Message</a>` : ''}
                                 ${c.unsubscribed_at ? ' · <span style="color:#c0392b">UNSUBSCRIBED (email)</span>' : ''}
@@ -4280,6 +4279,7 @@ function verify(secret, rawBody, header) {
                             </div>
                         </div>
                         <div class="contact-actions" style="display:flex;flex-wrap:wrap;gap:4px">
+                            ${c.email ? `<button class="btn btn-secondary btn-xs" onclick="openScheduleModal(${c.id})" style="background:#e3f2fd;color:#1565c0;border-color:#bbdefb" title="Pick a time on your calendar + send the invite">📅 Schedule</button>` : ''}
                             <button class="btn btn-secondary btn-xs" onclick="editContact(${c.id})">Edit</button>
                             ${c.phone && (!c.phone_type || c.phone_type === 'unknown' || c.phone_type === 'error') ? `<button class="btn btn-secondary btn-xs" onclick="checkPhoneType(${c.id})" title="Look up via Twilio whether this is mobile / landline / VoIP">🔎 Check Phone</button>` : ''}
                             ${!c.email ? `<button class="btn btn-secondary btn-xs" onclick="setContactEmail(${c.id})">Set Email</button>` : ''}
