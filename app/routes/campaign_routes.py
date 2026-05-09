@@ -417,14 +417,16 @@ async def _execute_batch(campaign_id: int, db: AsyncSession, user: User):
     }
 
     # Step 1: Search Google Maps
-    if not settings.google_maps_api_key:
+    from app.runtime_config import get_google_maps_api_key
+    maps_key = await get_google_maps_api_key(db)
+    if not maps_key:
         raise HTTPException(status_code=500, detail="Google Maps API key not configured")
 
     try:
         businesses = await search_businesses(
             keyword=business_type,
             location=location,
-            api_key=settings.google_maps_api_key,
+            api_key=maps_key,
             max_results=40,
         )
     except Exception as e:
@@ -1042,6 +1044,9 @@ async def _execute_god_mode_batch(campaign_id: int, db: AsyncSession) -> dict:
     }
     per_target_summaries = []
 
+    from app.runtime_config import get_google_maps_api_key
+    maps_key = await get_google_maps_api_key(db)
+
     for target in targets:
         if remaining_total <= 0:
             break
@@ -1060,14 +1065,14 @@ async def _execute_god_mode_batch(campaign_id: int, db: AsyncSession) -> dict:
         }
 
         # Search Maps for this target's pair
-        if not settings.google_maps_api_key:
+        if not maps_key:
             _log(db, campaign.id, "error", "Google Maps API key not configured")
             break
 
         try:
             businesses = await search_businesses(
                 keyword=target.vertical, location=target.location,
-                api_key=settings.google_maps_api_key, max_results=40,
+                api_key=maps_key, max_results=40,
             )
         except Exception as e:
             _log(db, campaign.id, "error", f"Search failed for {target.vertical} in {target.location}: {str(e)[:80]}")

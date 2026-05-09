@@ -467,6 +467,11 @@ class RuntimeConfig(Base):
     # settings.resend_webhook_secret env var if this is empty.
     resend_webhook_secret = Column(Text, nullable=True)
 
+    # Google Maps API key — powers /find-leads (Places API + nearby search) and
+    # the campaign runner's geo-targeted scrapes. Platform-tier: super_admin
+    # only. DB-first with env fallback so rotation doesn't need a redeploy.
+    google_maps_api_key = Column(Text, nullable=True)
+
     # Apollo BYO-key — the ONE customer-supplied integration in the SaaS
     # model. Tenants who already pay Apollo can plug their key in to unlock
     # decision-maker contacts + direct dials for verticals where Apollo's

@@ -36,7 +36,9 @@ async def create_search(
     user: User = Depends(get_current_user),
 ):
     """Start a new lead search. Scrapes maps and returns businesses."""
-    if not settings.google_maps_api_key:
+    from app.runtime_config import get_google_maps_api_key
+    maps_key = await get_google_maps_api_key(db)
+    if not maps_key:
         raise HTTPException(status_code=500, detail="Google Maps API key not configured")
 
     # Create search record
@@ -53,7 +55,7 @@ async def create_search(
     businesses = await search_businesses(
         keyword=req.keyword,
         location=req.location,
-        api_key=settings.google_maps_api_key,
+        api_key=maps_key,
         max_results=req.max_results,
     )
 

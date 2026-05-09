@@ -1232,6 +1232,19 @@ function verify(secret, rawBody, header) {
                         <div id="netrows-key-current" style="font-size:11px;color:#888;margin-top:4px"></div>
                     </div>
 
+                    <div class="form-group">
+                        <label>Google Maps API Key
+                            <span id="google-maps-key-status" style="font-size:11px;font-weight:400;color:#888;margin-left:6px"></span>
+                        </label>
+                        <p style="font-size:12px;color:#888;margin:4px 0 8px">Powers Find Leads (Places API + nearby search) and the Auto Pilot campaign runner. Restrict the key in Google Cloud Console to just <code>Places API</code> + <code>Geocoding API</code> + your IP / referrer for safety.</p>
+                        <div style="display:flex;gap:6px">
+                            <input type="password" id="settings-google-maps-key" placeholder="AIza..." autocomplete="off" style="flex:1">
+                            <button class="btn btn-primary" onclick="saveGoogleMapsKey()">Save</button>
+                            <button class="btn btn-secondary" onclick="clearGoogleMapsKey()" title="Revert to env-var default">Clear</button>
+                        </div>
+                        <div id="google-maps-key-current" style="font-size:11px;color:#888;margin-top:4px"></div>
+                    </div>
+
                     <div style="margin-top:24px;padding-top:16px;border-top:1px solid #eee">
                         <h4 style="font-size:14px;margin-bottom:6px">Twilio Voice
                             <span id="twilio-overall-status" style="font-size:11px;font-weight:400;color:#888;margin-left:6px"></span>
@@ -7118,6 +7131,24 @@ hmac.compare_digest(expected, header)</pre>
                 }
             }
 
+            // Google Maps (platform-tier)
+            const gm = cfg.google_maps || {};
+            const gmStatus = document.getElementById('google-maps-key-status');
+            const gmCurrent = document.getElementById('google-maps-key-current');
+            const gmInput = document.getElementById('settings-google-maps-key');
+            if (gmInput) gmInput.value = '';
+            if (gmStatus && gmCurrent) {
+                if (gm.set) {
+                    gmStatus.textContent = `(active · source: ${gm.source})`;
+                    gmStatus.style.color = 'var(--bmp-green)';
+                    gmCurrent.textContent = `Current: ${gm.masked}`;
+                } else {
+                    gmStatus.textContent = '(not set)';
+                    gmStatus.style.color = '#c0392b';
+                    gmCurrent.textContent = 'No key configured. Find Leads + campaign Maps scrapes will fail until you add one.';
+                }
+            }
+
             // Twilio per-field status
             const t = cfg.twilio || {};
             const fields = [
@@ -8650,6 +8681,25 @@ hmac.compare_digest(expected, header)</pre>
                 body: JSON.stringify({ netrows_api_key: '' }),
             });
             if (data) { toast('Netrows key cleared'); loadRuntimeConfig(); }
+        }
+
+        async function saveGoogleMapsKey() {
+            const value = document.getElementById('settings-google-maps-key').value.trim();
+            if (!value) { toast('Paste a key first, or click Clear to revert to env default'); return; }
+            const data = await api('/api/runtime-config', {
+                method: 'PATCH',
+                body: JSON.stringify({ google_maps_api_key: value }),
+            });
+            if (data) { toast('Google Maps key saved'); loadRuntimeConfig(); }
+        }
+
+        async function clearGoogleMapsKey() {
+            if (!confirm('Clear the Google Maps key from the database? (Will fall back to the server\'s environment variable.)')) return;
+            const data = await api('/api/runtime-config', {
+                method: 'PATCH',
+                body: JSON.stringify({ google_maps_api_key: '' }),
+            });
+            if (data) { toast('Google Maps key cleared'); loadRuntimeConfig(); }
         }
 
         // Apollo BYO-key — the one customer-supplied integration. Tenant-tier

@@ -124,6 +124,21 @@ async def set_blooio_signing_secret(db: AsyncSession, value: str) -> RuntimeConf
     return rc
 
 
+async def get_google_maps_api_key(db: AsyncSession) -> str:
+    """DB-first; falls back to env var so rotation doesn't need a redeploy."""
+    rc = await _get_or_create(db)
+    return (rc.google_maps_api_key or "").strip() or settings.google_maps_api_key or ""
+
+
+async def set_google_maps_api_key(db: AsyncSession, value: str) -> RuntimeConfig:
+    rc = await _get_or_create(db)
+    rc.google_maps_api_key = value.strip() or None
+    rc.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(rc)
+    return rc
+
+
 async def get_resend_webhook_secret(db: AsyncSession) -> str:
     """DB value first, env fallback. Lets Steve rotate from Settings UI
     without SSH; env stays as the bootstrap default."""

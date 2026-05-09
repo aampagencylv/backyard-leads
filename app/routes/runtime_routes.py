@@ -23,6 +23,7 @@ from app.runtime_config import (
     set_resend_webhook_secret,
     set_messaging_direction,
     set_apollo_api_key,
+    set_google_maps_api_key,
     DEFAULT_MESSAGING_DIRECTION,
     mask_key,
 )
@@ -43,6 +44,7 @@ class UpdateRuntimeConfigRequest(BaseModel):
     resend_webhook_secret: Optional[str] = None
     messaging_direction: Optional[str] = None
     apollo_api_key: Optional[str] = None  # Tenant-tier (admin can set)
+    google_maps_api_key: Optional[str] = None  # Platform-tier (super_admin only)
 
 
 def _tenant_payload(rc, settings_obj) -> dict:
@@ -126,6 +128,13 @@ def _platform_payload(rc, settings_obj) -> dict:
                 else ("env" if (settings_obj.resend_webhook_secret or "").strip() else "none"),
             "webhook_secret_masked": mask_key((rc.resend_webhook_secret or "").strip() or settings_obj.resend_webhook_secret),
         },
+        "google_maps": {
+            "set": bool((rc.google_maps_api_key or "").strip() or (settings_obj.google_maps_api_key or "").strip()),
+            "source":
+                "database" if (rc.google_maps_api_key or "").strip()
+                else ("env" if (settings_obj.google_maps_api_key or "").strip() else "none"),
+            "masked": mask_key((rc.google_maps_api_key or "").strip() or settings_obj.google_maps_api_key),
+        },
     }
 
 
@@ -193,6 +202,7 @@ async def update_runtime_config(
         req.deepgram_api_key,
         req.blooio_api_key, req.blooio_signing_secret,
         req.resend_webhook_secret,
+        req.google_maps_api_key,
     )
     if any(v is not None for v in platform_changes) and not is_super:
         raise HTTPException(status_code=403, detail="Only super admins can modify platform credentials")
@@ -226,6 +236,8 @@ async def update_runtime_config(
             await set_blooio_signing_secret(db, req.blooio_signing_secret)
         if req.resend_webhook_secret is not None:
             await set_resend_webhook_secret(db, req.resend_webhook_secret)
+        if req.google_maps_api_key is not None:
+            await set_google_maps_api_key(db, req.google_maps_api_key)
 
     # Audit summary — record which fields were touched, never the values
     touched_fields = []
@@ -234,6 +246,7 @@ async def update_runtime_config(
         "twilio_api_key_sid", "twilio_api_key_secret", "twilio_twiml_app_sid",
         "deepgram_api_key", "blooio_api_key", "blooio_signing_secret",
         "resend_webhook_secret", "messaging_direction", "apollo_api_key",
+        "google_maps_api_key",
     ):
         val = getattr(req, field_name)
         if val is not None:
