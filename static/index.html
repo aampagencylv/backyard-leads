@@ -1404,7 +1404,17 @@ function verify(secret, rawBody, header) {
                             <div id="google-cal-since" style="color:#888;font-size:11px"></div>
                             <div style="margin-top:6px"><strong>Booking URL:</strong> <a id="google-cal-booking-link" target="_blank" rel="noopener" style="color:#0077B5"></a></div>
                         </div>
-                        <div style="margin-top:10px">
+                        <div style="margin-top:12px;padding-top:10px;border-top:1px solid #f0f0f0">
+                            <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Which calendar should bookings land on?</label>
+                            <div style="display:flex;gap:6px;align-items:center">
+                                <select id="google-cal-picker" onchange="setBookingCalendar(this.value)" style="flex:1;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                                    <option value="primary">Loading…</option>
+                                </select>
+                                <button class="btn btn-secondary btn-xs" onclick="loadGoogleCalendarList()" title="Refresh calendar list">↻</button>
+                            </div>
+                            <div style="font-size:11px;color:#888;margin-top:4px">Tip: for a clean separation, create a "Discovery Calls" calendar in Google Calendar, then come back and pick it here.</div>
+                        </div>
+                        <div style="margin-top:12px">
                             <button class="btn btn-secondary btn-sm" onclick="disconnectGoogleCalendar()">Disconnect</button>
                         </div>
                     </div>
@@ -6641,6 +6651,7 @@ hmac.compare_digest(expected, header)</pre>
                 }
                 if (rulesSection) rulesSection.style.display = '';
                 loadSchedulingConfig();
+                loadGoogleCalendarList();
             } else {
                 if (status) { status.textContent = '· not connected'; status.style.color = '#888'; }
                 if (notConn) notConn.style.display = '';
@@ -6841,6 +6852,33 @@ hmac.compare_digest(expected, header)</pre>
             if (data && data.disconnected) {
                 toast('Disconnected from Google.');
                 loadGoogleCalendarStatus();
+            }
+        }
+
+        async function loadGoogleCalendarList() {
+            const sel = document.getElementById('google-cal-picker');
+            if (!sel) return;
+            sel.innerHTML = '<option value="primary">Loading…</option>';
+            const data = await api('/api/google/oauth/calendars');
+            if (!data || !data.calendars) {
+                sel.innerHTML = '<option value="primary">Primary (couldn\'t list)</option>';
+                return;
+            }
+            const opts = data.calendars.map(c => {
+                const label = c.summary + (c.primary ? ' (primary)' : '');
+                const sel_ = c.selected ? ' selected' : '';
+                return `<option value="${escapeHtml(c.id)}"${sel_}>${escapeHtml(label)}</option>`;
+            }).join('');
+            sel.innerHTML = opts;
+        }
+
+        async function setBookingCalendar(calendarId) {
+            const data = await api('/api/google/oauth/calendar', {
+                method: 'PATCH',
+                body: JSON.stringify({ calendar_id: calendarId }),
+            });
+            if (data && data.calendar_id) {
+                toast(`Bookings will now land on: ${calendarId === 'primary' ? 'Primary' : calendarId}`);
             }
         }
 

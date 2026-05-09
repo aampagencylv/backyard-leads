@@ -38,9 +38,10 @@ from app.services.google_oauth import (
     GoogleAPIError,
     build_auth_url,
     exchange_code_for_tokens,
-    find_or_create_bookings_calendar,
     get_userinfo,
     is_configured,
+    list_calendars,
+    refresh_access_token,
     revoke_token,
 )
 
@@ -173,14 +174,21 @@ async def google_oauth_callback(
             return RedirectResponse(f"{fail_redirect}&reason=no_refresh_token", status_code=302)
 
         info = await get_userinfo(tokens.access_token)
-        cal_id = await find_or_create_bookings_calendar(tokens.access_token)
     except GoogleAPIError as e:
         log.exception(f"Google OAuth callback failed: {e}")
         return RedirectResponse(f"{fail_redirect}&reason=google_api", status_code=302)
 
     user.google_email = info.email
     user.google_refresh_token = tokens.refresh_token
-    user.google_calendar_id = cal_id
+    # Default to PRIMARY. Reps can switch to any calendar they own via
+    # the dropdown in Settings → Google Calendar (uses calendar.readonly
+    # to list their calendars + the existing token to write events).
+    # We deliberately don't auto-create a dedicated "BMP Bookings"
+    # calendar — that requires the broader calendar.app.created scope,
+    # and most users would rather keep events on their primary calendar
+    # anyway. If they want a dedicated calendar, they create one in
+    # Google Calendar and pick it from our dropdown.
+    user.google_calendar_id = "primary"
     user.google_connected_at = datetime.now(timezone.utc)
     if not user.booking_slug:
         slug_base = _slugify_for_booking(user.first_name, user.last_name)
@@ -205,6 +213,82 @@ async def google_oauth_status(user: User = Depends(get_current_user)):
             if user.booking_slug else None
         ),
     }
+
+
+@router.get("/calendars")
+async def list_my_calendars(user: User = Depends(get_current_user)):
+    """Return the user's calendar list — used by the Settings dropdown
+    to let reps pick which calendar booked events should land on.
+    Filters to calendars where the user has writer/owner access (no
+    point listing read-only shared calendars they can't write to)."""
+    if not user.google_refresh_token:
+        raise HTTPException(status_code=400, detail="Google not connected")
+    try:
+        tokens = await refresh_access_token(user.google_refresh_token)
+        items = await list_calendars(tokens.access_token)
+    except GoogleAPIError as e:
+        log.warning(f"list_my_calendars failed for user {user.id}: {e}")
+        raise HTTPException(status_code=502, detail=f"Google API error: {e.status}")
+    out = []
+    for c in items:
+        access = (c.get("accessRole") or "").lower()
+        if access not in ("writer", "owner"):
+            continue
+        cal_id = c.get("id")
+        out.append({
+            "id": cal_id,
+            "summary": c.get("summary") or cal_id,
+            "primary": bool(c.get("primary")),
+            "background_color": c.get("backgroundColor"),
+            "selected": cal_id == (user.google_calendar_id or "primary"),
+        })
+    # Always include "primary" as a synthetic first option even if
+    # Google's calendarList didn't return it (rare but possible when
+    # the user has hidden their primary from the list).
+    if not any(c["id"] == "primary" or c["primary"] for c in out):
+        out.insert(0, {
+            "id": "primary",
+            "summary": f"Primary ({user.google_email or user.email})",
+            "primary": True,
+            "background_color": None,
+            "selected": (user.google_calendar_id or "primary") == "primary",
+        })
+    return {"calendars": out, "selected_id": user.google_calendar_id or "primary"}
+
+
+from pydantic import BaseModel
+
+
+class _SetCalendarRequest(BaseModel):
+    calendar_id: str
+
+
+@router.patch("/calendar")
+async def set_my_booking_calendar(
+    body: _SetCalendarRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update which calendar new bookings land on. We only validate
+    the picked id against the user's own calendar list, so a rep can't
+    point bookings at someone else's calendar."""
+    if not user.google_refresh_token:
+        raise HTTPException(status_code=400, detail="Google not connected")
+    target = (body.calendar_id or "").strip() or "primary"
+    if target != "primary":
+        try:
+            tokens = await refresh_access_token(user.google_refresh_token)
+            items = await list_calendars(tokens.access_token)
+        except GoogleAPIError as e:
+            raise HTTPException(status_code=502, detail=f"Google API error: {e.status}")
+        owned = {c.get("id") for c in items
+                 if (c.get("accessRole") or "").lower() in ("writer", "owner")}
+        if target not in owned:
+            raise HTTPException(status_code=400,
+                                detail="Calendar not in your list (or you don't have write access)")
+    user.google_calendar_id = target
+    await db.commit()
+    return {"calendar_id": target}
 
 
 @router.post("/disconnect")
