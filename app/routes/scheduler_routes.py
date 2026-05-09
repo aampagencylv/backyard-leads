@@ -291,6 +291,233 @@ async def preview_my_slots(
 
 
 # ============================================================
+# Rep-initiated scheduling — book a meeting *with* a known contact
+# ============================================================
+#
+# This is the "Schedule with Contact" flow Steve asked for: a BDR is
+# looking at a contact card in the CRM and wants to drop a meeting
+# straight onto their calendar without sending the prospect through
+# the public booking page. We re-use the slot generator + Google
+# event creator from the public flow, but:
+#   - The host is the authenticated user (no slug lookup)
+#   - is_active doesn't gate this — the BDR can always book on
+#     their own time, even if they've paused public bookings
+#   - Custom intake questions are skipped — the rep already knows
+#     the contact, no need to gate on form completion
+#   - We mirror the booked event into the CRM via Activity row,
+#     same Activity shape as the public flow so dashboards / hot-
+#     lead detectors don't need to know which path booked it
+
+
+class InternalBookingRequest(BaseModel):
+    contact_id: int
+    starts_at_utc: str
+    custom_meeting_title: Optional[str] = None
+    note: Optional[str] = None  # internal note for the rep, surfaced in event description
+
+
+@host_router.post("/book-for-contact")
+async def book_for_contact(
+    body: InternalBookingRequest,
+    background: BackgroundTasks,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Rep-initiated booking. Validates the slot against the rep's
+    own calendar (same gates as the public booking flow), creates
+    the Google event with both rep + prospect as attendees, and
+    logs an Activity on the matched company timeline."""
+    if not user.google_refresh_token:
+        raise HTTPException(
+            status_code=400,
+            detail="Connect Google Calendar in Calendar Settings first.",
+        )
+
+    # Resolve contact + scope: a sales_rep can only schedule with
+    # contacts whose company they own. Admins / super_admins skip the
+    # ownership gate.
+    contact = (await db.execute(
+        select(Contact).where(Contact.id == body.contact_id)
+    )).scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    company = (await db.execute(
+        select(Company).where(Company.id == contact.company_id)
+    )).scalar_one_or_none()
+    if not company:
+        raise HTTPException(status_code=404, detail="Contact has no company")
+    if user.role == "sales_rep" and company.assigned_to and company.assigned_to != user.id:
+        raise HTTPException(status_code=403, detail="Not your company")
+    if not contact.email:
+        raise HTTPException(status_code=400, detail="Contact has no email — Google requires an attendee email")
+
+    c = await _get_or_create_config(db, user.id)
+    starts_at = _parse_iso_utc(body.starts_at_utc)
+    ends_at = starts_at + timedelta(minutes=c.slot_minutes)
+    now = datetime.now(timezone.utc)
+    if starts_at < now:
+        raise HTTPException(status_code=400, detail="Slot is in the past")
+    # Allow rep-initiated booking up to 90 days out regardless of the
+    # public-booking max_advance_days (which is a prospect-facing UX
+    # cap, not a hard rule).
+    if (starts_at - now).days > max(c.max_advance_days, 90):
+        raise HTTPException(status_code=400, detail="Slot is past the booking window")
+
+    busy, err = await fetch_user_busy(
+        user, time_min=now, time_max=starts_at + timedelta(hours=2),
+    )
+    if err:
+        raise HTTPException(status_code=503, detail="Calendar temporarily unavailable. Please try again.")
+    db_busy = await db_busy_ranges(db, user.id, time_min=now, time_max=starts_at + timedelta(hours=2))
+    slots = generate_slots(
+        c, user.timezone or "America/Phoenix",
+        window_start_utc=now,
+        window_end_utc=starts_at + timedelta(hours=2),
+        busy_ranges=busy, booked_in_db=db_busy, now_utc=now,
+    )
+    if not any(s.starts_at == starts_at for s in slots):
+        raise HTTPException(
+            status_code=409,
+            detail="That time was just taken or is no longer available. Please pick another.",
+        )
+
+    prospect_name = contact.full_name or contact.email
+    prospect_email = contact.email.strip().lower()
+    prospect_phone = contact.phone or ""
+    meeting_title = (body.custom_meeting_title or c.meeting_title).strip() or "Meeting"
+
+    # Build description block — host's standard meeting description
+    # plus the rep's internal note, plus contact context.
+    desc_parts = []
+    if (c.meeting_description or "").strip():
+        desc_parts.append((c.meeting_description or "").strip())
+        desc_parts.append("")
+    desc_parts.append(f"Booked by {user.full_name} for {prospect_name} <{prospect_email}>"
+                      + (f" · {prospect_phone}" if prospect_phone else ""))
+    if company.name:
+        desc_parts.append(f"Company: {company.name}")
+    if body.note:
+        desc_parts.append(f"\nNote: {body.note}")
+
+    # Honor host's meeting_type — same logic as the public flow.
+    meeting_type = (c.meeting_type or "google_meet").lower()
+    location_field: Optional[str] = None
+    with_meet_link = False
+    if meeting_type == "google_meet":
+        with_meet_link = True
+    elif meeting_type == "phone":
+        location_field = (f"Phone — {prospect_phone}" if prospect_phone else "Phone call")
+        if prospect_phone:
+            desc_parts.append(f"\n📞 You'll call {prospect_name} at {prospect_phone}.")
+    elif meeting_type == "in_person":
+        location_field = (c.meeting_location_details or "").strip() or "In person"
+    elif meeting_type == "custom_link":
+        link = (c.meeting_location_details or "").strip()
+        location_field = link or "Online meeting"
+        if link and link.startswith(("http://", "https://")):
+            desc_parts.append(f"\n🔗 Meeting link: {link}")
+
+    try:
+        tokens = await refresh_access_token(user.google_refresh_token)
+    except GoogleAPIError:
+        raise HTTPException(status_code=503, detail="Could not refresh your Google token. Reconnect Calendar.")
+
+    event = {
+        "summary": f"{meeting_title} — {prospect_name}",
+        "description": "\n".join(desc_parts).strip(),
+        "start": {"dateTime": starts_at.isoformat(), "timeZone": "UTC"},
+        "end":   {"dateTime": ends_at.isoformat(),   "timeZone": "UTC"},
+        "attendees": [
+            {"email": prospect_email, "displayName": prospect_name, "responseStatus": "needsAction"},
+            {"email": user.google_email or user.email, "displayName": user.full_name,
+             "responseStatus": "accepted", "organizer": True},
+        ],
+        "reminders": {"useDefault": True},
+    }
+    if location_field:
+        event["location"] = location_field
+    cal_id = user.google_calendar_id or "primary"
+    try:
+        gevent = await create_event(
+            tokens.access_token, cal_id, event,
+            with_meet_link=with_meet_link,
+        )
+    except GoogleAPIError as e:
+        log.exception(f"book-for-contact create_event failed: {e}")
+        raise HTTPException(status_code=502, detail="Could not create the calendar event. Try again.")
+
+    meet_link: Optional[str] = None
+    if with_meet_link:
+        meet_link = gevent.get("hangoutLink")
+        if not meet_link:
+            for ep in ((gevent.get("conferenceData") or {}).get("entryPoints") or []):
+                if ep.get("entryPointType") == "video" and ep.get("uri"):
+                    meet_link = ep["uri"]
+                    break
+
+    booking = Booking(
+        host_user_id=user.id,
+        starts_at=starts_at,
+        ends_at=ends_at,
+        prospect_name=prospect_name[:160],
+        prospect_email=prospect_email[:255],
+        prospect_phone=prospect_phone[:40] or None,
+        prospect_message=(body.note or "")[:2000] or None,
+        company_id=company.id,
+        contact_id=contact.id,
+        google_event_id=gevent.get("id"),
+        google_event_link=gevent.get("htmlLink"),
+        google_meet_link=meet_link,
+        status="confirmed",
+    )
+    db.add(booking)
+
+    db.add(Activity(
+        company_id=company.id,
+        contact_id=contact.id,
+        user_id=user.id,
+        activity_type="meeting_booked",
+        content=(
+            f"Scheduled {meeting_title} with {prospect_name} for "
+            f"{starts_at.astimezone(timezone.utc).isoformat()}"
+        ),
+        metadata_json=json.dumps({
+            "source": "rep_initiated",
+            "host_user_id": user.id,
+            "google_event_id": gevent.get("id"),
+            "google_event_link": gevent.get("htmlLink"),
+            "google_meet_link": meet_link,
+            "meeting_type": meeting_type,
+            "prospect_email": prospect_email,
+        }),
+    ))
+
+    # Bump the company status if it's still in early stages.
+    if company.status in ("new", "pursuing", "sequencing", "contacted"):
+        company.status = "qualified"
+
+    await db.commit()
+    await db.refresh(booking)
+
+    background.add_task(
+        _send_booking_confirmation_email,
+        booking.id, host_name=user.full_name,
+    )
+
+    return {
+        "booked": True,
+        "booking_id": booking.id,
+        "starts_at_utc": starts_at.isoformat(),
+        "ends_at_utc": ends_at.isoformat(),
+        "google_event_link": gevent.get("htmlLink"),
+        "google_meet_link": meet_link,
+        "meeting_type": meeting_type,
+        "host_name": user.full_name,
+        "meeting_title": meeting_title,
+    }
+
+
+# ============================================================
 # Prospect-side public booking
 # ============================================================
 

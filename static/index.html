@@ -3128,6 +3128,9 @@ function verify(secret, rawBody, header) {
                                     ${c.email && c.email_status !== 'valid' && c.email_status !== 'bounced'
                                         ? `<button class="btn btn-secondary btn-xs" onclick="verifyContactEmail(${c.id})">Verify</button>`
                                         : ''}
+                                    ${c.email
+                                        ? `<button class="btn btn-secondary btn-xs" onclick="openScheduleModal(${c.id})" title="Pick a time on your calendar and send the invite">📅 Schedule</button>`
+                                        : ''}
                                 </div>
                             </td>
                         </tr>
@@ -4268,6 +4271,7 @@ function verify(secret, rawBody, header) {
                                 ${c.title ? escapeHtml(c.title) + ' · ' : ''}
                                 ${c.email ? `<a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a>` : '<em>no email</em>'}
                                 ${c.email && !c.unsubscribed_at ? ` · <a onclick="event.stopPropagation();openAdhocComposer(${c.id})" style="color:var(--bmp-orange);cursor:pointer;text-decoration:none;border-bottom:1px dotted var(--bmp-orange)" title="Send a one-off email">📧 Email</a>` : ''}
+                                ${c.email ? ` · <a onclick="event.stopPropagation();openScheduleModal(${c.id})" style="color:#1a73e8;cursor:pointer;text-decoration:none;border-bottom:1px dotted #1a73e8" title="Pick a time on your calendar and send the invite">📅 Schedule</a>` : ''}
                                 ${c.phone ? ` · <a class="call-link" onclick="event.stopPropagation();callContact(${c.id})">${escapeHtml(c.phone)}</a>${renderPhoneTypeBadge(c)}` : ''}
                                 ${c.phone && !c.do_not_text && c.phone_type !== 'landline' ? ` · <a class="sms-link" onclick="event.stopPropagation();openSmsComposer(${c.id})" style="color:#0b93f6;cursor:pointer;text-decoration:none;border-bottom:1px dotted #0b93f6" title="iMessage via Blooio">💬 Message</a>` : ''}
                                 ${c.unsubscribed_at ? ' · <span style="color:#c0392b">UNSUBSCRIBED (email)</span>' : ''}
@@ -7173,6 +7177,164 @@ hmac.compare_digest(expected, header)</pre>
             _schedQuestions.forEach((q, i) => q.position = i);
             _renderBookingQuestions();
             saveSchedulingConfig();
+        }
+
+        // ============================================================
+        // 📅 Schedule with Contact — rep-initiated booking modal
+        // ============================================================
+        // Opens a modal pre-filled with the contact's name + email,
+        // pulls live availability from /api/me/scheduling/preview,
+        // and POSTs to /api/me/scheduling/book-for-contact on submit.
+        // Same slot generator as the public booking page; this is just
+        // the rep-side entry point so a BDR doesn't have to share a
+        // public link with a contact they're already talking to.
+
+        let _scheduleModalState = null;  // { contactId, slots, host_tz, ... }
+
+        async function openScheduleModal(contactId) {
+            // Fetch the contact + the rep's slots in parallel
+            const [contact, preview] = await Promise.all([
+                api(`/api/contacts/${contactId}`),
+                api('/api/me/scheduling/preview?days=14'),
+            ]);
+            if (!contact) {
+                toast('Could not load contact');
+                return;
+            }
+            if (!preview) {
+                toast('Could not load your availability — connect Google Calendar?');
+                return;
+            }
+            if (preview.google_error) {
+                toast('Calendar temporarily unavailable. Try again in a minute.');
+                return;
+            }
+            _scheduleModalState = { contactId, slots: preview.slots || [], selectedUtc: null,
+                                    hostTz: preview.host_timezone || 'America/Phoenix' };
+
+            const root = document.getElementById('modal-root');
+            const slotsHtml = _renderScheduleSlots(preview.slots || [], preview.host_timezone);
+            const contactBlock = `
+                <div style="background:#FFF8F0;border-radius:8px;padding:10px 12px;margin-bottom:12px">
+                    <div style="font-size:13px;color:#333"><strong>${escapeHtml(contact.name || contact.full_name || 'Contact')}</strong>${contact.title ? ` · <span style="color:#666">${escapeHtml(contact.title)}</span>` : ''}</div>
+                    <div style="font-size:12px;color:#666;margin-top:2px">${escapeHtml(contact.email || '(no email)')} ${contact.phone ? '· ' + escapeHtml(contact.phone) : ''}</div>
+                    ${contact.company_name ? `<div style="font-size:11px;color:#888;margin-top:2px">${escapeHtml(contact.company_name)}</div>` : ''}
+                </div>`;
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="closeScheduleModal()">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:680px;max-height:90vh;overflow-y:auto">
+                        <h2 style="margin:0 0 12px">📅 Schedule a Meeting</h2>
+                        ${contactBlock}
+                        <div style="font-size:12px;color:#666;margin-bottom:6px">Pick a time — slots use your calendar's free/busy in <span style="color:#444">${escapeHtml(preview.host_timezone || 'America/Phoenix')}</span></div>
+                        <div id="sched-modal-slots" style="border:1px solid #eee;border-radius:6px;padding:8px;max-height:280px;overflow-y:auto;background:#fafafa">${slotsHtml}</div>
+
+                        <div class="form-group" style="margin-top:14px">
+                            <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Meeting title (optional)</label>
+                            <input id="sched-modal-title" placeholder="Discovery Call" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px;box-sizing:border-box">
+                        </div>
+                        <div class="form-group" style="margin-top:8px">
+                            <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Note for the calendar invite (optional)</label>
+                            <textarea id="sched-modal-note" rows="2" placeholder="Quick context that goes in the event description…" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px;box-sizing:border-box;font-family:inherit"></textarea>
+                        </div>
+
+                        <div id="sched-modal-summary" style="font-size:13px;color:#666;margin-top:12px;min-height:18px"></div>
+
+                        <div class="modal-actions" style="display:flex;gap:8px;margin-top:14px">
+                            <button class="btn btn-secondary" onclick="closeScheduleModal()">Cancel</button>
+                            <button class="btn btn-primary" id="sched-modal-submit" onclick="submitScheduleModal()" disabled>Send invite</button>
+                        </div>
+                        <div id="sched-modal-err" style="color:#c0392b;font-size:12px;margin-top:8px"></div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function _renderScheduleSlots(slots, hostTz) {
+            if (!slots || !slots.length) {
+                return '<div style="font-size:12px;color:#888;text-align:center;padding:20px">No available slots in the next 14 days. Add weekly hours in Calendar → Settings.</div>';
+            }
+            const byDay = {};
+            for (const s of slots) {
+                const dayKey = s.starts_at_local.slice(0, 10);
+                if (!byDay[dayKey]) byDay[dayKey] = [];
+                byDay[dayKey].push(s);
+            }
+            const days = Object.keys(byDay).sort().slice(0, 14);
+            return days.map(d => {
+                const dt = new Date(d + 'T00:00:00');
+                const dayLabel = dt.toLocaleDateString(undefined, { weekday:'short', month:'short', day:'numeric' });
+                const buttons = byDay[d].slice(0, 16).map(s => {
+                    const t = new Date(s.starts_at_local).toLocaleTimeString(undefined, { hour:'numeric', minute:'2-digit' });
+                    return `<button type="button" class="sched-slot-btn" data-utc="${encodeURIComponent(s.starts_at_utc)}" data-local="${encodeURIComponent(s.starts_at_local)}" onclick="selectScheduleSlot(this)" style="padding:5px 10px;background:white;border:1px solid #e6e6e6;border-radius:4px;cursor:pointer;font-size:12px;color:#333;margin:2px 4px 2px 0">${t}</button>`;
+                }).join('');
+                return `<div style="margin-bottom:10px">
+                    <div style="font-size:11px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">${dayLabel}</div>
+                    <div>${buttons}</div>
+                </div>`;
+            }).join('');
+        }
+
+        function selectScheduleSlot(btn) {
+            document.querySelectorAll('.sched-slot-btn').forEach(b => {
+                b.style.background = 'white';
+                b.style.borderColor = '#e6e6e6';
+                b.style.color = '#333';
+            });
+            btn.style.background = 'var(--bmp-orange)';
+            btn.style.borderColor = 'var(--bmp-orange)';
+            btn.style.color = 'white';
+            const utc = decodeURIComponent(btn.dataset.utc);
+            const local = decodeURIComponent(btn.dataset.local);
+            _scheduleModalState.selectedUtc = utc;
+            const dt = new Date(local);
+            const dayLabel = dt.toLocaleDateString(undefined, { weekday:'long', month:'short', day:'numeric' });
+            const tLabel = dt.toLocaleTimeString(undefined, { hour:'numeric', minute:'2-digit' });
+            document.getElementById('sched-modal-summary').innerHTML =
+                `<strong style="color:var(--bmp-orange)">${dayLabel} at ${tLabel}</strong>`;
+            const submit = document.getElementById('sched-modal-submit');
+            if (submit) submit.disabled = false;
+        }
+
+        async function submitScheduleModal() {
+            const state = _scheduleModalState;
+            if (!state || !state.selectedUtc) return;
+            const errEl = document.getElementById('sched-modal-err');
+            errEl.textContent = '';
+            const submit = document.getElementById('sched-modal-submit');
+            submit.disabled = true;
+            submit.textContent = 'Booking…';
+            const data = await api('/api/me/scheduling/book-for-contact', {
+                method: 'POST',
+                body: JSON.stringify({
+                    contact_id: state.contactId,
+                    starts_at_utc: state.selectedUtc,
+                    custom_meeting_title: document.getElementById('sched-modal-title').value.trim() || null,
+                    note: document.getElementById('sched-modal-note').value.trim() || null,
+                }),
+            });
+            if (!data || !data.booked) {
+                // api() already toasted the error; surface inline too
+                errEl.textContent = (data && data.detail) || 'Booking failed. Try a different slot.';
+                submit.disabled = false;
+                submit.textContent = 'Send invite';
+                return;
+            }
+            const linkBit = data.google_meet_link
+                ? ` · <a href="${data.google_meet_link}" target="_blank" rel="noopener" style="color:#1a73e8">Meet link</a>`
+                : (data.google_event_link ? ` · <a href="${data.google_event_link}" target="_blank" rel="noopener" style="color:#0077B5">View event</a>` : '');
+            toast(`✅ Meeting booked${linkBit ? ' (Meet link in invite)' : ''}`);
+            closeScheduleModal();
+            // Refresh the open company detail so the new Activity shows on the timeline
+            const detailEl = document.getElementById('page-company-detail');
+            if (detailEl && !detailEl.classList.contains('hidden')) {
+                const companyMatch = location.hash.match(/company\/(\d+)/);
+                if (companyMatch) openCompanyDetail(parseInt(companyMatch[1]));
+            }
+        }
+
+        function closeScheduleModal() {
+            _scheduleModalState = null;
+            document.getElementById('modal-root').innerHTML = '';
         }
 
         // ============================================================
