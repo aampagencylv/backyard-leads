@@ -1341,6 +1341,58 @@ function verify(secret, rawBody, header) {
                             </div>
                         </details>
 
+                        <details style="border-top:1px solid #f0f0f0;padding-top:12px;margin-top:12px">
+                            <summary style="cursor:pointer;font-size:13px;color:#444;font-weight:500">🎨 Look &amp; feel</summary>
+                            <div style="margin-top:14px">
+                                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+                                    <div>
+                                        <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Brand color</label>
+                                        <div style="display:flex;gap:6px;align-items:center">
+                                            <input type="color" id="sched-brand-color" oninput="onBrandColorChange()" onchange="saveSchedulingConfig()" style="width:48px;height:34px;padding:2px;border:1px solid #ddd;border-radius:4px;cursor:pointer">
+                                            <input type="text" id="sched-brand-color-hex" oninput="syncBrandHexInput()" onblur="saveSchedulingConfig()" maxlength="7" pattern="^#[0-9a-fA-F]{6}$" placeholder="#E65100" style="flex:1;padding:7px;border:1px solid #ddd;border-radius:4px;font-size:13px;font-family:monospace">
+                                        </div>
+                                        <div style="font-size:11px;color:#888;margin-top:4px">Buttons, selected slots, accents.</div>
+                                    </div>
+                                    <div>
+                                        <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Soft accent color</label>
+                                        <div style="display:flex;gap:6px;align-items:center">
+                                            <input type="color" id="sched-accent-color" oninput="onAccentColorChange()" onchange="saveSchedulingConfig()" style="width:48px;height:34px;padding:2px;border:1px solid #ddd;border-radius:4px;cursor:pointer">
+                                            <input type="text" id="sched-accent-color-hex" oninput="syncAccentHexInput()" onblur="saveSchedulingConfig()" maxlength="7" pattern="^#[0-9a-fA-F]{6}$" placeholder="#FFF8F0" style="flex:1;padding:7px;border:1px solid #ddd;border-radius:4px;font-size:13px;font-family:monospace">
+                                        </div>
+                                        <div style="font-size:11px;color:#888;margin-top:4px">Header gradient + selected backgrounds.</div>
+                                    </div>
+                                </div>
+                                <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 12px;align-items:center;font-size:12px;margin-bottom:12px">
+                                    <label style="color:#666">Logo URL</label>
+                                    <input id="sched-logo-url" oninput="_refreshBrandPreviewFromInputs()" onchange="saveSchedulingConfig()" placeholder="https://example.com/logo.png" style="padding:7px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                                </div>
+                                <div style="font-size:11px;color:#888;margin-bottom:8px">Logo URL must be HTTPS — http images get blocked by browsers on the secure booking page.</div>
+
+                                <!-- Mini live preview — reflects current values as you change them -->
+                                <div style="margin-top:8px">
+                                    <div style="font-size:11px;color:#666;margin-bottom:4px">Preview</div>
+                                    <div id="sched-preview-mini" style="border:1px solid #e6e6e6;border-radius:8px;overflow:hidden;background:white">
+                                        <div id="sched-preview-header" style="padding:14px 16px;background:linear-gradient(135deg,#FFF8F0,#fff);border-bottom:1px solid #f1ebe5">
+                                            <img id="sched-preview-logo" src="" alt="" style="display:none;max-height:24px;margin-bottom:6px">
+                                            <div id="sched-preview-title" style="font-size:14px;font-weight:600;color:#1a1a1a">Book a Discovery Call</div>
+                                            <div style="font-size:11px;color:#666;margin-top:2px">Mini preview — open booking page for full view</div>
+                                        </div>
+                                        <div style="padding:12px 16px;display:flex;gap:8px;flex-wrap:wrap">
+                                            <button id="sched-preview-slot-on" type="button" style="background:#E65100;color:white;border:0;padding:5px 10px;border-radius:5px;font-size:11px;cursor:default">10:30 AM</button>
+                                            <button id="sched-preview-slot-off" type="button" style="background:white;border:1px solid #e6e6e6;padding:5px 10px;border-radius:5px;font-size:11px;color:#333;cursor:default">11:00 AM</button>
+                                            <button id="sched-preview-slot-off2" type="button" style="background:white;border:1px solid #e6e6e6;padding:5px 10px;border-radius:5px;font-size:11px;color:#333;cursor:default">11:30 AM</button>
+                                            <button id="sched-preview-cta" type="button" style="background:#E65100;color:white;border:0;padding:7px 14px;border-radius:5px;font-size:11px;cursor:default;margin-left:auto">Confirm booking</button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+                                    <button class="btn btn-secondary btn-xs" onclick="resetBrandColors()">Reset to defaults</button>
+                                    <a id="sched-open-public-link" href="#" target="_blank" rel="noopener" style="font-size:11px;color:#0077B5;text-decoration:none;display:none">Open booking page in new tab →</a>
+                                </div>
+                            </div>
+                        </details>
+
                         <div style="margin-top:14px;display:flex;gap:8px;align-items:center">
                             <button class="btn btn-secondary btn-sm" onclick="previewSchedulingSlots()">👁️ Preview slots (next 7 days)</button>
                             <span id="sched-preview-status" style="font-size:11px;color:#888"></span>
@@ -6887,6 +6939,19 @@ hmac.compare_digest(expected, header)</pre>
             set('sched-meeting-desc', data.meeting_description);
             set('sched-meeting-type', data.meeting_type || 'google_meet');
             set('sched-meeting-loc-details', data.meeting_location_details || '');
+            set('sched-brand-color', data.brand_color || '#E65100');
+            set('sched-brand-color-hex', data.brand_color || '#E65100');
+            set('sched-accent-color', data.accent_bg_color || '#FFF8F0');
+            set('sched-accent-color-hex', data.accent_bg_color || '#FFF8F0');
+            set('sched-logo-url', data.logo_url || '');
+            _applyBrandPreview(data.brand_color || '#E65100', data.accent_bg_color || '#FFF8F0', data.logo_url || '');
+            // Wire the "open public page" link in Look & feel
+            const link = document.getElementById('cal-page-booking-link');
+            const openLink = document.getElementById('sched-open-public-link');
+            if (openLink && link && link.href) {
+                openLink.href = link.href;
+                openLink.style.display = '';
+            }
             _renderMeetingTypeFields(data.meeting_type || 'google_meet');
             _schedQuestions = (data.questions || []).slice();
             _renderBookingQuestions();
@@ -6926,6 +6991,9 @@ hmac.compare_digest(expected, header)</pre>
                     meeting_type: txt('sched-meeting-type'),
                     meeting_location_details: txt('sched-meeting-loc-details'),
                     questions: _schedQuestions,
+                    brand_color: txt('sched-brand-color-hex') || txt('sched-brand-color'),
+                    accent_bg_color: txt('sched-accent-color-hex') || txt('sched-accent-color'),
+                    logo_url: txt('sched-logo-url'),
                 };
                 const data = await api('/api/me/scheduling/config', {
                     method: 'PATCH',
@@ -7098,6 +7166,83 @@ hmac.compare_digest(expected, header)</pre>
             _schedQuestions[target] = tmp;
             _schedQuestions.forEach((q, i) => q.position = i);
             _renderBookingQuestions();
+            saveSchedulingConfig();
+        }
+
+        // ============================================================
+        // Booking page Look & feel — brand color pickers + mini preview
+        // ============================================================
+
+        // Lightweight hex check; mirrors server validation.
+        function _isHex(s) { return typeof s === 'string' && /^#[0-9a-fA-F]{6}$/.test(s); }
+
+        function _applyBrandPreview(brand, accent, logoUrl) {
+            const safeBrand = _isHex(brand) ? brand : '#E65100';
+            const safeAccent = _isHex(accent) ? accent : '#FFF8F0';
+            const header = document.getElementById('sched-preview-header');
+            const slotOn = document.getElementById('sched-preview-slot-on');
+            const cta = document.getElementById('sched-preview-cta');
+            const logo = document.getElementById('sched-preview-logo');
+            if (header) header.style.background = `linear-gradient(135deg, ${safeAccent}, #fff)`;
+            if (slotOn) { slotOn.style.background = safeBrand; slotOn.style.borderColor = safeBrand; }
+            if (cta) cta.style.background = safeBrand;
+            if (logo) {
+                if (logoUrl && logoUrl.startsWith('https://')) {
+                    logo.src = logoUrl;
+                    logo.style.display = 'block';
+                } else {
+                    logo.style.display = 'none';
+                    logo.removeAttribute('src');
+                }
+            }
+        }
+
+        function _refreshBrandPreviewFromInputs() {
+            const brand = document.getElementById('sched-brand-color-hex').value
+                       || document.getElementById('sched-brand-color').value;
+            const accent = document.getElementById('sched-accent-color-hex').value
+                        || document.getElementById('sched-accent-color').value;
+            const logo = document.getElementById('sched-logo-url').value;
+            _applyBrandPreview(brand, accent, logo);
+        }
+
+        // Color picker → hex text input. Fires on every drag tick so
+        // the preview tracks live.
+        function onBrandColorChange() {
+            const v = document.getElementById('sched-brand-color').value;
+            document.getElementById('sched-brand-color-hex').value = v;
+            _refreshBrandPreviewFromInputs();
+        }
+        function onAccentColorChange() {
+            const v = document.getElementById('sched-accent-color').value;
+            document.getElementById('sched-accent-color-hex').value = v;
+            _refreshBrandPreviewFromInputs();
+        }
+
+        // Hex text input → color picker. Only sync the picker (which
+        // requires a strict #RRGGBB) when the input is a valid hex —
+        // we don't want to clobber what the user is mid-typing.
+        function syncBrandHexInput() {
+            const v = document.getElementById('sched-brand-color-hex').value.trim();
+            if (_isHex(v)) document.getElementById('sched-brand-color').value = v;
+            _refreshBrandPreviewFromInputs();
+        }
+        function syncAccentHexInput() {
+            const v = document.getElementById('sched-accent-color-hex').value.trim();
+            if (_isHex(v)) document.getElementById('sched-accent-color').value = v;
+            _refreshBrandPreviewFromInputs();
+        }
+
+        // Defaults — match the server-side _DEFAULT_BRAND / _DEFAULT_ACCENT_BG.
+        function resetBrandColors() {
+            const brand = '#E65100';
+            const accent = '#FFF8F0';
+            document.getElementById('sched-brand-color').value = brand;
+            document.getElementById('sched-brand-color-hex').value = brand;
+            document.getElementById('sched-accent-color').value = accent;
+            document.getElementById('sched-accent-color-hex').value = accent;
+            document.getElementById('sched-logo-url').value = '';
+            _refreshBrandPreviewFromInputs();
             saveSchedulingConfig();
         }
 

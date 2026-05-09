@@ -1031,6 +1031,20 @@ class SchedulingConfig(Base):
     # this array. Answers persist on Booking.answers_json.
     booking_questions_json = Column(Text, nullable=True)
 
+    # Public-booking-page brand customization. Hex strings (#RRGGBB).
+    # `brand_color`        → buttons, slot-button selected/hover, radio
+    #                        selected border + text, accent.
+    # `accent_bg_color`    → soft tinted backgrounds (slot-row hover,
+    #                        radio-option selected bg, header gradient
+    #                        starts here).
+    # `logo_url`           → optional. If set, renders above page-headline
+    #                        in the booking-page header. Customer-supplied
+    #                        URL — must be HTTPS for the image to load
+    #                        cleanly inside our HTTPS page.
+    brand_color = Column(String(20), nullable=False, default="#E65100")
+    accent_bg_color = Column(String(20), nullable=False, default="#FFF8F0")
+    logo_url = Column(String(500), nullable=True)
+
     # Public visibility — admin can deactivate without disconnecting Google
     is_active = Column(Boolean, default=True, nullable=False)
 

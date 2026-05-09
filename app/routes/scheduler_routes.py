@@ -65,7 +65,23 @@ async def _get_or_create_config(db: AsyncSession, user_id: int) -> SchedulingCon
 
 
 _VALID_QUESTION_TYPES = {"short_text", "long_text", "url", "single_select"}
-_DEFAULT_BOOKING_QUESTIONS = []  # Empty by default — name/email/phone/message are always shown.
+_DEFAULT_BOOKING_QUESTIONS = []  # Empty by default — name/email/phone are always shown.
+
+_HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+_DEFAULT_BRAND = "#E65100"
+_DEFAULT_ACCENT_BG = "#FFF8F0"
+
+
+def _normalize_hex(s: Optional[str], fallback: str) -> str:
+    """Validate + normalize a hex string. Bad input → fallback. We
+    intentionally don't accept #RGB short-form to keep the surface
+    narrow — color picker UIs always emit #RRGGBB."""
+    if not s:
+        return fallback
+    s = s.strip()
+    if _HEX_COLOR_RE.match(s):
+        return s.lower() if s.startswith("#") else f"#{s.lower()}"
+    return fallback
 
 
 def _config_payload(c: SchedulingConfig) -> dict:
@@ -85,6 +101,9 @@ def _config_payload(c: SchedulingConfig) -> dict:
         "meeting_type": c.meeting_type or "google_meet",
         "meeting_location_details": c.meeting_location_details or "",
         "questions": json.loads(c.booking_questions_json) if c.booking_questions_json else _DEFAULT_BOOKING_QUESTIONS,
+        "brand_color": _normalize_hex(c.brand_color, _DEFAULT_BRAND),
+        "accent_bg_color": _normalize_hex(c.accent_bg_color, _DEFAULT_ACCENT_BG),
+        "logo_url": c.logo_url or "",
     }
 
 
@@ -113,6 +132,9 @@ class SchedulingConfigPatch(BaseModel):
     meeting_type: Optional[str] = None
     meeting_location_details: Optional[str] = None
     questions: Optional[list] = None
+    brand_color: Optional[str] = None
+    accent_bg_color: Optional[str] = None
+    logo_url: Optional[str] = None
 
 
 def _validate_questions(raw: list) -> list:
@@ -224,6 +246,17 @@ async def patch_my_scheduling_config(
         c.meeting_location_details = body.meeting_location_details.strip()[:1000] or None
     if body.questions is not None:
         c.booking_questions_json = json.dumps(_validate_questions(body.questions))
+    if body.brand_color is not None:
+        c.brand_color = _normalize_hex(body.brand_color, _DEFAULT_BRAND)
+    if body.accent_bg_color is not None:
+        c.accent_bg_color = _normalize_hex(body.accent_bg_color, _DEFAULT_ACCENT_BG)
+    if body.logo_url is not None:
+        url = body.logo_url.strip()[:500]
+        # Reject non-https logo URLs — embedding http:// images in our
+        # https booking page triggers mixed-content blocks in browsers.
+        if url and not url.startswith("https://"):
+            raise HTTPException(status_code=400, detail="Logo URL must start with https://")
+        c.logo_url = url or None
     await db.commit()
     await db.refresh(c)
     return _config_payload(c)
@@ -708,25 +741,54 @@ async def render_booking_page(slug: str, db: AsyncSession = Depends(get_db)):
             "<p>The host hasn't connected their calendar.</p></body></html>",
             status_code=503, headers=no_cache_headers,
         )
-    return HTMLResponse(_render_booking_html(slug), headers=no_cache_headers)
+    # Pull brand customization from the host's config so the CSS
+    # variables get baked into the page at render time — avoids the
+    # "flash of default colors" you'd get if we set them via JS after
+    # the API call. Cache-Control: no-store means brand changes are
+    # visible immediately on the next page load.
+    cfg = await _get_or_create_config(db, user.id)
+    brand = _normalize_hex(cfg.brand_color, _DEFAULT_BRAND)
+    accent = _normalize_hex(cfg.accent_bg_color, _DEFAULT_ACCENT_BG)
+    logo_url = cfg.logo_url or ""
+    return HTMLResponse(
+        _render_booking_html(slug, brand=brand, accent=accent, logo_url=logo_url),
+        headers=no_cache_headers,
+    )
 
 
-def _render_booking_html(slug: str) -> str:
+def _render_booking_html(
+    slug: str, *, brand: str = _DEFAULT_BRAND,
+    accent: str = _DEFAULT_ACCENT_BG, logo_url: str = "",
+) -> str:
     """The booking page template. Vanilla JS — no React/build step.
     Loads slots via /api/book/{slug}/info, groups by day in the
     visitor's local TZ, lets them pick a time, fills in name/email/
-    phone, then POSTs to /confirm. Designed to be brand-agnostic
-    enough that swapping logo + colors makes it tenant-skinnable in
-    the SaaS world."""
+    phone, then POSTs to /confirm.
+
+    Brand customization is server-rendered into CSS variables so the
+    page paints in the right colors with no flash. Pass `brand`
+    (primary), `accent` (soft tint backgrounds), and an optional
+    `logo_url` (https only — http would trigger mixed-content blocks)."""
+    # Build the slug + brand JSON literals once; the rest of the JS is
+    # static. Using json.dumps preserves quoting + escapes.
+    logo_block = (
+        f'<img src="{logo_url}" alt="" style="max-height:48px;max-width:200px;'
+        f'display:block;margin-bottom:12px" '
+        f'onerror="this.style.display=\'none\'">'
+    ) if logo_url and logo_url.startswith("https://") else ""
     return r"""<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Book a Discovery Call — BMP</title>
+<title>Book a Discovery Call</title>
 <style>
+  :root {
+    --brand: """ + brand + r""";
+    --brand-soft: """ + accent + r""";
+  }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background:#fafafa; color:#222; margin:0; padding:20px; }
   .wrap { max-width:780px; margin:30px auto; background:white; border-radius:14px; box-shadow:0 4px 20px rgba(0,0,0,0.06); overflow:hidden; }
-  header { background:linear-gradient(135deg,#FFF8F0,#fff); padding:28px 32px; border-bottom:1px solid #f1ebe5; }
+  header { background:linear-gradient(135deg, var(--brand-soft), #fff); padding:28px 32px; border-bottom:1px solid #f1ebe5; }
   header h1 { margin:0; font-size:24px; color:#1a1a1a; }
   header .intro { color:#666; font-size:14px; margin-top:6px; line-height:1.55; }
   .body { padding:24px 32px; }
@@ -737,8 +799,8 @@ def _render_booking_html(slug: str) -> str:
   .day { margin-bottom:12px; }
   .day h4 { margin:0 0 6px; font-size:13px; color:#666; text-transform:uppercase; letter-spacing:0.5px; }
   .slot-btn { display:block; width:100%; text-align:left; padding:8px 12px; margin:4px 0; background:white; border:1px solid #e6e6e6; border-radius:6px; cursor:pointer; font-size:13px; color:#333; transition:all 0.15s; }
-  .slot-btn:hover { border-color:#E65100; color:#E65100; }
-  .slot-btn.selected { background:#E65100; color:white; border-color:#E65100; }
+  .slot-btn:hover { border-color:var(--brand); color:var(--brand); }
+  .slot-btn.selected { background:var(--brand); color:white; border-color:var(--brand); }
   .form-pane { padding-left:14px; }
   @media (max-width:680px){ .form-pane { padding-left:0; } }
   .form-pane h3 { margin:0 0 10px; font-size:15px; }
@@ -749,20 +811,22 @@ def _render_booking_html(slug: str) -> str:
   .form-pane input[type="radio"] { margin:0; cursor:pointer; }
   .form-pane .radio-group { margin-top:4px; }
   .form-pane .radio-option { display:flex; align-items:center; gap:8px; padding:6px 8px; margin-top:4px; border:1px solid transparent; border-radius:6px; font-size:13px; color:#333; cursor:pointer; transition:all 0.12s; }
-  .form-pane .radio-option:hover { background:#FFF8F0; }
-  .form-pane .radio-option:has(input:checked) { background:#FFF8F0; border-color:#E65100; color:#E65100; }
-  .form-pane button { background:#E65100; color:white; border:0; padding:11px 18px; border-radius:6px; font-size:14px; cursor:pointer; margin-top:14px; font-weight:600; }
+  .form-pane .radio-option:hover { background:var(--brand-soft); }
+  .form-pane .radio-option:has(input:checked) { background:var(--brand-soft); border-color:var(--brand); color:var(--brand); }
+  .form-pane button { background:var(--brand); color:white; border:0; padding:11px 18px; border-radius:6px; font-size:14px; cursor:pointer; margin-top:14px; font-weight:600; }
   .form-pane button:disabled { background:#ccc; cursor:not-allowed; }
-  .selected-summary { padding:10px 12px; background:#FFF8F0; border-radius:6px; font-size:13px; margin-bottom:8px; color:#333; }
+  .selected-summary { padding:10px 12px; background:var(--brand-soft); border-radius:6px; font-size:13px; margin-bottom:8px; color:#333; }
   .err { color:#c0392b; font-size:13px; margin-top:10px; }
   .empty { color:#888; font-size:13px; padding:20px; text-align:center; }
   .booked { text-align:center; padding:40px 20px; }
   .booked h2 { color:#1b5e20; }
+  .booked .cta-link { background:var(--brand); }
 </style>
 </head>
 <body>
   <div class="wrap" id="root">
     <header>
+      """ + logo_block + r"""
       <h1 id="page-headline">Loading…</h1>
       <div class="intro" id="page-intro"></div>
       <div style="font-size:11px;color:#888;margin-top:8px"><span id="meeting-meta"></span></div>
@@ -956,7 +1020,7 @@ async function confirmBooking() {
       <p><strong>${fmtDay(selectedSlot.local)} at ${fmtTime(selectedSlot.local)}</strong></p>
       <p>A calendar invite is on its way to <strong>${escapeHtml(email)}</strong>.</p>
       ${locLine}
-      ${data.google_event_link ? `<p style="margin-top:10px"><a href="${escapeHtml(data.google_event_link)}" style="color:#0077B5;font-size:12px">View on your calendar</a></p>` : ''}
+      ${data.google_event_link ? `<p style="margin-top:10px"><a href="${escapeHtml(data.google_event_link)}" style="color:var(--brand);font-size:12px">View on your calendar</a></p>` : ''}
       <p style="color:#888;font-size:13px;margin-top:18px">Talk soon,<br>${escapeHtml(data.host_name)}</p>
     </div>
   `;
