@@ -234,6 +234,11 @@ confirmed they're live. Each retains its design history in git.
    below; OAuth scope covers (a) Gmail send for users who prefer it
    over Resend, (b) calendar availability reads, (c) Sign-in-with-Google
    for user auth.
+   - **Audit page logo upload follow-up:** the generic
+     `POST /api/uploads/logo` endpoint shipped with the booking-page
+     branding work. When we touch the audit reports next, swap the
+     hardcoded BMP logo for a per-org uploaded one using the same
+     endpoint + a settings UI mirror of Calendar's "Look & feel" panel.
 3. **Missive sidebar app (Inbox capture Phase B)** — hosted at
    `/missive-sidebar`, iframe-embedded, matches company/contact on
    From address. "Add to CRM" if not found, full card + actions if

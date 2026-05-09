@@ -32,6 +32,7 @@ from app.routes import (
     integration_routes,
     google_oauth_routes,
     scheduler_routes,
+    upload_routes,
 )
 
 
@@ -194,9 +195,16 @@ app.include_router(google_oauth_routes.router)
 app.include_router(scheduler_routes.host_router)
 app.include_router(scheduler_routes.public_router)
 app.include_router(scheduler_routes.booking_page_router)
+app.include_router(upload_routes.router)
 
-# Serve static frontend
+# Serve static frontend + user-uploaded files (logos, etc.).
+# var/uploads/ is gitignored and persists across deploys; ensure the
+# directory exists before mounting so Starlette doesn't error at boot
+# on a fresh checkout.
+from app.services.uploads import ensure_upload_dirs
+ensure_upload_dirs()
 app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/uploads", StaticFiles(directory="var/uploads"), name="uploads")
 
 
 @app.get("/", response_class=HTMLResponse)

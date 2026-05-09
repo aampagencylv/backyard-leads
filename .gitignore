@@ -4,3 +4,6 @@ __pycache__/
 leads.db
 venv/
 .venv/
+
+# User-uploaded files (logos, etc.) — persisted on the VPS, not in git
+var/

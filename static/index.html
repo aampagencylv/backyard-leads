@@ -1362,9 +1362,15 @@ function verify(secret, rawBody, header) {
                                         <div style="font-size:11px;color:#888;margin-top:4px">Header gradient + selected backgrounds.</div>
                                     </div>
                                 </div>
-                                <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 12px;align-items:center;font-size:12px;margin-bottom:12px">
-                                    <label style="color:#666">Logo URL</label>
-                                    <input id="sched-logo-url" oninput="_refreshBrandPreviewFromInputs()" onchange="saveSchedulingConfig()" placeholder="https://example.com/logo.png" style="padding:7px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                                <div style="margin-bottom:12px">
+                                    <label style="color:#666;font-size:12px;display:block;margin-bottom:4px">Logo</label>
+                                    <div style="display:flex;gap:6px;align-items:stretch;flex-wrap:wrap">
+                                        <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('sched-logo-file').click()">📤 Upload image</button>
+                                        <input type="file" id="sched-logo-file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" onchange="onLogoFilePicked(this)" style="display:none">
+                                        <input id="sched-logo-url" oninput="_refreshBrandPreviewFromInputs()" onchange="saveSchedulingConfig()" placeholder="…or paste an https://… URL" style="flex:1;min-width:200px;padding:7px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                                        <button type="button" class="btn btn-secondary btn-sm" onclick="clearLogoUrl()" title="Remove logo">✕</button>
+                                    </div>
+                                    <div id="sched-logo-status" style="font-size:11px;color:#888;margin-top:4px">PNG / JPG / WebP / SVG / GIF · 2&nbsp;MB max · stored on prospector.backyardmarketingpros.com</div>
                                 </div>
                                 <div style="font-size:11px;color:#888;margin-bottom:8px">Logo URL must be HTTPS — http images get blocked by browsers on the secure booking page.</div>
 
@@ -7231,6 +7237,47 @@ hmac.compare_digest(expected, header)</pre>
             const v = document.getElementById('sched-accent-color-hex').value.trim();
             if (_isHex(v)) document.getElementById('sched-accent-color').value = v;
             _refreshBrandPreviewFromInputs();
+        }
+
+        // Logo file upload — sends multipart/form-data to /api/uploads/logo,
+        // gets back an absolute URL, populates the URL input, refreshes
+        // preview, and triggers the standard config save.
+        async function onLogoFilePicked(inputEl) {
+            const file = inputEl.files && inputEl.files[0];
+            if (!file) return;
+            const status = document.getElementById('sched-logo-status');
+            if (status) { status.textContent = `Uploading ${file.name} (${Math.round(file.size/1024)}KB)…`; status.style.color = '#888'; }
+
+            const fd = new FormData();
+            fd.append('file', file);
+            const token = localStorage.getItem('access_token');
+            try {
+                const r = await fetch('/api/uploads/logo', {
+                    method: 'POST',
+                    headers: { Authorization: `Bearer ${token}` },
+                    body: fd,
+                });
+                const data = await r.json().catch(() => ({}));
+                if (!r.ok || !data.url) {
+                    if (status) { status.textContent = `✗ ${data.detail || 'Upload failed'}`; status.style.color = '#c0392b'; }
+                    inputEl.value = '';  // reset file input so user can retry same file
+                    return;
+                }
+                document.getElementById('sched-logo-url').value = data.url;
+                _refreshBrandPreviewFromInputs();
+                await saveSchedulingConfig();
+                if (status) { status.textContent = `✓ Uploaded · ${Math.round(data.size_bytes/1024)}KB`; status.style.color = '#1b5e20'; }
+                inputEl.value = '';  // allow re-uploading same filename
+            } catch (e) {
+                if (status) { status.textContent = `✗ Upload failed: ${e.message || e}`; status.style.color = '#c0392b'; }
+                inputEl.value = '';
+            }
+        }
+
+        function clearLogoUrl() {
+            document.getElementById('sched-logo-url').value = '';
+            _refreshBrandPreviewFromInputs();
+            saveSchedulingConfig();
         }
 
         // Defaults — match the server-side _DEFAULT_BRAND / _DEFAULT_ACCENT_BG.
