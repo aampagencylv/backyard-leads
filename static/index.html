@@ -3853,7 +3853,10 @@ function verify(secret, rawBody, header) {
                                     ${c.title ? `<div style="font-size:11px;color:#888">${escapeHtml(c.title)}</div>` : ''}
                                     ${c.email ? `<div style="font-size:11px;color:var(--bmp-orange)">${escapeHtml(c.email)}</div>` : '<div style="font-size:11px;color:#ccc">no email</div>'}
                                     ${c.phone ? `<div style="font-size:11px"><a class="call-link" onclick="event.stopPropagation();callContact(${c.id})">${escapeHtml(c.phone)}</a>${renderPhoneTypeBadge(c)}${c.do_not_text ? ` · <span style="color:#c0392b">opted out</span>` : (c.phone_type === 'landline' ? '' : ` · <a class="sms-link" onclick="event.stopPropagation();openSmsComposer(${c.id})" style="color:#0b93f6;cursor:pointer;text-decoration:none;border-bottom:1px dotted #0b93f6" title="iMessage via Blooio">💬 Message</a>`)}</div>` : ''}
-                                    ${c.email && !c.unsubscribed_at ? `<div style="font-size:11px"><a onclick="event.stopPropagation();openAdhocComposer(${c.id})" style="color:var(--bmp-orange);cursor:pointer;text-decoration:none;border-bottom:1px dotted var(--bmp-orange)" title="Send a one-off email">📧 Send Email</a></div>` : ''}
+                                    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;font-size:11px">
+                                        ${c.email && !c.unsubscribed_at ? `<a onclick="event.stopPropagation();openAdhocComposer(${c.id})" style="color:var(--bmp-orange);cursor:pointer;text-decoration:none;border-bottom:1px dotted var(--bmp-orange)" title="Send a one-off email">📧 Send Email</a>` : ''}
+                                        <a onclick="event.stopPropagation();openScheduleModal(${c.id})" style="color:#1a73e8;cursor:pointer;text-decoration:none;border-bottom:1px dotted #1a73e8;font-weight:600" title="Pick a time on your calendar + send the invite">📅 Schedule</a>
+                                    </div>
                                     ${c.emails.length > 0 ? `<div style="font-size:10px;color:var(--bmp-green);margin-top:2px">${c.emails.filter(e=>e.is_sent).length}/${c.emails.length} steps sent</div>` : ''}
                                 </div>
                             `).join('')}
