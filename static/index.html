@@ -5258,22 +5258,29 @@ function verify(secret, rawBody, header) {
                     <thead><tr style="background:#fafafa;text-align:left">
                         <th style="padding:6px 8px">Name</th>
                         <th style="padding:6px 8px">Key</th>
+                        <th style="padding:6px 8px">Scope</th>
                         <th style="padding:6px 8px">Last Used</th>
                         <th style="padding:6px 8px">Status</th>
                         <th style="padding:6px 8px"></th>
                     </tr></thead>
                     <tbody>
-                    ${rows.map(k => `
+                    ${rows.map(k => {
+                        const scope = k.scope || 'read';
+                        const scopeBadge = scope === 'write'
+                            ? '<span style="font-size:10px;background:#fff3cd;color:#c0392b;padding:1px 6px;border-radius:3px;font-weight:600">WRITE</span>'
+                            : '<span style="font-size:10px;background:#e8f4ea;color:#1b5e20;padding:1px 6px;border-radius:3px;font-weight:600">READ</span>';
+                        return `
                         <tr style="border-top:1px solid #f0f0f0;${k.is_active ? '' : 'opacity:0.5'}">
                             <td style="padding:6px 8px"><strong>${escapeHtml(k.name)}</strong></td>
                             <td style="padding:6px 8px"><code style="font-size:11px;color:#666">${escapeHtml(k.key_prefix)}</code></td>
+                            <td style="padding:6px 8px">${scopeBadge}</td>
                             <td style="padding:6px 8px;color:#888">${k.last_used_at ? fmtRelative(k.last_used_at) : '<span style="color:#bbb">never</span>'}</td>
                             <td style="padding:6px 8px">${k.is_active ? '<span style="color:var(--bmp-green)">active</span>' : '<span style="color:#c0392b">revoked</span>'}</td>
                             <td style="padding:6px 8px;text-align:right">
                                 ${k.is_active ? `<button class="btn btn-secondary btn-xs" onclick="revokeApiKey(${k.id})">Revoke</button>` : ''}
                             </td>
-                        </tr>
-                    `).join('')}
+                        </tr>`;
+                    }).join('')}
                     </tbody>
                 </table>
             `;
@@ -5285,10 +5292,29 @@ function verify(secret, rawBody, header) {
                 <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
                     <div class="modal-card" onclick="event.stopPropagation()" style="max-width:520px">
                         <h2>New API Key</h2>
-                        <p style="font-size:13px;color:#666;margin-bottom:12px">Used for the public REST API at <code>/api/v1/*</code>. The plaintext key is shown <strong>once</strong> — save it before closing this dialog.</p>
+                        <p style="font-size:13px;color:#666;margin-bottom:12px">Used for the public REST API at <code>/api/v1/*</code> and the MCP server at <code>/mcp</code>. The plaintext key is shown <strong>once</strong> — save it before closing this dialog.</p>
                         <div class="form-group">
-                            <label>Label (e.g. 'Zapier integration', 'CSV import script')</label>
+                            <label>Label (e.g. 'Zapier integration', 'Claude Desktop')</label>
                             <input type="text" id="api-key-name" maxlength="80" placeholder="What is this key for?">
+                        </div>
+                        <div class="form-group" style="margin-top:10px">
+                            <label>Permission scope</label>
+                            <div style="display:flex;flex-direction:column;gap:6px;margin-top:4px">
+                                <label style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border:1px solid #ddd;border-radius:6px;cursor:pointer;font-weight:400">
+                                    <input type="radio" name="api-key-scope" value="read" checked style="margin-top:2px">
+                                    <div>
+                                        <div style="font-weight:600;font-size:13px">Read</div>
+                                        <div style="font-size:11px;color:#666">Search + view companies, contacts, deals, hot leads. Cannot modify anything. Safe default for AI assistants.</div>
+                                    </div>
+                                </label>
+                                <label style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border:1px solid #ddd;border-radius:6px;cursor:pointer;font-weight:400">
+                                    <input type="radio" name="api-key-scope" value="write" style="margin-top:2px">
+                                    <div>
+                                        <div style="font-weight:600;font-size:13px">Write <span style="font-size:10px;color:#c0392b;background:#fff3cd;padding:1px 6px;border-radius:3px;font-weight:600;margin-left:4px">CAUTION</span></div>
+                                        <div style="font-size:11px;color:#666">Everything Read can do, plus: add notes, create tasks, update fields, start/pause sequences, schedule meetings. Every action is audit-logged.</div>
+                                    </div>
+                                </label>
+                            </div>
                         </div>
                         <div class="modal-actions" style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
                             <button class="btn btn-secondary" onclick="document.getElementById('modal-root').innerHTML=''">Cancel</button>
@@ -5302,8 +5328,10 @@ function verify(secret, rawBody, header) {
         async function submitNewApiKey() {
             const name = document.getElementById('api-key-name').value.trim();
             if (!name) { toast('Label is required'); return; }
+            const scopeEl = document.querySelector('input[name="api-key-scope"]:checked');
+            const scope = scopeEl ? scopeEl.value : 'read';
             const data = await api('/api/integrations/api-keys', {
-                method: 'POST', body: JSON.stringify({ name }),
+                method: 'POST', body: JSON.stringify({ name, scope }),
             });
             if (!data || !data.plaintext_key) return;
             const root = document.getElementById('modal-root');

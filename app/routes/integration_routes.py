@@ -37,6 +37,7 @@ def _key_payload(k: ApiKey) -> dict:
         "name": k.name,
         "key_prefix": k.key_prefix,
         "is_active": k.is_active,
+        "scope": getattr(k, "scope", "read") or "read",
         "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
         "created_at": k.created_at.isoformat() if k.created_at else None,
     }
@@ -59,6 +60,10 @@ async def list_api_keys(
 
 class CreateApiKeyRequest(BaseModel):
     name: str
+    # 'read'  → search/get/summarize tools only (default; safe)
+    # 'write' → can also invoke MCP write tools (add note, enroll
+    #           in sequence, book meeting, send email, etc.)
+    scope: Optional[str] = "read"
 
 
 @router.post("/api-keys")
@@ -72,6 +77,9 @@ async def create_api_key(
     for display."""
     if not req.name or not req.name.strip():
         raise HTTPException(status_code=400, detail="name is required")
+    scope = (req.scope or "read").strip().lower()
+    if scope not in ("read", "write"):
+        raise HTTPException(status_code=400, detail="scope must be 'read' or 'write'")
     plaintext = "pk_live_" + secrets.token_hex(32)
     key_hash = hashlib.sha256(plaintext.encode()).hexdigest()
     prefix = plaintext[:12] + "..."
@@ -81,6 +89,7 @@ async def create_api_key(
         key_hash=key_hash,
         key_prefix=prefix,
         is_active=True,
+        scope=scope,
     )
     db.add(row)
     await db.commit()

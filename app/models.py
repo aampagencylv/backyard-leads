@@ -835,6 +835,14 @@ class ApiKey(Base):
     last_used_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
+    # Permission scope. v1 keys default to 'read' (search, get, summarize).
+    # 'write' keys can additionally invoke MCP write tools (add note,
+    # enroll in sequence, book meeting, etc.) — anything that mutates
+    # the CRM. 'admin' is reserved for future tenant-level platform ops.
+    # Existing keys created before this column existed are 'read' by
+    # default for safety.
+    scope = Column(String(20), default="read", nullable=False)
+
 
 class Webhook(Base):
     """Outbound webhook subscription. When a subscribed event fires,

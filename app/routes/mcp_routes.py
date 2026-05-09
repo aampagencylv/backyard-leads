@@ -27,7 +27,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import get_user_from_api_key
 from app.database import get_db
 from app.models import User
-from app.services.mcp_tools import TOOL_DEFINITIONS, TOOL_HANDLERS, get_company, get_contact
+from app.services.mcp_tools import (
+    TOOL_DEFINITIONS, TOOL_HANDLERS, WRITE_TOOL_NAMES,
+    get_company, get_contact,
+)
 
 log = logging.getLogger("bmp.mcp")
 
@@ -97,6 +100,23 @@ async def _handle_tools_call(params: dict, db: AsyncSession, user: User) -> dict
             "isError": True,
             "content": [{"type": "text", "text": f"Unknown tool: {name}"}],
         }
+    # Scope gate: write tools require an API key with scope='write'.
+    # The auth helper stamps _api_key_scope on the user object.
+    if name in WRITE_TOOL_NAMES:
+        scope = getattr(user, "_api_key_scope", "read") or "read"
+        if scope != "write":
+            return {
+                "isError": True,
+                "content": [{
+                    "type": "text",
+                    "text": (
+                        f"Permission denied: '{name}' requires an API key with "
+                        f"scope='write'. The current key has scope='{scope}'. "
+                        "Generate a new key in Settings → 🔑 API Keys & Webhooks "
+                        "with the Write scope."
+                    ),
+                }],
+            }
     try:
         result = await handler(db, user, **arguments)
     except TypeError as e:

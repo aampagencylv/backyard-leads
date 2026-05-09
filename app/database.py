@@ -52,6 +52,7 @@ async def init_db():
         "scripts.migrate_google_maps_key",
         "scripts.migrate_scheduler_v2",
         "scripts.migrate_scheduler_branding",
+        "scripts.migrate_apikey_scope",
     ):
         try:
             mod = __import__(_migration_module, fromlist=["main"])

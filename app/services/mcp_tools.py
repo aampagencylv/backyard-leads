@@ -26,7 +26,7 @@ from typing import Any, Optional
 from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Activity, Company, Contact, Deal, User
+from app.models import Activity, Company, Contact, Deal, GeneratedEmail, User
 from app.scoping import scope_companies, scope_contacts
 
 log = logging.getLogger("bmp.mcp_tools")
@@ -620,3 +620,553 @@ TOOL_HANDLERS: dict[str, Any] = {
     "get_recent_replies":   get_recent_replies,
     "summarize_company":    summarize_company,
 }
+
+
+# Tools that mutate state require an API key with scope='write'.
+# Listed by name so the MCP handler can gate without inspecting tool
+# metadata directly.
+WRITE_TOOL_NAMES: set[str] = set()
+
+
+# ============================================================
+# Write tools (MCP v2a)
+# ============================================================
+#
+# Mutating tools — each one writes audit + (where applicable) fires
+# a webhook event so external systems stay in sync. These require
+# scope='write' on the calling API key. Read-only keys get a 403.
+#
+# We don't bake confirmation prompts into the server itself; modern
+# MCP clients (Claude Desktop, Claude.ai) automatically ask the user
+# to confirm tool calls that look like writes. Belt-and-suspenders:
+# every write here is also captured in the audit log so anything an
+# AI does is reviewable after the fact.
+
+
+async def _company_for_write(db: AsyncSession, user: User, company_id: int) -> Optional[Company]:
+    """Resolve + access-check a company for a write tool. Returns None
+    if not found / out of scope; caller should respond with an error."""
+    company = (await db.execute(
+        select(Company).where(Company.id == int(company_id))
+    )).scalar_one_or_none()
+    if not company:
+        return None
+    from app.scoping import check_company_access
+    if not await check_company_access(company, user, db):
+        return None
+    return company
+
+
+async def _contact_for_write(db: AsyncSession, user: User, contact_id: int) -> Optional[Contact]:
+    contact = (await db.execute(
+        select(Contact).where(Contact.id == int(contact_id))
+    )).scalar_one_or_none()
+    if not contact:
+        return None
+    from app.scoping import check_contact_access
+    if not await check_contact_access(contact, user, db):
+        return None
+    return contact
+
+
+async def add_note(
+    db: AsyncSession, user: User, *,
+    company_id: int, content: str, contact_id: Optional[int] = None,
+) -> dict:
+    """Log a free-form note Activity on a company timeline. The most
+    common write operation — Claude can capture call notes, action
+    items, or context the rep mentioned in chat."""
+    company = await _company_for_write(db, user, int(company_id))
+    if not company:
+        return {"error": "company_not_found_or_out_of_scope"}
+    txt = (content or "").strip()
+    if not txt:
+        return {"error": "content_required"}
+    activity = Activity(
+        company_id=company.id,
+        contact_id=contact_id,
+        user_id=user.id,
+        activity_type="note",
+        content=txt[:5000],
+        metadata_json=json.dumps({"source": "mcp"}),
+    )
+    db.add(activity)
+    from app.services.audit_log import record_audit
+    await record_audit(
+        db, actor=user, action="note.added_via_mcp",
+        target_type="company", target_id=company.id, target_label=company.name,
+        metadata={"content_preview": txt[:120], "contact_id": contact_id},
+    )
+    await db.commit()
+    await db.refresh(activity)
+    return {
+        "ok": True,
+        "activity_id": activity.id,
+        "company_id": company.id,
+        "company_name": company.name,
+        "content": txt[:5000],
+    }
+WRITE_TOOL_NAMES.add("add_note")
+
+
+async def create_task(
+    db: AsyncSession, user: User, *,
+    company_id: int, description: str,
+    due_in_hours: Optional[int] = None,
+    assignee_user_id: Optional[int] = None,
+) -> dict:
+    """Create a Task for the rep. `due_in_hours` is relative to now —
+    e.g. 24 = tomorrow, 168 = in a week. If omitted, task has no due
+    date. assignee_user_id defaults to the calling user."""
+    from app.models import Task
+    company = await _company_for_write(db, user, int(company_id))
+    if not company:
+        return {"error": "company_not_found_or_out_of_scope"}
+    desc = (description or "").strip()
+    if not desc:
+        return {"error": "description_required"}
+    due = None
+    if due_in_hours and due_in_hours > 0:
+        due = datetime.now(timezone.utc) + timedelta(hours=int(due_in_hours))
+    assignee = int(assignee_user_id) if assignee_user_id else user.id
+    task = Task(
+        user_id=assignee,
+        company_id=company.id,
+        description=desc[:2000],
+        due_date=due,
+    )
+    db.add(task)
+    from app.services.audit_log import record_audit
+    await record_audit(
+        db, actor=user, action="task.created_via_mcp",
+        target_type="company", target_id=company.id, target_label=company.name,
+        metadata={"description": desc[:120], "due_in_hours": due_in_hours, "assignee_user_id": assignee},
+    )
+    await db.commit()
+    await db.refresh(task)
+    return {
+        "ok": True,
+        "task_id": task.id,
+        "company_id": company.id,
+        "description": desc[:2000],
+        "due_date": due.isoformat() if due else None,
+        "assignee_user_id": assignee,
+    }
+WRITE_TOOL_NAMES.add("create_task")
+
+
+# Fields safe to PATCH on Company via MCP. Excludes id, status,
+# scoring outputs, raw enrichment cache, etc. — those have their own
+# tools or shouldn't be touched by external AI.
+_COMPANY_WRITE_FIELDS = {
+    "name", "phone", "address", "city", "state", "industry",
+    "business_type", "website", "linkedin_url", "facebook_url",
+    "instagram_url", "youtube_url", "tiktok_url", "rating",
+    "review_count", "employee_count",
+}
+
+
+async def update_company(
+    db: AsyncSession, user: User, *,
+    company_id: int, fields: dict,
+) -> dict:
+    """Patch fields on a company. `fields` is a dict — only whitelisted
+    keys are applied (everything else is silently dropped). Returns
+    the updated record."""
+    company = await _company_for_write(db, user, int(company_id))
+    if not company:
+        return {"error": "company_not_found_or_out_of_scope"}
+    if not isinstance(fields, dict):
+        return {"error": "fields_must_be_object"}
+    applied: dict[str, Any] = {}
+    for k, v in fields.items():
+        if k not in _COMPANY_WRITE_FIELDS:
+            continue
+        if v is None:
+            setattr(company, k, None)
+        elif isinstance(v, str):
+            setattr(company, k, v.strip()[:500])
+        elif isinstance(v, (int, float)):
+            setattr(company, k, v)
+        else:
+            continue
+        applied[k] = getattr(company, k)
+    if not applied:
+        return {"error": "no_writable_fields_in_payload",
+                "allowed_fields": sorted(_COMPANY_WRITE_FIELDS)}
+    from app.services.audit_log import record_audit
+    await record_audit(
+        db, actor=user, action="company.updated_via_mcp",
+        target_type="company", target_id=company.id, target_label=company.name,
+        metadata={"applied": applied},
+    )
+    await db.commit()
+    return {"ok": True, "company_id": company.id, "applied": applied}
+WRITE_TOOL_NAMES.add("update_company")
+
+
+_CONTACT_WRITE_FIELDS = {
+    "first_name", "last_name", "title", "email", "phone",
+    "linkedin_url", "is_primary",
+}
+
+
+async def update_contact(
+    db: AsyncSession, user: User, *,
+    contact_id: int, fields: dict,
+) -> dict:
+    contact = await _contact_for_write(db, user, int(contact_id))
+    if not contact:
+        return {"error": "contact_not_found_or_out_of_scope"}
+    if not isinstance(fields, dict):
+        return {"error": "fields_must_be_object"}
+    applied: dict[str, Any] = {}
+    for k, v in fields.items():
+        if k not in _CONTACT_WRITE_FIELDS:
+            continue
+        if v is None:
+            setattr(contact, k, None)
+        elif isinstance(v, bool) and k == "is_primary":
+            setattr(contact, k, bool(v))
+        elif isinstance(v, str):
+            setattr(contact, k, v.strip()[:500])
+        else:
+            continue
+        applied[k] = getattr(contact, k)
+    if not applied:
+        return {"error": "no_writable_fields_in_payload",
+                "allowed_fields": sorted(_CONTACT_WRITE_FIELDS)}
+    from app.services.audit_log import record_audit
+    await record_audit(
+        db, actor=user, action="contact.updated_via_mcp",
+        target_type="contact", target_id=contact.id, target_label=contact.full_name,
+        metadata={"applied": applied},
+    )
+    await db.commit()
+    return {"ok": True, "contact_id": contact.id, "applied": applied}
+WRITE_TOOL_NAMES.add("update_contact")
+
+
+async def tag_company(
+    db: AsyncSession, user: User, *,
+    company_id: int, tag_name: str,
+) -> dict:
+    """Add a tag to a company (creates the tag if it doesn't exist)."""
+    from app.models import Tag
+    company = await _company_for_write(db, user, int(company_id))
+    if not company:
+        return {"error": "company_not_found_or_out_of_scope"}
+    tname = (tag_name or "").strip().lower()[:50]
+    if not tname:
+        return {"error": "tag_name_required"}
+    tag = (await db.execute(select(Tag).where(Tag.name == tname))).scalar_one_or_none()
+    if not tag:
+        tag = Tag(name=tname)
+        db.add(tag)
+        await db.flush()
+    if tag not in company.tags:
+        company.tags.append(tag)
+    from app.services.audit_log import record_audit
+    await record_audit(
+        db, actor=user, action="company.tagged_via_mcp",
+        target_type="company", target_id=company.id, target_label=company.name,
+        metadata={"tag": tname},
+    )
+    await db.commit()
+    return {"ok": True, "company_id": company.id, "tag": tname}
+WRITE_TOOL_NAMES.add("tag_company")
+
+
+async def start_sequence(
+    db: AsyncSession, user: User, *, contact_id: int,
+) -> dict:
+    """Generate the default sequence for a contact. Mirrors the
+    UI's '▶️ Generate 30-day Sequence' button by reusing the
+    existing route handler directly so the AI never produces a
+    behavior that diverges from the UI."""
+    contact = await _contact_for_write(db, user, int(contact_id))
+    if not contact:
+        return {"error": "contact_not_found_or_out_of_scope"}
+    from app.routes.contact_routes import generate_contact_sequence
+    try:
+        result = await generate_contact_sequence(
+            contact_id=int(contact_id), db=db, user=user,
+        )
+    except Exception as e:
+        # FastAPI HTTPException carries .detail; surface gracefully
+        detail = getattr(e, "detail", None) or str(e)
+        return {"error": "generation_failed", "detail": str(detail)[:300]}
+    from app.services.audit_log import record_audit
+    await record_audit(
+        db, actor=user, action="sequence.started_via_mcp",
+        target_type="contact", target_id=contact.id, target_label=contact.full_name,
+        metadata={"emails_created": (result or {}).get("emails_created")},
+    )
+    await db.commit()
+    return {
+        "ok": True,
+        "contact_id": contact.id,
+        "contact_name": contact.full_name,
+        **(result or {}),
+    }
+WRITE_TOOL_NAMES.add("start_sequence")
+
+
+async def pause_sequence(
+    db: AsyncSession, user: User, *, contact_id: int,
+) -> dict:
+    contact = await _contact_for_write(db, user, int(contact_id))
+    if not contact:
+        return {"error": "contact_not_found_or_out_of_scope"}
+    rows = (await db.execute(
+        select(GeneratedEmail).where(
+            GeneratedEmail.contact_id == contact.id,
+            GeneratedEmail.is_sent == False,
+        )
+    )).scalars().all()
+    paused_count = 0
+    for r in rows:
+        if not r.paused_at:
+            r.paused_at = datetime.now(timezone.utc)
+            paused_count += 1
+    from app.services.audit_log import record_audit
+    await record_audit(
+        db, actor=user, action="sequence.paused_via_mcp",
+        target_type="contact", target_id=contact.id, target_label=contact.full_name,
+        metadata={"steps_paused": paused_count},
+    )
+    await db.commit()
+    return {"ok": True, "contact_id": contact.id, "steps_paused": paused_count}
+WRITE_TOOL_NAMES.add("pause_sequence")
+
+
+async def resume_sequence(
+    db: AsyncSession, user: User, *, contact_id: int,
+) -> dict:
+    contact = await _contact_for_write(db, user, int(contact_id))
+    if not contact:
+        return {"error": "contact_not_found_or_out_of_scope"}
+    rows = (await db.execute(
+        select(GeneratedEmail).where(
+            GeneratedEmail.contact_id == contact.id,
+            GeneratedEmail.is_sent == False,
+            GeneratedEmail.paused_at.isnot(None),
+        )
+    )).scalars().all()
+    for r in rows:
+        r.paused_at = None
+    from app.services.audit_log import record_audit
+    await record_audit(
+        db, actor=user, action="sequence.resumed_via_mcp",
+        target_type="contact", target_id=contact.id, target_label=contact.full_name,
+        metadata={"steps_resumed": len(rows)},
+    )
+    await db.commit()
+    return {"ok": True, "contact_id": contact.id, "steps_resumed": len(rows)}
+WRITE_TOOL_NAMES.add("resume_sequence")
+
+
+async def book_meeting(
+    db: AsyncSession, user: User, *,
+    contact_id: int, starts_at_utc: str,
+    custom_meeting_title: Optional[str] = None, note: Optional[str] = None,
+) -> dict:
+    """Schedule a meeting with a contact using the rep's native
+    scheduler config. Validates against the rep's actual free/busy,
+    creates the Google event, sends invites to both attendees, and
+    logs an Activity. Same flow as the in-app 📅 Schedule modal."""
+    # Reuse scheduler_routes' helper logic by calling through the
+    # endpoint's underlying machinery. To keep things simple, replicate
+    # the minimal verification + post — the bulk of the logic already
+    # lives in the host_router endpoint; we just have to translate
+    # MCP args to its request shape.
+    from app.routes.scheduler_routes import (
+        InternalBookingRequest, book_for_contact,
+    )
+    from fastapi import BackgroundTasks
+    contact = await _contact_for_write(db, user, int(contact_id))
+    if not contact:
+        return {"error": "contact_not_found_or_out_of_scope"}
+    body = InternalBookingRequest(
+        contact_id=int(contact_id),
+        starts_at_utc=starts_at_utc,
+        custom_meeting_title=custom_meeting_title,
+        note=note,
+    )
+    bg = BackgroundTasks()
+    try:
+        result = await book_for_contact(body=body, background=bg, user=user, db=db)
+    except Exception as e:
+        log.exception(f"book_meeting via MCP failed: {e}")
+        # FastAPI's HTTPException carries .status_code + .detail
+        detail = getattr(e, "detail", None) or str(e)
+        return {"error": "booking_failed", "detail": str(detail)[:300]}
+    # Run the queued background task synchronously (small price for
+    # MCP path simplicity). The confirmation email is best-effort.
+    for task in bg.tasks:
+        try:
+            await task()
+        except Exception:
+            pass
+    return {"ok": True, **result}
+WRITE_TOOL_NAMES.add("book_meeting")
+
+
+# ============================================================
+# Tool definitions for write tools (appended to existing list)
+# ============================================================
+
+TOOL_DEFINITIONS.extend([
+    {
+        "name": "add_note",
+        "description": (
+            "Log a free-form note on a company's activity timeline. "
+            "Use after a call, when the rep mentions context, or to "
+            "capture next steps. Permanently audited."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "integer"},
+                "content":    {"type": "string", "description": "Note text. Up to 5000 chars."},
+                "contact_id": {"type": "integer", "description": "Optional — pin the note to a specific contact."},
+            },
+            "required": ["company_id", "content"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "create_task",
+        "description": (
+            "Create a task on a company. Use for action items the rep "
+            "needs to follow up on (e.g. 'send pricing PDF', 'check in "
+            "Tuesday'). due_in_hours is relative to now."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "company_id":       {"type": "integer"},
+                "description":      {"type": "string"},
+                "due_in_hours":     {"type": "integer", "minimum": 1, "maximum": 8760},
+                "assignee_user_id": {"type": "integer", "description": "Defaults to the calling user."},
+            },
+            "required": ["company_id", "description"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "update_company",
+        "description": (
+            "Patch fields on a company. Provide a `fields` object with "
+            "only the keys you want to change. Allowed: name, phone, "
+            "address, city, state, industry, business_type, website, "
+            "linkedin_url, facebook_url, instagram_url, youtube_url, "
+            "tiktok_url, rating, review_count, employee_count."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "integer"},
+                "fields":     {"type": "object", "description": "Subset of writable fields keyed by name."},
+            },
+            "required": ["company_id", "fields"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "update_contact",
+        "description": (
+            "Patch fields on a contact. Allowed: first_name, last_name, "
+            "title, email, phone, linkedin_url, is_primary."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "contact_id": {"type": "integer"},
+                "fields":     {"type": "object"},
+            },
+            "required": ["contact_id", "fields"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "tag_company",
+        "description": "Add a tag to a company. Tag is created if it doesn't exist.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "integer"},
+                "tag_name":   {"type": "string", "description": "Lowercased on save. Max 50 chars."},
+            },
+            "required": ["company_id", "tag_name"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "start_sequence",
+        "description": (
+            "Generate the default 30-day outreach sequence for a contact "
+            "(13 steps: email + LinkedIn + call + iMessage). Fails if a "
+            "sequence already exists — call resume_sequence in that case."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"contact_id": {"type": "integer"}},
+            "required": ["contact_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "pause_sequence",
+        "description": "Pause all unsent steps in a contact's active sequence.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"contact_id": {"type": "integer"}},
+            "required": ["contact_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "resume_sequence",
+        "description": "Un-pause previously-paused unsent steps.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"contact_id": {"type": "integer"}},
+            "required": ["contact_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "book_meeting",
+        "description": (
+            "Schedule a meeting with a contact using the rep's native "
+            "scheduler. Validates against live free/busy, creates the "
+            "Google event, sends invites to both attendees. starts_at_utc "
+            "must be ISO-8601 with timezone (e.g. '2026-05-12T17:00:00Z'). "
+            "Use search_companies / get_contact first to find the contact_id."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "contact_id":           {"type": "integer"},
+                "starts_at_utc":        {"type": "string"},
+                "custom_meeting_title": {"type": "string"},
+                "note":                 {"type": "string", "description": "Goes in the calendar invite description."},
+            },
+            "required": ["contact_id", "starts_at_utc"],
+            "additionalProperties": False,
+        },
+    },
+])
+
+TOOL_HANDLERS.update({
+    "add_note":         add_note,
+    "create_task":      create_task,
+    "update_company":   update_company,
+    "update_contact":   update_contact,
+    "tag_company":      tag_company,
+    "start_sequence":   start_sequence,
+    "pause_sequence":   pause_sequence,
+    "resume_sequence":  resume_sequence,
+    "book_meeting":     book_meeting,
+})

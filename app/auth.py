@@ -101,6 +101,11 @@ async def get_user_from_api_key(
         await db.commit()
     except Exception:
         pass
+    # Stash the API key's scope on the user object so downstream
+    # handlers (e.g. MCP write-tool gate) can check without a second
+    # DB lookup. SQLAlchemy ORM lets us attach instance attributes;
+    # they don't persist back to the DB.
+    user_row._api_key_scope = getattr(row, "scope", "read") or "read"
     return user_row
 
 
