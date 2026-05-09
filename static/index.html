@@ -388,6 +388,7 @@
                 <a data-page="contacts" onclick="showPage('contacts')">Contacts <span id="nav-contacts-count" class="nav-badge"></span></a>
                 <a data-page="pipeline" onclick="showPage('pipeline')">Pipeline <span id="nav-pipeline-count" class="nav-badge"></span></a>
                 <a data-page="tasks" onclick="showPage('tasks')">Tasks <span id="nav-tasks-count" class="nav-badge"></span></a>
+                <a data-page="calendar" onclick="showPage('calendar')">📅 Calendar</a>
                 <a data-page="autopilot" onclick="showPage('autopilot')" style="margin-top:12px;border-top:1px solid rgba(255,255,255,0.1);padding-top:12px">Auto Pilot</a>
                 <a href="#" onclick="event.preventDefault();openStandaloneDialer()" style="color:var(--bmp-orange)">Dial a Number</a>
                 <a data-page="developer" id="nav-developer" onclick="showPage('developer')" class="hidden">Developer</a>
@@ -1162,6 +1163,164 @@ function verify(secret, rawBody, header) {
                 }
             </style>
 
+            <!-- =========================================================
+                 📅 Calendar — dedicated page for everything booking-related.
+                 Tabs: Upcoming (placeholder, list view ships next) +
+                       Settings (Google connection + availability + page wording).
+                 Pulled out of the Settings page so the Settings page stops
+                 being a landfill for unrelated panels.
+                 ========================================================= -->
+            <div id="page-calendar" class="hidden">
+                <div class="page-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+                    <div>
+                        <h1 style="margin:0">📅 Calendar</h1>
+                        <p style="margin:4px 0 0;font-size:13px;color:#666">Discovery-call bookings, availability rules, and your public booking page.</p>
+                    </div>
+                    <div id="cal-page-booking-link-wrap" style="display:none">
+                        <span style="font-size:11px;color:#888;display:block;text-align:right">Public booking page</span>
+                        <a id="cal-page-booking-link" target="_blank" rel="noopener" style="color:#0077B5;font-size:13px;text-decoration:none"></a>
+                        <button class="btn btn-secondary btn-xs" onclick="copyBookingLink()" style="margin-left:6px">📋 Copy</button>
+                    </div>
+                </div>
+
+                <!-- Tab strip -->
+                <div style="border-bottom:1px solid #e6e6e6;margin-bottom:18px;display:flex;gap:6px">
+                    <button class="cal-tab" data-tab="upcoming" onclick="switchCalTab('upcoming')" style="background:transparent;border:0;padding:10px 16px;font-size:13px;cursor:pointer;color:#666;border-bottom:3px solid transparent;font-weight:500">Upcoming</button>
+                    <button class="cal-tab active" data-tab="settings" onclick="switchCalTab('settings')" style="background:transparent;border:0;padding:10px 16px;font-size:13px;cursor:pointer;color:var(--bmp-orange);border-bottom:3px solid var(--bmp-orange);font-weight:600">Settings</button>
+                </div>
+
+                <!-- Upcoming tab (placeholder for the list view that ships next) -->
+                <div id="cal-tab-upcoming" class="cal-tab-pane" style="display:none">
+                    <div class="search-box" style="max-width:760px;text-align:center;padding:32px 20px">
+                        <p style="font-size:14px;color:#888;margin:0 0 6px">Upcoming bookings list ships next.</p>
+                        <p style="font-size:12px;color:#999;margin:0">For now, click a slot to book on the public page or check Google Calendar directly.</p>
+                    </div>
+                </div>
+
+                <!-- Settings tab — connection + availability + page customization -->
+                <div id="cal-tab-settings" class="cal-tab-pane">
+                    <!-- Google Calendar connection card -->
+                    <div class="search-box" style="max-width:760px">
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+                            <h3 style="margin:0;font-size:15px">Google Calendar Connection</h3>
+                            <span id="google-cal-status" style="font-size:11px;color:#888"></span>
+                        </div>
+                        <p style="font-size:12px;color:#888;margin:0 0 14px">We use Google Calendar to read your free/busy and write booking events. <strong>You pick which calendar</strong> — we never touch others.</p>
+
+                        <div id="google-cal-not-connected" style="display:none">
+                            <button class="btn btn-primary btn-sm" onclick="connectGoogleCalendar()">🔌 Connect Google Calendar</button>
+                            <div id="google-cal-not-configured" style="display:none;margin-top:10px;padding:10px 12px;background:#fff5f0;border-radius:6px;font-size:11px;color:#c0392b;line-height:1.55">
+                                ⚠️ Google OAuth isn't configured on the server. Set <code>GOOGLE_OAUTH_CLIENT_ID</code> + <code>GOOGLE_OAUTH_CLIENT_SECRET</code> in <code>/opt/backyard-leads/.env</code> and restart. Redirect URI to register: <code id="google-cal-redirect-uri" style="word-break:break-all"></code>
+                            </div>
+                        </div>
+
+                        <div id="google-cal-connected" style="display:none">
+                            <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:13px;line-height:1.7;align-items:baseline">
+                                <span style="color:#666">Connected as</span>
+                                <span id="google-cal-email" style="color:#1b5e20;font-weight:500"></span>
+                                <span style="color:#666">Connected</span>
+                                <span id="google-cal-since" style="color:#888"></span>
+                                <span style="color:#666">Booking URL</span>
+                                <a id="google-cal-booking-link" target="_blank" rel="noopener" style="color:#0077B5;text-decoration:none;word-break:break-all"></a>
+                                <span style="color:#666">Active calendar</span>
+                                <div style="display:flex;gap:6px;align-items:center">
+                                    <select id="google-cal-picker" onchange="setBookingCalendar(this.value)" style="flex:1;max-width:340px;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                                        <option value="primary">Loading…</option>
+                                    </select>
+                                    <button class="btn btn-secondary btn-xs" onclick="loadGoogleCalendarList()" title="Refresh calendar list">↻</button>
+                                </div>
+                            </div>
+                            <div style="margin-top:10px;font-size:11px;color:#888">Tip: create a "Discovery Calls" calendar in Google Calendar and pick it here for clean separation from your personal events.</div>
+                            <div style="margin-top:14px;padding-top:12px;border-top:1px solid #f0f0f0">
+                                <button class="btn btn-secondary btn-sm" onclick="disconnectGoogleCalendar()">Disconnect Google</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Availability card — only meaningful when Google is connected -->
+                    <div id="scheduling-rules-section" class="search-box" style="max-width:760px;margin-top:18px;display:none">
+                        <h3 style="margin:0 0 6px;font-size:15px">⏰ Booking Availability</h3>
+                        <p style="font-size:12px;color:#888;margin:0 0 16px">When can prospects book a call with you? Slots respect your real calendar — already-booked time isn't offered.</p>
+
+                        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:18px">
+                            <div>
+                                <label style="font-size:12px;color:#666;display:block;margin-bottom:3px">Slot length</label>
+                                <select id="sched-slot-minutes" onchange="saveSchedulingConfig()" style="width:100%;padding:7px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                                    <option value="15">15 minutes</option>
+                                    <option value="30">30 minutes</option>
+                                    <option value="45">45 minutes</option>
+                                    <option value="60">60 minutes</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="font-size:12px;color:#666;display:block;margin-bottom:3px">Buffer between meetings</label>
+                                <select id="sched-buffer-after" onchange="saveSchedulingConfig()" style="width:100%;padding:7px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                                    <option value="0">No buffer</option>
+                                    <option value="5">5 min</option>
+                                    <option value="10">10 min</option>
+                                    <option value="15">15 min</option>
+                                    <option value="30">30 min</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="font-size:12px;color:#666;display:block;margin-bottom:3px">Min lead time</label>
+                                <select id="sched-min-lead" onchange="saveSchedulingConfig()" style="width:100%;padding:7px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                                    <option value="0">No minimum</option>
+                                    <option value="1">1 hour</option>
+                                    <option value="2">2 hours</option>
+                                    <option value="4">4 hours</option>
+                                    <option value="8">8 hours</option>
+                                    <option value="24">24 hours</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="font-size:12px;color:#666;display:block;margin-bottom:3px">Max advance booking</label>
+                                <select id="sched-max-advance" onchange="saveSchedulingConfig()" style="width:100%;padding:7px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                                    <option value="7">7 days</option>
+                                    <option value="14">14 days</option>
+                                    <option value="30">30 days</option>
+                                    <option value="60">60 days</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="font-size:12px;color:#666;display:block;margin-bottom:3px">Daily limit</label>
+                                <select id="sched-daily-limit" onchange="saveSchedulingConfig()" style="width:100%;padding:7px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                                    <option value="0">Unlimited</option>
+                                    <option value="3">3 / day</option>
+                                    <option value="5">5 / day</option>
+                                    <option value="8">8 / day</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div style="border-top:1px solid #f0f0f0;padding-top:14px">
+                            <h4 style="margin:0 0 10px;font-size:13px;color:#444">Weekly hours <span style="color:#888;font-weight:400;font-size:11px">— in your timezone, <span id="sched-host-tz" style="color:#666"></span></span></h4>
+                            <div id="sched-rules-grid" style="display:grid;grid-template-columns:80px 1fr;gap:8px 14px;font-size:12px;align-items:start;margin-bottom:14px"></div>
+                        </div>
+
+                        <details style="border-top:1px solid #f0f0f0;padding-top:12px">
+                            <summary style="cursor:pointer;font-size:13px;color:#444;font-weight:500">✏️ Booking page wording</summary>
+                            <div style="margin-top:10px;display:grid;grid-template-columns:auto 1fr;gap:8px 12px;align-items:center;font-size:12px">
+                                <label style="color:#666">Page title</label>
+                                <input id="sched-page-headline" onchange="saveSchedulingConfig()" maxlength="200" style="padding:7px;border:1px solid #ddd;border-radius:4px">
+                                <label style="color:#666">Page intro</label>
+                                <textarea id="sched-page-intro" onchange="saveSchedulingConfig()" rows="2" style="padding:7px;border:1px solid #ddd;border-radius:4px;font-family:inherit"></textarea>
+                                <label style="color:#666">Meeting title</label>
+                                <input id="sched-meeting-title" onchange="saveSchedulingConfig()" maxlength="120" style="padding:7px;border:1px solid #ddd;border-radius:4px">
+                                <label style="color:#666">Meeting description</label>
+                                <textarea id="sched-meeting-desc" onchange="saveSchedulingConfig()" rows="2" style="padding:7px;border:1px solid #ddd;border-radius:4px;font-family:inherit"></textarea>
+                            </div>
+                        </details>
+
+                        <div style="margin-top:14px;display:flex;gap:8px;align-items:center">
+                            <button class="btn btn-secondary btn-sm" onclick="previewSchedulingSlots()">👁️ Preview slots (next 7 days)</button>
+                            <span id="sched-preview-status" style="font-size:11px;color:#888"></span>
+                        </div>
+                        <div id="sched-preview-results" style="margin-top:12px"></div>
+                    </div>
+                </div>
+            </div>
+
             <div id="page-settings" class="hidden">
                 <div class="page-header"><h1>Settings</h1></div>
                 <div class="search-box" style="max-width:600px">
@@ -1387,107 +1546,12 @@ function verify(secret, rawBody, header) {
                     </div>
                 </div>
 
-                <!-- Google Calendar — Phase 1 of native scheduler -->
-                <div class="search-box" style="max-width:600px;margin-top:16px">
-                    <h3 style="margin:0 0 6px">📅 Google Calendar <span id="google-cal-status" style="font-size:11px;font-weight:400;color:#888"></span></h3>
-                    <p style="font-size:12px;color:#888;margin-bottom:8px">Connect your Google Calendar so prospects can self-book discovery calls on your real availability. Booked calls land on a dedicated <strong>BMP Discovery Calls</strong> calendar — your personal calendar stays untouched.</p>
-                    <p style="font-size:11px;color:#888;margin-bottom:12px"><strong>Phase 1 (now):</strong> connect / disconnect Google. <strong>Phase 2 (next):</strong> set availability rules + recurring hours. <strong>Phase 3:</strong> public booking page at <code>/book/{your-slug}</code> + booking confirmation flow.</p>
-                    <div id="google-cal-not-connected" style="display:none">
-                        <button class="btn btn-primary btn-sm" onclick="connectGoogleCalendar()">🔌 Connect Google Calendar</button>
-                        <div id="google-cal-not-configured" style="display:none;margin-top:8px;padding:8px 10px;background:#fff5f0;border-radius:4px;font-size:11px;color:#c0392b">
-                            ⚠️ Google OAuth isn't configured on the server. Set <code>GOOGLE_OAUTH_CLIENT_ID</code> + <code>GOOGLE_OAUTH_CLIENT_SECRET</code> in <code>/opt/backyard-leads/.env</code> and restart the service. The redirect URI to register in Google Cloud Console is <code id="google-cal-redirect-uri"></code>.
-                        </div>
-                    </div>
-                    <div id="google-cal-connected" style="display:none">
-                        <div style="font-size:13px;line-height:1.7">
-                            <div><strong>Connected as:</strong> <span id="google-cal-email" style="color:#1b5e20"></span></div>
-                            <div id="google-cal-since" style="color:#888;font-size:11px"></div>
-                            <div style="margin-top:6px"><strong>Booking URL:</strong> <a id="google-cal-booking-link" target="_blank" rel="noopener" style="color:#0077B5"></a></div>
-                        </div>
-                        <div style="margin-top:12px;padding-top:10px;border-top:1px solid #f0f0f0">
-                            <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Which calendar should bookings land on?</label>
-                            <div style="display:flex;gap:6px;align-items:center">
-                                <select id="google-cal-picker" onchange="setBookingCalendar(this.value)" style="flex:1;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:13px">
-                                    <option value="primary">Loading…</option>
-                                </select>
-                                <button class="btn btn-secondary btn-xs" onclick="loadGoogleCalendarList()" title="Refresh calendar list">↻</button>
-                            </div>
-                            <div style="font-size:11px;color:#888;margin-top:4px">Tip: for a clean separation, create a "Discovery Calls" calendar in Google Calendar, then come back and pick it here.</div>
-                        </div>
-                        <div style="margin-top:12px">
-                            <button class="btn btn-secondary btn-sm" onclick="disconnectGoogleCalendar()">Disconnect</button>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Scheduling rules — only meaningful when Google is connected -->
-                <div id="scheduling-rules-section" class="search-box" style="max-width:600px;margin-top:16px;display:none">
-                    <h3 style="margin:0 0 6px">⏰ Booking Availability</h3>
-                    <p style="font-size:12px;color:#888;margin-bottom:14px">When are you available to take discovery calls? Slots respect your calendar — if you're already booked elsewhere, that time won't be offered.</p>
-
-                    <div style="display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:center;font-size:13px;margin-bottom:14px">
-                        <label style="color:#666">Slot length</label>
-                        <select id="sched-slot-minutes" onchange="saveSchedulingConfig()" style="padding:6px;border:1px solid #ddd;border-radius:4px;width:140px">
-                            <option value="15">15 minutes</option>
-                            <option value="30">30 minutes</option>
-                            <option value="45">45 minutes</option>
-                            <option value="60">60 minutes</option>
-                        </select>
-                        <label style="color:#666">Buffer after</label>
-                        <select id="sched-buffer-after" onchange="saveSchedulingConfig()" style="padding:6px;border:1px solid #ddd;border-radius:4px;width:140px">
-                            <option value="0">No buffer</option>
-                            <option value="5">5 min</option>
-                            <option value="10">10 min</option>
-                            <option value="15">15 min</option>
-                            <option value="30">30 min</option>
-                        </select>
-                        <label style="color:#666">Min lead time</label>
-                        <select id="sched-min-lead" onchange="saveSchedulingConfig()" style="padding:6px;border:1px solid #ddd;border-radius:4px;width:140px">
-                            <option value="0">None</option>
-                            <option value="1">1 hour</option>
-                            <option value="2">2 hours</option>
-                            <option value="4">4 hours</option>
-                            <option value="8">8 hours</option>
-                            <option value="24">24 hours</option>
-                        </select>
-                        <label style="color:#666">Max advance</label>
-                        <select id="sched-max-advance" onchange="saveSchedulingConfig()" style="padding:6px;border:1px solid #ddd;border-radius:4px;width:140px">
-                            <option value="7">7 days</option>
-                            <option value="14">14 days</option>
-                            <option value="30">30 days</option>
-                            <option value="60">60 days</option>
-                        </select>
-                        <label style="color:#666">Daily limit</label>
-                        <select id="sched-daily-limit" onchange="saveSchedulingConfig()" style="padding:6px;border:1px solid #ddd;border-radius:4px;width:140px">
-                            <option value="0">Unlimited</option>
-                            <option value="3">3 / day</option>
-                            <option value="5">5 / day</option>
-                            <option value="8">8 / day</option>
-                        </select>
-                    </div>
-
-                    <h4 style="margin:0 0 8px;font-size:13px;color:#444">Weekly hours <span style="color:#888;font-weight:400;font-size:11px">(in your timezone, <span id="sched-host-tz"></span>)</span></h4>
-                    <div id="sched-rules-grid" style="display:grid;grid-template-columns:80px 1fr;gap:6px 12px;font-size:12px;align-items:start;margin-bottom:14px"></div>
-
-                    <details style="margin-bottom:12px">
-                        <summary style="cursor:pointer;font-size:12px;color:#666">Booking page wording</summary>
-                        <div style="margin-top:8px;display:grid;grid-template-columns:auto 1fr;gap:6px 10px;align-items:center;font-size:12px">
-                            <label style="color:#666">Page title</label>
-                            <input id="sched-page-headline" onchange="saveSchedulingConfig()" maxlength="200" style="padding:6px;border:1px solid #ddd;border-radius:4px">
-                            <label style="color:#666">Page intro</label>
-                            <textarea id="sched-page-intro" onchange="saveSchedulingConfig()" rows="2" style="padding:6px;border:1px solid #ddd;border-radius:4px;font-family:inherit"></textarea>
-                            <label style="color:#666">Meeting title</label>
-                            <input id="sched-meeting-title" onchange="saveSchedulingConfig()" maxlength="120" style="padding:6px;border:1px solid #ddd;border-radius:4px">
-                            <label style="color:#666">Meeting description</label>
-                            <textarea id="sched-meeting-desc" onchange="saveSchedulingConfig()" rows="2" style="padding:6px;border:1px solid #ddd;border-radius:4px;font-family:inherit"></textarea>
-                        </div>
-                    </details>
-
-                    <div style="display:flex;gap:8px;align-items:center">
-                        <button class="btn btn-secondary btn-sm" onclick="previewSchedulingSlots()">👁️ Preview slots (next 7 days)</button>
-                        <span id="sched-preview-status" style="font-size:11px;color:#888"></span>
-                    </div>
-                    <div id="sched-preview-results" style="margin-top:12px"></div>
+                <!-- Calendar settings have moved to the dedicated 📅 Calendar
+                     page in the sidebar — keeps Settings focused on profile,
+                     sending, and admin/platform credentials. -->
+                <div class="search-box" style="max-width:600px;margin-top:16px;background:#FFF8F0;border-left:3px solid var(--bmp-orange)">
+                    <h3 style="margin:0 0 4px;font-size:14px">📅 Calendar settings moved</h3>
+                    <p style="font-size:12px;color:#666;margin:0">Google Calendar connection + booking availability + booking-page wording now live on the <a href="#" onclick="event.preventDefault();showPage('calendar')" style="color:var(--bmp-orange);font-weight:600">Calendar page</a> in the sidebar.</p>
                 </div>
 
                 <!-- Notifications -->
@@ -2358,6 +2422,7 @@ function verify(secret, rawBody, header) {
             if (page === 'pipeline') loadPipeline();
             if (page === 'tasks') loadTasks('mine');
             if (page === 'settings') loadSettings();
+            if (page === 'calendar') loadCalendarPage();
             if (page === 'autopilot') loadCampaigns();
             if (page === 'developer') {
                 // Admin-only — refuse the visit if a sales_rep deep-links here
@@ -6446,9 +6511,7 @@ hmac.compare_digest(expected, header)</pre>
                     ? `Last sent ${fmtRelative(data.last_brief_sent_at)}`
                     : 'No brief sent yet';
             }
-
-            // Google Calendar — Phase 1 native scheduler
-            loadGoogleCalendarStatus();
+            // Calendar settings live on the dedicated /calendar page now.
 
             // Role-gated Settings panels:
             //   admin+         → team management, tenant-tier keys, AI tone, Twilio numbers
@@ -6616,6 +6679,39 @@ hmac.compare_digest(expected, header)</pre>
         // Google Calendar (Phase 1 of native scheduler)
         // ============================================================
 
+        // Entry point for the dedicated 📅 Calendar page. Wires the
+        // connection card + (when connected) the availability rules
+        // + booking-page wording + calendar picker dropdown. Tab state
+        // defaults to Settings since the Upcoming list view ships next.
+        function loadCalendarPage() {
+            switchCalTab('settings');  // landing tab
+            loadGoogleCalendarStatus();
+        }
+
+        function switchCalTab(tab) {
+            document.querySelectorAll('.cal-tab').forEach(b => {
+                const isActive = b.dataset.tab === tab;
+                b.classList.toggle('active', isActive);
+                b.style.color = isActive ? 'var(--bmp-orange)' : '#666';
+                b.style.borderBottom = isActive ? '3px solid var(--bmp-orange)' : '3px solid transparent';
+                b.style.fontWeight = isActive ? '600' : '500';
+            });
+            document.querySelectorAll('.cal-tab-pane').forEach(p => {
+                p.style.display = p.id === `cal-tab-${tab}` ? '' : 'none';
+            });
+        }
+
+        async function copyBookingLink() {
+            const link = document.getElementById('cal-page-booking-link');
+            if (!link || !link.href) { toast('No booking URL yet — connect Google first'); return; }
+            try {
+                await navigator.clipboard.writeText(link.href);
+                toast('Booking link copied');
+            } catch (e) {
+                toast('Could not copy — long-press the link instead');
+            }
+        }
+
         async function loadGoogleCalendarStatus() {
             const data = await api('/api/google/oauth/status');
             if (!data) return;
@@ -6624,6 +6720,8 @@ hmac.compare_digest(expected, header)</pre>
             const conn = document.getElementById('google-cal-connected');
             const notCfg = document.getElementById('google-cal-not-configured');
             const rulesSection = document.getElementById('scheduling-rules-section');
+            const headerLinkWrap = document.getElementById('cal-page-booking-link-wrap');
+            const headerLink = document.getElementById('cal-page-booking-link');
             if (!data.configured) {
                 if (status) status.textContent = '· not configured';
                 if (status) status.style.color = '#c0392b';
@@ -6631,6 +6729,7 @@ hmac.compare_digest(expected, header)</pre>
                 if (conn) conn.style.display = 'none';
                 if (notCfg) notCfg.style.display = '';
                 if (rulesSection) rulesSection.style.display = 'none';
+                if (headerLinkWrap) headerLinkWrap.style.display = 'none';
                 const redirEl = document.getElementById('google-cal-redirect-uri');
                 if (redirEl) redirEl.textContent = location.origin + '/api/google/oauth/callback';
                 return;
@@ -6644,10 +6743,17 @@ hmac.compare_digest(expected, header)</pre>
                 const sinceEl = document.getElementById('google-cal-since');
                 const linkEl = document.getElementById('google-cal-booking-link');
                 if (emailEl) emailEl.textContent = data.google_email || '(unknown)';
-                if (sinceEl) sinceEl.textContent = data.connected_at ? `Connected ${fmtRelative(data.connected_at)}` : '';
+                if (sinceEl) sinceEl.textContent = data.connected_at ? fmtRelative(data.connected_at) : '';
                 if (linkEl && data.booking_url) {
                     linkEl.href = data.booking_url;
                     linkEl.textContent = data.booking_url;
+                }
+                if (headerLink && data.booking_url) {
+                    headerLink.href = data.booking_url;
+                    headerLink.textContent = data.booking_url.replace(/^https?:\/\//, '');
+                    if (headerLinkWrap) headerLinkWrap.style.display = '';
+                } else if (headerLinkWrap) {
+                    headerLinkWrap.style.display = 'none';
                 }
                 if (rulesSection) rulesSection.style.display = '';
                 loadSchedulingConfig();
@@ -6657,6 +6763,7 @@ hmac.compare_digest(expected, header)</pre>
                 if (notConn) notConn.style.display = '';
                 if (conn) conn.style.display = 'none';
                 if (rulesSection) rulesSection.style.display = 'none';
+                if (headerLinkWrap) headerLinkWrap.style.display = 'none';
             }
         }
 
@@ -6749,14 +6856,13 @@ hmac.compare_digest(expected, header)</pre>
             set('sched-page-intro', data.page_intro);
             set('sched-meeting-title', data.meeting_title);
             set('sched-meeting-desc', data.meeting_description);
-            // Show host TZ next to "Weekly hours" label
-            const tzEl = document.getElementById('sched-host-tz');
-            if (tzEl) {
-                const briefTz = document.getElementById('brief-tz');
-                tzEl.textContent = (briefTz && briefTz.value) || 'America/Phoenix';
-            }
             _schedRules = (data.rules || []).map(r => ({ weekday: r.weekday, start_time: r.start_time, end_time: r.end_time }));
             _renderRulesGrid(_schedRules);
+            // Show the host's timezone next to "Weekly hours" — pulled from
+            // currentUser since the Calendar page no longer co-exists with
+            // the Morning Brief panel where brief-tz lives.
+            const tzEl = document.getElementById('sched-host-tz');
+            if (tzEl) tzEl.textContent = (currentUser && currentUser.timezone) || 'America/Phoenix';
         }
 
         let _schedSaveTimer = null;
@@ -6899,11 +7005,11 @@ hmac.compare_digest(expected, header)</pre>
                 toast(`❌ Google OAuth failed: ${reason}`);
             }
             // Strip the params so a refresh doesn't re-toast or re-route.
-            // Keep the existing hash so the URL stays clean as /#settings.
             history.replaceState(null, '', '/');
-            // Defer one tick so showPage finds settings panels fully wired.
+            // Calendar settings now live on the dedicated 📅 Calendar
+            // page — that's where the user wants to land post-connect.
             setTimeout(() => {
-                if (typeof showPage === 'function') showPage('settings');
+                if (typeof showPage === 'function') showPage('calendar');
             }, 50);
         }
 

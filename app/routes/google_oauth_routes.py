@@ -147,7 +147,7 @@ async def google_oauth_callback(
     # there's no hashchange→page router so users landed on Dashboard
     # after consent and never saw the connection state update.
     fail_redirect = f"{public_url}/?google_oauth=error"
-    success_redirect = f"{public_url}/?google_oauth=connected#settings"
+    success_redirect = f"{public_url}/?google_oauth=connected#calendar"
 
     if error:
         log.warning(f"Google OAuth user-denied or error: {error}")
