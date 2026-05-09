@@ -1922,6 +1922,12 @@ function verify(secret, rawBody, header) {
                     if (typeof user.onboarding_step === 'number' && user.onboarding_step < 99) {
                         setTimeout(() => startTour(Math.max(1, user.onboarding_step)), 1200);
                     }
+                    // After auth + initial paint, see if we just bounced back
+                    // from Google OAuth — if so, route to Settings + toast.
+                    // (Handler is a no-op when no oauth params are present.)
+                    if (typeof _checkGoogleOAuthRedirect === 'function') {
+                        try { _checkGoogleOAuthRedirect(); } catch(e) {}
+                    }
                 }
             } catch(e) { logout(); }
         }
@@ -6838,21 +6844,30 @@ hmac.compare_digest(expected, header)</pre>
             }
         }
 
-        // Detect ?google_oauth=connected after redirect from callback
+        // Detect ?google_oauth=connected after redirect from callback.
+        // The OAuth callback redirects to /?google_oauth=connected#settings
+        // — we read the query string (not the hash, since hash-only
+        // params can't trigger a page change in our click-driven SPA).
+        // Invoked from checkAuth() after auth is confirmed, so role-
+        // gated Settings panels hydrate with the right currentUser.
         function _checkGoogleOAuthRedirect() {
-            const hash = window.location.hash || '';
-            if (hash.includes('google_oauth=connected')) {
+            const params = new URLSearchParams(window.location.search || '');
+            const status = params.get('google_oauth');
+            if (!status) return;
+            if (status === 'connected') {
                 toast('✅ Google Calendar connected');
-                // Strip the param so a refresh doesn't re-toast
-                history.replaceState(null, '', '#settings');
-            } else if (hash.includes('google_oauth=error')) {
-                const reason = (hash.match(/reason=([^&]+)/) || [])[1] || 'unknown';
-                toast(`❌ Google OAuth failed: ${decodeURIComponent(reason)}`);
-                history.replaceState(null, '', '#settings');
+            } else if (status === 'error') {
+                const reason = params.get('reason') || 'unknown';
+                toast(`❌ Google OAuth failed: ${reason}`);
             }
+            // Strip the params so a refresh doesn't re-toast or re-route.
+            // Keep the existing hash so the URL stays clean as /#settings.
+            history.replaceState(null, '', '/');
+            // Defer one tick so showPage finds settings panels fully wired.
+            setTimeout(() => {
+                if (typeof showPage === 'function') showPage('settings');
+            }, 50);
         }
-        try { _checkGoogleOAuthRedirect(); } catch (e) {}
-        window.addEventListener('hashchange', () => { try { _checkGoogleOAuthRedirect(); } catch (e) {} });
 
         async function changePassword() {
             const current = document.getElementById('settings-current-pw').value;

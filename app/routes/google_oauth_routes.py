@@ -140,8 +140,13 @@ async def google_oauth_callback(
       6. Redirect back to /#settings with a success/failure flag
     """
     public_url = settings.public_url.rstrip("/")
-    fail_redirect = f"{public_url}/#settings?google_oauth=error"
-    success_redirect = f"{public_url}/#settings?google_oauth=connected"
+    # Use query-param + #settings hash. The SPA's _checkGoogleOAuthRedirect
+    # parses location.search and calls showPage('settings'); the hash is
+    # cosmetic for landing-page polish. Earlier we used hash-only, but
+    # there's no hashchange→page router so users landed on Dashboard
+    # after consent and never saw the connection state update.
+    fail_redirect = f"{public_url}/?google_oauth=error"
+    success_redirect = f"{public_url}/?google_oauth=connected#settings"
 
     if error:
         log.warning(f"Google OAuth user-denied or error: {error}")
