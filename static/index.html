@@ -1787,6 +1787,31 @@ function verify(secret, rawBody, header) {
                         <div style="font-size:11px;color:#888;margin-bottom:6px">Outbound POSTs to your URL when subscribed events fire. Body is signed with HMAC-SHA256 in <code>X-Webhook-Signature: sha256=&lt;hex&gt;</code>.</div>
                         <div id="webhooks-list" style="font-size:12px"></div>
                     </div>
+
+                    <!-- MCP — Model Context Protocol server. Lets external AI
+                         clients (Claude Desktop, Claude.ai, ChatGPT) talk to
+                         Prospector directly using the same API key as above. -->
+                    <div style="margin-top:24px;padding-top:18px;border-top:1px solid #eee">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                            <strong style="font-size:13px">🤖 Connect Claude / ChatGPT (MCP)</strong>
+                            <a href="/mcp" target="_blank" rel="noopener" style="font-size:11px;color:var(--bmp-green);text-decoration:none">View server info →</a>
+                        </div>
+                        <p style="font-size:12px;color:#666;margin:0 0 10px">Plug Prospector into any AI assistant that speaks Model Context Protocol — Claude Desktop, Claude.ai, ChatGPT (with MCP), Cursor. Your AI can search companies, look up contacts, surface hot leads, summarize prospects, and brief you before calls.</p>
+                        <div style="background:#f8f9fa;border:1px solid #e6e6e6;border-radius:6px;padding:10px;font-size:12px;line-height:1.7">
+                            <div><strong>Server URL:</strong> <code id="mcp-url-display"></code> <button class="btn btn-secondary btn-xs" style="margin-left:6px" onclick="copyMcpUrl()">📋 Copy</button></div>
+                            <div><strong>Auth:</strong> <code>X-API-Key: &lt;your-pk_live_… key from above&gt;</code></div>
+                            <div><strong>Available tools:</strong> <span id="mcp-tools-list" style="color:#666">loading…</span></div>
+                        </div>
+                        <details style="margin-top:8px">
+                            <summary style="cursor:pointer;font-size:12px;color:#666">How to add it in Claude Desktop / Claude.ai / ChatGPT</summary>
+                            <div style="margin-top:8px;font-size:12px;color:#444;line-height:1.65">
+                                <p style="margin:0 0 6px"><strong>Claude Desktop / Claude.ai (Connectors):</strong> Settings → Connectors → Add custom connector → paste the Server URL + your API key.</p>
+                                <p style="margin:0 0 6px"><strong>ChatGPT (with MCP enabled):</strong> Settings → Connectors → Add MCP server → paste the URL + key.</p>
+                                <p style="margin:0 0 6px"><strong>Cursor / other clients:</strong> they typically accept the same URL + <code>X-API-Key</code> header pair.</p>
+                                <p style="margin:0;color:#888">Once connected, ask: <em>"Show me hot leads in Phoenix I haven't called this week"</em> or <em>"Summarize Smith Pools and pull a few talking points"</em> — your AI will call the right tool automatically.</p>
+                            </div>
+                        </details>
+                    </div>
                 </div>
 
                 <!-- Audit Log (admin+ only).
@@ -5185,6 +5210,41 @@ function verify(secret, rawBody, header) {
         }
 
         // ============ Integrations: API Keys + Webhooks ============
+        // MCP server info — populates the "Connect Claude / ChatGPT"
+        // panel with the live server URL + tool list. The /mcp GET
+        // endpoint returns metadata without auth so it's safe to
+        // call from any logged-in session.
+        async function loadMcpInfo() {
+            const urlEl = document.getElementById('mcp-url-display');
+            const toolsEl = document.getElementById('mcp-tools-list');
+            if (!urlEl || !toolsEl) return;
+            const fullUrl = `${location.origin}/mcp`;
+            urlEl.textContent = fullUrl;
+            try {
+                const r = await fetch('/mcp');
+                if (!r.ok) {
+                    toolsEl.textContent = `(server returned ${r.status})`;
+                    return;
+                }
+                const data = await r.json();
+                const tools = (data.tools || []).join(', ');
+                toolsEl.textContent = tools || `${data.tool_count || 0} tools available`;
+            } catch (e) {
+                toolsEl.textContent = '(could not fetch — server unreachable)';
+            }
+        }
+
+        async function copyMcpUrl() {
+            const urlEl = document.getElementById('mcp-url-display');
+            if (!urlEl) return;
+            try {
+                await navigator.clipboard.writeText(urlEl.textContent);
+                toast('MCP URL copied');
+            } catch (e) {
+                toast('Could not copy — long-press the URL instead');
+            }
+        }
+
         async function loadApiKeys() {
             const rows = await api('/api/integrations/api-keys');
             const panel = document.getElementById('api-keys-list');
@@ -6641,6 +6701,7 @@ hmac.compare_digest(expected, header)</pre>
             // their own keys + hooks; admins see all)
             loadApiKeys();
             loadWebhooks();
+            loadMcpInfo();
 
             if (isAdminPlus) loadRuntimeConfig();
 

@@ -33,6 +33,7 @@ from app.routes import (
     google_oauth_routes,
     scheduler_routes,
     upload_routes,
+    mcp_routes,
 )
 
 
@@ -196,6 +197,7 @@ app.include_router(scheduler_routes.host_router)
 app.include_router(scheduler_routes.public_router)
 app.include_router(scheduler_routes.booking_page_router)
 app.include_router(upload_routes.router)
+app.include_router(mcp_routes.router)
 
 # Serve static frontend + user-uploaded files (logos, etc.).
 # var/uploads/ is gitignored and persists across deploys; ensure the
