@@ -1298,6 +1298,31 @@ function verify(secret, rawBody, header) {
                             <div id="sched-rules-grid" style="display:grid;grid-template-columns:80px 1fr;gap:8px 14px;font-size:12px;align-items:start;margin-bottom:14px"></div>
                         </div>
 
+                        <div style="border-top:1px solid #f0f0f0;padding-top:14px;margin-bottom:14px">
+                            <h4 style="margin:0 0 10px;font-size:13px;color:#444">📍 Where does the meeting happen?</h4>
+                            <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 12px;align-items:center;font-size:12px">
+                                <label style="color:#666">Meeting type</label>
+                                <select id="sched-meeting-type" onchange="onMeetingTypeChange()" style="padding:7px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                                    <option value="google_meet">Google Meet (auto-generated link)</option>
+                                    <option value="phone">Phone — host calls prospect</option>
+                                    <option value="in_person">In person at an address</option>
+                                    <option value="custom_link">Custom link (Zoom, Teams, etc.)</option>
+                                </select>
+                                <label id="sched-meeting-loc-label" style="color:#666;display:none">Address / link</label>
+                                <input id="sched-meeting-loc-details" onchange="saveSchedulingConfig()" placeholder="e.g. 1234 Main St, Phoenix AZ — or https://zoom.us/j/..." style="padding:7px;border:1px solid #ddd;border-radius:4px;font-size:13px;display:none">
+                            </div>
+                            <div style="font-size:11px;color:#888;margin-top:6px" id="sched-meeting-type-help">Google Meet creates a unique link in each invite — no setup needed.</div>
+                        </div>
+
+                        <div style="border-top:1px solid #f0f0f0;padding-top:14px;margin-bottom:14px">
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                                <h4 style="margin:0;font-size:13px;color:#444">📝 Intake questions</h4>
+                                <button class="btn btn-secondary btn-xs" onclick="addBookingQuestion()">+ Add question</button>
+                            </div>
+                            <p style="font-size:11px;color:#888;margin:0 0 10px">Name, email, phone, and a free-form message are always shown. Add questions below to qualify leads (Calendly-style).</p>
+                            <div id="sched-questions-list" style="display:flex;flex-direction:column;gap:10px"></div>
+                        </div>
+
                         <details style="border-top:1px solid #f0f0f0;padding-top:12px">
                             <summary style="cursor:pointer;font-size:13px;color:#444;font-weight:500">✏️ Booking page wording</summary>
                             <div style="margin-top:10px;display:grid;grid-template-columns:auto 1fr;gap:8px 12px;align-items:center;font-size:12px">
@@ -6856,6 +6881,11 @@ hmac.compare_digest(expected, header)</pre>
             set('sched-page-intro', data.page_intro);
             set('sched-meeting-title', data.meeting_title);
             set('sched-meeting-desc', data.meeting_description);
+            set('sched-meeting-type', data.meeting_type || 'google_meet');
+            set('sched-meeting-loc-details', data.meeting_location_details || '');
+            _renderMeetingTypeFields(data.meeting_type || 'google_meet');
+            _schedQuestions = (data.questions || []).slice();
+            _renderBookingQuestions();
             _schedRules = (data.rules || []).map(r => ({ weekday: r.weekday, start_time: r.start_time, end_time: r.end_time }));
             _renderRulesGrid(_schedRules);
             // Show the host's timezone next to "Weekly hours" — pulled from
@@ -6889,6 +6919,9 @@ hmac.compare_digest(expected, header)</pre>
                     meeting_description: txt('sched-meeting-desc'),
                     page_headline: txt('sched-page-headline'),
                     page_intro: txt('sched-page-intro'),
+                    meeting_type: txt('sched-meeting-type'),
+                    meeting_location_details: txt('sched-meeting-loc-details'),
+                    questions: _schedQuestions,
                 };
                 const data = await api('/api/me/scheduling/config', {
                     method: 'PATCH',
@@ -6903,6 +6936,98 @@ hmac.compare_digest(expected, header)</pre>
                     }
                 }
             }, 300);
+        }
+
+        // ============================================================
+        // Meeting type + custom questions
+        // ============================================================
+
+        function _renderMeetingTypeFields(type) {
+            const helpEl = document.getElementById('sched-meeting-type-help');
+            const labelEl = document.getElementById('sched-meeting-loc-label');
+            const inputEl = document.getElementById('sched-meeting-loc-details');
+            const helpByType = {
+                google_meet: 'Google Meet creates a unique link in each invite — no setup needed.',
+                phone: 'Host calls the prospect at the phone number they enter on the booking form. Phone becomes a required field.',
+                in_person: 'Enter the address that goes on the calendar invite (visible to the prospect after booking).',
+                custom_link: 'Paste your existing Zoom / Teams / etc. link. Same link gets put on every booking — useful if you have a fixed personal room.',
+            };
+            if (helpEl) helpEl.textContent = helpByType[type] || '';
+            const showDetails = (type === 'in_person' || type === 'custom_link');
+            if (labelEl) labelEl.style.display = showDetails ? '' : 'none';
+            if (inputEl) inputEl.style.display = showDetails ? '' : 'none';
+        }
+
+        function onMeetingTypeChange() {
+            const type = document.getElementById('sched-meeting-type').value;
+            _renderMeetingTypeFields(type);
+            saveSchedulingConfig();
+        }
+
+        let _schedQuestions = [];
+
+        function _renderBookingQuestions() {
+            const list = document.getElementById('sched-questions-list');
+            if (!list) return;
+            if (!_schedQuestions.length) {
+                list.innerHTML = '<div style="font-size:12px;color:#999;font-style:italic;padding:8px 4px">No custom questions yet — click <strong>+ Add question</strong> to qualify leads.</div>';
+                return;
+            }
+            list.innerHTML = _schedQuestions.map((q, i) => {
+                const optsBlock = q.type === 'single_select'
+                    ? `<div style="margin-top:6px"><label style="font-size:11px;color:#666;display:block;margin-bottom:3px">Options (one per line)</label><textarea data-qfield="options" data-qidx="${i}" rows="3" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:12px;font-family:inherit" oninput="updateQuestionField(${i},'options',this.value)" onblur="saveSchedulingConfig()">${escapeHtml((q.options || []).join('\n'))}</textarea></div>`
+                    : '';
+                return `<div style="border:1px solid #e6e6e6;border-radius:8px;padding:12px;background:#fafafa">
+                    <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
+                        <select onchange="updateQuestionField(${i},'type',this.value);saveSchedulingConfig()" style="padding:5px;border:1px solid #ddd;border-radius:4px;font-size:11px">
+                            <option value="short_text"${q.type === 'short_text' ? ' selected' : ''}>Short text</option>
+                            <option value="long_text"${q.type === 'long_text' ? ' selected' : ''}>Long text</option>
+                            <option value="url"${q.type === 'url' ? ' selected' : ''}>URL</option>
+                            <option value="single_select"${q.type === 'single_select' ? ' selected' : ''}>Single select</option>
+                        </select>
+                        <input value="${escapeHtml(q.label || '')}" placeholder="Question text (e.g. Company Name)" oninput="updateQuestionField(${i},'label',this.value)" onblur="saveSchedulingConfig()" style="flex:1;padding:5px 7px;border:1px solid #ddd;border-radius:4px;font-size:12px">
+                        <label style="font-size:11px;color:#666;display:flex;align-items:center;gap:3px;white-space:nowrap"><input type="checkbox" ${q.required ? 'checked' : ''} onchange="updateQuestionField(${i},'required',this.checked);saveSchedulingConfig()"> req</label>
+                        <button type="button" onclick="moveQuestion(${i},-1)" ${i === 0 ? 'disabled' : ''} title="Up" style="background:transparent;border:0;cursor:pointer;color:#666;padding:3px 5px;font-size:13px">↑</button>
+                        <button type="button" onclick="moveQuestion(${i},1)" ${i === _schedQuestions.length - 1 ? 'disabled' : ''} title="Down" style="background:transparent;border:0;cursor:pointer;color:#666;padding:3px 5px;font-size:13px">↓</button>
+                        <button type="button" onclick="removeQuestion(${i})" title="Delete" style="background:transparent;border:0;cursor:pointer;color:#c0392b;padding:3px 5px;font-size:14px">✕</button>
+                    </div>
+                    ${optsBlock}
+                </div>`;
+            }).join('');
+        }
+
+        function addBookingQuestion() {
+            _schedQuestions.push({ type: 'short_text', label: '', required: false, options: [], position: _schedQuestions.length });
+            _renderBookingQuestions();
+            // No save until they type a label — empty labels get filtered server-side
+        }
+
+        function removeQuestion(idx) {
+            _schedQuestions.splice(idx, 1);
+            _schedQuestions.forEach((q, i) => q.position = i);
+            _renderBookingQuestions();
+            saveSchedulingConfig();
+        }
+
+        function moveQuestion(idx, dir) {
+            const target = idx + dir;
+            if (target < 0 || target >= _schedQuestions.length) return;
+            const tmp = _schedQuestions[idx];
+            _schedQuestions[idx] = _schedQuestions[target];
+            _schedQuestions[target] = tmp;
+            _schedQuestions.forEach((q, i) => q.position = i);
+            _renderBookingQuestions();
+            saveSchedulingConfig();
+        }
+
+        function updateQuestionField(idx, field, value) {
+            const q = _schedQuestions[idx];
+            if (!q) return;
+            if (field === 'options') {
+                q.options = String(value || '').split('\n').map(s => s.trim()).filter(Boolean);
+            } else {
+                q[field] = value;
+            }
         }
 
         async function previewSchedulingSlots() {

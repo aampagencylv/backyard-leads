@@ -1015,6 +1015,22 @@ class SchedulingConfig(Base):
     page_intro = Column(Text, nullable=False,
                         default="Pick a time that works for you. The call lands on both our calendars and you'll get a confirmation email.")
 
+    # Meeting location / conferencing.
+    #   'google_meet'  → Google Calendar auto-generates a Meet link
+    #   'phone'        → "Host will call you at <prospect phone>"
+    #   'in_person'    → meeting_location_details is the address
+    #   'custom_link'  → meeting_location_details is a Zoom/Teams URL or instructions
+    meeting_type = Column(String(20), nullable=False, default="google_meet")
+    meeting_location_details = Column(Text, nullable=True)
+
+    # Custom intake questions on the booking form (iClosed-style).
+    # Stored as JSON array of:
+    #   {id: str, key: str, label: str, type: 'short_text'|'long_text'|'url'|'single_select',
+    #    options: list[str] (single_select only), required: bool, position: int}
+    # The built-in name/email/phone fields are always present and not in
+    # this array. Answers persist on Booking.answers_json.
+    booking_questions_json = Column(Text, nullable=True)
+
     # Public visibility — admin can deactivate without disconnecting Google
     is_active = Column(Boolean, default=True, nullable=False)
 
@@ -1052,9 +1068,13 @@ class Booking(Base):
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=True)
     contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=True)
 
+    # Custom intake answers — JSON object keyed by question.key
+    answers_json = Column(Text, nullable=True)
+
     # Google Calendar
     google_event_id = Column(String(255), nullable=True)
     google_event_link = Column(String(500), nullable=True)
+    google_meet_link = Column(String(500), nullable=True)  # populated when meeting_type='google_meet'
 
     # Lifecycle
     status = Column(String(20), nullable=False, default="confirmed")  # confirmed/cancelled

@@ -50,6 +50,7 @@ async def init_db():
         "scripts.migrate_google_oauth",
         "scripts.migrate_scheduler",
         "scripts.migrate_google_maps_key",
+        "scripts.migrate_scheduler_v2",
     ):
         try:
             mod = __import__(_migration_module, fromlist=["main"])

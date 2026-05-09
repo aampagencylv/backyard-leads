@@ -311,13 +311,33 @@ async def free_busy(
 
 async def create_event(
     access_token: str, calendar_id: str, event: dict,
+    *, with_meet_link: bool = False,
 ) -> dict:
     """Create a single calendar event. `event` follows Google's
     Calendar API event shape: summary, description, start.dateTime,
-    end.dateTime, attendees, etc."""
+    end.dateTime, attendees, etc.
+
+    When with_meet_link=True, attaches a conferenceData.createRequest
+    that tells Google to auto-generate a Hangouts/Meet link. The Calendar
+    API requires conferenceDataVersion=1 in the query string for the
+    create-request payload to be honored — without that param, Google
+    silently drops conferenceData and you get an event with no Meet
+    link. The returned event includes hangoutLink + a populated
+    conferenceData.entryPoints[*].uri for the actual call URL."""
+    import secrets as _secrets
+    body = dict(event)
+    params = {"sendUpdates": "all"}
+    if with_meet_link:
+        body["conferenceData"] = {
+            "createRequest": {
+                "requestId": _secrets.token_urlsafe(16),
+                "conferenceSolutionKey": {"type": "hangoutsMeet"},
+            },
+        }
+        params["conferenceDataVersion"] = 1
     return await _cal_request(
         "POST", f"/calendars/{urllib.parse.quote(calendar_id, safe='')}/events",
         access_token=access_token,
-        params={"sendUpdates": "all"},  # send invite to attendees
-        json_body=event,
+        params=params,
+        json_body=body,
     )

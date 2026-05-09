@@ -64,6 +64,10 @@ async def _get_or_create_config(db: AsyncSession, user_id: int) -> SchedulingCon
     return row
 
 
+_VALID_QUESTION_TYPES = {"short_text", "long_text", "url", "single_select"}
+_DEFAULT_BOOKING_QUESTIONS = []  # Empty by default — name/email/phone/message are always shown.
+
+
 def _config_payload(c: SchedulingConfig) -> dict:
     return {
         "slot_minutes": c.slot_minutes,
@@ -78,6 +82,9 @@ def _config_payload(c: SchedulingConfig) -> dict:
         "page_headline": c.page_headline,
         "page_intro": c.page_intro,
         "is_active": c.is_active,
+        "meeting_type": c.meeting_type or "google_meet",
+        "meeting_location_details": c.meeting_location_details or "",
+        "questions": json.loads(c.booking_questions_json) if c.booking_questions_json else _DEFAULT_BOOKING_QUESTIONS,
     }
 
 
@@ -103,6 +110,57 @@ class SchedulingConfigPatch(BaseModel):
     page_headline: Optional[str] = None
     page_intro: Optional[str] = None
     is_active: Optional[bool] = None
+    meeting_type: Optional[str] = None
+    meeting_location_details: Optional[str] = None
+    questions: Optional[list] = None
+
+
+def _validate_questions(raw: list) -> list:
+    """Sanity-check incoming custom questions. Each entry must have a
+    type from _VALID_QUESTION_TYPES and a non-empty label. Drops
+    malformed entries; reassigns positions sequentially. Auto-generates
+    a stable `key` (slug from label) when the client didn't supply one,
+    so answers can persist with a meaningful column name across edits."""
+    out: list[dict] = []
+    seen_keys: set[str] = set()
+    for i, q in enumerate(raw or []):
+        if not isinstance(q, dict):
+            continue
+        qtype = (q.get("type") or "").strip()
+        if qtype not in _VALID_QUESTION_TYPES:
+            continue
+        label = (q.get("label") or "").strip()
+        if not label:
+            continue
+        key = (q.get("key") or "").strip().lower()
+        if not key:
+            key = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")[:40] or f"q{i+1}"
+        # Avoid collisions with built-in fields + earlier custom keys
+        builtin = {"name", "email", "phone", "message"}
+        base = key
+        n = 2
+        while key in builtin or key in seen_keys:
+            key = f"{base}_{n}"
+            n += 1
+        seen_keys.add(key)
+        entry = {
+            "id": q.get("id") or f"q{i+1}",
+            "key": key,
+            "label": label[:200],
+            "type": qtype,
+            "required": bool(q.get("required")),
+            "position": i,
+        }
+        if qtype == "single_select":
+            opts = q.get("options") or []
+            entry["options"] = [str(o).strip()[:120] for o in opts if str(o).strip()][:20]
+            if not entry["options"]:
+                continue  # single_select with no options is useless
+        out.append(entry)
+    out.sort(key=lambda x: x["position"])
+    for i, e in enumerate(out):
+        e["position"] = i
+    return out
 
 
 def _validate_rules(rules: list) -> list:
@@ -157,6 +215,15 @@ async def patch_my_scheduling_config(
         c.page_intro = body.page_intro.strip()[:2000]
     if body.is_active is not None:
         c.is_active = body.is_active
+    if body.meeting_type is not None:
+        mt = body.meeting_type.strip().lower()
+        if mt not in ("google_meet", "phone", "in_person", "custom_link"):
+            mt = "google_meet"
+        c.meeting_type = mt
+    if body.meeting_location_details is not None:
+        c.meeting_location_details = body.meeting_location_details.strip()[:1000] or None
+    if body.questions is not None:
+        c.booking_questions_json = json.dumps(_validate_questions(body.questions))
     await db.commit()
     await db.refresh(c)
     return _config_payload(c)
@@ -223,29 +290,8 @@ async def get_booking_info(
     window_end = now + timedelta(days=days)
     busy, err = await fetch_user_busy(user, time_min=now, time_max=window_end)
     db_busy = await db_busy_ranges(db, user.id, time_min=now, time_max=window_end)
-    if err:
-        # Fail-closed when calendar isn't reachable — better to show
-        # "calendar temporarily unavailable" than to overbook.
-        return {
-            "slug": slug,
-            "host_name": user.full_name,
-            "host_first_name": user.first_name,
-            "page_headline": c.page_headline,
-            "page_intro": c.page_intro,
-            "meeting_title": c.meeting_title,
-            "slot_minutes": c.slot_minutes,
-            "host_timezone": user.timezone,
-            "viewer_timezone": viewer_tz,
-            "slots": [],
-            "calendar_error": err,
-        }
-    viewer_tz = viewer_tz or user.timezone or "America/Phoenix"
-    slots = generate_slots(
-        c, user.timezone or "America/Phoenix",
-        window_start_utc=now, window_end_utc=window_end,
-        busy_ranges=busy, booked_in_db=db_busy, now_utc=now,
-    )
-    return {
+    questions = json.loads(c.booking_questions_json) if c.booking_questions_json else []
+    base = {
         "slug": slug,
         "host_name": user.full_name,
         "host_first_name": user.first_name,
@@ -253,11 +299,25 @@ async def get_booking_info(
         "page_intro": c.page_intro,
         "meeting_title": c.meeting_title,
         "slot_minutes": c.slot_minutes,
+        "meeting_type": c.meeting_type or "google_meet",
+        # Don't leak host's address / personal Zoom link before booking
+        # — the prospect only sees it on the confirmation. The page just
+        # shows a friendly label like "Google Meet" / "Phone" / etc.
         "host_timezone": user.timezone,
-        "viewer_timezone": viewer_tz,
-        "slots": [s.to_payload(viewer_tz) for s in slots[:200]],
-        "calendar_error": None,
+        "viewer_timezone": viewer_tz or user.timezone or "America/Phoenix",
+        "questions": questions,
     }
+    if err:
+        # Fail-closed when calendar isn't reachable — better to show
+        # "calendar temporarily unavailable" than to overbook.
+        return {**base, "slots": [], "calendar_error": err}
+    viewer_tz = base["viewer_timezone"]
+    slots = generate_slots(
+        c, user.timezone or "America/Phoenix",
+        window_start_utc=now, window_end_utc=window_end,
+        busy_ranges=busy, booked_in_db=db_busy, now_utc=now,
+    )
+    return {**base, "slots": [s.to_payload(viewer_tz) for s in slots[:200]], "calendar_error": None}
 
 
 class BookingConfirmRequest(BaseModel):
@@ -267,6 +327,7 @@ class BookingConfirmRequest(BaseModel):
     phone: Optional[str] = None
     message: Optional[str] = None
     viewer_timezone: Optional[str] = None
+    answers: Optional[dict] = None  # custom-question answers, keyed by question.key
 
 
 def _parse_iso_utc(s: str) -> datetime:
@@ -277,6 +338,37 @@ def _parse_iso_utc(s: str) -> datetime:
         return dt.astimezone(timezone.utc)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid starts_at_utc")
+
+
+def _filter_answers(host_questions: list, raw: dict) -> dict:
+    """Coerce + clamp custom answers against the host's question schema.
+    Drops keys we don't know about, validates single_select against the
+    declared options, truncates long_text. Never raises — bad input
+    just means an empty value for that key."""
+    valid_keys = {q["key"]: q for q in host_questions if isinstance(q, dict) and q.get("key")}
+    out: dict = {}
+    if not isinstance(raw, dict):
+        return out
+    for k, v in raw.items():
+        q = valid_keys.get(k)
+        if not q:
+            continue
+        sval = str(v).strip() if v is not None else ""
+        if not sval:
+            continue
+        qtype = q.get("type")
+        if qtype == "single_select":
+            opts = q.get("options") or []
+            if sval not in opts:
+                continue
+            out[k] = sval
+        elif qtype == "url":
+            out[k] = sval[:500]
+        elif qtype == "long_text":
+            out[k] = sval[:5000]
+        else:  # short_text
+            out[k] = sval[:300]
+    return out
 
 
 async def _find_company_contact_by_email(db: AsyncSession, email: str):
@@ -348,6 +440,62 @@ async def confirm_booking(
     # CRM linkage best-effort
     company_id, contact_id = await _find_company_contact_by_email(db, body.email.strip().lower())
 
+    # Validate + filter custom answers against the host's question schema
+    host_questions = json.loads(c.booking_questions_json) if c.booking_questions_json else []
+    answers_clean = _filter_answers(host_questions, body.answers or {})
+    # Required-field check
+    for q in host_questions:
+        if q.get("required") and not str(answers_clean.get(q["key"], "")).strip():
+            raise HTTPException(status_code=400, detail=f"Required field missing: {q['label']}")
+
+    # Build the description block including built-in fields + answers.
+    # Reads top-to-bottom in the calendar invite — Google's UI shows
+    # the description prominently, so it's the right place to surface
+    # what the prospect told us.
+    desc_parts = []
+    if (c.meeting_description or "").strip():
+        desc_parts.append((c.meeting_description or "").strip())
+    desc_parts.append("")  # blank line
+    desc_parts.append("Booked through Backyard Marketing Pros' scheduler.")
+    desc_parts.append(
+        f"Prospect: {body.name} <{body.email}>"
+        + (f" · {body.phone}" if body.phone else "")
+    )
+    if body.message:
+        desc_parts.append(f"\nNote from prospect: {body.message}")
+    if host_questions and answers_clean:
+        desc_parts.append("\n— Intake answers —")
+        for q in host_questions:
+            v = answers_clean.get(q["key"])
+            if v is None or str(v).strip() == "":
+                continue
+            desc_parts.append(f"{q['label']}: {v}")
+
+    # Honor the host's meeting_type. google_meet → conferenceData attached
+    # so Google generates a Meet link. Other types → set event.location
+    # (Google Calendar's invite renders the location prominently).
+    meeting_type = (c.meeting_type or "google_meet").lower()
+    location_field: Optional[str] = None
+    with_meet_link = False
+    if meeting_type == "google_meet":
+        with_meet_link = True
+    elif meeting_type == "phone":
+        prospect_phone = (body.phone or "").strip()
+        if prospect_phone:
+            location_field = f"Phone — {prospect_phone}"
+            desc_parts.append(f"\n📞 Host will call you at {prospect_phone}.")
+        else:
+            location_field = "Phone call"
+            desc_parts.append("\n📞 This is a phone call. The host will reach out.")
+    elif meeting_type == "in_person":
+        addr = (c.meeting_location_details or "").strip()
+        location_field = addr or "In person — host will share address"
+    elif meeting_type == "custom_link":
+        link = (c.meeting_location_details or "").strip()
+        location_field = link or "Online meeting link"
+        if link and link.startswith(("http://", "https://")):
+            desc_parts.append(f"\n🔗 Meeting link: {link}")
+
     # Create Google event
     try:
         tokens = await refresh_access_token(user.google_refresh_token)
@@ -356,13 +504,7 @@ async def confirm_booking(
 
     event = {
         "summary": f"{c.meeting_title} — {body.name}",
-        "description": (
-            (c.meeting_description or "").strip() + "\n\n"
-            f"Booked through Backyard Marketing Pros' scheduler.\n"
-            f"Prospect: {body.name} <{body.email}>"
-            + (f" · {body.phone}" if body.phone else "")
-            + (f"\n\nNote from prospect: {body.message}" if body.message else "")
-        ),
+        "description": "\n".join(desc_parts).strip(),
         "start": {"dateTime": starts_at.isoformat(), "timeZone": "UTC"},
         "end":   {"dateTime": ends_at.isoformat(),   "timeZone": "UTC"},
         "attendees": [
@@ -372,12 +514,30 @@ async def confirm_booking(
         ],
         "reminders": {"useDefault": True},
     }
+    if location_field:
+        event["location"] = location_field
     cal_id = user.google_calendar_id or "primary"
     try:
-        gevent = await create_event(tokens.access_token, cal_id, event)
+        gevent = await create_event(
+            tokens.access_token, cal_id, event,
+            with_meet_link=with_meet_link,
+        )
     except GoogleAPIError as e:
         log.exception(f"Failed to create Google event for booking: {e}")
         raise HTTPException(status_code=502, detail="Could not create the calendar event. Please try again.")
+
+    # Pull the Meet link Google just generated (if we asked for one).
+    # `hangoutLink` is the canonical field; conferenceData.entryPoints
+    # is the fallback for older API responses.
+    meet_link: Optional[str] = None
+    if with_meet_link:
+        meet_link = gevent.get("hangoutLink")
+        if not meet_link:
+            entries = ((gevent.get("conferenceData") or {}).get("entryPoints") or [])
+            for e in entries:
+                if (e.get("entryPointType") == "video") and e.get("uri"):
+                    meet_link = e["uri"]
+                    break
 
     booking = Booking(
         host_user_id=user.id,
@@ -387,10 +547,12 @@ async def confirm_booking(
         prospect_email=body.email.strip().lower()[:255],
         prospect_phone=(body.phone or "").strip()[:40] or None,
         prospect_message=(body.message or "").strip()[:2000] or None,
+        answers_json=json.dumps(answers_clean) if answers_clean else None,
         company_id=company_id,
         contact_id=contact_id,
         google_event_id=gevent.get("id"),
         google_event_link=gevent.get("htmlLink"),
+        google_meet_link=meet_link,
         status="confirmed",
     )
     db.add(booking)
@@ -411,7 +573,10 @@ async def confirm_booking(
                 "host_user_id": user.id,
                 "google_event_id": gevent.get("id"),
                 "google_event_link": gevent.get("htmlLink"),
+                "google_meet_link": meet_link,
+                "meeting_type": meeting_type,
                 "prospect_email": body.email,
+                "answers": answers_clean or None,
             }),
         ))
 
@@ -432,6 +597,8 @@ async def confirm_booking(
         "starts_at_utc": starts_at.isoformat(),
         "ends_at_utc": ends_at.isoformat(),
         "google_event_link": gevent.get("htmlLink"),
+        "google_meet_link": meet_link,
+        "meeting_type": meeting_type,
         "host_name": user.full_name,
         "meeting_title": c.meeting_title,
     }
@@ -600,6 +767,10 @@ function fmtDay(iso) {
 function fmtTime(iso) {
   return new Date(iso).toLocaleTimeString(undefined, { hour:'numeric', minute:'2-digit' });
 }
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
 
 async function load() {
   const r = await fetch(`/api/book/${SLUG}/info?days=14&viewer_tz=${encodeURIComponent(VIEWER_TZ)}`);
@@ -610,7 +781,8 @@ async function load() {
   info = await r.json();
   document.getElementById('page-headline').textContent = info.page_headline;
   document.getElementById('page-intro').textContent = info.page_intro;
-  document.getElementById('meeting-meta').textContent = `${info.meeting_title} · ${info.slot_minutes} min · with ${info.host_name} · times shown in ${VIEWER_TZ}`;
+  const typeLabel = ({google_meet:'📹 Google Meet', phone:'📞 Phone', in_person:'📍 In person', custom_link:'🔗 Online'}[info.meeting_type] || '');
+  document.getElementById('meeting-meta').textContent = `${info.meeting_title} · ${info.slot_minutes} min · ${typeLabel} · with ${info.host_name} · times shown in ${VIEWER_TZ}`;
   if (info.calendar_error) {
     document.getElementById('body').innerHTML = `<div class="empty">Calendar temporarily unavailable. Please try again in a few minutes.</div>`;
     return;
@@ -635,6 +807,27 @@ async function load() {
     }
     html += '</div>';
   }
+  // Render any custom intake questions the host configured. Built-in
+  // name/email/phone/message are always shown; custom ones append below
+  // in their declared position order.
+  const phoneRequiredByMeetingType = info.meeting_type === 'phone';
+  const customQs = (info.questions || []).slice().sort((a,b) => (a.position||0) - (b.position||0));
+  let customHtml = '';
+  for (const q of customQs) {
+    const id = 'bkq-' + q.key;
+    const req = q.required ? ' *' : ' (optional)';
+    if (q.type === 'long_text') {
+      customHtml += `<label>${escapeHtml(q.label)}${req}</label><textarea id="${id}" data-qkey="${escapeHtml(q.key)}" rows="3"></textarea>`;
+    } else if (q.type === 'url') {
+      customHtml += `<label>${escapeHtml(q.label)}${req}</label><input id="${id}" data-qkey="${escapeHtml(q.key)}" type="url" placeholder="https://">`;
+    } else if (q.type === 'single_select') {
+      const opts = (q.options || []).map(o => `<label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#333;margin-top:4px;font-weight:400;cursor:pointer"><input type="radio" name="${id}" value="${escapeHtml(o)}" data-qkey="${escapeHtml(q.key)}"> ${escapeHtml(o)}</label>`).join('');
+      customHtml += `<label>${escapeHtml(q.label)}${req}</label><div id="${id}" style="margin-top:4px">${opts}</div>`;
+    } else {
+      customHtml += `<label>${escapeHtml(q.label)}${req}</label><input id="${id}" data-qkey="${escapeHtml(q.key)}" type="text">`;
+    }
+  }
+
   html += `</div><div class="form-pane">
     <h3>Your details</h3>
     <div id="form-empty" style="color:#888;font-size:13px">Pick a time to book.</div>
@@ -642,8 +835,9 @@ async function load() {
       <div class="selected-summary" id="selected-summary"></div>
       <label>Full name *</label><input id="bk-name" required>
       <label>Email *</label><input id="bk-email" type="email" required>
-      <label>Phone (optional)</label><input id="bk-phone" type="tel">
+      <label>Phone${phoneRequiredByMeetingType ? ' *' : ' (optional)'}</label><input id="bk-phone" type="tel"${phoneRequiredByMeetingType ? ' required' : ''}>
       <label>What would you like to discuss? (optional)</label><textarea id="bk-msg" rows="3"></textarea>
+      ${customHtml}
       <button id="bk-submit" onclick="confirmBooking()">Confirm booking</button>
       <div class="err" id="bk-err"></div>
     </div>
@@ -664,6 +858,23 @@ async function load() {
   });
 }
 
+function _collectAnswers() {
+  // Gather { question.key: value } from all rendered custom-question
+  // inputs. For radio groups, we look up the checked input by name.
+  const answers = {};
+  for (const q of (info && info.questions) || []) {
+    const id = 'bkq-' + q.key;
+    if (q.type === 'single_select') {
+      const checked = document.querySelector(`input[name="${id}"]:checked`);
+      if (checked) answers[q.key] = checked.value;
+    } else {
+      const el = document.getElementById(id);
+      if (el && el.value && el.value.trim()) answers[q.key] = el.value.trim();
+    }
+  }
+  return answers;
+}
+
 async function confirmBooking() {
   const name = document.getElementById('bk-name').value.trim();
   const email = document.getElementById('bk-email').value.trim();
@@ -673,6 +884,24 @@ async function confirmBooking() {
   errEl.textContent = '';
   if (!name || !email) { errEl.textContent = 'Name and email are required.'; return; }
   if (!selectedSlot) { errEl.textContent = 'Please pick a time first.'; return; }
+  if (info && info.meeting_type === 'phone' && !phone) {
+    errEl.textContent = 'Phone is required — the host will call you.';
+    return;
+  }
+  // Required custom-question check (we also re-validate server-side)
+  for (const q of (info && info.questions) || []) {
+    if (!q.required) continue;
+    const id = 'bkq-' + q.key;
+    let val = '';
+    if (q.type === 'single_select') {
+      const checked = document.querySelector(`input[name="${id}"]:checked`);
+      val = checked ? checked.value : '';
+    } else {
+      const el = document.getElementById(id);
+      val = el && el.value ? el.value.trim() : '';
+    }
+    if (!val) { errEl.textContent = `Required: ${q.label}`; return; }
+  }
   const btn = document.getElementById('bk-submit');
   btn.disabled = true;
   btn.textContent = 'Booking…';
@@ -683,6 +912,7 @@ async function confirmBooking() {
       starts_at_utc: selectedSlot.utc,
       name, email, phone, message,
       viewer_timezone: VIEWER_TZ,
+      answers: _collectAnswers(),
     }),
   });
   if (!r.ok) {
@@ -693,13 +923,25 @@ async function confirmBooking() {
     return;
   }
   const data = await r.json();
+  // Build the meeting-location line shown on the confirmation screen.
+  let locLine = '';
+  if (data.meeting_type === 'google_meet' && data.google_meet_link) {
+    locLine = `<p style="margin-top:14px"><a href="${escapeHtml(data.google_meet_link)}" style="display:inline-block;background:#1a73e8;color:white;padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:600">📹 Join Google Meet</a><br><span style="font-size:11px;color:#888">${escapeHtml(data.google_meet_link)}</span></p>`;
+  } else if (data.meeting_type === 'phone') {
+    locLine = `<p style="font-size:13px;color:#444;margin-top:14px">📞 The host will call you at the phone number you provided.</p>`;
+  } else if (data.meeting_type === 'in_person') {
+    locLine = `<p style="font-size:13px;color:#444;margin-top:14px">📍 Meeting location details are in your calendar invite.</p>`;
+  } else if (data.meeting_type === 'custom_link') {
+    locLine = `<p style="font-size:13px;color:#444;margin-top:14px">🔗 Meeting link is in your calendar invite.</p>`;
+  }
   document.getElementById('root').innerHTML = `
     <div class="booked">
       <h2>You're booked!</h2>
       <p><strong>${fmtDay(selectedSlot.local)} at ${fmtTime(selectedSlot.local)}</strong></p>
-      <p>A calendar invite is on its way to <strong>${email}</strong>.</p>
-      ${data.google_event_link ? `<p><a href="${data.google_event_link}">View on your calendar</a></p>` : ''}
-      <p style="color:#888;font-size:13px">Talk soon,<br>${data.host_name}</p>
+      <p>A calendar invite is on its way to <strong>${escapeHtml(email)}</strong>.</p>
+      ${locLine}
+      ${data.google_event_link ? `<p style="margin-top:10px"><a href="${escapeHtml(data.google_event_link)}" style="color:#0077B5;font-size:12px">View on your calendar</a></p>` : ''}
+      <p style="color:#888;font-size:13px;margin-top:18px">Talk soon,<br>${escapeHtml(data.host_name)}</p>
     </div>
   `;
 }
