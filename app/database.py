@@ -53,6 +53,7 @@ async def init_db():
         "scripts.migrate_scheduler_v2",
         "scripts.migrate_scheduler_branding",
         "scripts.migrate_apikey_scope",
+        "scripts.migrate_audit_branding",
     ):
         try:
             mod = __import__(_migration_module, fromlist=["main"])

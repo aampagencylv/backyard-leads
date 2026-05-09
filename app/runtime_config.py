@@ -124,6 +124,22 @@ async def set_blooio_signing_secret(db: AsyncSession, value: str) -> RuntimeConf
     return rc
 
 
+async def set_audit_branding(
+    db: AsyncSession, *,
+    header_url: Optional[str] = None,
+    logo_url: Optional[str] = None,
+) -> RuntimeConfig:
+    rc = await _get_or_create(db)
+    if header_url is not None:
+        rc.audit_report_header_url = header_url.strip()[:500] or None
+    if logo_url is not None:
+        rc.audit_report_logo_url = logo_url.strip()[:500] or None
+    rc.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(rc)
+    return rc
+
+
 async def get_google_maps_api_key(db: AsyncSession) -> str:
     """DB-first; falls back to env var so rotation doesn't need a redeploy."""
     rc = await _get_or_create(db)

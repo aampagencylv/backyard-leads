@@ -24,6 +24,7 @@ from app.runtime_config import (
     set_messaging_direction,
     set_apollo_api_key,
     set_google_maps_api_key,
+    set_audit_branding,
     DEFAULT_MESSAGING_DIRECTION,
     mask_key,
 )
@@ -45,6 +46,8 @@ class UpdateRuntimeConfigRequest(BaseModel):
     messaging_direction: Optional[str] = None
     apollo_api_key: Optional[str] = None  # Tenant-tier (admin can set)
     google_maps_api_key: Optional[str] = None  # Platform-tier (super_admin only)
+    audit_report_header_url: Optional[str] = None  # Tenant-tier (admin can set)
+    audit_report_logo_url: Optional[str] = None    # Tenant-tier (admin can set)
 
 
 def _tenant_payload(rc, settings_obj) -> dict:
@@ -68,6 +71,10 @@ def _tenant_payload(rc, settings_obj) -> dict:
             "direction": (rc.messaging_direction or "").strip(),
             "is_custom": bool((rc.messaging_direction or "").strip()),
             "default_preview": DEFAULT_MESSAGING_DIRECTION[:240] + "…",
+        },
+        "audit_branding": {
+            "header_url": (getattr(rc, "audit_report_header_url", None) or ""),
+            "logo_url": (getattr(rc, "audit_report_logo_url", None) or ""),
         },
     }
 
@@ -214,6 +221,12 @@ async def update_runtime_config(
         await set_apollo_api_key(db, req.apollo_api_key)
     if req.messaging_direction is not None:
         await set_messaging_direction(db, req.messaging_direction)
+    if req.audit_report_header_url is not None or req.audit_report_logo_url is not None:
+        await set_audit_branding(
+            db,
+            header_url=req.audit_report_header_url,
+            logo_url=req.audit_report_logo_url,
+        )
 
     # Platform-tier writes (super_admin only)
     if is_super:
@@ -247,6 +260,7 @@ async def update_runtime_config(
         "deepgram_api_key", "blooio_api_key", "blooio_signing_secret",
         "resend_webhook_secret", "messaging_direction", "apollo_api_key",
         "google_maps_api_key",
+        "audit_report_header_url", "audit_report_logo_url",
     ):
         val = getattr(req, field_name)
         if val is not None:

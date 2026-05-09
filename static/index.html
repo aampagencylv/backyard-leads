@@ -1614,6 +1614,37 @@ function verify(secret, rawBody, header) {
                     </div>
                 </div>
 
+                <!-- Audit Report Branding — tenant-tier. Two image fields with
+                     direct uploads via the shared /api/uploads/logo endpoint. -->
+                <div id="audit-branding-section" class="search-box hidden" style="max-width:600px;margin-top:16px">
+                    <h3 style="margin:0 0 6px">📊 Audit Report Branding</h3>
+                    <p style="font-size:12px;color:#888;margin-bottom:14px">Customize the AI Findability audit report your prospects see. The header banner sits at the top of the report; the footer logo appears at the bottom. Leave blank to use the BMP defaults.</p>
+
+                    <div class="form-group" style="margin-bottom:14px">
+                        <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Header banner</label>
+                        <p style="font-size:11px;color:#888;margin:0 0 6px">Wide image — 1200×360 works well. Sits behind the report title, full-width.</p>
+                        <div style="display:flex;gap:6px;align-items:stretch;flex-wrap:wrap">
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('audit-header-file').click()">📤 Upload</button>
+                            <input type="file" id="audit-header-file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" onchange="uploadAuditImage('header', this)" style="display:none">
+                            <input id="audit-header-url" oninput="previewAuditHeader()" onchange="saveAuditBranding()" placeholder="…or paste an https://… URL" style="flex:1;min-width:220px;padding:7px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="clearAuditImage('header')" title="Revert to default">✕</button>
+                        </div>
+                        <div id="audit-header-preview" style="margin-top:8px"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Footer logo</label>
+                        <p style="font-size:11px;color:#888;margin:0 0 6px">Renders at the bottom of the report. Caps at 200×60, transparent PNG / SVG looks best.</p>
+                        <div style="display:flex;gap:6px;align-items:stretch;flex-wrap:wrap">
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('audit-logo-file').click()">📤 Upload</button>
+                            <input type="file" id="audit-logo-file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" onchange="uploadAuditImage('logo', this)" style="display:none">
+                            <input id="audit-logo-url" oninput="previewAuditLogo()" onchange="saveAuditBranding()" placeholder="…or paste an https://… URL" style="flex:1;min-width:220px;padding:7px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="clearAuditImage('logo')" title="Revert to default">✕</button>
+                        </div>
+                        <div id="audit-logo-preview" style="margin-top:8px"></div>
+                    </div>
+                </div>
+
                 <!-- Morning Brief — daily TZ-aware digest email -->
                 <div class="search-box" style="max-width:600px;margin-top:16px">
                     <h3 style="margin:0 0 6px">☀️ Morning Brief</h3>
@@ -6721,6 +6752,9 @@ hmac.compare_digest(expected, header)</pre>
             const messagingSection = document.getElementById('messaging-direction-section');
             if (messagingSection) messagingSection.classList.toggle('hidden', !isAdminPlus);
 
+            const auditBrandingSection = document.getElementById('audit-branding-section');
+            if (auditBrandingSection) auditBrandingSection.classList.toggle('hidden', !isAdminPlus);
+
             const apiKeysSection = document.getElementById('api-keys-section');
             if (apiKeysSection) apiKeysSection.classList.toggle('hidden', !isSuper);
 
@@ -8233,6 +8267,15 @@ hmac.compare_digest(expected, header)</pre>
                     : 'Default direction active. AI generation will lead with the AI findability / GEO / local SEO angle.';
             }
 
+            // Audit report branding (header banner + footer logo)
+            const ab = (cfg.audit_branding || {});
+            const headerInput = document.getElementById('audit-header-url');
+            const logoInput = document.getElementById('audit-logo-url');
+            if (headerInput) headerInput.value = ab.header_url || '';
+            if (logoInput) logoInput.value = ab.logo_url || '';
+            previewAuditHeader();
+            previewAuditLogo();
+
             // Browser-notification permission status
             const notifStatus = document.getElementById('notif-status');
             if (notifStatus) {
@@ -9626,6 +9669,78 @@ hmac.compare_digest(expected, header)</pre>
                 body: JSON.stringify({ google_maps_api_key: value }),
             });
             if (data) { toast('Google Maps key saved'); loadRuntimeConfig(); }
+        }
+
+        // ============================================================
+        // Audit-report branding (tenant-tier — admin can manage)
+        // ============================================================
+
+        function previewAuditHeader() {
+            const url = (document.getElementById('audit-header-url')?.value || '').trim();
+            const box = document.getElementById('audit-header-preview');
+            if (!box) return;
+            if (!url) { box.innerHTML = '<div style="font-size:11px;color:#888;font-style:italic">Using BMP default banner.</div>'; return; }
+            box.innerHTML = `<img src="${escapeHtml(url)}" style="max-width:100%;max-height:120px;border-radius:6px;border:1px solid #eee" onerror="this.replaceWith(Object.assign(document.createElement('div'),{textContent:'Image failed to load',style:'font-size:11px;color:#c0392b'}))">`;
+        }
+
+        function previewAuditLogo() {
+            const url = (document.getElementById('audit-logo-url')?.value || '').trim();
+            const box = document.getElementById('audit-logo-preview');
+            if (!box) return;
+            if (!url) { box.innerHTML = '<div style="font-size:11px;color:#888;font-style:italic">Using BMP default logo.</div>'; return; }
+            box.innerHTML = `<img src="${escapeHtml(url)}" style="max-height:60px;max-width:200px;background:#f8f9fa;padding:6px;border-radius:6px;border:1px solid #eee" onerror="this.replaceWith(Object.assign(document.createElement('div'),{textContent:'Image failed to load',style:'font-size:11px;color:#c0392b'}))">`;
+        }
+
+        async function uploadAuditImage(kind, inputEl) {
+            const file = inputEl.files && inputEl.files[0];
+            if (!file) return;
+            const fd = new FormData();
+            fd.append('file', file);
+            const token = localStorage.getItem('access_token');
+            try {
+                const r = await fetch('/api/uploads/logo', {
+                    method: 'POST',
+                    headers: { Authorization: `Bearer ${token}` },
+                    body: fd,
+                });
+                const data = await r.json().catch(() => ({}));
+                if (!r.ok || !data.url) {
+                    toast(data.detail || 'Upload failed');
+                    inputEl.value = '';
+                    return;
+                }
+                const targetId = kind === 'header' ? 'audit-header-url' : 'audit-logo-url';
+                document.getElementById(targetId).value = data.url;
+                if (kind === 'header') previewAuditHeader();
+                else previewAuditLogo();
+                await saveAuditBranding();
+                toast(`✓ ${kind === 'header' ? 'Header' : 'Logo'} uploaded · ${Math.round(data.size_bytes/1024)}KB`);
+                inputEl.value = '';
+            } catch (e) {
+                toast(`Upload failed: ${e.message || e}`);
+                inputEl.value = '';
+            }
+        }
+
+        function clearAuditImage(kind) {
+            const id = kind === 'header' ? 'audit-header-url' : 'audit-logo-url';
+            document.getElementById(id).value = '';
+            if (kind === 'header') previewAuditHeader();
+            else previewAuditLogo();
+            saveAuditBranding();
+        }
+
+        async function saveAuditBranding() {
+            const header = document.getElementById('audit-header-url')?.value || '';
+            const logo = document.getElementById('audit-logo-url')?.value || '';
+            const data = await api('/api/runtime-config', {
+                method: 'PATCH',
+                body: JSON.stringify({
+                    audit_report_header_url: header.trim(),
+                    audit_report_logo_url: logo.trim(),
+                }),
+            });
+            if (data) { /* silent — preview already shows the result */ }
         }
 
         async function clearGoogleMapsKey() {

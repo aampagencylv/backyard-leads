@@ -1544,7 +1544,13 @@ async def pursue_companies(
                     )
                     token = _secrets.token_urlsafe(16)
                     public_url = settings.public_url.rstrip("/")
-                    html = render_report_html(audit, token, public_url)
+                    from app.runtime_config import _get_or_create as _get_rc
+                    rc = await _get_rc(db)
+                    html = render_report_html(
+                        audit, token, public_url,
+                        header_url=getattr(rc, "audit_report_header_url", "") or "",
+                        footer_logo_url=getattr(rc, "audit_report_logo_url", "") or "",
+                    )
                     audit_report = AuditReportModel(
                         company_id=company.id,
                         token=token,

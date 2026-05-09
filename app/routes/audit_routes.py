@@ -63,7 +63,16 @@ async def generate_audit_report(
 
     token = existing.token if existing else secrets.token_urlsafe(16)
     public_url = settings.public_url.rstrip("/")
-    html = render_report_html(report, token, public_url)
+    # Pull org-level audit-report branding overrides (header banner +
+    # footer logo). Empty values → render_report_html falls back to
+    # the BMP defaults.
+    from app.runtime_config import _get_or_create as _get_rc
+    rc = await _get_rc(db)
+    html = render_report_html(
+        report, token, public_url,
+        header_url=getattr(rc, "audit_report_header_url", "") or "",
+        footer_logo_url=getattr(rc, "audit_report_logo_url", "") or "",
+    )
 
     if existing:
         existing.html_content = html

@@ -472,6 +472,12 @@ class RuntimeConfig(Base):
     # only. DB-first with env fallback so rotation doesn't need a redeploy.
     google_maps_api_key = Column(Text, nullable=True)
 
+    # Audit-report branding — two image URLs (uploaded via /api/uploads/logo
+    # or any direct https URL). When unset, render_report_html falls back
+    # to the hardcoded BMP defaults so existing reports keep their look.
+    audit_report_header_url = Column(Text, nullable=True)
+    audit_report_logo_url = Column(Text, nullable=True)
+
     # Apollo BYO-key — the ONE customer-supplied integration in the SaaS
     # model. Tenants who already pay Apollo can plug their key in to unlock
     # decision-maker contacts + direct dials for verticals where Apollo's

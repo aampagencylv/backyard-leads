@@ -290,8 +290,22 @@ async def generate_audit(
     return report
 
 
-def render_report_html(report: AuditReport, token: str, public_url: str = "") -> str:
-    """Render the audit report as a branded HTML page."""
+DEFAULT_HEADER_BANNER = "/static/report-banner.jpg"
+DEFAULT_FOOTER_LOGO = "https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz-1024x269.png"
+
+
+def render_report_html(
+    report: AuditReport, token: str, public_url: str = "",
+    *, header_url: str = "", footer_logo_url: str = "",
+) -> str:
+    """Render the audit report as a branded HTML page.
+
+    `header_url` + `footer_logo_url` are optional org-level overrides
+    (set in Settings → Platform Credentials → Audit Report Branding).
+    Empty strings fall back to the BMP defaults so the existing look
+    keeps working when no override is configured."""
+    header_img = (header_url or "").strip() or DEFAULT_HEADER_BANNER
+    footer_img = (footer_logo_url or "").strip() or DEFAULT_FOOTER_LOGO
 
     def score_color(score):
         if score >= 70:
@@ -380,7 +394,7 @@ def render_report_html(report: AuditReport, token: str, public_url: str = "") ->
 <body>
     <div class="container">
         <div style="border-radius:12px;overflow:hidden;margin-bottom:24px;box-shadow:0 4px 16px rgba(0,0,0,0.1)">
-            <img src="/static/report-banner.jpg" alt="Backyard Marketing Pros" style="width:100%;display:block">
+            <img src="{_esc(header_img)}" alt="Header" style="width:100%;display:block;background:#0D3B13" onerror="this.style.display='none'">
             <div style="background:linear-gradient(135deg, #0D3B13 0%, #1B5E20 100%);color:white;padding:32px 40px;display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap">
                 <div>
                     <h1 style="font-size:28px;margin-bottom:8px">AI Findability Report</h1>
@@ -535,7 +549,7 @@ def render_report_html(report: AuditReport, token: str, public_url: str = "") ->
         </div>
 
         <div class="footer">
-            <img src="https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz-1024x269.png" style="width:160px;margin-bottom:8px" alt="BMP">
+            <img src="{_esc(footer_img)}" style="max-width:200px;max-height:60px;margin-bottom:8px" alt="Logo" onerror="this.style.display='none'">
             <p>Backyard Marketing Pros &middot; A Division of AAMP Agency</p>
             <p style="margin-top:4px">backyardmarketingpros.com</p>
         </div>
