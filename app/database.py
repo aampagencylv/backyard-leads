@@ -19,9 +19,9 @@ if settings.database_url.startswith("sqlite"):
 engine = create_async_engine(
     settings.database_url, echo=False,
     connect_args=_connect_args,
-    # Larger pool than the default 5/10. SQLite serializes writes anyway
-    # but reads can fan out across connections under WAL.
-    pool_size=10, max_overflow=20, pool_recycle=3600,
+    # Note: SQLAlchemy uses NullPool for SQLite by default — pool_size /
+    # max_overflow aren't applicable here. WAL mode + busy_timeout
+    # handle concurrency at the database file level.
 )
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
