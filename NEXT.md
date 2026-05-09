@@ -57,6 +57,61 @@
 | 4 | **Configure Resend Inbound webhook** + paste `RESEND_WEBHOOK_SECRET` into VPS `.env` | Token-based reply catching is code-complete but accepts any payload until the secret is set; details in Phase A operator setup below |
 | 5 | **Set `ICLOSED_WEBHOOK_SECRET`** in VPS `.env` + update iClosed dashboard webhook URL to include `?t=<secret>` | Authoritative booking confirmation for the gated competitor report |
 | 6 | **Confirm each rep has `twilio_phone_number` assigned** under User → Edit | TwiML refuses to record calls without it — symptoms = no waveform appears on call activities |
+| 7 | **Set up Google OAuth** (full walkthrough below) | Required for the native scheduler — the `/book/{slug}` page won't work until each rep can connect their Google Calendar |
+
+### Google OAuth — full setup (one-time, ~10 min)
+
+Required only once at the platform level. After this, each rep just clicks "Connect Google Calendar" in Settings.
+
+**1. Configure the OAuth consent screen** (Google Cloud Console)
+- Go to [console.cloud.google.com](https://console.cloud.google.com) → pick or create a project (e.g. "BMP Prospector")
+- Left nav → **APIs & Services** → **OAuth consent screen**
+- User type: **External**
+- Fill in:
+  - App name: `BMP Prospector` (or whatever you want users to see on the consent screen)
+  - User support email: yours
+  - App logo: optional (BMP logo recommended)
+  - Authorized domains: `backyardmarketingpros.com`
+  - Developer contact email: yours
+- Save → **Add or Remove Scopes** → add these four:
+  - `openid`
+  - `.../auth/userinfo.email`
+  - `.../auth/calendar.readonly`
+  - `.../auth/calendar.events`
+- Save. (You can leave it in "Testing" mode — Google will show a warning screen to users until you have 100+ users and submit for verification. For BMP's internal team that's fine indefinitely.)
+
+**2. Enable the Google Calendar API**
+- APIs & Services → **Library** → search "Google Calendar API" → **Enable**
+
+**3. Create OAuth Client credentials**
+- APIs & Services → **Credentials** → **+ Create credentials** → **OAuth client ID**
+- Application type: **Web application**
+- Name: `BMP Prospector Web`
+- **Authorized JavaScript origins**: `https://prospector.backyardmarketingpros.com`
+- **Authorized redirect URIs**: `https://prospector.backyardmarketingpros.com/api/google/oauth/callback` *(this is the only URL the OAuth callback ever uses — no others needed)*
+- Create → copy the **Client ID** + **Client secret** that appear
+
+**4. Drop into VPS env + restart**
+```bash
+ssh vps "echo 'GOOGLE_OAUTH_CLIENT_ID=<paste-client-id>' >> /opt/backyard-leads/.env"
+ssh vps "echo 'GOOGLE_OAUTH_CLIENT_SECRET=<paste-client-secret>' >> /opt/backyard-leads/.env"
+ssh vps "systemctl restart backyard-leads"
+```
+
+**5. Connect each rep**
+- Each rep opens **Settings → Google Calendar** → clicks **🔌 Connect Google Calendar**
+- Google's consent screen shows the four scopes; rep approves
+- They'll see "⚠️ Google hasn't verified this app" — click **Advanced → Go to BMP Prospector (unsafe)**. Normal for unverified internal apps; harmless once you trust it
+- After redirect they see a green "connected" badge with their email
+- Below appears the **⏰ Booking Availability** panel — set weekly hours, slot length, etc.
+
+**6. Test**
+- Settings → Booking Availability → click **👁️ Preview slots (next 7 days)** → confirm slots render
+- Open the booking URL shown in Settings (e.g. `https://prospector.backyardmarketingpros.com/book/steven-edwards`) in an incognito tab
+- Pick a slot, fill in test name/email, hit Confirm → you should see:
+  - The Google Calendar event on the BMP Discovery Calls calendar
+  - A `meeting_booked` Activity on any matched company timeline
+  - A confirmation email in the prospect's inbox (via Resend) plus Google's own invite
 
 ---
 
