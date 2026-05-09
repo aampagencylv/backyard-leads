@@ -1,8 +1,28 @@
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from app.config import settings
 
-engine = create_async_engine(settings.database_url, echo=False)
+# SQLite concurrency hardening:
+#   - busy_timeout (passed via aiosqlite's `timeout` connect arg, in seconds)
+#     makes writers wait briefly for a lock instead of failing immediately
+#     with "database is locked". 30 seconds is the standard Django/Rails
+#     default; under bursty load it gives the WAL log time to drain.
+#   - check_same_thread=False is required for async access patterns where
+#     a connection might be touched from multiple coroutines.
+# WAL mode itself is set persistently on the file in init_db() via
+# PRAGMA journal_mode=WAL — once set, it sticks across processes.
+_connect_args = {}
+if settings.database_url.startswith("sqlite"):
+    _connect_args = {"timeout": 30, "check_same_thread": False}
+
+engine = create_async_engine(
+    settings.database_url, echo=False,
+    connect_args=_connect_args,
+    # Larger pool than the default 5/10. SQLite serializes writes anyway
+    # but reads can fan out across connections under WAL.
+    pool_size=10, max_overflow=20, pool_recycle=3600,
+)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
@@ -26,6 +46,16 @@ async def init_db():
     idempotent (PRAGMA table_info check before ALTER), so running them
     twice is harmless.
     """
+    # SQLite concurrency: switch the database file to WAL mode (one writer
+    # but unblocked readers — sane behavior under any load) and lower the
+    # synchronous level to NORMAL (still durable; faster commits when
+    # paired with WAL). These are persistent file-level settings; once
+    # applied they stick across processes / restarts.
+    if settings.database_url.startswith("sqlite"):
+        async with engine.begin() as conn:
+            await conn.execute(text("PRAGMA journal_mode=WAL"))
+            await conn.execute(text("PRAGMA synchronous=NORMAL"))
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 

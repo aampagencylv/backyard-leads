@@ -151,6 +151,20 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Middleware ordering note: Starlette runs middleware in reverse-add
+# order. We want, on each request:
+#   1. RequestId/error-handler outermost (catches everything, including
+#      panics raised by other middleware)
+#   2. SecurityHeaders next (so headers are attached even on errors)
+#   3. RateLimit before route handlers (cheap rejection)
+#   4. CORS innermost
+# Add them in that priority order; Starlette will execute outside-in.
+from app.middleware import (
+    RequestIdAndErrorHandler,
+    SecurityHeadersMiddleware,
+    RateLimitMiddleware,
+)
+
 # CORS: restrict to our own surfaces. Auth uses Bearer tokens in localStorage,
 # not cookies, so we don't need allow_credentials. The only cross-origin caller
 # is the bymp.com WVT snippet hitting /api/track/pageview — bymp.com is in the
@@ -165,8 +179,15 @@ app.add_middleware(
     ],
     allow_credentials=False,
     allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With", "X-API-Key", "X-Request-ID"],
+    expose_headers=["X-Request-ID"],
 )
+# Add hardening middleware *after* CORS in source order (Starlette runs
+# them in reverse-registration order, so RateLimit fires first, then
+# SecurityHeaders, then RequestIdAndErrorHandler outermost).
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RequestIdAndErrorHandler)
 
 # API routes
 app.include_router(auth_routes.router)
