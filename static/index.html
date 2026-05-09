@@ -4279,7 +4279,7 @@ function verify(secret, rawBody, header) {
                             </div>
                         </div>
                         <div class="contact-actions" style="display:flex;flex-wrap:wrap;gap:4px">
-                            ${c.email ? `<button class="btn btn-secondary btn-xs" onclick="openScheduleModal(${c.id})" style="background:#e3f2fd;color:#1565c0;border-color:#bbdefb" title="Pick a time on your calendar + send the invite">📅 Schedule</button>` : ''}
+                            <button class="btn btn-secondary btn-xs" onclick="openScheduleModal(${c.id})" style="background:#e3f2fd;color:#1565c0;border-color:#bbdefb;font-weight:600" title="Pick a time on your calendar + send the invite">📅 Schedule</button>
                             <button class="btn btn-secondary btn-xs" onclick="editContact(${c.id})">Edit</button>
                             ${c.phone && (!c.phone_type || c.phone_type === 'unknown' || c.phone_type === 'error') ? `<button class="btn btn-secondary btn-xs" onclick="checkPhoneType(${c.id})" title="Look up via Twilio whether this is mobile / landline / VoIP">🔎 Check Phone</button>` : ''}
                             ${!c.email ? `<button class="btn btn-secondary btn-xs" onclick="setContactEmail(${c.id})">Set Email</button>` : ''}
@@ -7214,11 +7214,19 @@ hmac.compare_digest(expected, header)</pre>
 
             const root = document.getElementById('modal-root');
             const slotsHtml = _renderScheduleSlots(preview.slots || [], preview.host_timezone);
+            const noEmail = !contact.email;
             const contactBlock = `
                 <div style="background:#FFF8F0;border-radius:8px;padding:10px 12px;margin-bottom:12px">
-                    <div style="font-size:13px;color:#333"><strong>${escapeHtml(contact.name || contact.full_name || 'Contact')}</strong>${contact.title ? ` · <span style="color:#666">${escapeHtml(contact.title)}</span>` : ''}</div>
-                    <div style="font-size:12px;color:#666;margin-top:2px">${escapeHtml(contact.email || '(no email)')} ${contact.phone ? '· ' + escapeHtml(contact.phone) : ''}</div>
-                    ${contact.company_name ? `<div style="font-size:11px;color:#888;margin-top:2px">${escapeHtml(contact.company_name)}</div>` : ''}
+                    <div style="font-size:13px;color:#333"><strong>${escapeHtml(contact.name || 'Contact')}</strong>${contact.title ? ` · <span style="color:#666">${escapeHtml(contact.title)}</span>` : ''}${contact.company_name ? ` · <span style="color:#888;font-size:12px">${escapeHtml(contact.company_name)}</span>` : ''}</div>
+                    ${noEmail
+                        ? `<div style="margin-top:8px;padding:8px;background:#fff3cd;border:1px solid #ffe082;border-radius:4px;font-size:12px;color:#856404">⚠️ This contact has no email yet. Add one below — Google needs an attendee email to send the invite. The contact record will be updated.</div>
+                           <div style="margin-top:8px;display:grid;grid-template-columns:auto 1fr;gap:6px 10px;font-size:12px;align-items:center">
+                               <label style="color:#666">Email <strong style="color:#c0392b">*</strong></label>
+                               <input id="sched-modal-prospect-email" type="email" placeholder="prospect@company.com" style="padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                               <label style="color:#666">Phone</label>
+                               <input id="sched-modal-prospect-phone" type="tel" placeholder="optional" value="${escapeHtml(contact.phone || '')}" style="padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                           </div>`
+                        : `<div style="font-size:12px;color:#666;margin-top:2px">${escapeHtml(contact.email)}${contact.phone ? ' · ' + escapeHtml(contact.phone) : ''}</div>`}
                 </div>`;
             root.innerHTML = `
                 <div class="modal-backdrop" onclick="closeScheduleModal()">
@@ -7300,6 +7308,17 @@ hmac.compare_digest(expected, header)</pre>
             if (!state || !state.selectedUtc) return;
             const errEl = document.getElementById('sched-modal-err');
             errEl.textContent = '';
+            // If the contact had no email, the modal exposed an inline
+            // input for it — send that to the backend so it can update
+            // the contact record before booking.
+            const emailEl = document.getElementById('sched-modal-prospect-email');
+            const phoneEl = document.getElementById('sched-modal-prospect-phone');
+            const overrideEmail = emailEl ? emailEl.value.trim() : '';
+            const overridePhone = phoneEl ? phoneEl.value.trim() : '';
+            if (emailEl && !overrideEmail) {
+                errEl.textContent = 'Email is required — Google needs it to invite the prospect.';
+                return;
+            }
             const submit = document.getElementById('sched-modal-submit');
             submit.disabled = true;
             submit.textContent = 'Booking…';
@@ -7310,6 +7329,8 @@ hmac.compare_digest(expected, header)</pre>
                     starts_at_utc: state.selectedUtc,
                     custom_meeting_title: document.getElementById('sched-modal-title').value.trim() || null,
                     note: document.getElementById('sched-modal-note').value.trim() || null,
+                    prospect_email_override: overrideEmail || null,
+                    prospect_phone_override: overridePhone || null,
                 }),
             });
             if (!data || !data.booked) {

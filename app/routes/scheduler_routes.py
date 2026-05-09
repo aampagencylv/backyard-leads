@@ -314,6 +314,11 @@ class InternalBookingRequest(BaseModel):
     starts_at_utc: str
     custom_meeting_title: Optional[str] = None
     note: Optional[str] = None  # internal note for the rep, surfaced in event description
+    # When the contact has no email on file, the modal collects one
+    # inline. We persist that to the contact record before booking
+    # (Google requires an attendee email). Phone is optional.
+    prospect_email_override: Optional[str] = None
+    prospect_phone_override: Optional[str] = None
 
 
 @host_router.post("/book-for-contact")
@@ -348,6 +353,17 @@ async def book_for_contact(
         raise HTTPException(status_code=404, detail="Contact has no company")
     if user.role == "sales_rep" and company.assigned_to and company.assigned_to != user.id:
         raise HTTPException(status_code=403, detail="Not your company")
+
+    # Apply email/phone overrides from the modal if the contact had
+    # missing data. Persist back so the contact record stays current.
+    override_email = (body.prospect_email_override or "").strip().lower()
+    override_phone = (body.prospect_phone_override or "").strip()
+    if override_email and "@" in override_email:
+        if not contact.email:
+            contact.email = override_email
+    if override_phone and not contact.phone:
+        contact.phone = override_phone
+
     if not contact.email:
         raise HTTPException(status_code=400, detail="Contact has no email — Google requires an attendee email")
 
