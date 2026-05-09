@@ -461,6 +461,9 @@ async def confirm_booking(
         f"Prospect: {body.name} <{body.email}>"
         + (f" · {body.phone}" if body.phone else "")
     )
+    # Legacy free-form `message` is no longer collected on the booking
+    # page (hosts use custom long_text questions instead). Older API
+    # callers may still send it — surface it if present.
     if body.message:
         desc_parts.append(f"\nNote from prospect: {body.message}")
     if host_questions and answers_clean:
@@ -681,24 +684,31 @@ booking_page_router = APIRouter(tags=["public-booking-page"])
 async def render_booking_page(slug: str, db: AsyncSession = Depends(get_db)):
     """Static brand-styled booking page. Single HTML doc with vanilla
     JS that calls /api/book/{slug}/info on load + /confirm on submit.
-    No SPA routing — keeping booking flow simple & SEO-indexable."""
+    No SPA routing — keeping booking flow simple & SEO-indexable.
+
+    Cache-Control: no-store so a fresh deploy reaches prospects
+    immediately. The dynamic data (slots, questions) loads via the
+    JSON `/info` endpoint regardless of HTML cache, but the embedded
+    JS and CSS shipped here change with deploys, and a cached HTML
+    that hits a newer API can mismatch."""
     user = (await db.execute(
         select(User).where(User.booking_slug == slug, User.is_active == True)
     )).scalar_one_or_none()
+    no_cache_headers = {"Cache-Control": "no-store, no-cache, must-revalidate"}
     if not user:
         return HTMLResponse(
             "<html><body style='font-family:system-ui;text-align:center;padding:60px'>"
             "<h2>Booking page not found</h2></body></html>",
-            status_code=404,
+            status_code=404, headers=no_cache_headers,
         )
     if not user.google_refresh_token:
         return HTMLResponse(
             "<html><body style='font-family:system-ui;text-align:center;padding:60px'>"
             "<h2>This page isn't ready yet</h2>"
             "<p>The host hasn't connected their calendar.</p></body></html>",
-            status_code=503,
+            status_code=503, headers=no_cache_headers,
         )
-    return HTMLResponse(_render_booking_html(slug))
+    return HTMLResponse(_render_booking_html(slug), headers=no_cache_headers)
 
 
 def _render_booking_html(slug: str) -> str:
@@ -733,7 +743,14 @@ def _render_booking_html(slug: str) -> str:
   @media (max-width:680px){ .form-pane { padding-left:0; } }
   .form-pane h3 { margin:0 0 10px; font-size:15px; }
   .form-pane label { display:block; font-size:12px; color:#666; margin-top:10px; }
-  .form-pane input, .form-pane textarea { width:100%; padding:9px 11px; border:1px solid #ddd; border-radius:6px; font-size:14px; box-sizing:border-box; font-family:inherit; }
+  /* Scope text-input styling to only text-like inputs — otherwise radio/checkbox
+     buttons get width:100% + padding + border applied and visually disappear. */
+  .form-pane input:not([type="radio"]):not([type="checkbox"]), .form-pane textarea { width:100%; padding:9px 11px; border:1px solid #ddd; border-radius:6px; font-size:14px; box-sizing:border-box; font-family:inherit; }
+  .form-pane input[type="radio"] { margin:0; cursor:pointer; }
+  .form-pane .radio-group { margin-top:4px; }
+  .form-pane .radio-option { display:flex; align-items:center; gap:8px; padding:6px 8px; margin-top:4px; border:1px solid transparent; border-radius:6px; font-size:13px; color:#333; cursor:pointer; transition:all 0.12s; }
+  .form-pane .radio-option:hover { background:#FFF8F0; }
+  .form-pane .radio-option:has(input:checked) { background:#FFF8F0; border-color:#E65100; color:#E65100; }
   .form-pane button { background:#E65100; color:white; border:0; padding:11px 18px; border-radius:6px; font-size:14px; cursor:pointer; margin-top:14px; font-weight:600; }
   .form-pane button:disabled { background:#ccc; cursor:not-allowed; }
   .selected-summary { padding:10px 12px; background:#FFF8F0; border-radius:6px; font-size:13px; margin-bottom:8px; color:#333; }
@@ -821,8 +838,9 @@ async function load() {
     } else if (q.type === 'url') {
       customHtml += `<label>${escapeHtml(q.label)}${req}</label><input id="${id}" data-qkey="${escapeHtml(q.key)}" type="url" placeholder="https://">`;
     } else if (q.type === 'single_select') {
-      const opts = (q.options || []).map(o => `<label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#333;margin-top:4px;font-weight:400;cursor:pointer"><input type="radio" name="${id}" value="${escapeHtml(o)}" data-qkey="${escapeHtml(q.key)}"> ${escapeHtml(o)}</label>`).join('');
-      customHtml += `<label>${escapeHtml(q.label)}${req}</label><div id="${id}" style="margin-top:4px">${opts}</div>`;
+      const opts = (q.options || []).map(o => `<label class="radio-option"><input type="radio" name="${id}" value="${escapeHtml(o)}" data-qkey="${escapeHtml(q.key)}"> <span>${escapeHtml(o)}</span></label>`).join('');
+      const empty = !(q.options || []).length;
+      customHtml += `<label>${escapeHtml(q.label)}${req}</label><div id="${id}" class="radio-group">${empty ? '<div style="font-size:11px;color:#888;font-style:italic">(no options configured yet)</div>' : opts}</div>`;
     } else {
       customHtml += `<label>${escapeHtml(q.label)}${req}</label><input id="${id}" data-qkey="${escapeHtml(q.key)}" type="text">`;
     }
@@ -836,7 +854,6 @@ async function load() {
       <label>Full name *</label><input id="bk-name" required>
       <label>Email *</label><input id="bk-email" type="email" required>
       <label>Phone${phoneRequiredByMeetingType ? ' *' : ' (optional)'}</label><input id="bk-phone" type="tel"${phoneRequiredByMeetingType ? ' required' : ''}>
-      <label>What would you like to discuss? (optional)</label><textarea id="bk-msg" rows="3"></textarea>
       ${customHtml}
       <button id="bk-submit" onclick="confirmBooking()">Confirm booking</button>
       <div class="err" id="bk-err"></div>
@@ -879,7 +896,6 @@ async function confirmBooking() {
   const name = document.getElementById('bk-name').value.trim();
   const email = document.getElementById('bk-email').value.trim();
   const phone = document.getElementById('bk-phone').value.trim();
-  const message = document.getElementById('bk-msg').value.trim();
   const errEl = document.getElementById('bk-err');
   errEl.textContent = '';
   if (!name || !email) { errEl.textContent = 'Name and email are required.'; return; }
@@ -910,7 +926,7 @@ async function confirmBooking() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       starts_at_utc: selectedSlot.utc,
-      name, email, phone, message,
+      name, email, phone,
       viewer_timezone: VIEWER_TZ,
       answers: _collectAnswers(),
     }),
