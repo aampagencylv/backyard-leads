@@ -899,6 +899,34 @@ async def enrich_company(
     hunter_added = actually_added["hunter"]
     apollo_added = actually_added["apollo"]
 
+    # Backfill LinkedIn URLs via Netrows reverse-lookup for contacts
+    # that have an email but no LinkedIn profile. 1 credit per lookup.
+    try:
+        from app.services.netrows_enrichment import reverse_email_lookup
+        nr_key = await get_netrows_api_key(db)
+        if nr_key:
+            no_linkedin = (await db.execute(
+                select(Contact).where(
+                    Contact.company_id == company_id,
+                    Contact.email.isnot(None),
+                    Contact.email != "",
+                    (Contact.linkedin_url.is_(None)) | (Contact.linkedin_url == ""),
+                )
+            )).scalars().all()
+            for c in no_linkedin[:10]:  # cap at 10 to limit credit spend
+                try:
+                    rl = await reverse_email_lookup(c.email, nr_key)
+                    if rl and rl.linkedin_url:
+                        c.linkedin_url = rl.linkedin_url
+                        if rl.headline and not c.title:
+                            c.title = rl.headline
+                except Exception:
+                    pass
+            if no_linkedin:
+                await db.commit()
+    except Exception:
+        pass  # reverse-lookup failure shouldn't block enrichment
+
     # Meter Netrows + Hunter at the route level (provider classes don't
     # meter these yet; Apollo meters itself). When the providers fully
     # own metering, this block goes away.
