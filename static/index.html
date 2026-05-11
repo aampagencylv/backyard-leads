@@ -5234,8 +5234,8 @@ function verify(secret, rawBody, header) {
                     <div>
                         <h1 style="margin:0">${escapeHtml(d.name)}</h1>
                         <div style="font-size:13px;color:#666;margin-top:4px">
-                            ${d.website ? `<a href="${escapeHtml(d.website)}" target="_blank">${escapeHtml(d.website.replace(/^https?:\/\//,''))}</a> · ` : ''}
-                            ${escapeHtml(d.city || '')}${d.state ? ', ' + escapeHtml(d.state) : ''}
+                            ${d.website ? `<a href="${escapeHtml(d.website)}" target="_blank">${escapeHtml(d.website.replace(/^https?:\/\//,'').replace(/\?.*$/,''))}</a> · ` : ''}
+                            ${d.address ? escapeHtml(d.address) : (escapeHtml(d.city || '') + (d.state ? ', ' + escapeHtml(d.state) : ''))}
                             ${d.phone ? ` · <a class="call-link" onclick="callCompany(${d.id}, '${escapeHtml(d.phone)}')">${escapeHtml(d.phone)}</a>` : ''}
                             ${d.employee_count ? ` · ${d.employee_count} employees` : ''}
                             ${d.linkedin_url ? ` · <a href="${escapeHtml(d.linkedin_url)}" target="_blank" style="color:#0077B5">LinkedIn</a>` : ''}
@@ -5756,7 +5756,7 @@ function verify(secret, rawBody, header) {
                         ` : ''}
                         <div class="sequence-body" id="${cardId}-seq" style="display:none">
                             ${c.emails.map((e, i) => {
-                                const card = renderEmailCard(e, c.id);
+                                const card = renderEmailCard(e, c.id, c.linkedin_url);
                                 const insertBtn = (!e.is_sent && !e.skipped_at) ? `<div style="text-align:center;margin:2px 0"><button class="btn btn-xs" onclick="addStepToSequence(${c.id}, ${e.sequence_order})" style="background:transparent;color:#aab;border:1px dashed #ccc;font-size:11px;padding:2px 12px;border-radius:12px" title="Insert a step after this one">+ Add Step</button></div>` : '';
                                 return card + insertBtn;
                             }).join('')}
@@ -5768,7 +5768,7 @@ function verify(secret, rawBody, header) {
             }).join('');
         }
 
-        function renderEmailCard(e, contactId) {
+        function renderEmailCard(e, contactId, contactLinkedin) {
             const stype = e.step_type || 'email';
             const iconMap = { linkedin: '💼', call: '📞', text: '💬', imessage: '💬', email: '📧' };
             const icon = iconMap[stype] || '•';
@@ -5804,6 +5804,7 @@ function verify(secret, rawBody, header) {
                         </span>
                     </div>
                     <div class="subject">${stype === 'email' ? 'Subject: ' : ''}${escapeHtml(e.subject)}</div>
+                    ${stype === 'linkedin' && contactLinkedin ? `<div style="margin:4px 0;padding:6px 10px;background:#e8f4f8;border-radius:6px;font-size:12px"><a href="${escapeHtml(contactLinkedin)}" target="_blank" rel="noreferrer" style="color:#0077B5;font-weight:600;text-decoration:none">🔗 Open LinkedIn Profile →</a></div>` : ''}
                     <div class="body">${escapeHtml(e.body)}</div>
                 </div>
             `;

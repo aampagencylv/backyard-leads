@@ -60,12 +60,24 @@ async def create_search(
     )
 
     # Save companies to database
+    def _clean_website(url):
+        """Strip UTM params and tracking query strings from website URLs."""
+        if not url:
+            return url
+        from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
+        p = urlparse(url)
+        # Remove utm_*, gclid, fbclid, etc — keep any meaningful query params
+        clean_params = {k: v for k, v in parse_qs(p.query).items()
+                        if not k.startswith(('utm_', 'gclid', 'fbclid', 'mc_', 'ref'))}
+        clean_query = urlencode(clean_params, doseq=True) if clean_params else ""
+        return urlunparse((p.scheme, p.netloc, p.path.rstrip('/'), p.params, clean_query, ""))
+
     for biz in businesses:
         company = Company(
             search_id=search.id,
             name=biz.name,
             phone=biz.phone,
-            website=biz.website,
+            website=_clean_website(biz.website),
             address=biz.address,
             city=biz.city,
             state=biz.state,
