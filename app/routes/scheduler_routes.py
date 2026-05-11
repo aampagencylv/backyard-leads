@@ -976,12 +976,14 @@ async def _send_booking_confirmation_email(booking_id: int, *, host_name: str) -
                 + (f'<p><a href="{link}">View the meeting on your calendar</a></p>' if link else "")
                 + f"<p>Talk soon,<br>{host_name}</p>"
             )
+            from app.services.html_to_text import html_to_plain_text
             payload = {
                 "from": from_addr,
                 "to": [b.prospect_email],
                 "reply_to": host.google_email or host.email,
                 "subject": subject,
                 "html": html,
+                "text": html_to_plain_text(html),
                 "headers": {
                     "X-Entity-Ref-ID": f"booking-confirm-{booking_id}",
                 },

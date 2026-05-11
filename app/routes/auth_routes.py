@@ -330,14 +330,8 @@ async def invite_user(
         from app.config import settings
         if settings.resend_api_key:
             import httpx
-            await httpx.AsyncClient(timeout=10).post(
-                "https://api.resend.com/emails",
-                headers={"Authorization": f"Bearer {settings.resend_api_key}", "Content-Type": "application/json"},
-                json={
-                    "from": f"Backyard Marketing Pros <noreply@{settings.send_domain}>",
-                    "to": [new_user.email],
-                    "subject": "Welcome to BMP Prospector — Your Account is Ready",
-                    "html": f"""
+            from app.services.html_to_text import html_to_plain_text
+            welcome_html = f"""
                     <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:500px;margin:0 auto;padding:20px">
                         <img src="https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz-1024x269.png" style="width:250px;margin-bottom:20px" alt="BMP">
                         <h2 style="color:#1B5E20">Welcome to Prospector, {new_user.first_name}!</h2>
@@ -350,7 +344,16 @@ async def invite_user(
                         <p style="color:#666;font-size:13px">Please change your password after your first login by going to Settings.</p>
                         <p>— The BMP Team</p>
                     </div>
-                    """,
+                    """
+            await httpx.AsyncClient(timeout=10).post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {settings.resend_api_key}", "Content-Type": "application/json"},
+                json={
+                    "from": f"Backyard Marketing Pros <noreply@{settings.send_domain}>",
+                    "to": [new_user.email],
+                    "subject": "Welcome to BMP Prospector — Your Account is Ready",
+                    "html": welcome_html,
+                    "text": html_to_plain_text(welcome_html),
                 },
             )
             email_sent = True
@@ -509,14 +512,8 @@ async def forgot_password(
         from app.config import settings
         if settings.resend_api_key:
             import httpx
-            await httpx.AsyncClient(timeout=10).post(
-                "https://api.resend.com/emails",
-                headers={"Authorization": f"Bearer {settings.resend_api_key}", "Content-Type": "application/json"},
-                json={
-                    "from": f"Backyard Marketing Pros <noreply@{settings.send_domain}>",
-                    "to": [user.email],
-                    "subject": "Password Reset — BMP Prospector",
-                    "html": f"""
+            from app.services.html_to_text import html_to_plain_text
+            reset_html = f"""
                     <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:500px;margin:0 auto;padding:20px">
                         <img src="https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz-1024x269.png" style="width:250px;margin-bottom:20px" alt="BMP">
                         <h2 style="color:#1B5E20">Password Reset</h2>
@@ -526,7 +523,16 @@ async def forgot_password(
                         </div>
                         <p>Log in at <a href="{settings.public_url}">{settings.public_url}</a> and change your password in Settings.</p>
                     </div>
-                    """,
+                    """
+            await httpx.AsyncClient(timeout=10).post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {settings.resend_api_key}", "Content-Type": "application/json"},
+                json={
+                    "from": f"Backyard Marketing Pros <noreply@{settings.send_domain}>",
+                    "to": [user.email],
+                    "subject": "Password Reset — BMP Prospector",
+                    "html": reset_html,
+                    "text": html_to_plain_text(reset_html),
                 },
             )
     except Exception:

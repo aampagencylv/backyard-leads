@@ -71,11 +71,20 @@ async def send_email(
     # Outlook, etc.) honor the display name in Reply-To headers.
     reply_to_value = f"{from_name} <{reply_to_email}>" if from_name else reply_to_email
 
+    # Plain-text alternative — HTML-only emails are a soft spam signal at
+    # Gmail/Outlook, and a clean text part also produces sane quoted-reply
+    # output. Derive from the same HTML so the two versions never diverge.
+    try:
+        from app.services.html_to_text import html_to_plain_text
+        text_body = html_to_plain_text(html_body)
+    except Exception:
+        text_body = body  # last-ditch fallback to the raw input
     payload = {
         "from": from_address,
         "to": [to_email],
         "subject": subject,
         "html": html_body,
+        "text": text_body,
         "reply_to": reply_to_value,
         "headers": headers,
         "tags": [
