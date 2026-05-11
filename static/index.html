@@ -5607,19 +5607,21 @@ function verify(secret, rawBody, header) {
             }
         }
 
-        async function addStepToSequence(contactId) {
+        async function addStepToSequence(contactId, afterOrder) {
+            const insertLabel = afterOrder ? `Insert after step ${afterOrder}` : 'Add to end of sequence';
             const root = document.getElementById('modal-root');
             root.innerHTML = `
                 <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
                     <div class="modal-card" onclick="event.stopPropagation()" style="max-width:480px">
                         <h2>Add Step to Sequence</h2>
+                        <p style="font-size:12px;color:#888;margin:0 0 12px">${insertLabel}</p>
                         <div class="form-group">
                             <label>Step Type</label>
                             <select id="step-type-select" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px">
                                 <option value="email">Email</option>
                                 <option value="linkedin">LinkedIn Message</option>
                                 <option value="call">Phone Call</option>
-                                <option value="text">Text Message</option>
+                                <option value="imessage">iMessage</option>
                                 <option value="custom">Custom Task</option>
                             </select>
                         </div>
@@ -5628,14 +5630,14 @@ function verify(secret, rawBody, header) {
                         <div class="form-group"><label>Day (from sequence start)</label><input type="number" id="step-delay" value="0" min="0"></div>
                         <div class="modal-actions" style="display:flex;gap:8px;margin-top:16px">
                             <button class="btn btn-secondary" onclick="document.getElementById('modal-root').innerHTML=''">Cancel</button>
-                            <button class="btn btn-primary" onclick="submitAddStep(${contactId})">Add Step</button>
+                            <button class="btn btn-primary" onclick="submitAddStep(${contactId}, ${afterOrder || 0})">Add Step</button>
                         </div>
                     </div>
                 </div>
             `;
         }
 
-        async function submitAddStep(contactId) {
+        async function submitAddStep(contactId, afterOrder) {
             const data = await api(`/api/send/contact/${contactId}/add-step`, {
                 method: 'POST',
                 body: JSON.stringify({
@@ -5643,6 +5645,7 @@ function verify(secret, rawBody, header) {
                     subject: document.getElementById('step-subject').value,
                     body: document.getElementById('step-body').value,
                     delay_days: parseInt(document.getElementById('step-delay').value) || 0,
+                    after_order: afterOrder || 0,
                 }),
             });
             if (data) {
@@ -5716,12 +5719,16 @@ function verify(secret, rawBody, header) {
                                         ${c.emails.every(e => !e.is_sent) ? 'Start Sequence' : 'Send Next Step'}
                                     </button>
                                     ${c.emails.some(e => !e.is_sent && !e.paused_at) ? `<button class="btn btn-secondary btn-sm" onclick="pauseSequence(${c.id})">Pause</button>` : ''}
-                                    ${c.emails.some(e => e.paused_at) ? `<button class="btn btn-secondary btn-sm" onclick="resumeSequence(${c.id})">Resume</button>` : ''}
+                                    ${c.emails.some(e => e.paused_at) ? `<button class="btn btn-success btn-sm" onclick="resumeSequence(${c.id})">Resume Now</button><button class="btn btn-secondary btn-sm" onclick="rescheduleSequence(${c.id})">Reschedule</button>` : ''}
                                 </div>
                             </div>
                         ` : ''}
                         <div class="sequence-body" id="${cardId}-seq" style="display:none">
-                            ${c.emails.map(e => renderEmailCard(e, c.id)).join('')}
+                            ${c.emails.map((e, i) => {
+                                const card = renderEmailCard(e, c.id);
+                                const insertBtn = (!e.is_sent && !e.skipped_at) ? `<div style="text-align:center;margin:2px 0"><button class="btn btn-xs" onclick="addStepToSequence(${c.id}, ${e.sequence_order})" style="background:transparent;color:#aab;border:1px dashed #ccc;font-size:11px;padding:2px 12px;border-radius:12px" title="Insert a step after this one">+ Add Step</button></div>` : '';
+                                return card + insertBtn;
+                            }).join('')}
                         </div>
                     </div>
                     ` : `<p style="font-size:12px;color:#888;margin-top:8px">No sequence yet. ${c.email ? 'Click "Generate Sequence" above to create one.' : "Set this contact's email first, then generate a sequence."}</p>`}
@@ -6476,6 +6483,41 @@ function verify(secret, rawBody, header) {
         async function resumeSequence(contactId) {
             const data = await api(`/api/sequences/resume/${contactId}`, { method: 'POST' });
             if (data) { toast(`Resumed ${data.resumed} steps (re-anchored to today)`); _refreshCurrentCompany(); }
+        }
+
+        async function rescheduleSequence(contactId) {
+            const root = document.getElementById('modal-root');
+            const today = new Date().toISOString().split('T')[0];
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:400px">
+                        <h2>Reschedule Sequence</h2>
+                        <p style="font-size:13px;color:#666;margin-bottom:12px">Pick a future date to resume this sequence. All remaining steps will be re-anchored starting from that date.</p>
+                        <div class="form-group">
+                            <label>Resume On</label>
+                            <input type="date" id="reschedule-date" min="${today}" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px">
+                        </div>
+                        <div class="modal-actions" style="display:flex;gap:8px;margin-top:16px">
+                            <button class="btn btn-secondary" onclick="document.getElementById('modal-root').innerHTML=''">Cancel</button>
+                            <button class="btn btn-primary" onclick="submitReschedule(${contactId})">Reschedule</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function submitReschedule(contactId) {
+            const dateVal = document.getElementById('reschedule-date').value;
+            if (!dateVal) { toast('Pick a date', 'error'); return; }
+            const data = await api(`/api/sequences/resume/${contactId}`, {
+                method: 'POST',
+                body: JSON.stringify({ resume_at: dateVal + 'T09:00:00Z' }),
+            });
+            if (data) {
+                toast(`Rescheduled ${data.resumed} steps to resume on ${dateVal}`);
+                document.getElementById('modal-root').innerHTML = '';
+                _refreshCurrentCompany();
+            }
         }
 
         async function triggerPostCallSequence(activityId) {

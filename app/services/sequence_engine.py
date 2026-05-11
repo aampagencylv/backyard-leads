@@ -592,10 +592,10 @@ async def pause_sequence(db: AsyncSession, contact_id: int, reason: str, sequenc
     return len(rows)
 
 
-async def resume_sequence(db: AsyncSession, contact_id: int, sequence_label: str = "main") -> int:
+async def resume_sequence(db: AsyncSession, contact_id: int, sequence_label: str = "main", resume_at: datetime = None) -> int:
     """Un-pause and re-anchor scheduling so the sequence picks up from where
-    it left off (rather than firing all paused steps at once)."""
-    now = datetime.now(timezone.utc)
+    it left off. If resume_at is given, anchor to that future date instead of now."""
+    now = resume_at or datetime.now(timezone.utc)
     rows = (await db.execute(
         select(GeneratedEmail).where(
             GeneratedEmail.contact_id == contact_id,

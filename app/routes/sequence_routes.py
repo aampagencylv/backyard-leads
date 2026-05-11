@@ -132,16 +132,30 @@ async def pause(
     return {"paused": n}
 
 
+class RescheduleRequest(BaseModel):
+    resume_at: Optional[str] = None  # ISO date string, e.g. "2026-07-15"
+
+
 @router.post("/resume/{contact_id}")
 async def resume(
     contact_id: int,
     label: str = Query("main"),
+    body: Optional[RescheduleRequest] = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    n = await resume_sequence(db, contact_id, sequence_label=label)
+    resume_at_dt = None
+    if body and body.resume_at:
+        try:
+            parsed = datetime.fromisoformat(body.resume_at.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            resume_at_dt = parsed
+        except (ValueError, TypeError):
+            pass
+    n = await resume_sequence(db, contact_id, sequence_label=label, resume_at=resume_at_dt)
     await db.commit()
-    return {"resumed": n}
+    return {"resumed": n, "resume_at": resume_at_dt.isoformat() if resume_at_dt else "now"}
 
 
 @router.post("/run-now")
