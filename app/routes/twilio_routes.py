@@ -216,6 +216,9 @@ async def assign_twilio_number(
     target.twilio_phone_number = (req.phone_number or "").strip() or None
     if not target.twilio_identity:
         target.twilio_identity = f"bmp_user_{target.id}"
+    # Auto-set their profile phone number (shows in signature as direct line)
+    if target.twilio_phone_number and not target.phone_number:
+        target.phone_number = target.twilio_phone_number
     await db.commit()
     await db.refresh(target)
 
