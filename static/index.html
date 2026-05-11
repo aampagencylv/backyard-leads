@@ -2578,12 +2578,16 @@ function verify(secret, rawBody, header) {
                     if (typeof _checkGoogleOAuthRedirect === 'function') {
                         try { _checkGoogleOAuthRedirect(); } catch(e) {}
                     }
-                    // Deep-link from the Missive sidebar (and the upcoming
-                    // Chrome extension) — ?dial=<phone>&contact_id=<id>
-                    // pops the dialer with the right contact pre-loaded.
+                    // Deep-link handlers from the Missive sidebar (and the
+                    // upcoming Chrome extension). The sidebar pops Prospector
+                    // in a new tab with one of these query strings:
+                    //   ?dial=<phone>&contact_id=<id>   → opens the dialer
+                    //   ?schedule=1&contact_id=<id>     → opens the schedule modal
+                    // Clean the query after firing so reloads don't re-trigger.
                     try {
                         const _p = new URLSearchParams(window.location.search || '');
                         const _dial = (_p.get('dial') || '').trim();
+                        const _sched = (_p.get('schedule') || '').trim();
                         const _cid = parseInt(_p.get('contact_id') || '0', 10);
                         if (_dial) {
                             setTimeout(async () => {
@@ -2595,7 +2599,11 @@ function verify(secret, rawBody, header) {
                                 else if (!contact.phone) contact.phone = _dial;
                                 if (typeof startCall === 'function') startCall(contact);
                                 else openStandaloneDialer();
-                                // Clean the query so the dial doesn't refire on reload
+                                history.replaceState(null, '', window.location.pathname);
+                            }, 600);
+                        } else if (_sched && _cid) {
+                            setTimeout(() => {
+                                if (typeof openScheduleModal === 'function') openScheduleModal(_cid);
                                 history.replaceState(null, '', window.location.pathname);
                             }, 600);
                         }

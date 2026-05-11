@@ -182,6 +182,38 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
       box-shadow: 0 2px 6px rgba(10, 102, 194, 0.28);
     }}
     .action-btn.linkedin:hover {{ box-shadow: 0 3px 10px rgba(10, 102, 194, 0.4); border-color: transparent; }}
+
+    /* Schedule meeting — BMP-green (calendar / forward-motion vibe) */
+    .action-btn.schedule {{
+      background: linear-gradient(135deg, var(--bmp-green) 0%, #2E7D32 100%);
+      color: white;
+      border-color: transparent;
+      box-shadow: 0 2px 6px rgba(27, 94, 32, 0.32);
+    }}
+    .action-btn.schedule:hover {{ box-shadow: 0 3px 10px rgba(27, 94, 32, 0.45); border-color: transparent; }}
+
+    /* Add task — neutral but emphasized */
+    .action-btn.task {{
+      background: #fff8f0;
+      border-color: #ffd9b3;
+      color: #b05500;
+    }}
+    .action-btn.task:hover {{ background: #fff0db; border-color: #ffc592; }}
+
+    /* Due-date pill buttons inside the add-task inline form */
+    .due-btn {{
+      background: white;
+      border: 1px solid #ddd;
+      color: #444;
+      padding: 6px 6px;
+      border-radius: 5px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.1s, border-color 0.1s, color 0.1s;
+    }}
+    .due-btn:hover {{ background: #f7f7f7; }}
+    .due-btn.active {{ background: var(--bmp-orange); color: white; border-color: var(--bmp-orange); }}
     .note {{ font-size: 12px; padding: 8px; background: #fffbe6; border-left: 3px solid #f5b800; border-radius: 4px; margin-top: 6px; }}
     .note:first-child {{ margin-top: 0; }}
     .task-row {{ display: flex; align-items: flex-start; padding: 6px 0; border-bottom: 1px dashed #f0f0f0; }}
@@ -461,6 +493,9 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
         actionBtns.push(`<button class="action-btn primary" title="Call ${{escapeHtml(c.phone)}}" onclick="callNow('${{escapeHtml(c.phone)}}', ${{c.id}})"><span class="icon">📞</span><span>Call</span></button>`);
         actionBtns.push(`<button class="action-btn imessage" title="Send iMessage to ${{escapeHtml(c.phone)}}" onclick="quickIMessage()"><span class="icon">💬</span><span>iMessage</span></button>`);
       }}
+      // Always-available next-step buttons (no phone needed)
+      actionBtns.push(`<button class="action-btn schedule" title="Schedule a meeting on your calendar" onclick="scheduleMeeting()"><span class="icon">📅</span><span>Schedule meeting</span></button>`);
+      actionBtns.push(`<button class="action-btn task" title="Create a follow-up task" onclick="toggleAddTask()"><span class="icon">📋</span><span>Add task</span></button>`);
       if (c.linkedin_url) {{
         actionBtns.push(`<button class="action-btn linkedin" title="Open LinkedIn profile" onclick="window.open('${{escapeHtml(c.linkedin_url)}}', '_blank')"><span class="icon">💼</span><span>LinkedIn</span></button>`);
       }}
@@ -468,6 +503,31 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
         actionBtns.push(`<button class="action-btn" title="Copy email" onclick="copyEmail('${{escapeHtml(c.email)}}')"><span class="icon">✉️</span><span>Copy email</span></button>`);
       }}
       const actionBtnsHtml = actionBtns.length ? `<div class="action-grid">${{actionBtns.join('')}}</div>` : '';
+
+      // Inline task-creation form (hidden until toggleAddTask()). Kept
+      // INSIDE the iframe so we don't depend on Missive.openForm — the
+      // SDK's choices field type was inconsistent and the popup wasn't
+      // resolving reliably.
+      const addTaskFormHtml = `
+        <div id="add-task-form" class="section" style="display:none;background:#fff8f0;border:1px solid #ffd9b3;border-radius:8px">
+          <div class="label">📋 Schedule a task</div>
+          <textarea id="new-task-desc" placeholder="What needs to be done?" rows="2"
+            style="width:100%;border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:12px;font-family:inherit;resize:vertical;box-sizing:border-box"></textarea>
+          <div style="font-size:11px;color:#666;margin-top:8px;margin-bottom:4px">Due</div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px">
+            <button class="due-btn" data-days="0"  onclick="setDueDays(0)">Today</button>
+            <button class="due-btn active" data-days="1"  onclick="setDueDays(1)">Tomorrow</button>
+            <button class="due-btn" data-days="3"  onclick="setDueDays(3)">3 days</button>
+            <button class="due-btn" data-days="7"  onclick="setDueDays(7)">Next week</button>
+            <button class="due-btn" data-days="14" onclick="setDueDays(14)">2 weeks</button>
+            <button class="due-btn" data-days="30" onclick="setDueDays(30)">30 days</button>
+            <button class="due-btn" data-days="-1" onclick="setDueDays(-1)" style="grid-column:span 2">No due date</button>
+          </div>
+          <div style="display:flex;gap:6px;margin-top:10px">
+            <button class="btn" onclick="submitAddTask()" style="flex:1">Create task</button>
+            <button class="btn secondary" onclick="toggleAddTask(true)">Cancel</button>
+          </div>
+        </div>`;
 
       // Inline contact details row
       const detailParts = [];
@@ -536,15 +596,13 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
           </div>`;
       }}
 
-      // Open tasks (always shown with the +Add button, even when empty)
+      // Open tasks — the "+ Add task" entrypoint moved into the action
+      // grid at the top, so this section is now display-only.
       const tasks = ctx.open_tasks || [];
-      const tasksHtml = `
+      const tasksHtml = tasks.length ? `
         <div class="section">
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <div class="label">📋 Open tasks</div>
-            <button class="link-btn" onclick="addTask()" title="Create a new task">+ Add task</button>
-          </div>
-          ${{tasks.length ? tasks.map(t => {{
+          <div class="label">📋 Open tasks</div>
+          ${{tasks.map(t => {{
             const overdue = t.due_date && (new Date(t.due_date).getTime() < Date.now());
             return `
               <div class="task-row">
@@ -554,8 +612,8 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
                   ${{t.due_date ? `<div style="font-size:11px;color:${{overdue ? '#c62828' : '#888'}}">Due ${{escapeHtml(fmtRel(t.due_date))}}${{overdue ? ' · OVERDUE' : ''}}</div>` : ''}}
                 </div>
               </div>`;
-          }}).join('') : '<div style="font-size:11px;color:#888;padding:6px 0">No open tasks. Click + Add task to schedule one.</div>'}}
-        </div>`;
+          }}).join('')}}
+        </div>` : '';
 
       // Other contacts at the company
       let otherContactsHtml = '';
@@ -653,6 +711,7 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
           </div>
         </div>
 
+        ${{addTaskFormHtml}}
         ${{notesHtml}}
         ${{tasksHtml}}
         ${{seqHtml}}
@@ -737,53 +796,72 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
       }}
     }}
 
-    async function addTask() {{
+    // Inline add-task form state. Holds the currently-selected due
+    // offset; -1 means "no due date".
+    let _newTaskDueDays = 1;
+
+    function toggleAddTask(forceHide) {{
+      const form = document.getElementById('add-task-form');
+      if (!form) return;
+      const willShow = forceHide ? false : (form.style.display === 'none');
+      form.style.display = willShow ? 'block' : 'none';
+      if (willShow) {{
+        // Reset state on every open
+        _newTaskDueDays = 1;
+        const ta = document.getElementById('new-task-desc');
+        if (ta) {{ ta.value = ''; setTimeout(() => ta.focus(), 30); }}
+        document.querySelectorAll('.due-btn').forEach(b => {{
+          b.classList.toggle('active', parseInt(b.getAttribute('data-days'), 10) === 1);
+        }});
+        form.scrollIntoView({{ behavior: 'smooth', block: 'nearest' }});
+      }}
+    }}
+
+    function setDueDays(days) {{
+      _newTaskDueDays = days;
+      document.querySelectorAll('.due-btn').forEach(b => {{
+        b.classList.toggle('active', parseInt(b.getAttribute('data-days'), 10) === days);
+      }});
+    }}
+
+    async function submitAddTask() {{
       const c  = _currentContext && _currentContext.contact;
       const co = _currentContext && _currentContext.company;
       if (!co) return;
-      try {{
-        const fields = await Missive.openForm({{
-          name: 'Schedule a task',
-          fields: [
-            {{ name: 'description', label: 'What needs to be done?', initial: '' }},
-            {{
-              name: 'due_in_days',
-              label: 'Due',
-              choices: [
-                {{ value: '0',  label: 'Today' }},
-                {{ value: '1',  label: 'Tomorrow' }},
-                {{ value: '3',  label: 'In 3 days' }},
-                {{ value: '7',  label: 'Next week' }},
-                {{ value: '14', label: 'In 2 weeks' }},
-                {{ value: '30', label: 'In 30 days' }},
-                {{ value: '',   label: 'No due date' }},
-              ],
-              initial: '1',
-            }},
-          ],
-          buttons: [{{ name: 'create', label: 'Create task' }}],
-          autoClose: true,
-        }});
-        const desc = ((fields.find(x => x.name === 'description') || {{}}).value || '').trim();
-        if (!desc) return;
-        const dueRaw = (fields.find(x => x.name === 'due_in_days') || {{}}).value;
-        const dueDays = (dueRaw === '' || dueRaw == null) ? null : parseInt(dueRaw, 10);
-        const r = await jwtAuthFetch('/api/integrations/sidebar/create-task', {{
-          method: 'POST',
-          body: JSON.stringify({{
-            company_id: co.id,
-            contact_id: c ? c.id : null,
-            description: desc,
-            due_in_days: dueDays,
-          }}),
-        }});
-        if (r && r.ok) {{
-          Missive.alert({{ title: 'Task created', message: r.task.description + (r.task.due_date ? ` (due ${{new Date(r.task.due_date).toLocaleDateString()}})` : '') }});
-          handleChangeConversations(_lastConversationIds);
-        }} else {{
-          Missive.alert({{ title: 'Create failed', message: 'Could not create the task.' }});
-        }}
-      }} catch (e) {{ /* user cancelled openForm */ }}
+      const ta = document.getElementById('new-task-desc');
+      const desc = ((ta && ta.value) || '').trim();
+      if (!desc) {{
+        Missive.alert({{ title: 'Description required', message: 'Tell us what needs to be done.' }});
+        ta && ta.focus();
+        return;
+      }}
+      const r = await jwtAuthFetch('/api/integrations/sidebar/create-task', {{
+        method: 'POST',
+        body: JSON.stringify({{
+          company_id: co.id,
+          contact_id: c ? c.id : null,
+          description: desc,
+          due_in_days: _newTaskDueDays >= 0 ? _newTaskDueDays : null,
+        }}),
+      }});
+      if (r && r.ok) {{
+        toggleAddTask(true);
+        handleChangeConversations(_lastConversationIds);
+      }} else {{
+        Missive.alert({{ title: 'Create failed', message: 'Could not create the task.' }});
+      }}
+    }}
+
+    function scheduleMeeting() {{
+      const c = _currentContext && _currentContext.contact;
+      if (!c) return;
+      // Deep-link into Prospector — its existing openScheduleModal picks
+      // up ?schedule=1&contact_id=X on boot, pulls free/busy from the
+      // user's Google Calendar, and renders the slot picker. Sending
+      // the invite + writing the Activity stays in the main app where
+      // all that logic already lives.
+      const url = APP_URL + '/?schedule=1&contact_id=' + c.id;
+      window.open(url, 'prospector-schedule');
     }}
 
     async function quickIMessage() {{
