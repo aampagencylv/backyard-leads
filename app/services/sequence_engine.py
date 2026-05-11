@@ -745,6 +745,35 @@ async def start_sequence_from_template(
 
     created = 0
     for idx, tstep in enumerate(template, start=1):
+        # Pre-evaluate skip conditions at creation time. If the contact
+        # is missing the required channel (no LinkedIn, no phone, etc.),
+        # skip the step immediately rather than creating it as pending —
+        # BDRs shouldn't see steps they can't act on.
+        skip_conds = tstep.get("skip_if", [])
+        skip_reason = evaluate_skip(contact, skip_conds) if skip_conds else None
+        if skip_reason:
+            # Still create the step so the timeline is complete, but mark
+            # it skipped from the start
+            step = GeneratedEmail(
+                contact_id=contact.id,
+                company_id=company.id,
+                step_type=tstep["step_type"],
+                email_type=tstep["label"],
+                subject=f"[Skipped] {tstep['step_type'].title()} step {idx}",
+                body=f"Skipped at creation: {skip_reason}",
+                sequence_order=idx,
+                send_delay_days=tstep["day"],
+                scheduled_send_at=now + timedelta(days=tstep["day"]),
+                skip_if_json=json.dumps(skip_conds),
+                auto_execute=False,
+                sequence_label=sequence_label,
+                skipped_at=now,
+                skip_reason=skip_reason,
+            )
+            db.add(step)
+            created += 1
+            continue
+
         body = "AUTO:"
         subject = ""
         if tstep["step_type"] == "email":
