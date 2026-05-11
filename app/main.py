@@ -44,6 +44,8 @@ from app.routes import (
     ai_chat_routes,
     dns_health_routes,
     reputation_routes,
+    integrations_context_routes,
+    missive_routes,
 )
 
 
@@ -234,6 +236,8 @@ app.include_router(mcp_routes.router)
 app.include_router(ai_chat_routes.router)
 app.include_router(dns_health_routes.router)
 app.include_router(reputation_routes.router)
+app.include_router(integrations_context_routes.router)
+app.include_router(missive_routes.router)
 
 # Serve static frontend + user-uploaded files (logos, etc.).
 # var/uploads/ is gitignored and persists across deploys; ensure the

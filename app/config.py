@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     # context. Free tier handles 5k events/month.
     sentry_dsn: str = ""
 
+    # Missive Personal Access Token. Server-to-server REST calls only
+    # (tag conversations, add comments, push contacts). The sidebar
+    # iframe doesn't need this — it talks to our own backend. Issued
+    # at Missive → Settings → API → Personal Tokens. Treat as a secret.
+    missive_api_token: str = ""
+
     class Config:
         env_file = ".env"
 

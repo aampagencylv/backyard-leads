@@ -1727,6 +1727,17 @@ function verify(secret, rawBody, header) {
                         </div>
                         <div id="apollo-key-current" style="font-size:11px;color:#888;margin-top:4px"></div>
                     </div>
+
+                    <div class="form-group">
+                        <label>Missive sidebar app</label>
+                        <p style="font-size:12px;color:#888;margin:4px 0 8px">When you (or any BDR on the team) open a thread in Missive, this sidebar panel shows the Prospector CRM context for that conversation — contact, sequence step, audit status, recent activity. To enable it: open Missive → Settings → Integrations → New Integration → "Custom integration" → paste the iframe URL below into the <strong>Sidebar URL</strong> field.</p>
+                        <div style="display:flex;gap:6px;align-items:center">
+                            <input type="text" id="missive-sidebar-url" readonly style="flex:1;font-family:ui-monospace,Menlo,monospace;font-size:12px;background:#f7f7f7;color:#444">
+                            <button class="btn btn-secondary" onclick="copyMissiveSidebarUrl()" title="Copy to clipboard">Copy</button>
+                            <button class="btn btn-secondary" onclick="window.open('https://missiveapp.com/help/integrations', '_blank')">Docs ↗</button>
+                        </div>
+                        <div style="font-size:11px;color:#888;margin-top:6px">After saving the integration in Missive, open any conversation — the panel will load on the right. First load asks you to sign in to Prospector once; the token persists across sessions per BDR via Missive's storage API.</div>
+                    </div>
                 </div>
 
                 <!-- Platform-tier settings (super_admin only): everything the
@@ -7514,6 +7525,19 @@ hmac.compare_digest(expected, header)</pre>
         }
 
         // ============ Settings ============
+        function copyMissiveSidebarUrl() {
+            const el = document.getElementById('missive-sidebar-url');
+            if (!el || !el.value) return;
+            el.select();
+            try {
+                navigator.clipboard.writeText(el.value);
+                toast('Sidebar URL copied');
+            } catch (e) {
+                document.execCommand('copy');
+                toast('Sidebar URL copied');
+            }
+        }
+
         async function loadSettings() {
             const data = await api('/api/send/profile');
             if (!data) return;
@@ -7543,6 +7567,14 @@ hmac.compare_digest(expected, header)</pre>
             document.getElementById('settings-send-from').textContent = data.send_from;
             document.getElementById('settings-reply-to').textContent = data.reply_to;
             document.getElementById('signature-preview').innerHTML = data.signature_html || '';
+
+            // Missive sidebar URL — derived from the current host so it
+            // works regardless of whether the user is on prospector.bymp.com
+            // or a local dev host.
+            const missiveUrlEl = document.getElementById('missive-sidebar-url');
+            if (missiveUrlEl) {
+                missiveUrlEl.value = window.location.origin + '/integrations/missive/sidebar';
+            }
 
             // Morning brief settings — populate from /me payload
             const briefEnabled = document.getElementById('brief-enabled');

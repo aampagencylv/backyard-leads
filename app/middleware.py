@@ -90,11 +90,17 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
         # Don't apply tight headers to publicly-embeddable surfaces:
         # the audit report at /report/{token}/* is meant to be sent to
-        # prospects who may view it inside their own iframe, and the
-        # public booking page at /book/{slug} likewise.
+        # prospects who may view it inside their own iframe, the
+        # public booking page at /book/{slug} likewise, and the
+        # Missive sidebar (/integrations/missive/sidebar) must load
+        # inside Missive's iframe — X-Frame-Options: DENY would block
+        # it, and Missive's docs explicitly note that frame-ancestors
+        # breaks iOS embedding.
         path = request.url.path
         is_public_embeddable = (
-            path.startswith("/report/") or path.startswith("/book/")
+            path.startswith("/report/")
+            or path.startswith("/book/")
+            or path.startswith("/integrations/missive/")
         )
 
         # Apply unconditionally
