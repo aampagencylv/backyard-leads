@@ -68,8 +68,18 @@ def render_comparison_html(
     city: str = "",
     state: str = "",
     business_type: str = "",
+    booking_url: str = "",
 ) -> str:
-    """Render a branded side-by-side comparison report."""
+    """Render a branded side-by-side comparison report.
+
+    `booking_url` controls where every 'Schedule A Discovery Call' CTA
+    points — pass the value returned by `_resolve_audit_booking_url`
+    so the report respects the org's `audit_scheduler_type` (iclosed,
+    native /book/{slug}, or custom URL). When empty, falls back to
+    the global iClosed URL.
+    """
+    from app.config import settings as _settings
+    cta_url = (booking_url or "").strip() or _settings.iclosed_booking_url or "https://app.iclosed.io/e/backyardmarketingpros/discovery-call"
 
     def score_color(s):
         if s >= 70: return "#1B5E20"
@@ -154,10 +164,13 @@ def render_comparison_html(
     <div class="container">
         <div style="border-radius:12px;overflow:hidden;margin-bottom:24px;box-shadow:0 4px 16px rgba(0,0,0,0.1)">
             <img src="/static/report-banner.jpg" alt="BMP" style="width:100%;display:block">
-            <div style="background:linear-gradient(135deg, #0D3B13, #1B5E20);color:white;padding:32px 40px">
-                <h1 style="font-size:26px;margin-bottom:8px">Competitive Comparison</h1>
-                <p style="color:rgba(255,255,255,0.8)">{_esc(company_name)} vs. Top Competitors in {_esc(city)}{', ' + _esc(state) if state else ''}</p>
-                <p style="color:rgba(255,255,255,0.5);font-size:12px;margin-top:4px">Generated {datetime.now(timezone.utc).strftime("%B %d, %Y")}</p>
+            <div style="background:linear-gradient(135deg, #0D3B13, #1B5E20);color:white;padding:32px 40px;display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap">
+                <div>
+                    <h1 style="font-size:26px;margin-bottom:8px">Competitive Comparison</h1>
+                    <p style="color:rgba(255,255,255,0.8)">{_esc(company_name)} vs. Top Competitors in {_esc(city)}{', ' + _esc(state) if state else ''}</p>
+                    <p style="color:rgba(255,255,255,0.5);font-size:12px;margin-top:4px">Generated {datetime.now(timezone.utc).strftime("%B %d, %Y")}</p>
+                </div>
+                <a href="{_esc(cta_url)}" style="display:inline-block;background:#FF723F;color:white;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.2)">📅 Schedule A Discovery Call</a>
             </div>
         </div>
 
@@ -187,7 +200,7 @@ def render_comparison_html(
         <div style="background:linear-gradient(135deg, var(--bmp-orange), #EF6C00);color:white;border-radius:12px;padding:32px;text-align:center;margin:24px 0">
             <h2 style="font-size:22px;margin-bottom:8px">Ready to get ahead of your competitors?</h2>
             <p style="margin-bottom:16px;color:rgba(255,255,255,0.9)">We can fix everything in this report and get you found by AI before your competition.</p>
-            <a href="https://backyardmarketingpros.com/contact" style="display:inline-block;background:white;color:var(--bmp-orange);padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600">Let's Talk</a>
+            <a href="{_esc(cta_url)}" style="display:inline-block;background:white;color:var(--bmp-orange);padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600">📅 Schedule A Discovery Call</a>
         </div>
 
         <div class="footer">

@@ -943,6 +943,14 @@ async def _generate_competitor_report_bg(report_id: int):
                         competitors.append(comp_data)
 
             if competitors:
+                # Resolve the same scheduler the main audit page uses, so
+                # the comparison report's CTAs route to whatever the org
+                # picked in Settings → Audit Reports (iclosed, native,
+                # or custom URL). Booking is its own white-label surface,
+                # so we pass the schedule_public_url base.
+                from app.runtime_config import _get_or_create as _get_rc
+                rc = await _get_rc(db)
+                cmp_booking_url = await _resolve_audit_booking_url(db, rc, settings.schedule_public_url.rstrip("/"))
                 html = render_comparison_html(
                     prospect=prospect,
                     competitors=competitors,
@@ -950,6 +958,7 @@ async def _generate_competitor_report_bg(report_id: int):
                     city=company.city or "",
                     state=company.state or "",
                     business_type=company.business_type or "",
+                    booking_url=cmp_booking_url,
                 )
                 report.competitor_html = html
                 report.competitor_generated_at = datetime.now(timezone.utc)

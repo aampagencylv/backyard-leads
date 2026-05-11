@@ -563,7 +563,7 @@ def render_report_html(
                     <p style="color:rgba(255,255,255,0.8);font-size:16px;margin-bottom:4px">{_esc(report.company_name)} &middot; {_esc(report.city)}{', ' + _esc(report.state) if report.state else ''}</p>
                     <p style="color:rgba(255,255,255,0.5);font-size:12px">Generated {report.generated_at}</p>
                 </div>
-                <a href="{_esc(booking_url)}" style="display:inline-block;background:#FF723F;color:white;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.2)">📅 Schedule a Discovery Call</a>
+                <a href="{_esc(booking_url)}" style="display:inline-block;background:#FF723F;color:white;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.2)">📅 Schedule A Discovery Call</a>
             </div>
         </div>
 
@@ -707,7 +707,7 @@ def render_report_html(
                 We help {_esc(report.business_type or 'backyard')} professionals get discovered by
                 ChatGPT, Google AI, and Perplexity. Pick a time below — we'll walk through what we found and the fastest fixes.
             </p>
-            <a href="{_esc(booking_url)}" style="display:inline-block;background:#E65100;color:white;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px">📅 Schedule a Discovery Call</a>
+            <a href="{_esc(booking_url)}" style="display:inline-block;background:#E65100;color:white;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px">📅 Schedule A Discovery Call</a>
         </div>
 
         <div class="footer">
