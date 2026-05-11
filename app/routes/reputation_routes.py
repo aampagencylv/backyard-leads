@@ -24,7 +24,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select, func, and_, or_, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import require_admin, get_current_user
+from app.auth import require_super_admin, get_current_user
 from app.database import get_db
 from app.models import GeneratedEmail, Contact, User
 from pydantic import BaseModel
@@ -89,7 +89,7 @@ def _extract_domain(email: Optional[str]) -> str:
 async def reputation_summary(
     days: int = 30,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(require_admin),
+    _user: User = Depends(require_super_admin),
 ) -> dict:
     """Overall numbers + per-domain breakdown over the last `days` days.
 
