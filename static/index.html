@@ -2466,12 +2466,26 @@ function verify(secret, rawBody, header) {
 
         // ============ PWA service worker ============
         // Register on every load — the SW itself decides what to cache.
-        // Fires on every page navigation but the browser dedupes; an
-        // existing registration just keeps running.
+        // Auto-reload when a new SW takes over so installed PWAs pick
+        // up CSS/JS updates on next launch without manual cache-clear.
+        // (Especially iOS PWAs — they ship stale cached HTML otherwise.)
         if ('serviceWorker' in navigator) {
+            let _swReloadInProgress = false;
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('/sw.js', { scope: '/' })
+                    .then((reg) => {
+                        // Force an update check on every page load — by default
+                        // the browser only checks every 24h.
+                        try { reg.update(); } catch (e) {}
+                    })
                     .catch((e) => console.warn('[sw] register failed:', e));
+            });
+            // When a new SW takes over (via skipWaiting + clients.claim),
+            // reload so the user sees the fresh HTML/CSS immediately.
+            navigator.serviceWorker.addEventListener('controllerchange', () => {
+                if (_swReloadInProgress) return;
+                _swReloadInProgress = true;
+                window.location.reload();
             });
         }
 
