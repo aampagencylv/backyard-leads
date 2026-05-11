@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Prospector</title>
+  <style>
+    body {
+      width: 320px;
+      margin: 0;
+      padding: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 13px;
+      color: #1a1a1a;
+      background: white;
+    }
+    h1 { margin: 0 0 4px; color: #1B5E20; font-size: 16px; }
+    p { margin: 0 0 12px; color: #666; font-size: 12px; }
+    label { display: block; font-size: 11px; font-weight: 600; color: #444; margin: 10px 0 4px; }
+    input { width: 100%; padding: 8px 9px; border: 1px solid #ddd; border-radius: 5px; font-size: 13px; box-sizing: border-box; background: white; color: #1a1a1a; }
+    button {
+      width: 100%;
+      background: #E65100;
+      color: white;
+      border: 0;
+      padding: 10px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 14px;
+    }
+    button:disabled { opacity: 0.6; cursor: default; }
+    button.secondary { background: #f4f4f4; color: #333; box-shadow: inset 0 0 0 1px #e3e3e3; }
+    .err { background: #ffebee; color: #c62828; padding: 8px 10px; border-radius: 5px; font-size: 12px; margin-top: 10px; display: none; }
+    .err.show { display: block; }
+    .ok { background: #e8f5e9; color: #1b5e20; padding: 8px 10px; border-radius: 5px; font-size: 12px; margin-top: 10px; }
+    .row { display: flex; gap: 6px; align-items: center; }
+    .pill { display: inline-block; background: #e8f5e9; color: #1b5e20; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>🌳 Prospector CRM</h1>
+  <p>Adds a CRM context sidebar to Gmail threads.</p>
+
+  <div id="signed-out">
+    <p style="color:#444">Sign in with your Prospector credentials.</p>
+    <label>Email</label>
+    <input id="username" type="email" autocomplete="username" placeholder="you@aamp.agency">
+    <label>Password</label>
+    <input id="password" type="password" autocomplete="current-password">
+    <div class="err" id="err"></div>
+    <button id="sign-in">Sign in</button>
+  </div>
+
+  <div id="signed-in" style="display:none">
+    <div class="ok" id="status">Signed in.</div>
+    <p style="margin-top:14px">Open any Gmail thread — the sidebar loads on the right with the CRM context for the sender.</p>
+    <button class="secondary" id="sign-out">Sign out</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -101,6 +101,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             path.startswith("/report/")
             or path.startswith("/book/")
             or path.startswith("/integrations/missive/")
+            or path.startswith("/integrations/embed/")
         )
 
         # Apply unconditionally

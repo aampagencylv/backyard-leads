@@ -46,6 +46,7 @@ from app.routes import (
     reputation_routes,
     integrations_context_routes,
     missive_routes,
+    embed_sidebar_routes,
 )
 
 
@@ -238,6 +239,7 @@ app.include_router(dns_health_routes.router)
 app.include_router(reputation_routes.router)
 app.include_router(integrations_context_routes.router)
 app.include_router(missive_routes.router)
+app.include_router(embed_sidebar_routes.router)
 
 # Serve static frontend + user-uploaded files (logos, etc.).
 # var/uploads/ is gitignored and persists across deploys; ensure the

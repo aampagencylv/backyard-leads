@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Prospector CRM Sidebar",
+  "version": "1.0.0",
+  "description": "CRM context for the prospect in your current email thread. Companion to the Prospector platform.",
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://prospector.backyardmarketingpros.com/*",
+    "https://mail.google.com/*",
+    "https://www.linkedin.com/*",
+    "https://mail.missiveapp.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Prospector CRM"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://mail.google.com/*"],
+      "js": ["content/gmail.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
