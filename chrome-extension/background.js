@@ -96,5 +96,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  if (msg.type === "auth_expired") {
+    // Content script's iframe reported a 401 — clear the stored token
+    // and bump the toolbar badge so the user sees they need to re-login.
+    clearToken().then(() => {
+      try {
+        chrome.action.setBadgeText({ text: "!" });
+        chrome.action.setBadgeBackgroundColor({ color: "#c62828" });
+      } catch (e) {}
+      sendResponse({ ok: true });
+    });
+    return true;
+  }
+
   return false;
+});
+
+// Clear the badge as soon as the popup successfully logs in
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes[STORAGE_KEY] && changes[STORAGE_KEY].newValue) {
+    try { chrome.action.setBadgeText({ text: "" }); } catch (e) {}
+  }
 });

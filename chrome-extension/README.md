@@ -1,9 +1,21 @@
 # Prospector CRM — Chrome Extension
 
-Adds the same CRM sidebar that lives in Missive to Gmail (and, soon, LinkedIn / Missive web).
-Opens on the right side of the Gmail window when a thread is open, shows the prospect's
-Prospector context: contact, company, sequence, audit, recent activity, all the same action
-buttons (Call / iMessage / Schedule meeting / Add task / etc).
+Adds the same CRM sidebar that lives in Missive to **Gmail** and **LinkedIn**. Opens on the
+right side of the page when a thread (Gmail) or profile (LinkedIn) is in focus. Shows the
+prospect's Prospector context: contact, company, sequence, audit, recent activity, plus all
+the action buttons (Call / iMessage / Schedule meeting / Add task / Quick note / etc).
+
+**Behavior across surfaces:**
+- **Gmail** — appears only when a thread is open or a compose window is focused. Parses the
+  latest expanded message's `From` header (or the To: field while composing), skips the BDR's
+  own email when picking the prospect.
+- **LinkedIn** — appears on `/in/<slug>/` profile views and Sales Navigator lead pages. Looks
+  up the profile by URL against `Contact.linkedin_url`. If not found, "Quick Add" lets you
+  enter their email + name to add them on the spot.
+- **Inbox lists, search results, settings pages** — panel is hidden (not distracting).
+- **Reveal tab** on the right edge of the page brings the panel back when collapsed.
+- **Token expiry** — when the API returns 401 the extension shows a red ! badge on the
+  toolbar icon; click to re-sign-in.
 
 ## Install (side-load for internal team)
 
@@ -38,11 +50,21 @@ the Missive SDK. So feature parity is automatic.
 
 ## Adding more hosts later
 
-To enable LinkedIn / Missive web:
+To enable Missive web (or any other surface):
 1. Add a new `content/<host>.js` script
 2. Update `manifest.json` `content_scripts` to include it
 3. The new script just needs to:
    - Identify the "currently focused prospect" by scraping the DOM
    - Inject (or reach into) the same iframe
    - PostMessage updates to it when the focused prospect changes
+     via `{ type: 'set_email', email: '...' }` or
+     `{ type: 'set_linkedin', linkedin: '...' }`
+
 The iframe itself doesn't change.
+
+## Updating after a code change
+
+Pull main on whichever machine has the extension loaded, then in
+`chrome://extensions` click the circular **Reload** icon on the
+Prospector CRM card. Open a fresh Gmail tab — content scripts only
+re-attach to new page loads, not existing ones.

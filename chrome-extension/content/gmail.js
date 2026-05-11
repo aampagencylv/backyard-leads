@@ -1,37 +1,49 @@
-// Gmail content script for the Prospector CRM extension.
+// Gmail content script — v2.
 //
-// What it does:
-//   1. Watches for "thread is open" state inside Gmail's SPA. Gmail
-//      rewrites its URL hash on every thread navigation, so we use
-//      hashchange + a mutation observer as redundant signals.
-//   2. Extracts the prospect's email from the open thread DOM.
-//   3. Injects a fixed-position sidebar iframe along the right side
-//      of the Gmail window, pointed at our embedded sidebar endpoint.
-//   4. PostMessages the iframe with the new email each time a
-//      different thread is opened — the iframe refetches context
-//      without reloading.
-//   5. Listens for {type: "token_updated"} from background and
-//      forwards to the iframe so a fresh login propagates instantly.
+// Goals over v1:
+//   1. Don't show the panel on Gmail's inbox-list view. Only show when
+//      the user has a thread open OR a compose window focused.
+//   2. Don't overlap Gmail content. When the panel is expanded, push
+//      Gmail's main pane to the left so they sit side-by-side.
+//   3. Pick the PROSPECT email by parsing the latest expanded message's
+//      `From` header — not "any email in the DOM" (which v1 occasionally
+//      mis-picked when an old message in the thread had a different
+//      sender).
+//   4. Collapsed state keeps a thin reveal tab on the right edge so the
+//      user can pop the panel back at any time.
+//   5. Detect compose recipients — when composing, the To field's
+//      recipient becomes the probed contact.
+//
+// What it does NOT do:
+//   - Inject into Gmail's native right rail (would require Google's
+//     Workspace Add-on framework). We use a clean fixed-position panel
+//     instead, but adjust Gmail's layout so they coexist.
 
 const APP_URL = "https://prospector.backyardmarketingpros.com";
 const SIDEBAR_WIDTH = 380;
+const REVEAL_TAB_WIDTH = 18;
+const STORAGE_KEY_COLLAPSED = "prospector_gmail_collapsed";
 
-let _sidebarEl = null;
-let _lastEmail = "";
+let _hostEl = null;
+let _iframeEl = null;
+let _lastProbe = "";    // last email we asked the iframe to load
 let _jwt = "";
+let _myEmail = "";
 
 // ----------------------------------------------------------------------
-// Bootstrap
+// Boot
 // ----------------------------------------------------------------------
 
 (async function init() {
   _jwt = await fetchToken();
-  injectSidebar();
-  pollForThread();   // immediate first read
-  // Re-poll on hash change (Gmail navigation) + on DOM mutations
-  // (compose window open, thread switch within label, etc).
-  window.addEventListener("hashchange", () => setTimeout(pollForThread, 200));
-  const obs = new MutationObserver(throttle(() => pollForThread(), 500));
+  ensureHost();
+  // Read once
+  refreshProbe();
+  // Gmail SPA navigation: hashchange covers most thread switches
+  window.addEventListener("hashchange", () => setTimeout(refreshProbe, 200));
+  // DOM mutations cover compose-window open, infinite-scroll, etc.
+  // Throttled to 500ms to avoid CPU churn.
+  const obs = new MutationObserver(throttle(refreshProbe, 500));
   obs.observe(document.body, { childList: true, subtree: true });
 })();
 
@@ -43,93 +55,132 @@ async function fetchToken() {
   });
 }
 
+// Forward iframe-originated messages (auth expiry signals from the
+// embed sidebar) into the background service worker. The iframe is at
+// prospector.bymp.com; its window.parent is THIS content script's
+// window, so a postMessage from inside the iframe fires here.
+window.addEventListener("message", (ev) => {
+  const data = ev && ev.data;
+  if (!data || typeof data !== "object") return;
+  // Only trust messages whose origin is our app
+  if (ev.origin !== APP_URL) return;
+  if (data.type === "auth_expired") {
+    try { chrome.runtime.sendMessage({ type: "auth_expired" }); } catch (e) {}
+  }
+});
+
 chrome.runtime.onMessage.addListener((msg) => {
   if (!msg || typeof msg !== "object") return;
   if (msg.type === "token_updated") {
     _jwt = msg.token || "";
-    // Push to iframe — it'll re-render
     postToIframe({ type: "set_token", token: _jwt });
-    if (_lastEmail) {
-      // Resync the context now that we have a fresh token
-      postToIframe({ type: "set_email", email: _lastEmail });
-    }
+    // Re-probe so a fresh login immediately renders context
+    refreshProbe(true);
   } else if (msg.type === "toggle_sidebar") {
-    toggleSidebar();
+    setCollapsed(_hostEl && _hostEl.dataset.collapsed !== "1" ? true : false);
   }
 });
 
 // ----------------------------------------------------------------------
-// DOM scraping — find the prospect's email on the open thread.
-//
-// Gmail uses several stable hooks across A/B test variants:
-//   - elements with attribute `email="..."` (the most reliable;
-//     present on every "from" / "to" header card)
-//   - `[data-hovercard-id="..."]` (hovercard pre-loads, holds the
-//     identifier — usually an email address)
-//   - `mailto:` href values on the header.
-// We collect candidates in priority order and pick the first that:
-//   (a) is not the user's own Gmail address, and
-//   (b) is not in the team-emails list returned by our backend
-//   (handled server-side; we just send the first non-self email).
+// "What's the current prospect?" detection
 // ----------------------------------------------------------------------
 
 function getMyGmailAddress() {
-  // Gmail puts the signed-in user's email at the top-right account
-  // chooser. The data attribute `data-email` is stable; fall back to
-  // an aria-label parse if Google A/B-tests it out.
+  if (_myEmail) return _myEmail;
+  // Multiple stable hooks across Gmail variants
   const el = document.querySelector('[data-email]');
-  if (el && el.getAttribute("data-email")) return el.getAttribute("data-email").trim().toLowerCase();
+  if (el && el.getAttribute("data-email")) {
+    _myEmail = el.getAttribute("data-email").trim().toLowerCase();
+    return _myEmail;
+  }
   const meta = document.querySelector('meta[name="user-email"]');
-  if (meta && meta.content) return meta.content.trim().toLowerCase();
+  if (meta && meta.content) {
+    _myEmail = meta.content.trim().toLowerCase();
+    return _myEmail;
+  }
+  // Last resort: parse from .gb_A title (account avatar tooltip)
+  const av = document.querySelector('.gb_A[aria-label]');
+  if (av) {
+    const m = (av.getAttribute("aria-label") || "").match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
+    if (m) {
+      _myEmail = m[0].toLowerCase();
+      return _myEmail;
+    }
+  }
   return "";
 }
 
-function getOpenThreadEmail() {
-  // Only run when a thread is open — Gmail puts a `#inbox/<id>` or
-  // `#label/<x>/<id>` in the URL hash; otherwise we're in a list view.
-  const hash = window.location.hash || "";
-  if (!/^#?(?:inbox|sent|label|search|all|starred|drafts|snoozed|spam|trash|imp)\/.+\/[A-Za-z0-9]+/.test(hash.replace(/^#/, ""))) {
-    // Not deep enough — list view or filter, no specific thread
-    return "";
+function isThreadOpen() {
+  // Gmail hash patterns for "deep" views (specific thread open):
+  //   #inbox/<thread_id>
+  //   #label/<label>/<thread_id>
+  //   #search/<q>/<thread_id>
+  //   #sent/<thread_id>
+  //   #all/<thread_id>
+  // Plus compose windows: #inbox?compose=new
+  const hash = (window.location.hash || "").replace(/^#/, "");
+  if (/^(inbox|sent|label|search|all|starred|drafts|snoozed|spam|trash|imp)\/.+\/[A-Za-z0-9]+/.test(hash)) {
+    return true;
   }
+  // Detect open compose windows even when the URL doesn't change
+  if (document.querySelector('.AD .nH .aDh, .M9, [role="dialog"][aria-label*="compose" i]')) {
+    return true;
+  }
+  return false;
+}
+
+function getFocusedMessageEmail() {
+  // Strategy: find the LATEST visible message in the open thread. Gmail
+  // expands one message by default (the most recent unread, or the
+  // bottom one if everything's read). We look for the bottom-most
+  // message wrapper (`.adn`) and read the email from its expanded
+  // header (`.gE [email]`).
   const me = getMyGmailAddress();
-  const candidates = [];
+  const messages = Array.from(document.querySelectorAll(".adn"));
+  if (messages.length > 0) {
+    // Walk from the bottom up — most recently sent is at the end.
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const wrap = messages[i];
+      // Skip collapsed messages (no header rendering)
+      const headerEmail = wrap.querySelector(".gE [email], .iv [email]");
+      const v = headerEmail && headerEmail.getAttribute("email");
+      if (v) {
+        const lower = v.trim().toLowerCase();
+        // If the latest sender is US, fall back to the To: address
+        // (e.g. the BDR just sent — they want the prospect's context)
+        if (lower && lower !== me) return lower;
+        // Try the to_fields of this same message
+        const toEmail = wrap.querySelector(".cf .g2[email], .iw .g2[email]");
+        if (toEmail) {
+          const tv = (toEmail.getAttribute("email") || "").trim().toLowerCase();
+          if (tv && tv !== me) return tv;
+        }
+      }
+    }
+  }
 
-  // Primary: any [email=...] attribute under the open thread container
-  // ".adn" wraps each visible message; ".ii" wraps the body. The
-  // headers above each have spans with email="..." attributes.
-  document.querySelectorAll('.adn [email], .gE [email], .iv [email]').forEach((el) => {
+  // Compose window — read the To: chip
+  const composeRecipient = document.querySelector('div[role="dialog"] .vR .vT[email], .M9 .vT[email]');
+  if (composeRecipient) {
+    const v = (composeRecipient.getAttribute("email") || "").trim().toLowerCase();
+    if (v && v !== me) return v;
+  }
+
+  // Generic fallback: any [email=…] that isn't us
+  const all = document.querySelectorAll('[email]');
+  for (const el of all) {
     const v = (el.getAttribute("email") || "").trim().toLowerCase();
-    if (v) candidates.push(v);
-  });
-  // Fallback: any [data-hovercard-id] that looks like an email
-  document.querySelectorAll('[data-hovercard-id]').forEach((el) => {
-    const v = (el.getAttribute("data-hovercard-id") || "").trim().toLowerCase();
-    if (v.includes("@")) candidates.push(v);
-  });
-  // Fallback: any mailto: href
-  document.querySelectorAll('a[href^="mailto:"]').forEach((el) => {
-    const href = el.getAttribute("href") || "";
-    const v = href.replace(/^mailto:/i, "").split("?")[0].trim().toLowerCase();
-    if (v.includes("@")) candidates.push(v);
-  });
-
-  // Dedupe + pick first non-self
-  const seen = new Set();
-  for (const e of candidates) {
-    if (seen.has(e)) continue;
-    seen.add(e);
-    if (e && e !== me) return e;
+    if (v && v !== me && v.includes("@")) return v;
   }
   return "";
 }
 
 // ----------------------------------------------------------------------
-// Sidebar injection
+// Iframe host management
 // ----------------------------------------------------------------------
 
-function injectSidebar() {
-  if (_sidebarEl && document.body.contains(_sidebarEl)) return;
+function ensureHost() {
+  if (_hostEl && document.body.contains(_hostEl)) return;
 
   const host = document.createElement("div");
   host.id = "prospector-sidebar-host";
@@ -142,12 +193,14 @@ function injectSidebar() {
     background: white;
     border-left: 1px solid #e3e3e3;
     box-shadow: -2px 0 10px rgba(0,0,0,0.08);
-    z-index: 999999;
-    transform: translateX(0);
-    transition: transform 0.2s ease;
+    z-index: 2147483600;
+    transform: translateX(${SIDEBAR_WIDTH}px);
+    transition: transform 0.22s cubic-bezier(.4,0,.2,1);
+    display: none;
   `;
+  host.dataset.collapsed = "1";  // start collapsed; show only when a probe lands
 
-  // Header strip with collapse + sign-in
+  // Header bar
   const header = document.createElement("div");
   header.style.cssText = `
     display:flex;align-items:center;gap:8px;padding:8px 12px;
@@ -156,62 +209,131 @@ function injectSidebar() {
   header.innerHTML = `
     <span>🌳 Prospector</span>
     <span style="flex:1"></span>
-    <button id="prospector-sidebar-toggle" title="Hide" style="background:transparent;border:0;color:white;cursor:pointer;font-size:16px;line-height:1">✕</button>`;
+    <button id="prospector-collapse" title="Collapse" style="background:transparent;border:0;color:white;cursor:pointer;font-size:16px;line-height:1;padding:2px 6px">›</button>`;
 
+  // Iframe
   const iframe = document.createElement("iframe");
   iframe.id = "prospector-sidebar-iframe";
   iframe.style.cssText = `width:100%;height:calc(100% - 36px);border:0;display:block;background:white;`;
-  iframe.src = buildIframeSrc("");
+  iframe.src = buildIframeSrc({});
 
   host.appendChild(header);
   host.appendChild(iframe);
   document.body.appendChild(host);
-  _sidebarEl = host;
+  _hostEl = host;
+  _iframeEl = iframe;
 
-  document.getElementById("prospector-sidebar-toggle").addEventListener("click", () => {
-    toggleSidebar();
+  document.getElementById("prospector-collapse").addEventListener("click", () => setCollapsed(true));
+
+  // Reveal tab — a slim sliver on the right edge that brings the panel
+  // back. Always present once the host has been mounted.
+  ensureRevealTab();
+
+  // Restore previous collapsed preference (if user collapsed before, stay collapsed)
+  chrome.storage.local.get([STORAGE_KEY_COLLAPSED], (data) => {
+    const wasCollapsed = !!(data && data[STORAGE_KEY_COLLAPSED]);
+    if (wasCollapsed) setCollapsed(true);
   });
 }
 
-function toggleSidebar() {
-  if (!_sidebarEl) return;
-  const collapsed = _sidebarEl.dataset.collapsed === "1";
-  if (collapsed) {
-    _sidebarEl.style.transform = "translateX(0)";
-    _sidebarEl.dataset.collapsed = "0";
+function ensureRevealTab() {
+  if (document.getElementById("prospector-reveal-tab")) return;
+  const tab = document.createElement("div");
+  tab.id = "prospector-reveal-tab";
+  tab.title = "Open Prospector sidebar";
+  tab.style.cssText = `
+    position: fixed; top: 50%; right: 0; transform: translateY(-50%);
+    width: ${REVEAL_TAB_WIDTH}px; min-height: 80px;
+    background: #1B5E20; color: white;
+    border-radius: 6px 0 0 6px;
+    cursor: pointer; z-index: 2147483599;
+    display: none;
+    align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; letter-spacing: 1px;
+    box-shadow: -2px 0 8px rgba(0,0,0,0.18);
+    writing-mode: vertical-rl; text-orientation: mixed;
+    padding: 8px 0;
+    transition: width 0.12s;
+  `;
+  tab.textContent = "PROSPECTOR";
+  tab.addEventListener("mouseenter", () => { tab.style.width = (REVEAL_TAB_WIDTH + 4) + "px"; });
+  tab.addEventListener("mouseleave", () => { tab.style.width = REVEAL_TAB_WIDTH + "px"; });
+  tab.addEventListener("click", () => setCollapsed(false));
+  document.body.appendChild(tab);
+}
+
+function setHostVisible(visible) {
+  if (!_hostEl) return;
+  if (visible) {
+    _hostEl.style.display = "block";
+    // Push Gmail's content left so we don't overlap
+    if (_hostEl.dataset.collapsed !== "1") {
+      document.body.style.marginRight = SIDEBAR_WIDTH + "px";
+    }
   } else {
-    _sidebarEl.style.transform = `translateX(${SIDEBAR_WIDTH - 24}px)`;
-    _sidebarEl.dataset.collapsed = "1";
+    _hostEl.style.display = "none";
+    document.body.style.marginRight = "";
+    const tab = document.getElementById("prospector-reveal-tab");
+    if (tab) tab.style.display = "none";
   }
 }
 
-function buildIframeSrc(email) {
-  let q = "";
-  if (_jwt) q += "t=" + encodeURIComponent(_jwt);
-  if (email) q += (q ? "&" : "") + "email=" + encodeURIComponent(email);
-  return APP_URL + "/integrations/embed/sidebar" + (q ? "?" + q : "");
+function setCollapsed(collapsed) {
+  if (!_hostEl) return;
+  if (collapsed) {
+    _hostEl.dataset.collapsed = "1";
+    _hostEl.style.transform = `translateX(${SIDEBAR_WIDTH}px)`;
+    document.body.style.marginRight = "";
+    const tab = document.getElementById("prospector-reveal-tab");
+    if (tab && _hostEl.style.display !== "none") tab.style.display = "flex";
+  } else {
+    _hostEl.dataset.collapsed = "0";
+    _hostEl.style.transform = "translateX(0)";
+    document.body.style.marginRight = SIDEBAR_WIDTH + "px";
+    const tab = document.getElementById("prospector-reveal-tab");
+    if (tab) tab.style.display = "none";
+  }
+  chrome.storage.local.set({ [STORAGE_KEY_COLLAPSED]: collapsed });
+}
+
+function buildIframeSrc(opts) {
+  const parts = [];
+  if (_jwt) parts.push("t=" + encodeURIComponent(_jwt));
+  if (opts.email) parts.push("email=" + encodeURIComponent(opts.email));
+  return APP_URL + "/integrations/embed/sidebar" + (parts.length ? "?" + parts.join("&") : "");
 }
 
 function postToIframe(msg) {
-  const ifr = document.getElementById("prospector-sidebar-iframe");
-  if (!ifr || !ifr.contentWindow) return;
-  try { ifr.contentWindow.postMessage(msg, APP_URL); } catch (e) {}
+  if (!_iframeEl || !_iframeEl.contentWindow) return;
+  try { _iframeEl.contentWindow.postMessage(msg, APP_URL); } catch (e) {}
 }
 
 // ----------------------------------------------------------------------
-// Poll-based thread detector
+// Probe loop — decide if/what to show
 // ----------------------------------------------------------------------
 
-function pollForThread() {
-  const email = getOpenThreadEmail();
-  if (!email || email === _lastEmail) return;
-  _lastEmail = email;
-  // If iframe isn't booted yet, set src; otherwise postMessage.
-  const ifr = document.getElementById("prospector-sidebar-iframe");
-  if (!ifr) return;
-  if (!ifr.dataset.booted) {
-    ifr.src = buildIframeSrc(email);
-    ifr.dataset.booted = "1";
+function refreshProbe(force) {
+  ensureHost();
+
+  if (!isThreadOpen()) {
+    setHostVisible(false);
+    _lastProbe = "";
+    return;
+  }
+  const email = getFocusedMessageEmail();
+  if (!email) {
+    // Thread open but we can't tell who — keep panel hidden (don't
+    // distract the user with a blank panel)
+    setHostVisible(false);
+    _lastProbe = "";
+    return;
+  }
+  setHostVisible(true);
+  if (email === _lastProbe && !force) return;
+  _lastProbe = email;
+  if (!_iframeEl.dataset.booted) {
+    _iframeEl.src = buildIframeSrc({ email });
+    _iframeEl.dataset.booted = "1";
   } else {
     postToIframe({ type: "set_email", email });
   }
@@ -223,9 +345,9 @@ function pollForThread() {
 
 function throttle(fn, ms) {
   let scheduled = false;
-  return function (...args) {
+  return function () {
     if (scheduled) return;
     scheduled = true;
-    setTimeout(() => { scheduled = false; fn.apply(this, args); }, ms);
+    setTimeout(() => { scheduled = false; fn(); }, ms);
   };
 }

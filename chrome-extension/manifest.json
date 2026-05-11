@@ -25,6 +25,11 @@
       "matches": ["https://mail.google.com/*"],
       "js": ["content/gmail.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.linkedin.com/*"],
+      "js": ["content/linkedin.js"],
+      "run_at": "document_idle"
     }
   ]
 }

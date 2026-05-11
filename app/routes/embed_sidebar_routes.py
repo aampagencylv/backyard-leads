@@ -140,6 +140,7 @@ def _render_embed_sidebar(app_url: str, audit_url: str) -> str:
     const root = document.getElementById('root');
     let _currentContext = null;
     let _currentEmail = '';
+    let _currentLinkedin = '';
     let _currentConversationId = '';
     let _jwt = '';
     let _newTaskDueDays = 1;
@@ -149,6 +150,7 @@ def _render_embed_sidebar(app_url: str, audit_url: str) -> str:
       const p = new URLSearchParams(window.location.search || '');
       _jwt = (p.get('t') || '').trim();
       _currentEmail = (p.get('email') || '').trim();
+      _currentLinkedin = (p.get('linkedin') || '').trim();
       _currentConversationId = (p.get('conversation_id') || '').trim();
       // Clean the URL so the token doesn't sit in the iframe location
       try {{ history.replaceState(null, '', window.location.pathname); }} catch (e) {{}}
@@ -162,12 +164,25 @@ def _render_embed_sidebar(app_url: str, audit_url: str) -> str:
         const newEmail = (msg.email || '').trim();
         if (newEmail && newEmail.toLowerCase() !== _currentEmail.toLowerCase()) {{
           _currentEmail = newEmail;
+          _currentLinkedin = '';
           _currentConversationId = (msg.conversation_id || '').trim();
+          loadContext();
+        }}
+      }} else if (msg.type === 'set_linkedin') {{
+        const newLi = (msg.linkedin || '').trim();
+        if (newLi && newLi.toLowerCase() !== _currentLinkedin.toLowerCase()) {{
+          _currentLinkedin = newLi;
+          _currentEmail = '';
           loadContext();
         }}
       }} else if (msg.type === 'set_token') {{
         _jwt = (msg.token || '').trim();
         loadContext();
+      }} else if (msg.type === 'clear') {{
+        _currentEmail = '';
+        _currentLinkedin = '';
+        _currentContext = null;
+        root.innerHTML = '<div class="empty">Open an email thread or LinkedIn profile to see CRM context here.</div>';
       }}
     }});
 
@@ -246,36 +261,44 @@ def _render_embed_sidebar(app_url: str, audit_url: str) -> str:
     // ---------- Main context loader ----------
     async function loadContext() {{
       if (!_jwt) {{ renderLoginGate(); return; }}
-      if (!_currentEmail) {{
-        root.innerHTML = '<div class="empty">Open an email thread to see CRM context here.</div>';
+      if (!_currentEmail && !_currentLinkedin) {{
+        root.innerHTML = '<div class="empty">Open an email thread or LinkedIn profile to see CRM context here.</div>';
         return;
       }}
-      root.innerHTML = '<div class="empty"><div class="spinner"></div><div style="margin-top:8px">Loading context for ' + escapeHtml(_currentEmail) + '…</div></div>';
-      const qs = '?email=' + encodeURIComponent(_currentEmail) +
-        (_currentConversationId ? '&conversation_id=' + encodeURIComponent(_currentConversationId) : '');
+      const probe = _currentEmail || _currentLinkedin;
+      root.innerHTML = '<div class="empty"><div class="spinner"></div><div style="margin-top:8px">Loading context for ' + escapeHtml(probe) + '…</div></div>';
+      const parts = [];
+      if (_currentEmail) parts.push('email=' + encodeURIComponent(_currentEmail));
+      if (_currentLinkedin) parts.push('linkedin=' + encodeURIComponent(_currentLinkedin));
+      if (_currentConversationId) parts.push('conversation_id=' + encodeURIComponent(_currentConversationId));
+      const qs = '?' + parts.join('&');
       const ctx = await authFetch('/api/integrations/context' + qs);
       if (!ctx) return;
       _currentContext = ctx;
       if (!ctx.found) {{
-        renderNotFound(_currentEmail);
+        renderNotFound(probe);
         return;
       }}
       renderContext(ctx);
     }}
 
-    function renderNotFound(email) {{
+    function renderNotFound(probeKey) {{
+      const onLinkedIn = !_currentEmail && !!_currentLinkedin;
+      // When the probe is a LinkedIn URL we can't auto-fill the email,
+      // so the quick-add form needs an email input on top of the rest.
       root.innerHTML = `
         <div class="section">
           <div class="label">Not in Prospector</div>
-          <h3>${{escapeHtml(email)}}</h3>
-          <p style="color:#666;margin:8px 0 12px">This contact hasn't been added yet.</p>
+          <h3 style="font-size:13px;word-break:break-all">${{escapeHtml(probeKey)}}</h3>
+          <p style="color:#666;margin:8px 0 12px">This ${{onLinkedIn ? 'profile' : 'contact'}} hasn't been added yet.</p>
           <div class="actions">
             <button class="btn" onclick="quickAddInline()">Quick add</button>
             <button class="btn secondary" onclick="openInProspector()">Open in Prospector</button>
           </div>
         </div>
         <div id="quick-add-form" class="section" style="display:none;background:#fff8f0;border:1px solid #ffd9b3;border-radius:8px">
-          <div class="label">➕ Add ${{escapeHtml(email)}}</div>
+          <div class="label">➕ Add new contact</div>
+          ${{onLinkedIn ? `<input id="qa-email" type="email" placeholder="Email (required)" style="padding:6px 8px;border:1px solid #ddd;border-radius:5px;font-size:12px;width:100%;box-sizing:border-box;margin-bottom:6px">` : ''}}
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
             <input id="qa-first" placeholder="First name" style="padding:6px 8px;border:1px solid #ddd;border-radius:5px;font-size:12px">
             <input id="qa-last"  placeholder="Last name"  style="padding:6px 8px;border:1px solid #ddd;border-radius:5px;font-size:12px">
@@ -296,10 +319,17 @@ def _render_embed_sidebar(app_url: str, audit_url: str) -> str:
 
     async function submitQuickAdd() {{
       const get = id => (document.getElementById(id)?.value || '').trim();
+      const emailField = document.getElementById('qa-email');
+      const emailToUse = _currentEmail || (emailField ? emailField.value.trim() : '');
+      if (!emailToUse || !emailToUse.includes('@')) {{
+        toast('Email is required', 'error');
+        if (emailField) emailField.focus();
+        return;
+      }}
       const r = await authFetch('/api/integrations/sidebar/quick-add', {{
         method: 'POST',
         body: JSON.stringify({{
-          email: _currentEmail,
+          email: emailToUse,
           first_name: get('qa-first'),
           last_name: get('qa-last'),
           company_name: get('qa-company'),
@@ -308,6 +338,8 @@ def _render_embed_sidebar(app_url: str, audit_url: str) -> str:
       }});
       if (r && (r.created || r.contact_id)) {{
         toast('Added to Prospector', 'success');
+        // After adding from a LinkedIn probe, switch to email-based lookup
+        if (!_currentEmail) _currentEmail = emailToUse;
         loadContext();
       }}
     }}

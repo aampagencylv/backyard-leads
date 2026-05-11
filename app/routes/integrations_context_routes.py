@@ -39,6 +39,26 @@ router = APIRouter(prefix="/api/integrations", tags=["integrations"])
 log = logging.getLogger("bmp.integrations_context")
 
 
+def _extract_linkedin_slug(url: str) -> str:
+    """Pull the /in/<slug>/ slug out of a LinkedIn URL. Handles the
+    public-profile URL shape; returns empty when the URL doesn't
+    contain /in/.
+
+    Examples:
+      https://www.linkedin.com/in/jane-doe-123/      → "jane-doe-123"
+      https://linkedin.com/in/jane-doe/?utm_source=… → "jane-doe"
+      https://linkedin.com/sales/lead/4567/          → ""  (no slug)
+    """
+    if not url:
+        return ""
+    s = url.strip().lower()
+    if "/in/" not in s:
+        return ""
+    after = s.split("/in/", 1)[1]
+    slug = after.split("/", 1)[0].split("?", 1)[0].strip()
+    return slug
+
+
 def _domain_from(value: str) -> str:
     """Pull the host out of an email or URL. Lowercased, no scheme, no path."""
     if not value:
@@ -60,6 +80,7 @@ def _domain_from(value: str) -> str:
 async def get_context(
     email: Optional[str] = Query(None, description="Email address — primary lookup"),
     domain: Optional[str] = Query(None, description="Company domain — fallback lookup"),
+    linkedin: Optional[str] = Query(None, description="LinkedIn profile URL — used by the Chrome extension's LinkedIn content script"),
     company_id: Optional[int] = Query(None, description="Direct company id"),
     conversation_id: Optional[str] = Query(None, description="Missive conversation ID — persisted onto the contact so status-change hooks know which thread to write back to"),
     db: AsyncSession = Depends(get_db),
@@ -84,6 +105,28 @@ async def get_context(
         contact = (await db.execute(
             select(Contact).where(func.lower(Contact.email) == e)
         )).scalars().first()
+        if contact and not company:
+            company = (await db.execute(
+                select(Company).where(Company.id == contact.company_id)
+            )).scalar_one_or_none()
+
+    # 2.5. LinkedIn URL — fuzzy match on Contact.linkedin_url.
+    # LinkedIn URLs can come in many shapes (/in/<slug>/, /in/<slug>/?...,
+    # /sales/lead/<id>/, etc), so we match on the slug substring when
+    # we recognize it, else on the bare URL substring.
+    if not contact and linkedin:
+        slug = _extract_linkedin_slug(linkedin)
+        if slug:
+            contact = (await db.execute(
+                select(Contact).where(Contact.linkedin_url.ilike(f"%/in/{slug}%"))
+            )).scalars().first()
+        if not contact:
+            # Fallback: substring against the raw input
+            li = linkedin.strip().lower()
+            if "linkedin.com" in li:
+                contact = (await db.execute(
+                    select(Contact).where(func.lower(Contact.linkedin_url).contains(li[:200]))
+                )).scalars().first()
         if contact and not company:
             company = (await db.execute(
                 select(Company).where(Company.id == contact.company_id)
@@ -117,7 +160,7 @@ async def get_context(
     if not contact and not company:
         return {
             "found": False,
-            "lookup": {"email": email, "domain": domain, "company_id": company_id},
+            "lookup": {"email": email, "domain": domain, "linkedin": linkedin, "company_id": company_id},
             "team_emails": sorted(await missive_client.team_emails()),
             "missive_configured": missive_client.is_configured(),
         }
@@ -297,7 +340,7 @@ async def get_context(
     return {
         "found": True,
         "checked_at": datetime.now(timezone.utc).isoformat(),
-        "lookup": {"email": email, "domain": domain, "company_id": company_id},
+        "lookup": {"email": email, "domain": domain, "linkedin": linkedin, "company_id": company_id},
         "contact": _serialize_contact(contact) if contact else None,
         "company": _serialize_company(company) if company else None,
         "sequence": sequence,
