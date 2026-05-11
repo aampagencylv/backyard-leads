@@ -135,18 +135,61 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
     .activity-when {{ color: #999; font-size: 10px; }}
     .actions {{ display: flex; flex-wrap: wrap; gap: 6px; }}
     button {{ font-family: inherit; }}
-    .btn {{ background: var(--bmp-orange); color: white; border: 0; padding: 7px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; flex: 1; min-width: 100px; }}
-    .btn.secondary {{ background: #f4f4f4; color: #333; }}
-    .btn:hover {{ opacity: 0.9; }}
-    .action-grid {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-top: 10px; }}
-    .action-btn {{ background: #f7f7f7; border: 1px solid #e3e3e3; color: #333; padding: 8px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; text-align: left; transition: background 0.1s; }}
-    .action-btn:hover {{ background: #eee; }}
+    .btn {{ background: var(--bmp-orange); color: white; border: 0; padding: 9px 12px; border-radius: 7px; font-size: 12px; font-weight: 600; cursor: pointer; flex: 1; min-width: 100px; box-shadow: 0 1px 2px rgba(0,0,0,0.06); transition: transform 0.06s ease, box-shadow 0.1s ease, opacity 0.1s; }}
+    .btn:hover {{ opacity: 0.92; box-shadow: 0 2px 5px rgba(0,0,0,0.12); }}
+    .btn:active {{ transform: translateY(1px); box-shadow: 0 1px 1px rgba(0,0,0,0.08); }}
+    .btn.secondary {{ background: #f4f4f4; color: #333; box-shadow: inset 0 0 0 1px #e3e3e3; }}
+    .btn.secondary:hover {{ background: #ececec; }}
+
+    .action-grid {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 12px; }}
+    .action-btn {{
+      display: flex; align-items: center; gap: 8px;
+      background: white; color: #1a1a1a;
+      border: 1px solid #dfdfdf;
+      padding: 11px 13px;
+      border-radius: 8px;
+      font-size: 13px; font-weight: 600;
+      cursor: pointer; text-align: left;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+      transition: transform 0.06s ease, box-shadow 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+    }}
+    .action-btn .icon {{ font-size: 17px; line-height: 1; flex-shrink: 0; }}
+    .action-btn:hover {{ border-color: #c5c5c5; box-shadow: 0 2px 6px rgba(0,0,0,0.09); }}
+    .action-btn:active {{ transform: translateY(1px); box-shadow: 0 1px 2px rgba(0,0,0,0.06); }}
+
+    /* Primary call action — visually distinct, drives the most-frequent
+       BDR action right out of the iframe. */
+    .action-btn.primary {{
+      background: linear-gradient(135deg, var(--bmp-orange) 0%, #FF7A36 100%);
+      color: white;
+      border-color: transparent;
+      box-shadow: 0 2px 6px rgba(230, 81, 0, 0.35);
+    }}
+    .action-btn.primary:hover {{ box-shadow: 0 3px 10px rgba(230, 81, 0, 0.45); border-color: transparent; }}
+
+    /* iMessage — Apple's signature blue */
+    .action-btn.imessage {{
+      background: linear-gradient(135deg, #007AFF 0%, #00A2FF 100%);
+      color: white;
+      border-color: transparent;
+      box-shadow: 0 2px 6px rgba(0, 122, 255, 0.32);
+    }}
+    .action-btn.imessage:hover {{ box-shadow: 0 3px 10px rgba(0, 122, 255, 0.42); border-color: transparent; }}
+
+    /* LinkedIn brand color */
+    .action-btn.linkedin {{
+      background: #0A66C2; color: white; border-color: transparent;
+      box-shadow: 0 2px 6px rgba(10, 102, 194, 0.28);
+    }}
+    .action-btn.linkedin:hover {{ box-shadow: 0 3px 10px rgba(10, 102, 194, 0.4); border-color: transparent; }}
     .note {{ font-size: 12px; padding: 8px; background: #fffbe6; border-left: 3px solid #f5b800; border-radius: 4px; margin-top: 6px; }}
     .note:first-child {{ margin-top: 0; }}
     .task-row {{ display: flex; align-items: flex-start; padding: 6px 0; border-bottom: 1px dashed #f0f0f0; }}
     .task-row:last-child {{ border-bottom: 0; }}
     .contact-row {{ display: flex; align-items: center; padding: 6px 0; gap: 8px; border-bottom: 1px dashed #f0f0f0; }}
     .contact-row:last-child {{ border-bottom: 0; }}
+    .link-btn {{ background: none; border: 0; color: var(--bmp-orange); font-size: 12px; font-weight: 600; cursor: pointer; padding: 2px 4px; }}
+    .link-btn:hover {{ text-decoration: underline; }}
     .spinner {{ display: inline-block; width: 16px; height: 16px; border: 2px solid #eee; border-top-color: var(--bmp-orange); border-radius: 50%; animation: spin 0.8s linear infinite; }}
     @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
     code {{ font-family: ui-monospace, Menlo, monospace; font-size: 11px; background: #f5f5f5; padding: 1px 5px; border-radius: 3px; word-break: break-all; }}
@@ -410,17 +453,19 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
       const tierPill   = co.lead_score_tier ? `<span class="pill pill-tier-${{co.lead_score_tier}}" title="Lead score ${{co.lead_score}}">${{escapeHtml(co.lead_score_tier)}} · ${{co.lead_score}}</span>` : '';
       const appCompanyUrl = APP_URL + '/?company_id=' + co.id;
 
-      // Big-button contact actions
+      // Big-button contact actions. Primary action (Call) gets the
+      // BMP-orange treatment; iMessage gets Apple blue; LinkedIn gets
+      // LinkedIn blue; Copy email is the quiet secondary action.
       const actionBtns = [];
       if (c.phone) {{
-        actionBtns.push(`<button class="action-btn" title="Call ${{escapeHtml(c.phone)}}" onclick="callNow('${{escapeHtml(c.phone)}}', ${{c.id}})">📞 Call</button>`);
-        actionBtns.push(`<button class="action-btn" title="Send iMessage to ${{escapeHtml(c.phone)}}" onclick="quickIMessage()">💬 iMessage</button>`);
-      }}
-      if (c.email) {{
-        actionBtns.push(`<button class="action-btn" title="Copy email" onclick="copyEmail('${{escapeHtml(c.email)}}')">✉️ Copy email</button>`);
+        actionBtns.push(`<button class="action-btn primary" title="Call ${{escapeHtml(c.phone)}}" onclick="callNow('${{escapeHtml(c.phone)}}', ${{c.id}})"><span class="icon">📞</span><span>Call</span></button>`);
+        actionBtns.push(`<button class="action-btn imessage" title="Send iMessage to ${{escapeHtml(c.phone)}}" onclick="quickIMessage()"><span class="icon">💬</span><span>iMessage</span></button>`);
       }}
       if (c.linkedin_url) {{
-        actionBtns.push(`<button class="action-btn" title="Open LinkedIn profile" onclick="window.open('${{escapeHtml(c.linkedin_url)}}', '_blank')">💼 LinkedIn</button>`);
+        actionBtns.push(`<button class="action-btn linkedin" title="Open LinkedIn profile" onclick="window.open('${{escapeHtml(c.linkedin_url)}}', '_blank')"><span class="icon">💼</span><span>LinkedIn</span></button>`);
+      }}
+      if (c.email) {{
+        actionBtns.push(`<button class="action-btn" title="Copy email" onclick="copyEmail('${{escapeHtml(c.email)}}')"><span class="icon">✉️</span><span>Copy email</span></button>`);
       }}
       const actionBtnsHtml = actionBtns.length ? `<div class="action-grid">${{actionBtns.join('')}}</div>` : '';
 
@@ -491,24 +536,26 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
           </div>`;
       }}
 
-      // Open tasks
-      let tasksHtml = '';
+      // Open tasks (always shown with the +Add button, even when empty)
       const tasks = ctx.open_tasks || [];
-      if (tasks.length) {{
-        tasksHtml = `
-          <div class="section">
+      const tasksHtml = `
+        <div class="section">
+          <div style="display:flex;justify-content:space-between;align-items:center">
             <div class="label">📋 Open tasks</div>
-            ${{tasks.map(t => `
+            <button class="link-btn" onclick="addTask()" title="Create a new task">+ Add task</button>
+          </div>
+          ${{tasks.length ? tasks.map(t => {{
+            const overdue = t.due_date && (new Date(t.due_date).getTime() < Date.now());
+            return `
               <div class="task-row">
                 <input type="checkbox" onchange="completeTask(${{t.id}})" style="margin-right:6px;cursor:pointer">
-                <div style="flex:1">
+                <div style="flex:1;min-width:0">
                   <div style="font-size:12px">${{escapeHtml(t.description || '')}}</div>
-                  ${{t.due_date ? `<div style="font-size:11px;color:#888">Due ${{escapeHtml(fmtRel(t.due_date))}}</div>` : ''}}
+                  ${{t.due_date ? `<div style="font-size:11px;color:${{overdue ? '#c62828' : '#888'}}">Due ${{escapeHtml(fmtRel(t.due_date))}}${{overdue ? ' · OVERDUE' : ''}}</div>` : ''}}
                 </div>
-              </div>
-            `).join('')}}
-          </div>`;
-      }}
+              </div>`;
+          }}).join('') : '<div style="font-size:11px;color:#888;padding:6px 0">No open tasks. Click + Add task to schedule one.</div>'}}
+        </div>`;
 
       // Other contacts at the company
       let otherContactsHtml = '';
@@ -688,6 +735,55 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
       if (r && r.ok) {{
         handleChangeConversations(_lastConversationIds);
       }}
+    }}
+
+    async function addTask() {{
+      const c  = _currentContext && _currentContext.contact;
+      const co = _currentContext && _currentContext.company;
+      if (!co) return;
+      try {{
+        const fields = await Missive.openForm({{
+          name: 'Schedule a task',
+          fields: [
+            {{ name: 'description', label: 'What needs to be done?', initial: '' }},
+            {{
+              name: 'due_in_days',
+              label: 'Due',
+              choices: [
+                {{ value: '0',  label: 'Today' }},
+                {{ value: '1',  label: 'Tomorrow' }},
+                {{ value: '3',  label: 'In 3 days' }},
+                {{ value: '7',  label: 'Next week' }},
+                {{ value: '14', label: 'In 2 weeks' }},
+                {{ value: '30', label: 'In 30 days' }},
+                {{ value: '',   label: 'No due date' }},
+              ],
+              initial: '1',
+            }},
+          ],
+          buttons: [{{ name: 'create', label: 'Create task' }}],
+          autoClose: true,
+        }});
+        const desc = ((fields.find(x => x.name === 'description') || {{}}).value || '').trim();
+        if (!desc) return;
+        const dueRaw = (fields.find(x => x.name === 'due_in_days') || {{}}).value;
+        const dueDays = (dueRaw === '' || dueRaw == null) ? null : parseInt(dueRaw, 10);
+        const r = await jwtAuthFetch('/api/integrations/sidebar/create-task', {{
+          method: 'POST',
+          body: JSON.stringify({{
+            company_id: co.id,
+            contact_id: c ? c.id : null,
+            description: desc,
+            due_in_days: dueDays,
+          }}),
+        }});
+        if (r && r.ok) {{
+          Missive.alert({{ title: 'Task created', message: r.task.description + (r.task.due_date ? ` (due ${{new Date(r.task.due_date).toLocaleDateString()}})` : '') }});
+          handleChangeConversations(_lastConversationIds);
+        }} else {{
+          Missive.alert({{ title: 'Create failed', message: 'Could not create the task.' }});
+        }}
+      }} catch (e) {{ /* user cancelled openForm */ }}
     }}
 
     async function quickIMessage() {{

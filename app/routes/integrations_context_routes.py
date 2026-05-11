@@ -19,7 +19,7 @@ current sequence position + audit-report status + lead score.
 """
 from __future__ import annotations
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, HTTPException
@@ -582,6 +582,84 @@ async def sidebar_set_status(
         log.exception("sidebar/set-status: missive tag sync failed")
 
     return {"ok": True, "changed": True, "status": company.status, "label_applied": label_applied}
+
+
+class CreateTaskRequest(BaseModel):
+    company_id: int
+    contact_id: Optional[int] = None
+    description: str
+    due_in_days: Optional[int] = None  # quick-set: 0=today, 1=tomorrow, 7=next week
+    due_at_iso: Optional[str] = None   # explicit ISO 8601, takes precedence over due_in_days
+    assignee_user_id: Optional[int] = None  # defaults to the caller
+
+
+@router.post("/sidebar/create-task")
+async def sidebar_create_task(
+    req: CreateTaskRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Create a task scoped to the company (and optionally to a specific
+    contact). Due date is set by `due_at_iso` if provided, else
+    derived from `due_in_days` (0..30); else left null. Defaults
+    assignee to the caller."""
+    desc = (req.description or "").strip()
+    if not desc:
+        raise HTTPException(status_code=400, detail="description is required")
+    if len(desc) > 500:
+        desc = desc[:500]
+
+    # Resolve due date
+    due_at = None
+    if req.due_at_iso:
+        try:
+            due_at = datetime.fromisoformat(req.due_at_iso.replace("Z", "+00:00"))
+            if due_at.tzinfo is None:
+                due_at = due_at.replace(tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(status_code=400, detail="due_at_iso must be ISO 8601")
+    elif req.due_in_days is not None:
+        days = max(0, min(int(req.due_in_days), 30))
+        # Use start-of-day in UTC; close-enough for a CRM task
+        base = datetime.now(timezone.utc).replace(hour=17, minute=0, second=0, microsecond=0)
+        due_at = base + timedelta(days=days)
+
+    assignee_id = req.assignee_user_id or user.id
+
+    # Validate the assignee actually exists (and is in our user table)
+    assignee = (await db.execute(select(User).where(User.id == assignee_id))).scalar_one_or_none()
+    if not assignee:
+        raise HTTPException(status_code=400, detail="assignee not found")
+
+    task = Task(
+        company_id=req.company_id,
+        contact_id=req.contact_id,
+        user_id=assignee.id,
+        description=desc,
+        due_date=due_at,
+        completed=False,
+    )
+    db.add(task)
+    db.add(Activity(
+        company_id=req.company_id,
+        contact_id=req.contact_id,
+        user_id=user.id,
+        activity_type="task_created",
+        content=f"[Sidebar] {user.first_name or user.email} created task for {assignee.first_name or assignee.email}: {desc}"
+                + (f" (due {due_at.date().isoformat()})" if due_at else ""),
+    ))
+    await db.commit()
+    await db.refresh(task)
+    return {
+        "ok": True,
+        "task": {
+            "id": task.id,
+            "description": task.description,
+            "due_date": task.due_date.isoformat() if task.due_date else None,
+            "assignee_id": task.user_id,
+            "assignee_name": assignee.first_name or assignee.email,
+        },
+    }
 
 
 class CompleteTaskRequest(BaseModel):
