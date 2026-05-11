@@ -436,6 +436,12 @@ async def generate_contact_sequence(
     first_subject = None
     created = 0
 
+    # Get-or-create the AI Findability audit so follow-up emails can
+    # share the link. ensure_audit_for_company returns None if anything
+    # fails — the sequence still generates, just without the link.
+    from app.services.audit_report import ensure_audit_for_company
+    audit_url = await ensure_audit_for_company(db, company)
+
     for step in CONTACT_SEQUENCE_SCHEDULE:
         try:
             if step["order"] == 1:
@@ -456,6 +462,7 @@ async def generate_contact_sequence(
                     previous_email_subject=first_subject or company.name,
                     follow_up_number=step["order"] - 1,
                     contact_name=contact.full_name or None,
+                    audit_url=audit_url,
                 )
 
             email = GeneratedEmail(

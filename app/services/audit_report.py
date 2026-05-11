@@ -294,6 +294,83 @@ DEFAULT_HEADER_BANNER = "/static/report-banner.jpg"
 DEFAULT_FOOTER_LOGO = "https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz-1024x269.png"
 
 
+async def ensure_audit_for_company(db, company) -> Optional[str]:
+    """Get-or-create an audit report URL for a company. Used by the
+    sequence generators so emails / iMessage steps can naturally
+    reference the audit they ran.
+
+    Behavior:
+      - Existing AuditReportModel? Return its public URL.
+      - No audit but company has a website + problems_found? Generate
+        one synchronously and persist + return URL.
+      - Anything else (no website, generation fails, etc.) → None.
+        Callers should treat None as 'skip the audit reference' so
+        sequence creation never breaks because of an audit issue.
+    """
+    from sqlalchemy import select as _s
+    from app.models import AuditReportModel
+    from app.config import settings as _settings
+    import secrets as _secrets
+    import json as _json
+    import logging
+    log = logging.getLogger("bmp.audit_report")
+
+    if not company or not getattr(company, "id", None):
+        return None
+    public_url = _settings.public_url.rstrip("/")
+
+    existing = (await db.execute(
+        _s(AuditReportModel).where(AuditReportModel.company_id == company.id)
+    )).scalar_one_or_none()
+    if existing:
+        return f"{public_url}/report/{existing.token}"
+
+    if not company.website:
+        return None
+
+    try:
+        audit = await generate_audit(
+            website=company.website,
+            company_name=company.name,
+            city=company.city or "",
+            state=company.state or "",
+            business_type=company.business_type or "",
+            rating=company.rating or 0,
+            review_count=company.review_count or 0,
+        )
+        token = _secrets.token_urlsafe(16)
+        # Resolve org branding (avoids a circular import — done inline)
+        from app.runtime_config import _get_or_create as _get_rc
+        from app.routes.audit_routes import _resolve_audit_booking_url, _resolve_audit_assets
+        rc = await _get_rc(db)
+        booking_url = await _resolve_audit_booking_url(db, rc, public_url)
+        assets = await _resolve_audit_assets(db, rc)
+        html = render_report_html(
+            audit, token, public_url,
+            booking_url_override=booking_url,
+            **assets,
+        )
+        row = AuditReportModel(
+            company_id=company.id,
+            token=token,
+            html_content=html,
+            ai_findability_score=audit.ai_findability_score,
+            content_citability_score=audit.content_citability_score,
+            local_seo_score=audit.local_seo_score,
+            overall_grade=audit.overall_grade,
+            findings_json=_json.dumps([{
+                "type": f.get("type", ""), "severity": f.get("severity", "medium"),
+                "detail": f.get("detail", ""), "angle": f.get("angle", ""),
+            } for f in audit.top_findings]),
+        )
+        db.add(row)
+        await db.flush()  # commit deferred to caller
+        return f"{public_url}/report/{token}"
+    except Exception as e:
+        log.warning(f"ensure_audit_for_company({company.id}) failed: {e}")
+        return None
+
+
 def render_report_html(
     report: AuditReport, token: str, public_url: str = "",
     *, header_url: str = "", footer_logo_url: str = "",

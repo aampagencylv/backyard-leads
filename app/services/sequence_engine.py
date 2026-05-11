@@ -238,6 +238,15 @@ async def _handle_imessage(db: AsyncSession, step: GeneratedEmail, contact: Cont
         intent = intent_map.get(step.email_type, "follow_up")
         from app.runtime_config import get_messaging_direction
         direction = await get_messaging_direction(db)
+        # Audit URL for the FIRST iMessage only (don't spam the link
+        # across all three).
+        audit_url_for_step = None
+        if step.email_type == "imessage_1":
+            try:
+                from app.services.audit_report import ensure_audit_for_company
+                audit_url_for_step = await ensure_audit_for_company(db, company)
+            except Exception:
+                pass
         try:
             gen = await generate_imessage(
                 business_name=company.name or "your business",
@@ -248,6 +257,7 @@ async def _handle_imessage(db: AsyncSession, step: GeneratedEmail, contact: Cont
                 location=(company.city or "") + ((", " + company.state) if company.state else "") or None,
                 intent=intent,
                 messaging_direction=direction,
+                audit_url=audit_url_for_step,
             )
             text_body = gen.get("body", "").strip()
         except Exception as e:
@@ -572,6 +582,16 @@ async def start_sequence_from_template(
 
     # Pre-generate email content for email steps so previews work immediately
     email_drafts: dict[str, dict] = {}
+    # Get-or-create the AI Findability audit so follow-up emails +
+    # iMessage steps can naturally share the link. None on any failure
+    # — sequence still generates, just without the link.
+    audit_url = None
+    try:
+        from app.services.audit_report import ensure_audit_for_company
+        audit_url = await ensure_audit_for_company(db, company)
+    except Exception as e:
+        logger.warning(f"Audit pre-generation failed for company {company.id}: {e}")
+
     if pre_generate_emails and contact.email:
         try:
             from app.services.email_generator import generate_cold_email, generate_follow_up
@@ -601,6 +621,7 @@ async def start_sequence_from_template(
                         follow_up_number=fu_num,
                         contact_name=contact.full_name,
                         messaging_direction=direction,
+                        audit_url=audit_url,
                     )
                 email_drafts[tstep["label"]] = draft
         except Exception as e:
@@ -617,6 +638,10 @@ async def start_sequence_from_template(
             for tstep in template:
                 if tstep["step_type"] != "imessage":
                     continue
+                # Only the first iMessage step drops the audit URL — by
+                # the time imessage_2 / imessage_3 fire the prospect has
+                # already seen it. Reduces link spam.
+                msg_audit_url = audit_url if tstep["label"] == "imessage_1" else None
                 draft = await generate_imessage(
                     business_name=company.name or "your business",
                     business_type=company.business_type or company.industry or "backyard professional",
@@ -626,6 +651,7 @@ async def start_sequence_from_template(
                     location=(company.city or "") + ((", " + company.state) if company.state else "") or None,
                     intent=intent_map.get(tstep["label"], "follow_up"),
                     messaging_direction=direction,
+                    audit_url=msg_audit_url,
                 )
                 imessage_drafts[tstep["label"]] = draft
         except Exception as e:

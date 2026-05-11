@@ -1374,9 +1374,17 @@ async def pursue_companies(
             first_subject = None
             emails_created = 0
 
-            # Get LinkedIn URL and audit URL for injecting into steps
+            # Get LinkedIn URL + AI Findability audit URL up-front so
+            # follow-up emails / iMessage steps can be generated with
+            # the link baked in naturally (instead of crudely appended
+            # after the fact, which was the previous behavior).
             contact_linkedin = primary.linkedin_url or ""
-            audit_url = None  # populated after audit generation; sequence emails reference it later via update
+            audit_url = None
+            try:
+                from app.services.audit_report import ensure_audit_for_company
+                audit_url = await ensure_audit_for_company(db, company)
+            except Exception:
+                pass
 
             for step in SEQUENCE_SCHEDULE:
                 try:
@@ -1399,7 +1407,8 @@ async def pursue_companies(
                             email_data["body"] = email_data["body"].rstrip() + f"\n\nAudit report to reference: {audit_url}"
 
                     elif stype == "imessage":
-                        # Generate iMessage with audit link
+                        # iMessage step — the generator weaves the audit
+                        # URL into the body naturally when provided.
                         from app.services.email_generator import generate_imessage
                         try:
                             email_data = await generate_imessage(
@@ -1408,15 +1417,19 @@ async def pursue_companies(
                                 contact_name=primary.full_name or None,
                                 problems=problems,
                                 intent="after_email",
+                                audit_url=audit_url,
                             )
-                            # Append audit link
-                            if audit_url:
-                                email_data["body"] = email_data["body"].rstrip() + f"\n\n{audit_url}"
                             email_data["subject"] = email_data.get("subject", f"iMessage to {primary.full_name or 'contact'}")
                         except Exception:
                             email_data = {
                                 "subject": f"iMessage to {primary.full_name or 'contact'}",
-                                "body": f"Hey{(' ' + primary.first_name) if primary.first_name else ''}, I sent you an email about your online presence — here's what I found: {audit_url}" if audit_url else f"Hey{(' ' + primary.first_name) if primary.first_name else ''}, did you get my email? Would love to show you what I found about your website.",
+                                "body": (
+                                    f"Hey{(' ' + primary.first_name) if primary.first_name else ''}, "
+                                    f"I sent you an email about your online presence — here's what I found: {audit_url}"
+                                ) if audit_url else (
+                                    f"Hey{(' ' + primary.first_name) if primary.first_name else ''}, "
+                                    f"did you get my email? Would love to show you what I found about your website."
+                                ),
                             }
 
                     elif step["type"] == "cold":
@@ -1437,6 +1450,7 @@ async def pursue_companies(
                             previous_email_subject=first_subject or company.name,
                             follow_up_number=step["order"] - 1,
                             contact_name=primary.full_name or None,
+                            audit_url=audit_url,
                         )
 
                     # Set skip conditions and auto_execute based on step type
@@ -1521,79 +1535,13 @@ async def pursue_companies(
             except Exception:
                 pass
 
-            # Auto-generate AI Findability Audit
-            audit_url = None
-            try:
-                from app.services.audit_report import generate_audit, render_report_html
-                from app.models import AuditReportModel
-                import secrets as _secrets
-
-                existing_audit = (await db.execute(
-                    select(AuditReportModel).where(AuditReportModel.company_id == company.id)
-                )).scalar_one_or_none()
-
-                if not existing_audit and company.website:
-                    audit = await generate_audit(
-                        website=company.website,
-                        company_name=company.name,
-                        city=company.city or "",
-                        state=company.state or "",
-                        business_type=company.business_type or "",
-                        rating=company.rating or 0,
-                        review_count=company.review_count or 0,
-                    )
-                    token = _secrets.token_urlsafe(16)
-                    public_url = settings.public_url.rstrip("/")
-                    from app.runtime_config import _get_or_create as _get_rc
-                    from app.routes.audit_routes import _resolve_audit_booking_url, _resolve_audit_assets
-                    rc = await _get_rc(db)
-                    booking_url = await _resolve_audit_booking_url(db, rc, public_url)
-                    assets = await _resolve_audit_assets(db, rc)
-                    html = render_report_html(
-                        audit, token, public_url,
-                        booking_url_override=booking_url,
-                        **assets,
-                    )
-                    audit_report = AuditReportModel(
-                        company_id=company.id,
-                        token=token,
-                        html_content=html,
-                        ai_findability_score=audit.ai_findability_score,
-                        content_citability_score=audit.content_citability_score,
-                        local_seo_score=audit.local_seo_score,
-                        overall_grade=audit.overall_grade,
-                        findings_json=json.dumps([{
-                            "type": f.get("type", ""), "severity": f.get("severity", "medium"),
-                            "detail": f.get("detail", ""), "angle": f.get("angle", ""),
-                        } for f in audit.top_findings]),
-                    )
-                    db.add(audit_report)
-                    audit_url = f"{public_url}/report/{token}"
-                    outcome["steps"].append("audit_generated")
-                elif existing_audit:
-                    public_url = settings.public_url.rstrip("/")
-                    audit_url = f"{public_url}/report/{existing_audit.token}"
-            except Exception:
-                pass  # Audit failure shouldn't block the pipeline
-
-            # Inject audit link into email 2 or 3 of the sequence
+            # Audit is now generated UP FRONT by ensure_audit_for_company
+            # at the top of this handler, and threaded into the email +
+            # iMessage generators directly. No post-hoc URL injection
+            # needed; the AI already wove the link into the body where
+            # it makes most sense.
             if audit_url:
-                try:
-                    seq_emails = (await db.execute(
-                        select(GeneratedEmail).where(
-                            GeneratedEmail.contact_id == primary.id,
-                            GeneratedEmail.step_type == "email",
-                            GeneratedEmail.is_sent == False,
-                        ).order_by(GeneratedEmail.sequence_order)
-                    )).scalars().all()
-                    # Target the 2nd or 3rd email step
-                    email_steps = [e for e in seq_emails if e.step_type == "email"]
-                    target = email_steps[1] if len(email_steps) > 1 else (email_steps[0] if email_steps else None)
-                    if target:
-                        audit_line = f"\n\nI actually ran an analysis on {company.name}'s online presence — thought you might find it interesting: {audit_url}"
-                        target.body = target.body.rstrip() + audit_line
-                except Exception:
-                    pass
+                outcome["steps"].append("audit_generated")
 
             await db.commit()
             outcome["steps"].append(f"sequence_created ({emails_created} emails)")

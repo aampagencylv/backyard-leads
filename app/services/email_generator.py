@@ -144,11 +144,32 @@ async def generate_follow_up(
     follow_up_number: int = 1,
     contact_name: Optional[str] = None,
     messaging_direction: Optional[str] = None,
+    audit_url: Optional[str] = None,
 ) -> dict:
-    """Generate a follow-up email."""
+    """Generate a follow-up email.
+
+    When `audit_url` is provided, the AI is instructed to share the
+    pre-run AI findability audit link as the value-add — that's the
+    natural hook for follow-up #1 ('I went ahead and ran an analysis
+    — here's what stood out: <url>'). Follow-up #1 is the right place
+    for the link by default; #2 references the audit if useful but
+    doesn't have to drop the link again."""
     problems_context = json.dumps(problems[:3], indent=2)
     first_name = _extract_first_name(contact_name)
     greeting = f"Hi {first_name}" if first_name else "Hi"
+
+    audit_clause = ""
+    if audit_url and follow_up_number in (1, 2):
+        audit_clause = (
+            f"\n\nIMPORTANT: We've already run an AI Findability audit on their site. "
+            f"For follow-up #1, your job is to share this exact link naturally in the "
+            f"body so the prospect can click and see what we found: {audit_url}\n"
+            f"Phrasing should feel value-add, not pitchy. Something like 'I actually "
+            f"went ahead and ran a quick AI findability scan on your site — "
+            f"posted the results here: {audit_url}'. Adapt phrasing to feel natural.\n"
+            f"For follow-up #2, you can briefly reference the audit (e.g. 'the "
+            f"analysis I shared') without dropping the link again."
+        )
 
     user_prompt = f"""Write follow-up #{follow_up_number} for this prospect who didn't respond to my first email.
 
@@ -159,6 +180,7 @@ Contact first name: {first_name or "Unknown"}
 
 Problems from their site:
 {problems_context}
+{audit_clause}
 
 Rules for follow-up #{follow_up_number}:
 - If #1: Brief, reference a different angle/problem than the first email. Add value — maybe share a quick insight.
@@ -166,7 +188,7 @@ Rules for follow-up #{follow_up_number}:
 - If #3: "Breakup" email — 2-3 sentences. Say you won't bug them again but leave the door open.
 
 Start with "{greeting}" — NO sign-off at the end. Signature is automatic.
-Keep it under 80 words.
+Keep it under {120 if audit_url and follow_up_number == 1 else 80} words.
 
 Return as JSON: {{"subject": "...", "body": "..."}}
 """
@@ -330,6 +352,7 @@ async def generate_imessage(
     location: Optional[str] = None,
     intent: str = "intro",  # 'intro', 'follow_up', 'after_email'
     messaging_direction: Optional[str] = None,
+    audit_url: Optional[str] = None,
 ) -> dict:
     """
     Generate a personalized iMessage. Returns {'body': str} — no subject because
@@ -365,6 +388,16 @@ async def generate_imessage(
         "after_email": "You sent an email recently — this is the bump. Acknowledge that in a casual way (\"did the email I sent get buried?\" energy).",
     }.get(intent, "First-touch via text.")
 
+    audit_clause = ""
+    if audit_url:
+        audit_clause = (
+            f"\n\nIMPORTANT: Include this audit link in the message naturally:\n"
+            f"  {audit_url}\n"
+            f"Phrasing should feel value-add. Example: 'Ran a quick AI scan on "
+            f"{business_name} — 3 things stood out, posted it here: {audit_url}'. "
+            f"Keep it casual — texts shouldn't sound like emails."
+        )
+
     user_prompt = f"""Write an iMessage (TEXT MESSAGE) for this prospect:
 
 Business: {business_name}
@@ -375,8 +408,9 @@ Intent: {intent} — {intent_hint}
 
 Personalization context:
 {context_block}
+{audit_clause}
 
-Return as JSON: {{"body": "the text message, under 240 chars, no signature"}}
+Return as JSON: {{"body": "the text message, under {280 if audit_url else 240} chars, no signature"}}
 """
 
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
