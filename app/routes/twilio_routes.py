@@ -334,7 +334,6 @@ async def voice_twiml(request: Request):
         )
 
     recording_callback = f"{settings.public_url.rstrip('/')}/api/twilio/voice/recording"
-    log.info(f"[twiml] Building outbound TwiML: to={to_number} caller_id={caller_id} recording_callback={recording_callback}")
     twiml = build_outbound_twiml(
         to_number=to_number,
         caller_id=caller_id,
@@ -342,7 +341,6 @@ async def voice_twiml(request: Request):
         recording_status_callback=recording_callback,
         consent_disclosure=True,
     )
-    log.info(f"[twiml] Returning TwiML: {twiml[:300]}")
     return Response(content=twiml, media_type="application/xml")
 
 
@@ -393,9 +391,11 @@ async def voice_recording(request: Request):
     form = await request.form()
     call_sid = form.get("CallSid")
     recording_url = form.get("RecordingUrl")
-    log.info(f"[recording-webhook] HIT! CallSid={call_sid} RecordingUrl={recording_url}")
+    import logging as _logging
+    _log = _logging.getLogger("bmp.twilio")
+    _log.info(f"[recording-webhook] HIT! CallSid={call_sid} RecordingUrl={recording_url}")
     if not (call_sid and recording_url):
-        log.warning(f"[recording-webhook] Missing CallSid or RecordingUrl, ignoring. Form keys: {list(form.keys())}")
+        _log.warning(f"[recording-webhook] Missing fields. Form keys: {list(form.keys())}")
         return Response(content="", media_type="application/xml")
 
     # Twilio gives us the .wav URL by default; .mp3 is smaller (~10x) and
