@@ -845,6 +845,26 @@ async def log_call(
     await db.commit()
     await db.refresh(activity)
 
+    # Auto-complete the next pending call step in this contact's sequence.
+    # Any call logged from the dialer (regardless of outcome) counts as
+    # "the BDR made the call" — the step is done.
+    if contact:
+        try:
+            next_call_step = (await db.execute(
+                select(GeneratedEmail).where(
+                    GeneratedEmail.contact_id == contact.id,
+                    GeneratedEmail.step_type == "call",
+                    GeneratedEmail.is_sent == False,
+                    GeneratedEmail.skipped_at.is_(None),
+                ).order_by(GeneratedEmail.sequence_order)
+            )).scalars().first()
+            if next_call_step:
+                next_call_step.is_sent = True
+                next_call_step.sent_at = datetime.now(timezone.utc)
+                await db.commit()
+        except Exception:
+            pass  # don't block the call log
+
     # Sequence-engine listener: a real conversation pauses the sequence, just
     # like an email/iMessage reply does. Definition of "real": connected outcome
     # AND duration > 30s (filters out voicemails / no-answers / 5-second misdials).

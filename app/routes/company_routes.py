@@ -551,7 +551,26 @@ async def get_company_full(
             .where(GeneratedEmail.contact_id == c.id)
             .order_by(GeneratedEmail.sequence_order)
         )
-        emails = emails_result.scalars().all()
+        all_emails = emails_result.scalars().all()
+        # Deduplicate: if a sequence was regenerated, old sent steps with the
+        # same sequence_order coexist with new pending ones. Keep the newest
+        # per sequence_order so the UI doesn't show duplicates.
+        seen_orders = {}
+        for e in all_emails:
+            key = e.sequence_order
+            if key in seen_orders:
+                prev = seen_orders[key]
+                # Prefer the unsent (active) step; if both sent, keep newer
+                if prev.is_sent and not e.is_sent:
+                    seen_orders[key] = e
+                elif not prev.is_sent and e.is_sent:
+                    pass  # keep prev (the active one)
+                elif e.id > prev.id:
+                    seen_orders[key] = e
+            else:
+                seen_orders[key] = e
+        # Also include any adhoc/one-off emails (sequence_order=0 or NULL)
+        emails = sorted(seen_orders.values(), key=lambda e: (e.sequence_order or 0, e.id))
         contacts_data.append({
             "id": c.id,
             "first_name": c.first_name,

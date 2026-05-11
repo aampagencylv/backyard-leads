@@ -5743,7 +5743,7 @@ function verify(secret, rawBody, header) {
                         <span>${handle}<span class="step-number">${e.sequence_order || '·'}</span>${icon} ${escapeHtml(channelLabel)} <span style="color:#aab">·</span> ${escapeHtml((e.email_type||'').replace(/_/g,' '))} ${stateLabel} ${auto}${skipBadges}</span>
                         <span style="display:flex;gap:4px">
                             ${!e.is_sent && !isSkipped ? `<button class="btn btn-secondary btn-xs" onclick="editEmail(${e.id})">Edit</button>` : ''}
-                            ${!e.is_sent && !isSkipped && stype !== 'email' && stype !== 'imessage' ? `<button class="btn btn-success btn-xs" onclick="completeStep(${e.id})">Mark Done</button>` : ''}
+                            ${!e.is_sent && !isSkipped && stype === 'linkedin' ? `<button class="btn btn-success btn-xs" onclick="completeStep(${e.id})">Mark Done</button>` : ''}
                             ${!e.is_sent && !isSkipped ? `<button class="btn btn-danger btn-xs" onclick="deleteEmail(${e.id})">Delete</button>` : ''}
                         </span>
                     </div>
