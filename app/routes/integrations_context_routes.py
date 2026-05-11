@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import get_current_user
 from app.database import get_db
 from app.models import (
-    User, Company, Contact, Activity, GeneratedEmail, AuditReportModel,
+    User, Company, Contact, Activity, GeneratedEmail, AuditReportModel, Task,
 )
 from app.config import settings
 from app.services import missive_client
@@ -222,6 +222,61 @@ async def get_context(
         )).scalar_one_or_none()
         last_clicked_at = last_click_act.created_at.isoformat() if last_click_act and last_click_act.created_at else None
 
+    # Notes + call-logs pinned for prominent display at the top of the
+    # sidebar — these are activity_type IN ('note', 'call', 'call_logged',
+    # 'meeting'). Keep the full activity feed too (above) for everything
+    # else. Cap at 6 most recent.
+    pinned_notes = []
+    if company:
+        note_rows = (await db.execute(
+            select(Activity).where(
+                Activity.company_id == company.id,
+                Activity.activity_type.in_(["note", "call", "call_logged", "meeting"]),
+            ).order_by(desc(Activity.created_at)).limit(6)
+        )).scalars().all()
+        pinned_notes = [{
+            "id": a.id,
+            "type": a.activity_type,
+            "content": a.content or "",
+            "at": a.created_at.isoformat() if a.created_at else None,
+            "user_id": a.user_id,
+        } for a in note_rows]
+
+    # Other contacts at the same company — so a BDR looking at Linda
+    # can see "Mark, Sarah, +3 others" at AAMP at a glance.
+    other_contacts = []
+    if company:
+        oc_rows = (await db.execute(
+            select(Contact).where(
+                Contact.company_id == company.id,
+                Contact.id != (contact.id if contact else -1),
+            ).order_by(desc(Contact.is_primary), Contact.id).limit(8)
+        )).scalars().all()
+        other_contacts = [{
+            "id": c2.id,
+            "full_name": f"{(c2.first_name or '').strip()} {(c2.last_name or '').strip()}".strip(),
+            "title": c2.title or "",
+            "email": c2.email or "",
+            "phone": c2.phone or "",
+            "is_primary": bool(c2.is_primary),
+        } for c2 in oc_rows]
+
+    # Open tasks on this company — what the team owes the prospect.
+    open_tasks = []
+    if company:
+        tk_rows = (await db.execute(
+            select(Task).where(
+                Task.company_id == company.id,
+                Task.completed == False,
+            ).order_by(Task.due_date.asc().nulls_last(), Task.id).limit(6)
+        )).scalars().all()
+        open_tasks = [{
+            "id": t.id,
+            "description": t.description or "",
+            "due_date": t.due_date.isoformat() if t.due_date else None,
+            "user_id": t.user_id,
+        } for t in tk_rows]
+
     # Audit report — exists / score / URL
     audit = None
     if company:
@@ -248,13 +303,22 @@ async def get_context(
         "sequence": sequence,
         "audit": audit,
         "activities": activities,
+        "pinned_notes": pinned_notes,
+        "other_contacts": other_contacts,
+        "open_tasks": open_tasks,
         "recent_emails": recent_emails,
         "last_opened_at": last_opened_at,
         "last_clicked_at": last_clicked_at,
         "app_url": settings.public_url.rstrip("/"),
+        "viewer": {"id": user.id, "first_name": user.first_name or "", "email": user.email},
         "team_emails": sorted(await missive_client.team_emails()),
         "missive_configured": missive_client.is_configured(),
         "missive_conversation_linked": bool(contact and contact.missive_conversation_id),
+        # Available status values for the quick-change dropdown
+        "status_options": [
+            "new", "pursuing", "sequencing", "contacted",
+            "replied", "qualified", "converted", "not_interested",
+        ],
     }
 
 
@@ -445,6 +509,154 @@ async def sidebar_missive_sync_tag(
         "status_applied": company.status,
         "label_name": missive_client.STATUS_TO_LABEL_NAME.get(company.status, ""),
     }
+
+
+class SetStatusRequest(BaseModel):
+    company_id: int
+    contact_id: Optional[int] = None
+    new_status: str
+
+
+@router.post("/sidebar/set-status")
+async def sidebar_set_status(
+    req: SetStatusRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Quick status change from the sidebar. Also fires the Missive tag
+    sync (best-effort) when a conversation is linked."""
+    valid = {"new", "pursuing", "sequencing", "contacted", "replied",
+             "qualified", "converted", "not_interested"}
+    if req.new_status not in valid:
+        raise HTTPException(status_code=400, detail=f"invalid status — must be one of {sorted(valid)}")
+    company = (await db.execute(
+        select(Company).where(Company.id == req.company_id)
+    )).scalar_one_or_none()
+    if not company:
+        raise HTTPException(status_code=404, detail="company not found")
+    old = company.status
+    if old == req.new_status:
+        return {"ok": True, "changed": False, "status": company.status}
+
+    company.status = req.new_status
+    db.add(Activity(
+        company_id=company.id,
+        contact_id=req.contact_id,
+        user_id=user.id,
+        activity_type="status_change",
+        content=f"{user.first_name or user.email}: {old or '(unset)'} → {req.new_status}",
+    ))
+    await db.commit()
+
+    # Best-effort Missive tag sync. We need a linked conversation_id on
+    # one of the company's contacts; prefer the contact the BDR was
+    # looking at, fall back to any contact that has a linked thread.
+    label_applied = None
+    try:
+        from app.services import missive_client as _mc
+        if _mc.is_configured():
+            target_contact = None
+            if req.contact_id:
+                target_contact = (await db.execute(
+                    select(Contact).where(Contact.id == req.contact_id)
+                )).scalar_one_or_none()
+            if not target_contact or not target_contact.missive_conversation_id:
+                target_contact = (await db.execute(
+                    select(Contact).where(
+                        Contact.company_id == company.id,
+                        Contact.missive_conversation_id.isnot(None),
+                    ).order_by(desc(Contact.missive_conversation_seen_at)).limit(1)
+                )).scalar_one_or_none()
+            if target_contact and target_contact.missive_conversation_id:
+                name = f"{(target_contact.first_name or '').strip()} {(target_contact.last_name or '').strip()}".strip()
+                result = await _mc.sync_status_label(
+                    conversation_id=target_contact.missive_conversation_id,
+                    new_status=req.new_status,
+                    contact_name=name or (target_contact.email or ""),
+                    company_name=company.name or "",
+                    actor=f"{user.first_name or user.email}",
+                )
+                if "_error" not in result:
+                    label_applied = _mc.STATUS_TO_LABEL_NAME.get(req.new_status)
+    except Exception:
+        log.exception("sidebar/set-status: missive tag sync failed")
+
+    return {"ok": True, "changed": True, "status": company.status, "label_applied": label_applied}
+
+
+class CompleteTaskRequest(BaseModel):
+    task_id: int
+
+
+@router.post("/sidebar/complete-task")
+async def sidebar_complete_task(
+    req: CompleteTaskRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Mark a task complete from the sidebar."""
+    task = (await db.execute(select(Task).where(Task.id == req.task_id))).scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="task not found")
+    task.completed = True
+    task.completed_at = datetime.now(timezone.utc)
+    db.add(Activity(
+        company_id=task.company_id,
+        contact_id=task.contact_id,
+        user_id=user.id,
+        activity_type="task_completed",
+        content=f"{user.first_name or user.email} completed: {task.description}",
+    ))
+    await db.commit()
+    return {"ok": True, "task_id": task.id}
+
+
+class SendIMessageRequest(BaseModel):
+    contact_id: int
+    body: str
+
+
+@router.post("/sidebar/send-imessage")
+async def sidebar_send_imessage(
+    req: SendIMessageRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Send a quick iMessage to the contact's phone — uses the Blooio
+    sender that powers automated iMessage steps. No-ops cleanly if
+    phone is missing, opted-out, or not a mobile line."""
+    contact = (await db.execute(select(Contact).where(Contact.id == req.contact_id))).scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="contact not found")
+    body = (req.body or "").strip()
+    if not body:
+        raise HTTPException(status_code=400, detail="body required")
+    if not contact.phone:
+        return {"ok": False, "reason": "no phone number on contact"}
+    if getattr(contact, "do_not_text", False):
+        return {"ok": False, "reason": "contact has opted out of SMS/iMessage"}
+
+    try:
+        from app.runtime_config import get_blooio_api_key
+        from app.services.blooio_messaging import send_message as blooio_send
+        api_key = await get_blooio_api_key(db)
+        if not api_key:
+            return {"ok": False, "reason": "Blooio not configured"}
+        result = await blooio_send(api_key=api_key, to_phone=contact.phone, text=body)
+        if not getattr(result, "ok", False):
+            return {"ok": False, "reason": getattr(result, "error", "send failed")}
+        db.add(Activity(
+            company_id=contact.company_id,
+            contact_id=contact.id,
+            user_id=user.id,
+            activity_type="imessage_sent",
+            content=f"[Sidebar] iMessage → {contact.phone}: {body[:200]}",
+        ))
+        await db.commit()
+        return {"ok": True, "message_id": getattr(result, "message_id", None)}
+    except Exception as e:
+        log.exception("sidebar/send-imessage failed")
+        return {"ok": False, "reason": str(e)}
 
 
 class SendNextStepRequest(BaseModel):

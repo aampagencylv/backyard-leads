@@ -2578,6 +2578,28 @@ function verify(secret, rawBody, header) {
                     if (typeof _checkGoogleOAuthRedirect === 'function') {
                         try { _checkGoogleOAuthRedirect(); } catch(e) {}
                     }
+                    // Deep-link from the Missive sidebar (and the upcoming
+                    // Chrome extension) — ?dial=<phone>&contact_id=<id>
+                    // pops the dialer with the right contact pre-loaded.
+                    try {
+                        const _p = new URLSearchParams(window.location.search || '');
+                        const _dial = (_p.get('dial') || '').trim();
+                        const _cid = parseInt(_p.get('contact_id') || '0', 10);
+                        if (_dial) {
+                            setTimeout(async () => {
+                                let contact = null;
+                                if (_cid) {
+                                    contact = await api('/api/contacts/' + _cid).catch(() => null);
+                                }
+                                if (!contact) contact = { phone: _dial, full_name: 'Unknown contact' };
+                                else if (!contact.phone) contact.phone = _dial;
+                                if (typeof startCall === 'function') startCall(contact);
+                                else openStandaloneDialer();
+                                // Clean the query so the dial doesn't refire on reload
+                                history.replaceState(null, '', window.location.pathname);
+                            }, 600);
+                        }
+                    } catch (e) {}
                 }
             } catch(e) { logout(); }
         }

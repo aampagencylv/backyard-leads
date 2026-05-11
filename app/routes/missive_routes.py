@@ -138,6 +138,15 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
     .btn {{ background: var(--bmp-orange); color: white; border: 0; padding: 7px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; flex: 1; min-width: 100px; }}
     .btn.secondary {{ background: #f4f4f4; color: #333; }}
     .btn:hover {{ opacity: 0.9; }}
+    .action-grid {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-top: 10px; }}
+    .action-btn {{ background: #f7f7f7; border: 1px solid #e3e3e3; color: #333; padding: 8px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; text-align: left; transition: background 0.1s; }}
+    .action-btn:hover {{ background: #eee; }}
+    .note {{ font-size: 12px; padding: 8px; background: #fffbe6; border-left: 3px solid #f5b800; border-radius: 4px; margin-top: 6px; }}
+    .note:first-child {{ margin-top: 0; }}
+    .task-row {{ display: flex; align-items: flex-start; padding: 6px 0; border-bottom: 1px dashed #f0f0f0; }}
+    .task-row:last-child {{ border-bottom: 0; }}
+    .contact-row {{ display: flex; align-items: center; padding: 6px 0; gap: 8px; border-bottom: 1px dashed #f0f0f0; }}
+    .contact-row:last-child {{ border-bottom: 0; }}
     .spinner {{ display: inline-block; width: 16px; height: 16px; border: 2px solid #eee; border-top-color: var(--bmp-orange); border-radius: 50%; animation: spin 0.8s linear infinite; }}
     @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
     code {{ font-family: ui-monospace, Menlo, monospace; font-size: 11px; background: #f5f5f5; padding: 1px 5px; border-radius: 3px; word-break: break-all; }}
@@ -395,29 +404,135 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
       const co = ctx.company || {{}};
       const seq = ctx.sequence;
       const audit = ctx.audit;
+      const missiveOk = !!ctx.missive_configured;
 
       const statusPill = co.status ? `<span class="pill pill-status-${{co.status}}">${{escapeHtml(co.status)}}</span>` : '';
       const tierPill   = co.lead_score_tier ? `<span class="pill pill-tier-${{co.lead_score_tier}}" title="Lead score ${{co.lead_score}}">${{escapeHtml(co.lead_score_tier)}} · ${{co.lead_score}}</span>` : '';
+      const appCompanyUrl = APP_URL + '/?company_id=' + co.id;
 
-      // Contact-detail row: phone tap-to-call, LinkedIn open-in-tab, copy-email
-      const contactLinks = [];
-      if (c.phone) contactLinks.push(`<a href="tel:${{escapeHtml(c.phone)}}" title="Call">📞 ${{escapeHtml(c.phone)}}</a>`);
-      if (c.email) contactLinks.push(`<a href="#" onclick="copyEmail('${{escapeHtml(c.email)}}');return false" title="Copy email">✉️ ${{escapeHtml(c.email)}}</a>`);
-      if (c.linkedin_url) contactLinks.push(`<a href="${{escapeHtml(c.linkedin_url)}}" target="_blank" title="LinkedIn profile">💼 LinkedIn</a>`);
-      const contactLinksHtml = contactLinks.length ? `<div style="margin-top:6px;font-size:12px;display:flex;gap:10px;flex-wrap:wrap">${{contactLinks.join('')}}</div>` : '';
+      // Big-button contact actions
+      const actionBtns = [];
+      if (c.phone) {{
+        actionBtns.push(`<button class="action-btn" title="Call ${{escapeHtml(c.phone)}}" onclick="callNow('${{escapeHtml(c.phone)}}', ${{c.id}})">📞 Call</button>`);
+        actionBtns.push(`<button class="action-btn" title="Send iMessage to ${{escapeHtml(c.phone)}}" onclick="quickIMessage()">💬 iMessage</button>`);
+      }}
+      if (c.email) {{
+        actionBtns.push(`<button class="action-btn" title="Copy email" onclick="copyEmail('${{escapeHtml(c.email)}}')">✉️ Copy email</button>`);
+      }}
+      if (c.linkedin_url) {{
+        actionBtns.push(`<button class="action-btn" title="Open LinkedIn profile" onclick="window.open('${{escapeHtml(c.linkedin_url)}}', '_blank')">💼 LinkedIn</button>`);
+      }}
+      const actionBtnsHtml = actionBtns.length ? `<div class="action-grid">${{actionBtns.join('')}}</div>` : '';
 
-      // Last engagement row — opens / clicks
-      const lastOpened  = ctx.last_opened_at  ? `Opened ${{escapeHtml(fmtRel(ctx.last_opened_at))}}` : '';
-      const lastClicked = ctx.last_clicked_at ? `Clicked ${{escapeHtml(fmtRel(ctx.last_clicked_at))}}` : '';
-      const engagementHtml = (lastOpened || lastClicked) ? `
-        <div class="section">
-          <div class="label">Engagement</div>
-          <div style="font-size:12px;color:#555">
-            ${{lastOpened ? `<div>👁️ ${{lastOpened}}</div>` : ''}}
-            ${{lastClicked ? `<div>🖱️ ${{lastClicked}}</div>` : ''}}
-          </div>
-        </div>` : '';
+      // Inline contact details row
+      const detailParts = [];
+      if (c.phone)   detailParts.push(`<a href="tel:${{escapeHtml(c.phone)}}" style="color:#444">${{escapeHtml(c.phone)}}</a>`);
+      if (c.email)   detailParts.push(`<a href="mailto:${{escapeHtml(c.email)}}" style="color:#444">${{escapeHtml(c.email)}}</a>`);
+      const detailHtml = detailParts.length ? `<div style="font-size:11px;color:#888;margin-top:6px;line-height:1.6">${{detailParts.join('<br>')}}</div>` : '';
 
+      // Status quick-change dropdown
+      const statusOpts = (ctx.status_options || []).map(s =>
+        `<option value="${{s}}" ${{s === co.status ? 'selected' : ''}}>${{escapeHtml(s)}}</option>`
+      ).join('');
+
+      // Engagement summary
+      const engagementBits = [];
+      if (ctx.last_opened_at)  engagementBits.push(`👁️ Last open ${{escapeHtml(fmtRel(ctx.last_opened_at))}}`);
+      if (ctx.last_clicked_at) engagementBits.push(`🖱️ Last click ${{escapeHtml(fmtRel(ctx.last_clicked_at))}}`);
+      const engagementHtml = engagementBits.length ?
+        `<div style="font-size:11px;color:#666;margin-top:4px">${{engagementBits.join(' · ')}}</div>` : '';
+
+      // Sequence
+      let seqHtml = '';
+      if (seq) {{
+        const next = seq.next_step;
+        const pct = seq.total_steps ? Math.round(seq.sent_steps * 100 / seq.total_steps) : 0;
+        seqHtml = `
+          <div class="section">
+            <div class="label">Sequence</div>
+            <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px">
+              <span>${{seq.sent_steps}} / ${{seq.total_steps}} sent</span>
+              <span style="color:#888;font-size:11px">${{pct}}%</span>
+            </div>
+            <div style="background:#eee;border-radius:4px;height:4px;margin-top:4px;overflow:hidden">
+              <div style="background:var(--bmp-orange);height:100%;width:${{pct}}%"></div>
+            </div>
+            ${{next ? `<div style="color:#555;margin-top:8px;font-size:12px">Next: <strong>${{escapeHtml(next.type)}}</strong> · ${{escapeHtml(next.subject || '')}}${{next.scheduled_at ? ' · ' + escapeHtml(fmtRel(next.scheduled_at)) : ''}}</div>` : '<div style="color:#888;margin-top:8px;font-size:12px">No further steps queued.</div>'}}
+          </div>`;
+      }}
+
+      // Audit
+      let auditHtml = '';
+      if (audit) {{
+        auditHtml = `
+          <div class="section">
+            <div class="label">AI Findability audit</div>
+            <div class="row">
+              <div><strong>${{escapeHtml(audit.grade || '?')}}</strong> · ${{audit.ai_findability_score}}/100 · ${{audit.view_count}} view${{audit.view_count===1?'':'s'}}</div>
+              <a href="${{audit.url}}" target="_blank">View →</a>
+            </div>
+          </div>`;
+      }}
+
+      // Pinned notes — shown prominently
+      let notesHtml = '';
+      const pinned = ctx.pinned_notes || [];
+      if (pinned.length) {{
+        notesHtml = `
+          <div class="section">
+            <div class="label">📝 Notes & Calls</div>
+            ${{pinned.map(n => `
+              <div class="note">
+                <span class="activity-type">${{escapeHtml(n.type)}}</span>
+                <span class="activity-when">· ${{escapeHtml(fmtRel(n.at))}}</span>
+                <div style="color:#333;margin-top:2px;white-space:pre-wrap;word-break:break-word">${{escapeHtml(n.content)}}</div>
+              </div>
+            `).join('')}}
+          </div>`;
+      }}
+
+      // Open tasks
+      let tasksHtml = '';
+      const tasks = ctx.open_tasks || [];
+      if (tasks.length) {{
+        tasksHtml = `
+          <div class="section">
+            <div class="label">📋 Open tasks</div>
+            ${{tasks.map(t => `
+              <div class="task-row">
+                <input type="checkbox" onchange="completeTask(${{t.id}})" style="margin-right:6px;cursor:pointer">
+                <div style="flex:1">
+                  <div style="font-size:12px">${{escapeHtml(t.description || '')}}</div>
+                  ${{t.due_date ? `<div style="font-size:11px;color:#888">Due ${{escapeHtml(fmtRel(t.due_date))}}</div>` : ''}}
+                </div>
+              </div>
+            `).join('')}}
+          </div>`;
+      }}
+
+      // Other contacts at the company
+      let otherContactsHtml = '';
+      const others = ctx.other_contacts || [];
+      if (others.length) {{
+        otherContactsHtml = `
+          <div class="section">
+            <div class="label">👥 Other contacts at ${{escapeHtml(co.name || 'this company')}}</div>
+            ${{others.map(oc => `
+              <div class="contact-row">
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:12px;font-weight:600;display:flex;align-items:center;gap:4px">
+                    ${{escapeHtml(oc.full_name || oc.email || '?')}}
+                    ${{oc.is_primary ? '<span style="font-size:9px;background:#fff4e0;color:#b06a00;padding:1px 5px;border-radius:3px;font-weight:600">PRIMARY</span>' : ''}}
+                  </div>
+                  <div style="font-size:11px;color:#888">${{escapeHtml(oc.title || '')}}${{oc.title && oc.email ? ' · ' : ''}}${{escapeHtml(oc.email || '')}}</div>
+                </div>
+                ${{oc.phone ? `<a href="tel:${{escapeHtml(oc.phone)}}" title="Call" style="text-decoration:none;padding:3px 6px;background:#f0f0f0;border-radius:4px;font-size:11px">📞</a>` : ''}}
+              </div>
+            `).join('')}}
+          </div>`;
+      }}
+
+      // Recent emails
       let recentEmailsHtml = '';
       if (ctx.recent_emails && ctx.recent_emails.length) {{
         recentEmailsHtml = `
@@ -445,12 +560,15 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
           </div>`;
       }}
 
+      // Full activity timeline (non-note items only — notes are pinned above)
       let activityHtml = '';
-      if (ctx.activities && ctx.activities.length) {{
+      const noteTypes = new Set(['note', 'call', 'call_logged', 'meeting']);
+      const otherActivities = (ctx.activities || []).filter(a => !noteTypes.has(a.type));
+      if (otherActivities.length) {{
         activityHtml = `
           <div class="section">
             <div class="label">Activity timeline</div>
-            ${{ctx.activities.map(a => `
+            ${{otherActivities.map(a => `
               <div class="activity">
                 <span class="activity-type">${{escapeHtml(a.type)}}</span>
                 <span class="activity-when">· ${{escapeHtml(fmtRel(a.at))}}</span>
@@ -460,63 +578,143 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
           </div>`;
       }}
 
-      let seqHtml = '';
-      if (seq) {{
-        const next = seq.next_step;
-        seqHtml = `
-          <div class="section">
-            <div class="label">Sequence</div>
-            <div>${{seq.sent_steps}}/${{seq.total_steps}} steps sent</div>
-            ${{next ? `<div style="color:#555;margin-top:4px;font-size:12px">Next: ${{escapeHtml(next.type)}} · ${{escapeHtml(next.subject || '')}}${{next.scheduled_at ? ' · ' + escapeHtml(fmtRel(next.scheduled_at)) : ''}}</div>` : '<div style="color:#888;margin-top:4px;font-size:12px">No further steps queued.</div>'}}
-          </div>`;
-      }}
-
-      let auditHtml = '';
-      if (audit) {{
-        auditHtml = `
-          <div class="section">
-            <div class="label">AI Findability audit</div>
-            <div class="row">
-              <div><strong>${{escapeHtml(audit.grade || '?')}}</strong> · ${{audit.ai_findability_score}}/100 · ${{audit.view_count}} view${{audit.view_count===1?'':'s'}}</div>
-              <a href="${{audit.url}}" target="_blank">View →</a>
-            </div>
-          </div>`;
-      }}
-
-      const appCompanyUrl = APP_URL + '/?company_id=' + co.id;
-      const missiveOk = !!ctx.missive_configured;
-
       root.innerHTML = `
         <div class="section">
           <div class="row">
-            <div>
-              <h2>${{escapeHtml(co.name || 'Unknown company')}}</h2>
-              <div style="color:#666;margin-top:2px">${{escapeHtml(c.full_name || c.email || '')}}${{c.title ? ' · ' + escapeHtml(c.title) : ''}}</div>
+            <div style="flex:1;min-width:0">
+              <h2 style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${{escapeHtml(co.name || 'Unknown company')}}</h2>
+              <div style="color:#666;margin-top:2px;font-size:12px">${{escapeHtml(c.full_name || c.email || '')}}${{c.title ? ' · ' + escapeHtml(c.title) : ''}}</div>
             </div>
+            <a href="${{appCompanyUrl}}" target="_blank" title="Open in Prospector" style="font-size:18px;text-decoration:none">↗</a>
           </div>
-          <div style="margin-top:6px">${{statusPill}} ${{tierPill}}</div>
-          ${{contactLinksHtml}}
+          <div style="margin-top:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+            ${{statusPill}} ${{tierPill}}
+            <select onchange="setStatus(this.value)" style="margin-left:auto;font-size:11px;padding:3px 6px;border:1px solid #ddd;border-radius:4px;background:white;cursor:pointer">${{statusOpts}}</select>
+          </div>
+          ${{detailHtml}}
+          ${{engagementHtml}}
+          ${{actionBtnsHtml}}
         </div>
 
+        <div class="section">
+          <div class="label">Quick note</div>
+          <textarea id="quick-note" placeholder="Add a note… (⌘+Enter to save)" rows="2"
+            style="width:100%;border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:12px;font-family:inherit;resize:vertical;box-sizing:border-box"></textarea>
+          <div style="display:flex;gap:6px;margin-top:6px">
+            <button class="btn secondary" onclick="saveInlineNote('note')" style="flex:1">Save note</button>
+            <button class="btn secondary" onclick="saveInlineNote('call_logged')" style="flex:1">Save as call</button>
+          </div>
+        </div>
+
+        ${{notesHtml}}
+        ${{tasksHtml}}
         ${{seqHtml}}
         ${{auditHtml}}
-        ${{engagementHtml}}
+        ${{otherContactsHtml}}
         ${{recentEmailsHtml}}
         ${{activityHtml}}
 
         <div class="section actions">
-          <button class="btn" onclick="window.open('${{appCompanyUrl}}', '_blank')">Open in Prospector</button>
-          ${{seq && seq.next_step ? `<button class="btn secondary" onclick="sendNextStep()">Send next step now</button>` : ''}}
+          ${{seq && seq.next_step ? `<button class="btn" onclick="sendNextStep()">Send next step now</button>` : ''}}
           ${{audit ? '' : `<button class="btn secondary" onclick="generateAuditNow()">Generate audit</button>`}}
-        </div>
-
-        <div class="section actions">
-          <button class="btn secondary" onclick="logNote()">📝 Log note</button>
-          <button class="btn secondary" onclick="logCall()">📞 Log call</button>
           ${{seq ? `<button class="btn secondary" onclick="pauseSequence()">Pause sequence</button>` : ''}}
-          ${{missiveOk ? `<button class="btn secondary" onclick="syncMissiveTag()">🏷️ Sync status to label</button>` : ''}}
+          ${{missiveOk ? `<button class="btn secondary" onclick="syncMissiveTag()">🏷️ Sync label</button>` : ''}}
         </div>
       `;
+
+      // Wire up Cmd+Enter on the inline note textarea
+      const ta = document.getElementById('quick-note');
+      if (ta) {{
+        ta.addEventListener('keydown', (e) => {{
+          if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {{
+            e.preventDefault();
+            saveInlineNote('note');
+          }}
+        }});
+      }}
+    }}
+
+    function callNow(phone, contactId) {{
+      // Pop the dialer in the main Prospector app via deep-link.
+      // The app picks up ?dial=<phone> at boot and triggers its
+      // existing Twilio dialer (browser or bridge mode, per user pref).
+      const url = APP_URL + '/?dial=' + encodeURIComponent(phone || '') + '&contact_id=' + (contactId || '');
+      window.open(url, 'prospector-dialer');
+    }}
+
+    async function saveInlineNote(kind) {{
+      const ta = document.getElementById('quick-note');
+      if (!ta) return;
+      const text = (ta.value || '').trim();
+      if (!text) return;
+      const c  = _currentContext && _currentContext.contact;  if (!c) return;
+      const co = _currentContext && _currentContext.company;  if (!co) return;
+      ta.disabled = true;
+      const r = await jwtAuthFetch('/api/integrations/sidebar/log-activity', {{
+        method: 'POST',
+        body: JSON.stringify({{ contact_id: c.id, company_id: co.id, text, activity_type: kind }}),
+      }});
+      ta.disabled = false;
+      if (r && r.id) {{
+        ta.value = '';
+        handleChangeConversations(_lastConversationIds);
+      }} else {{
+        Missive.alert({{ title: 'Save failed', message: 'Could not save the note.' }});
+      }}
+    }}
+
+    async function setStatus(newStatus) {{
+      const c  = _currentContext && _currentContext.contact;
+      const co = _currentContext && _currentContext.company;
+      if (!co) return;
+      const r = await jwtAuthFetch('/api/integrations/sidebar/set-status', {{
+        method: 'POST',
+        body: JSON.stringify({{ company_id: co.id, contact_id: c ? c.id : null, new_status: newStatus }}),
+      }});
+      if (r && r.ok) {{
+        const msg = r.label_applied ? `Status: ${{r.status}}. Missive label "${{r.label_applied}}" applied.` : `Status: ${{r.status}}.`;
+        Missive.alert({{ title: 'Updated', message: msg }});
+        handleChangeConversations(_lastConversationIds);
+      }} else {{
+        Missive.alert({{ title: 'Update failed', message: 'Could not change status.' }});
+      }}
+    }}
+
+    async function completeTask(taskId) {{
+      const r = await jwtAuthFetch('/api/integrations/sidebar/complete-task', {{
+        method: 'POST',
+        body: JSON.stringify({{ task_id: taskId }}),
+      }});
+      if (r && r.ok) {{
+        handleChangeConversations(_lastConversationIds);
+      }}
+    }}
+
+    async function quickIMessage() {{
+      const c = _currentContext && _currentContext.contact;
+      if (!c || !c.phone) return;
+      try {{
+        const fields = await Missive.openForm({{
+          name: 'Send iMessage',
+          fields: [{{ name: 'body', label: `To ${{c.phone}}`, initial: '' }}],
+          buttons: [{{ name: 'send', label: 'Send iMessage' }}],
+          autoClose: true,
+        }});
+        const body = ((fields.find(x => x.name === 'body') || {{}}).value || '').trim();
+        if (!body) return;
+        const r = await jwtAuthFetch('/api/integrations/sidebar/send-imessage', {{
+          method: 'POST',
+          body: JSON.stringify({{ contact_id: c.id, body }}),
+        }});
+        if (r && r.ok) {{
+          Missive.alert({{ title: 'iMessage sent', message: 'Logged to the activity timeline.' }});
+          handleChangeConversations(_lastConversationIds);
+        }} else if (r) {{
+          Missive.alert({{ title: 'Not sent', message: r.reason || 'Unknown error' }});
+        }} else {{
+          Missive.alert({{ title: 'Send failed', message: 'Could not send the iMessage.' }});
+        }}
+      }} catch (e) {{ /* cancelled */ }}
     }}
 
     async function copyEmail(addr) {{
