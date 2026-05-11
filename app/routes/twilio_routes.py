@@ -52,7 +52,7 @@ router = APIRouter(prefix="/api/twilio", tags=["twilio"])
 
 
 def _admin_only(user: User) -> None:
-    if user.role != "admin":
+    if user.role not in ("admin", "super_admin"):
         raise HTTPException(status_code=403, detail="Admin access required")
 
 
