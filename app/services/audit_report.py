@@ -557,13 +557,13 @@ def render_report_html(
     {container_open}
         <div style="border-radius:12px;overflow:hidden;margin-bottom:24px;box-shadow:0 4px 16px rgba(0,0,0,0.1)">
             <img src="{_esc(header_img)}" alt="Header" style="width:100%;display:block;background:#0D3B13" onerror="this.style.display='none'">
-            <div style="background:linear-gradient(135deg, #0D3B13 0%, #1B5E20 100%);color:white;padding:32px 40px;display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap">
-                <div>
+            <div style="background:linear-gradient(135deg, #0D3B13 0%, #1B5E20 100%);color:white;padding:32px 40px;display:flex;justify-content:space-between;align-items:flex-start;gap:20px">
+                <div style="flex:1;min-width:0">
                     <h1 style="font-size:28px;margin-bottom:8px">AI Findability Report</h1>
                     <p style="color:rgba(255,255,255,0.8);font-size:16px;margin-bottom:4px">{_esc(report.company_name)} &middot; {_esc(report.city)}{', ' + _esc(report.state) if report.state else ''}</p>
                     <p style="color:rgba(255,255,255,0.5);font-size:12px">Generated {report.generated_at}</p>
                 </div>
-                <a href="{_esc(booking_url)}" style="display:inline-block;background:#FF723F;color:white;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.2)">📅 Schedule A Discovery Call</a>
+                <a href="{_esc(booking_url)}" style="display:inline-block;background:#FF723F;color:white;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.2);flex-shrink:0;margin-top:4px">📅 Schedule A Discovery Call</a>
             </div>
         </div>
 
