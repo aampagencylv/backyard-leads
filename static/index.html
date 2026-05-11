@@ -3039,6 +3039,7 @@ function verify(secret, rawBody, header) {
                     if (navPlatform) navPlatform.classList.toggle('hidden', user.role !== 'super_admin');
                     // Move super-admin sections to Platform page so Settings stays clean.
                     // Defer to next tick so login flow completes first.
+                    const isSuper = (user.role === 'super_admin');
                     if (isSuper) setTimeout(() => { try { _reparentToPlatform(); } catch(e) { console.warn('reparent:', e); } }, 500);
                     // Find Leads + Auto Pilot — hidden from basic sales_rep.
                     // senior_rep (BDR+) and above can search for leads.
