@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     # app, and /report/* / /book/* paths respond identically on both
     # hostnames. Override in .env if your audit subdomain differs.
     audit_public_url: str = "https://audit.backyardmarketingpros.com"
+    # Booking pages (native scheduler /book/{slug}) live on their own
+    # subdomain. Same rationale as audit: prospect-facing surface that
+    # shouldn't leak the internal CRM hostname, and a clean CNAME target
+    # for white-labeled SaaS tenants down the road.
+    schedule_public_url: str = "https://schedule.backyardmarketingpros.com"
     bmp_postal_address: str = "Backyard Marketing Pros, Las Vegas, NV"  # CAN-SPAM requires a real postal address; override in .env
 
     # Google OAuth — per-user Google Calendar integration for the native

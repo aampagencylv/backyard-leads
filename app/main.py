@@ -183,6 +183,7 @@ app.add_middleware(
     allow_origins=[
         "https://prospector.backyardmarketingpros.com",
         "https://audit.backyardmarketingpros.com",
+        "https://schedule.backyardmarketingpros.com",
         "https://backyardmarketingpros.com",
         "https://www.backyardmarketingpros.com",
     ],

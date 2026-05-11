@@ -47,10 +47,16 @@ async def _resolve_audit_assets(db, rc) -> dict:
     }
 
 
-async def _resolve_audit_booking_url(db, rc, public_url: str) -> str:
+async def _resolve_audit_booking_url(db, rc, public_url: str = "") -> str:
     """Pick the right Schedule-a-Call destination based on the org's
     audit_scheduler_type setting. Falls back to '' (caller will then
-    use the default iClosed URL)."""
+    use the default iClosed URL).
+
+    Native scheduler links always go to settings.schedule_public_url
+    regardless of the public_url arg — the booking surface is its own
+    white-labelable subdomain. The arg is kept for backwards-compat
+    with existing call sites.
+    """
     scheduler_type = (getattr(rc, "audit_scheduler_type", None) or "iclosed").lower()
     if scheduler_type == "iclosed":
         return ""  # render_report_html falls back to settings.iclosed_booking_url
@@ -64,7 +70,8 @@ async def _resolve_audit_booking_url(db, rc, public_url: str) -> str:
             select(User).where(User.id == int(user_id), User.is_active == True)
         )).scalar_one_or_none()
         if host and host.booking_slug and host.google_refresh_token:
-            return f"{public_url.rstrip('/')}/book/{host.booking_slug}"
+            schedule_base = settings.schedule_public_url.rstrip("/")
+            return f"{schedule_base}/book/{host.booking_slug}"
         # Picked user no longer has a booking page → fall back
         return ""
     return ""

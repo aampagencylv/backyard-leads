@@ -209,7 +209,7 @@ async def google_oauth_status(user: User = Depends(get_current_user)):
         "booking_slug": user.booking_slug,
         "connected_at": user.google_connected_at.isoformat() if user.google_connected_at else None,
         "booking_url": (
-            f"{settings.public_url.rstrip('/')}/book/{user.booking_slug}"
+            f"{settings.schedule_public_url.rstrip('/')}/book/{user.booking_slug}"
             if user.booking_slug else None
         ),
     }
