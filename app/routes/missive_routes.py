@@ -103,9 +103,13 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
   <script src="https://integrations.missiveapp.com/missive.js"></script>
   <link href="https://integrations.missiveapp.com/missive.css" rel="stylesheet">
   <style>
-    :root {{ --bmp-orange: #E65100; --bmp-green: #1B5E20; --bmp-cream: #FFF8F0; }}
+    :root {{ --bmp-orange: #E65100; --bmp-green: #1B5E20; --bmp-cream: #FFF8F0; color-scheme: light; }}
     * {{ box-sizing: border-box; }}
-    body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; color: #1a1a1a; background: white; }}
+    /* Force a light color scheme inside the iframe regardless of the
+       host (Missive) being in dark mode — the BMP brand reads as light. */
+    html, body {{ background: white; color: #1a1a1a; }}
+    body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; }}
+    input, textarea, select {{ background: white; color: #1a1a1a; }}
     .container {{ padding: 14px; }}
     .empty {{ color: #888; padding: 20px; text-align: center; font-size: 13px; }}
     .empty button {{ background: var(--bmp-orange); color: white; border: 0; padding: 8px 14px; border-radius: 6px; cursor: pointer; margin-top: 10px; font-weight: 600; }}
@@ -231,6 +235,12 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
   <div id="root" class="container">
     <div class="empty"><div class="spinner"></div><div style="margin-top:8px">Loading…</div></div>
   </div>
+  <div id="toast"
+       style="position:fixed;left:50%;bottom:18px;transform:translateX(-50%) translateY(40px);
+              background:#1a1a1a;color:white;padding:10px 16px;border-radius:8px;
+              font-size:13px;font-weight:500;box-shadow:0 4px 16px rgba(0,0,0,0.25);
+              opacity:0;transition:transform 0.2s ease, opacity 0.2s ease;pointer-events:none;
+              z-index:9999;max-width:320px;text-align:center"></div>
 
   <script>
     const APP_URL = {app_url!r};
@@ -255,19 +265,54 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
       }} catch (e) {{ return ''; }}
     }}
 
+    let _toastTimer = null;
+    function toast(msg, kind) {{
+      const el = document.getElementById('toast');
+      if (!el) return;
+      el.textContent = msg;
+      el.style.background = kind === 'error' ? '#b71c1c' : (kind === 'success' ? '#1b5e20' : '#1a1a1a');
+      el.style.opacity = '1';
+      el.style.transform = 'translateX(-50%) translateY(0)';
+      if (_toastTimer) clearTimeout(_toastTimer);
+      _toastTimer = setTimeout(() => {{
+        el.style.opacity = '0';
+        el.style.transform = 'translateX(-50%) translateY(40px)';
+      }}, kind === 'error' ? 5000 : 2400);
+    }}
+
     async function jwtAuthFetch(path, opts = {{}}) {{
       opts.headers = Object.assign({{}}, opts.headers || {{}}, {{
         'Authorization': 'Bearer ' + _jwt,
         'Content-Type': 'application/json',
       }});
-      const r = await fetch(APP_URL + path, opts);
-      if (r.status === 401) {{
-        _jwt = null;
-        await Missive.storeSet('prospector_jwt', null);
+      let r;
+      try {{
+        r = await fetch(APP_URL + path, opts);
+      }} catch (e) {{
+        console.error('[sidebar] fetch failed', path, e);
+        toast('Network error — check console', 'error');
         return null;
       }}
-      if (!r.ok) return null;
-      return r.json();
+      if (r.status === 401) {{
+        console.warn('[sidebar] 401 on', path, '— clearing stored JWT');
+        _jwt = null;
+        await Missive.storeSet('prospector_jwt', null);
+        toast('Session expired — sign in again', 'error');
+        renderLoginGate();
+        return null;
+      }}
+      if (!r.ok) {{
+        const errText = await r.text().catch(() => '(no body)');
+        console.error('[sidebar]', path, 'returned', r.status, errText);
+        toast('Server returned ' + r.status, 'error');
+        return null;
+      }}
+      try {{
+        return await r.json();
+      }} catch (e) {{
+        console.error('[sidebar] could not parse JSON from', path, e);
+        return null;
+      }}
     }}
 
     async function ensureLogin() {{
@@ -463,11 +508,10 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
           }}),
         }});
         if (r && (r.created || r.contact_id)) {{
-          Missive.alert({{ title: 'Added to Prospector', message: emailAddr + ' is now in your CRM.' }});
-          // Re-render with the now-found record
+          toast('Added to Prospector', 'success');
           handleChangeConversations(_lastConversationIds);
         }} else {{
-          Missive.alert({{ title: 'Add failed', message: 'Could not add the contact.' }});
+          toast('Could not add the contact', 'error');
         }}
       }} catch (e) {{
         // openForm rejects on cancel — silently ignore
@@ -512,7 +556,7 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
         <div id="add-task-form" class="section" style="display:none;background:#fff8f0;border:1px solid #ffd9b3;border-radius:8px">
           <div class="label">📋 Schedule a task</div>
           <textarea id="new-task-desc" placeholder="What needs to be done?" rows="2"
-            style="width:100%;border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:12px;font-family:inherit;resize:vertical;box-sizing:border-box"></textarea>
+            style="width:100%;border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:12px;font-family:inherit;resize:vertical;box-sizing:border-box;background:white;color:#1a1a1a"></textarea>
           <div style="font-size:11px;color:#666;margin-top:8px;margin-bottom:4px">Due</div>
           <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px">
             <button class="due-btn" data-days="0"  onclick="setDueDays(0)">Today</button>
@@ -704,7 +748,7 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
         <div class="section">
           <div class="label">Quick note</div>
           <textarea id="quick-note" placeholder="Add a note… (⌘+Enter to save)" rows="2"
-            style="width:100%;border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:12px;font-family:inherit;resize:vertical;box-sizing:border-box"></textarea>
+            style="width:100%;border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:12px;font-family:inherit;resize:vertical;box-sizing:border-box;background:white;color:#1a1a1a"></textarea>
           <div style="display:flex;gap:6px;margin-top:6px">
             <button class="btn secondary" onclick="saveInlineNote('note')" style="flex:1">Save note</button>
             <button class="btn secondary" onclick="saveInlineNote('call_logged')" style="flex:1">Save as call</button>
@@ -740,11 +784,22 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
       }}
     }}
 
+    function _deepLinkUrl(query) {{
+      // Build a Prospector deep-link URL that also carries the BDR's
+      // JWT so the new tab auto-logs-in. Iframe storage is partitioned
+      // away from the top-level prospector.bymp.com origin (Chrome
+      // 115+ / Safari ITP), so we can't rely on shared localStorage —
+      // the token has to travel in the URL.
+      const q = query.startsWith('?') ? query : '?' + query;
+      const tokenParam = _jwt ? '&t=' + encodeURIComponent(_jwt) : '';
+      return APP_URL + q + tokenParam;
+    }}
+
     function callNow(phone, contactId) {{
       // Pop the dialer in the main Prospector app via deep-link.
       // The app picks up ?dial=<phone> at boot and triggers its
       // existing Twilio dialer (browser or bridge mode, per user pref).
-      const url = APP_URL + '/?dial=' + encodeURIComponent(phone || '') + '&contact_id=' + (contactId || '');
+      const url = _deepLinkUrl('?dial=' + encodeURIComponent(phone || '') + '&contact_id=' + (contactId || ''));
       window.open(url, 'prospector-dialer');
     }}
 
@@ -752,7 +807,7 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
       const ta = document.getElementById('quick-note');
       if (!ta) return;
       const text = (ta.value || '').trim();
-      if (!text) return;
+      if (!text) {{ toast('Type a note first', 'error'); return; }}
       const c  = _currentContext && _currentContext.contact;  if (!c) return;
       const co = _currentContext && _currentContext.company;  if (!co) return;
       ta.disabled = true;
@@ -762,10 +817,9 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
       }});
       ta.disabled = false;
       if (r && r.id) {{
+        toast(kind === 'call_logged' ? 'Call logged' : 'Note saved', 'success');
         ta.value = '';
         handleChangeConversations(_lastConversationIds);
-      }} else {{
-        Missive.alert({{ title: 'Save failed', message: 'Could not save the note.' }});
       }}
     }}
 
@@ -778,11 +832,9 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
         body: JSON.stringify({{ company_id: co.id, contact_id: c ? c.id : null, new_status: newStatus }}),
       }});
       if (r && r.ok) {{
-        const msg = r.label_applied ? `Status: ${{r.status}}. Missive label "${{r.label_applied}}" applied.` : `Status: ${{r.status}}.`;
-        Missive.alert({{ title: 'Updated', message: msg }});
+        const msg = r.label_applied ? `Status → ${{r.status}} (Missive label "${{r.label_applied}}" applied)` : `Status → ${{r.status}}`;
+        toast(msg, 'success');
         handleChangeConversations(_lastConversationIds);
-      }} else {{
-        Missive.alert({{ title: 'Update failed', message: 'Could not change status.' }});
       }}
     }}
 
@@ -827,11 +879,11 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
     async function submitAddTask() {{
       const c  = _currentContext && _currentContext.contact;
       const co = _currentContext && _currentContext.company;
-      if (!co) return;
+      if (!co) {{ toast('No company in context', 'error'); return; }}
       const ta = document.getElementById('new-task-desc');
       const desc = ((ta && ta.value) || '').trim();
       if (!desc) {{
-        Missive.alert({{ title: 'Description required', message: 'Tell us what needs to be done.' }});
+        toast('Type a description first', 'error');
         ta && ta.focus();
         return;
       }}
@@ -845,10 +897,12 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
         }}),
       }});
       if (r && r.ok) {{
+        toast('Task created', 'success');
         toggleAddTask(true);
         handleChangeConversations(_lastConversationIds);
       }} else {{
-        Missive.alert({{ title: 'Create failed', message: 'Could not create the task.' }});
+        // jwtAuthFetch already showed an error toast for network/401/5xx
+        if (r === undefined) toast('Could not create the task', 'error');
       }}
     }}
 
@@ -860,7 +914,7 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
       // user's Google Calendar, and renders the slot picker. Sending
       // the invite + writing the Activity stays in the main app where
       // all that logic already lives.
-      const url = APP_URL + '/?schedule=1&contact_id=' + c.id;
+      const url = _deepLinkUrl('?schedule=1&contact_id=' + c.id);
       window.open(url, 'prospector-schedule');
     }}
 
@@ -881,12 +935,10 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
           body: JSON.stringify({{ contact_id: c.id, body }}),
         }});
         if (r && r.ok) {{
-          Missive.alert({{ title: 'iMessage sent', message: 'Logged to the activity timeline.' }});
+          toast('iMessage sent', 'success');
           handleChangeConversations(_lastConversationIds);
         }} else if (r) {{
-          Missive.alert({{ title: 'Not sent', message: r.reason || 'Unknown error' }});
-        }} else {{
-          Missive.alert({{ title: 'Send failed', message: 'Could not send the iMessage.' }});
+          toast('Not sent: ' + (r.reason || 'unknown error'), 'error');
         }}
       }} catch (e) {{ /* cancelled */ }}
     }}
@@ -894,8 +946,16 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
     async function copyEmail(addr) {{
       try {{
         await Missive.writeToClipboard(addr);
-        Missive.alert({{ title: 'Copied', message: addr }});
-      }} catch (e) {{}}
+        toast('Copied: ' + addr, 'success');
+      }} catch (e) {{
+        // Fall back to the browser's clipboard API
+        try {{
+          await navigator.clipboard.writeText(addr);
+          toast('Copied: ' + addr, 'success');
+        }} catch (e2) {{
+          toast('Could not copy', 'error');
+        }}
+      }}
     }}
 
     async function _logActivityForm(kindLabel, defaultKind) {{
@@ -922,10 +982,8 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
           }}),
         }});
         if (r && r.id) {{
-          Missive.alert({{ title: 'Logged', message: kindLabel + ' saved to the Prospector timeline.' }});
+          toast(kindLabel + ' saved', 'success');
           handleChangeConversations(_lastConversationIds);
-        }} else {{
-          Missive.alert({{ title: 'Save failed', message: 'Could not log the activity.' }});
         }}
       }} catch (e) {{
         // user cancelled
@@ -942,12 +1000,10 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
         body: JSON.stringify({{ contact_id: c.id }}),
       }});
       if (r && r.fired) {{
-        Missive.alert({{ title: 'Step fired', message: 'Sent step #' + r.step_id + ' (' + (r.step_type || 'email') + ').' }});
+        toast('Sent step ' + (r.step_type || 'email'), 'success');
         handleChangeConversations(_lastConversationIds);
       }} else if (r) {{
-        Missive.alert({{ title: 'No step fired', message: r.reason || 'No pending step.' }});
-      }} else {{
-        Missive.alert({{ title: 'Send failed', message: 'Could not fire the next step.' }});
+        toast('No step fired — ' + (r.reason || 'nothing pending'), 'error');
       }}
     }}
 
@@ -962,23 +1018,20 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
         }}),
       }});
       if (r && r.ok) {{
-        Missive.alert({{ title: 'Label synced', message: 'Applied "' + (r.label_name || r.status_applied) + '" to this conversation.' }});
+        toast('Applied "' + (r.label_name || r.status_applied) + '" in Missive', 'success');
       }} else if (r && r.error) {{
-        Missive.alert({{ title: 'Sync failed', message: r.error }});
-      }} else {{
-        Missive.alert({{ title: 'Sync failed', message: 'Could not apply label.' }});
+        toast('Sync failed: ' + r.error, 'error');
       }}
     }}
 
     async function generateAuditNow() {{
       const co = _currentContext && _currentContext.company;
       if (!co) return;
+      toast('Generating audit… (15–25s)', '');
       const r = await jwtAuthFetch('/api/companies/' + co.id + '/audit', {{ method: 'POST' }});
       if (r && r.url) {{
-        Missive.alert({{ title: 'Audit generated', message: 'Grade ' + (r.overall_grade || '?') + ' · ' + r.ai_findability_score + '/100' }});
+        toast('Audit ready: ' + (r.overall_grade || '?') + ' · ' + r.ai_findability_score + '/100', 'success');
         handleChangeConversations(_lastConversationIds);
-      }} else {{
-        Missive.alert({{ title: 'Audit failed', message: 'Could not generate the report.' }});
       }}
     }}
 
@@ -987,10 +1040,8 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
       if (!c) return;
       const r = await jwtAuthFetch('/api/sequences/pause/' + c.id, {{ method: 'POST' }});
       if (r) {{
-        Missive.alert({{ title: 'Sequence paused', message: 'No further steps will fire for this contact.' }});
+        toast('Sequence paused', 'success');
         handleChangeConversations(_lastConversationIds);
-      }} else {{
-        Missive.alert({{ title: 'Pause failed', message: 'Could not pause the sequence.' }});
       }}
     }}
 

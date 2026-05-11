@@ -2233,6 +2233,21 @@ function verify(secret, rawBody, header) {
 
     <script>
         // ============ State + helpers ============
+        // Deep-link token from the Missive sidebar / Chrome extension —
+        // they pop us in a new tab with ?t=<jwt>, and we adopt that
+        // token so the operator doesn't have to log in again. Runs
+        // BEFORE the localStorage read so a fresh token wins.
+        try {
+            const _qp = new URLSearchParams(window.location.search || '');
+            const _qpToken = (_qp.get('t') || '').trim();
+            if (_qpToken && _qpToken.length > 20) {
+                localStorage.setItem('token', _qpToken);
+                _qp.delete('t');
+                const remaining = _qp.toString();
+                const newUrl = window.location.pathname + (remaining ? '?' + remaining : '') + window.location.hash;
+                history.replaceState(null, '', newUrl);
+            }
+        } catch (e) { /* non-fatal */ }
         let token = localStorage.getItem('token');
         let currentUser = null;
         if (token) checkAuth();
