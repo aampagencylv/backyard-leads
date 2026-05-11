@@ -2089,6 +2089,27 @@ function verify(secret, rawBody, header) {
     <!-- Modal mount point -->
     <div id="modal-root"></div>
 
+    <!-- Global "working" overlay — shown during long-running operations
+         (sequence generation, audit, enrichment, etc.). Blocks the UI
+         so users can't double-trigger work, with a spinner + optional
+         progress bar that fills based on an estimated duration. -->
+    <div id="working-overlay" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.45);backdrop-filter:blur(2px);display:flex;align-items:center;justify-content:center;z-index:10000">
+        <div style="background:white;padding:30px 36px;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.28);text-align:center;min-width:320px;max-width:480px">
+            <div id="working-spinner" style="width:48px;height:48px;border:4px solid #ececec;border-top-color:var(--bmp-orange);border-radius:50%;animation:bmpSpin 0.9s linear infinite;margin:0 auto 16px"></div>
+            <div id="working-title" style="font-size:16px;font-weight:600;color:#222;margin-bottom:6px">Working…</div>
+            <div id="working-hint" style="font-size:13px;color:#666;line-height:1.55"></div>
+            <div id="working-progress-wrap" style="display:none;height:6px;background:#ececec;border-radius:3px;overflow:hidden;margin-top:16px">
+                <div id="working-progress-bar" style="height:100%;background:var(--bmp-orange);width:0%;transition:width 0.4s ease;border-radius:3px"></div>
+            </div>
+            <div id="working-time" style="font-size:11px;color:#888;margin-top:8px;min-height:14px"></div>
+            <div id="working-substep" style="font-size:11px;color:#999;margin-top:4px;min-height:14px"></div>
+        </div>
+    </div>
+    <style>
+        @keyframes bmpSpin { to { transform: rotate(360deg); } }
+        #working-overlay.hidden { display: none !important; }
+    </style>
+
     <!-- AI chatbot widget (Ask Prospector). Floating button bottom-right;
          expands into a chat panel anchored to the same corner. Visibility
          is gated to logged-in users — checkAuth toggles `hidden` off. -->
@@ -2258,6 +2279,113 @@ function verify(secret, rawBody, header) {
             t.textContent = msg;
             document.body.appendChild(t);
             setTimeout(() => t.remove(), 3000);
+        }
+
+        // ============================================================
+        // Global "working" overlay
+        // ============================================================
+        //
+        // Long-running operations (sequence generation, audit, enrich,
+        // competitor report) take 15-90 seconds. Without feedback users
+        // click the button again, generate duplicate work, or assume
+        // the app crashed. This helper:
+        //
+        //   - Renders a centered modal with spinner + title + hint
+        //   - Optional progress bar that fills based on an estimated
+        //     duration (client-side animation; not perfectly accurate
+        //     but reassuring and dampens click-spamming)
+        //   - Blocks all clicks behind it
+        //   - Auto-dismisses when the caller's promise settles
+        //
+        // Usage:
+        //   const w = showWorking({
+        //       title: 'Generating sequence',
+        //       hint: 'AI is drafting 13 personalized touchpoints…',
+        //       estimatedSeconds: 60,
+        //   });
+        //   try { await someLongOperation(); } finally { w.close(); }
+
+        let _workingTimer = null;
+        let _workingStart = null;
+        let _workingEstimated = 0;
+
+        function showWorking({ title = 'Working…', hint = '', estimatedSeconds = 0 } = {}) {
+            const overlay = document.getElementById('working-overlay');
+            if (!overlay) return { close: () => {}, update: () => {}, substep: () => {} };
+            const titleEl = document.getElementById('working-title');
+            const hintEl  = document.getElementById('working-hint');
+            const wrap    = document.getElementById('working-progress-wrap');
+            const bar     = document.getElementById('working-progress-bar');
+            const tm      = document.getElementById('working-time');
+            const sub     = document.getElementById('working-substep');
+
+            if (titleEl) titleEl.textContent = title;
+            if (hintEl)  hintEl.textContent = hint;
+            if (bar) bar.style.width = '0%';
+            if (tm) tm.textContent = '';
+            if (sub) sub.textContent = '';
+
+            if (_workingTimer) clearInterval(_workingTimer);
+            _workingTimer = null;
+            _workingStart = Date.now();
+            _workingEstimated = estimatedSeconds;
+
+            if (estimatedSeconds > 0) {
+                if (wrap) wrap.style.display = '';
+                _workingTimer = setInterval(() => {
+                    const elapsed = (Date.now() - _workingStart) / 1000;
+                    // Cap at 95% — we never hit 100% on the timer; that
+                    // happens when close() fires. Feels honest: progress
+                    // creeps up, then snaps to done.
+                    const pct = Math.min(95, (elapsed / _workingEstimated) * 100);
+                    if (bar) bar.style.width = pct.toFixed(0) + '%';
+                    const remaining = Math.ceil(_workingEstimated - elapsed);
+                    if (tm) {
+                        if (remaining > 0) {
+                            tm.textContent = `About ${remaining}s remaining…`;
+                        } else {
+                            tm.textContent = 'Almost done — finishing up…';
+                        }
+                    }
+                }, 250);
+            } else {
+                if (wrap) wrap.style.display = 'none';
+            }
+
+            overlay.classList.remove('hidden');
+
+            return {
+                close() {
+                    if (_workingTimer) clearInterval(_workingTimer);
+                    _workingTimer = null;
+                    // Quick fill to 100% before hiding for a satisfying finish
+                    if (estimatedSeconds > 0 && bar) bar.style.width = '100%';
+                    setTimeout(() => overlay.classList.add('hidden'), estimatedSeconds > 0 ? 200 : 0);
+                },
+                update({ title, hint, estimatedSeconds } = {}) {
+                    if (title != null && titleEl) titleEl.textContent = title;
+                    if (hint != null && hintEl) hintEl.textContent = hint;
+                    if (estimatedSeconds != null) {
+                        _workingEstimated = estimatedSeconds;
+                        _workingStart = Date.now();
+                        if (wrap) wrap.style.display = estimatedSeconds > 0 ? '' : 'none';
+                    }
+                },
+                substep(text) {
+                    if (sub) sub.textContent = text || '';
+                },
+            };
+        }
+
+        // Convenience wrapper: showWorking + awaits the work + always closes.
+        // Returns whatever the work function returned. Errors bubble normally.
+        async function withWorking(opts, fn) {
+            const w = showWorking(opts);
+            try {
+                return await fn(w);
+            } finally {
+                w.close();
+            }
         }
 
         // ============ Modal helper ============
@@ -5359,21 +5487,27 @@ function verify(secret, rawBody, header) {
         }
 
         async function generateAuditReport(companyId) {
-            // Check if report already exists
+            // Check if report already exists (cheap call — no overlay)
             const existing = await api(`/api/companies/${companyId}/audit`);
             if (existing && existing.exists && existing.url) {
                 window.open(existing.url, '_blank');
                 return;
             }
-
-            // Generate new one
-            toast('Generating AI Findability Audit... this takes 15-30 seconds');
-            const data = await api(`/api/companies/${companyId}/audit`, { method: 'POST' });
-            if (data) {
-                toast(`Audit complete! Grade: ${data.overall_grade} | AI Score: ${data.ai_findability_score}/100`);
-                if (data.url) window.open(data.url, '_blank');
-                openCompanyDetail(companyId);
-            }
+            // Generation involves scraping the prospect's site, running
+            // AI findability checks, and rendering branded HTML. 15-30s
+            // typical.
+            return withWorking({
+                title: 'Running AI Findability Audit',
+                hint: 'Scanning the prospect’s site for AI-findability signals (llms.txt, FAQ schema, structured data, local SEO). Usually 15-30 seconds.',
+                estimatedSeconds: 25,
+            }, async () => {
+                const data = await api(`/api/companies/${companyId}/audit`, { method: 'POST' });
+                if (data) {
+                    toast(`Audit complete! Grade: ${data.overall_grade} | AI Score: ${data.ai_findability_score}/100`);
+                    if (data.url) window.open(data.url, '_blank');
+                    openCompanyDetail(companyId);
+                }
+            });
         }
 
         async function clearCompanyEnrichment(companyId) {
@@ -5422,12 +5556,17 @@ function verify(secret, rawBody, header) {
         }
 
         async function refreshYelp(companyId) {
-            toast('Pulling Yelp profile + reviews…');
-            const data = await api(`/api/companies/${companyId}/refresh-yelp`, { method: 'POST' });
-            if (data) {
-                toast(data.found ? `Yelp loaded${data.reviews && data.reviews.length ? ` · ${data.reviews.length} reviews` : ''}` : (data.message || 'No Yelp match'));
-                openCompanyDetail(companyId);
-            }
+            return withWorking({
+                title: 'Pulling Yelp profile',
+                hint: 'Searching Yelp by company name + city, then fetching business details + recent reviews (incl. any owner replies).',
+                estimatedSeconds: 12,
+            }, async () => {
+                const data = await api(`/api/companies/${companyId}/refresh-yelp`, { method: 'POST' });
+                if (data) {
+                    toast(data.found ? `Yelp loaded${data.reviews && data.reviews.length ? ` · ${data.reviews.length} reviews` : ''}` : (data.message || 'No Yelp match'));
+                    openCompanyDetail(companyId);
+                }
+            });
         }
 
         async function refreshIndeed(companyId) {
@@ -5441,20 +5580,28 @@ function verify(secret, rawBody, header) {
         }
 
         async function enrichContactsFromCompany(companyId) {
-            toast('Enriching — analyzing website, looking up contacts, pulling LinkedIn company data...');
-            const data = await api(`/api/companies/${companyId}/enrich`, { method: 'POST' });
-            if (data) {
-                const parts = [];
-                if (data.problems_found) parts.push(`${data.problems_found} problems found`);
-                if (data.contacts_added) parts.push(`${data.contacts_added} new contact(s)`);
-                const n = data.netrows_found ?? 0;
-                const h = data.hunter_found ?? 0;
-                if (n) parts.push(`Netrows: ${n} found`);
-                if (h) parts.push(`Hunter: ${h} found`);
-                if (!parts.length) parts.push('Enrichment complete — data updated');
-                toast(parts.join(' · '));
-                openCompanyDetail(companyId);
-            }
+            // Multi-phase: website scrape → Apollo → Netrows → Hunter
+            // waterfall → SimilarWeb + Technographics + SoS lookups.
+            // 20-45s depending on which providers respond.
+            return withWorking({
+                title: 'Enriching company',
+                hint: 'Running the full enrichment waterfall: website scan → Apollo → Netrows → Hunter → SimilarWeb → tech stack → public records. Usually 20-45 seconds.',
+                estimatedSeconds: 35,
+            }, async () => {
+                const data = await api(`/api/companies/${companyId}/enrich`, { method: 'POST' });
+                if (data) {
+                    const parts = [];
+                    if (data.problems_found) parts.push(`${data.problems_found} problems found`);
+                    if (data.contacts_added) parts.push(`${data.contacts_added} new contact(s)`);
+                    const n = data.netrows_found ?? 0;
+                    const h = data.hunter_found ?? 0;
+                    if (n) parts.push(`Netrows: ${n} found`);
+                    if (h) parts.push(`Hunter: ${h} found`);
+                    if (!parts.length) parts.push('Enrichment complete — data updated');
+                    toast(parts.join(' · '));
+                    openCompanyDetail(companyId);
+                }
+            });
         }
         // also called from the Companies list cards
         async function quickQualify(companyId, status) {
@@ -5478,18 +5625,22 @@ function verify(secret, rawBody, header) {
             return enrichContactsFromCompany(id);
         }
         async function generateContactSequence(contactId) {
-            // Now defaults to the 30-day multi-channel cadence: 13 touches —
-            // 5 email + 4 call + 3 iMessage + 2 LinkedIn — with auto-pause
-            // listeners on reply/connected-call/opt-out. The old email-only
-            // generate-sequence endpoint still exists for back-compat but is
-            // no longer wired to any button.
-            toast('Generating 30-day multi-channel sequence (Claude drafting emails)…');
-            const data = await api(`/api/sequences/start/${contactId}`, { method: 'POST' });
-            if (data && data.created) {
-                toast(`✓ ${data.created}-step sequence queued. First send fires within 60s.`);
-                const c = await api(`/api/contacts/${contactId}`);
-                if (c) openCompanyDetail(c.company_id);
-            }
+            // 30-day multi-channel cadence: 13 touches (5 email, 4 call,
+            // 3 iMessage, 2 LinkedIn). Slow: Claude is generating ~8
+            // email/iMessage bodies sequentially + auto-runs the AI
+            // findability audit if it doesn't exist yet.
+            return withWorking({
+                title: 'Generating 30-day sequence',
+                hint: 'AI is drafting 13 personalized touchpoints + running the AI findability audit so it can be referenced in follow-ups. This usually takes 45-90 seconds.',
+                estimatedSeconds: 75,
+            }, async () => {
+                const data = await api(`/api/sequences/start/${contactId}`, { method: 'POST' });
+                if (data && data.created) {
+                    toast(`✓ ${data.created}-step sequence queued. First send fires within 60s.`);
+                    const c = await api(`/api/contacts/${contactId}`);
+                    if (c) openCompanyDetail(c.company_id);
+                }
+            });
         }
 
         async function pauseSequence(contactId) {
@@ -7931,17 +8082,29 @@ hmac.compare_digest(expected, header)</pre>
             const submit = document.getElementById('sched-modal-submit');
             submit.disabled = true;
             submit.textContent = 'Booking…';
-            const data = await api('/api/me/scheduling/book-for-contact', {
-                method: 'POST',
-                body: JSON.stringify({
-                    contact_id: state.contactId,
-                    starts_at_utc: state.selectedUtc,
-                    custom_meeting_title: document.getElementById('sched-modal-title').value.trim() || null,
-                    note: document.getElementById('sched-modal-note').value.trim() || null,
-                    prospect_email_override: overrideEmail || null,
-                    prospect_phone_override: overridePhone || null,
-                }),
+            // Booking writes to the rep's Google Calendar and notifies
+            // both attendees — usually 3-8 seconds end-to-end.
+            const w = showWorking({
+                title: 'Booking the meeting',
+                hint: 'Confirming availability, creating the Google Calendar event, and sending invites to both you and the prospect.',
+                estimatedSeconds: 8,
             });
+            let data;
+            try {
+                data = await api('/api/me/scheduling/book-for-contact', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        contact_id: state.contactId,
+                        starts_at_utc: state.selectedUtc,
+                        custom_meeting_title: document.getElementById('sched-modal-title').value.trim() || null,
+                        note: document.getElementById('sched-modal-note').value.trim() || null,
+                        prospect_email_override: overrideEmail || null,
+                        prospect_phone_override: overridePhone || null,
+                    }),
+                });
+            } finally {
+                w.close();
+            }
             if (!data || !data.booked) {
                 // api() already toasted the error; surface inline too
                 errEl.textContent = (data && data.detail) || 'Booking failed. Try a different slot.';
