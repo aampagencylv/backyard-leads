@@ -144,14 +144,28 @@ async def _transcribe_with_deepgram(
         "paragraphs": "true",
         "utterances": "true",
     }
-    headers = {
-        "Authorization": f"Token {api_key}",
-        "Content-Type": "application/json",
-    }
-    body = {"url": recording_url}
+    # Twilio recording URLs require auth — download the audio first,
+    # then send raw bytes to Deepgram instead of a URL reference.
+    from app.runtime_config import get_twilio_credentials
+    from app.database import async_session
+    audio_bytes = None
+    if "api.twilio.com" in recording_url or "twilio" in recording_url.lower():
+        async with async_session() as _db:
+            _creds = await get_twilio_credentials(_db)
+        async with httpx.AsyncClient(timeout=60) as client:
+            audio_r = await client.get(recording_url, auth=(_creds.account_sid, _creds.auth_token))
+            if audio_r.status_code == 200:
+                audio_bytes = audio_r.content
+
+    headers = {"Authorization": f"Token {api_key}"}
 
     async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-        r = await client.post(DEEPGRAM_LISTEN_URL, params=params, headers=headers, json=body)
+        if audio_bytes:
+            headers["Content-Type"] = "audio/mpeg"
+            r = await client.post(DEEPGRAM_LISTEN_URL, params=params, headers=headers, content=audio_bytes)
+        else:
+            headers["Content-Type"] = "application/json"
+            r = await client.post(DEEPGRAM_LISTEN_URL, params=params, headers=headers, json={"url": recording_url})
     if r.status_code != 200:
         raise RuntimeError(f"Deepgram {r.status_code}: {r.text[:300]}")
 
