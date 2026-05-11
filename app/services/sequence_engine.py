@@ -168,7 +168,7 @@ async def _handle_email(db: AsyncSession, step: GeneratedEmail, contact: Contact
         )
     except Exception:
         tracked_body = step.body  # Fall back to untracked body
-    sig_html = render_signature(sender_user)
+    sig_html = await render_signature(db, sender_user)
     try:
         tracked_signature = await wrap_html_links(
             db, sig_html, contact_id=contact.id, company_id=company.id, email_id=step.id, label="signature_link",

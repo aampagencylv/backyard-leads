@@ -1688,6 +1688,12 @@ function verify(secret, rawBody, header) {
                         <input id="brand-company-name" oninput="renderBrandPreview()" onchange="saveOrgBrand()" maxlength="120" placeholder="Backyard Marketing Pros">
                     </div>
 
+                    <div class="form-group">
+                        <label>Marketing website URL</label>
+                        <input id="brand-website-url" oninput="renderBrandPreview()" onchange="saveOrgBrand()" maxlength="500" placeholder="https://backyardmarketingpros.com">
+                        <div style="font-size:11px;color:#888;margin-top:4px">Used in email signatures (W: link) and the signature logo's click target.</div>
+                    </div>
+
                     <div style="margin-top:14px">
                         <div style="font-size:12px;color:#666;margin-bottom:6px">Preview</div>
                         <div id="brand-preview" style="border:1px solid #e6e6e6;border-radius:8px;overflow:hidden;background:white"></div>
@@ -8903,6 +8909,7 @@ hmac.compare_digest(expected, header)</pre>
             setBrandField('brand-accent-hex',    b.accent_bg_color || '#FFF8F0');
             setBrandField('brand-logo-url',      b.logo_url || '');
             setBrandField('brand-company-name',  b.company_name || 'Backyard Marketing Pros');
+            setBrandField('brand-website-url',   b.website_url || 'https://backyardmarketingpros.com');
             renderBrandPreview();
 
             // Apollo BYO-key (tenant-tier — visible to admin+)
@@ -10578,6 +10585,7 @@ hmac.compare_digest(expected, header)</pre>
                 accent:    get('brand-accent-hex')    || get('brand-accent-color')    || '#FFF8F0',
                 logo:      get('brand-logo-url'),
                 company:   get('brand-company-name') || 'Backyard Marketing Pros',
+                website:   get('brand-website-url') || 'https://backyardmarketingpros.com',
             };
         }
 
@@ -10622,6 +10630,7 @@ hmac.compare_digest(expected, header)</pre>
                         brand_accent_bg_color: b.accent,
                         brand_logo_url:        b.logo,
                         brand_company_name:    b.company,
+                        brand_website_url:     b.website,
                     }),
                 });
                 if (status) {
@@ -10683,6 +10692,7 @@ hmac.compare_digest(expected, header)</pre>
             set('brand-accent-hex',    '#FFF8F0');
             set('brand-logo-url',      '');
             set('brand-company-name',  'Backyard Marketing Pros');
+            set('brand-website-url',   'https://backyardmarketingpros.com');
             renderBrandPreview();
             saveOrgBrand();
         }

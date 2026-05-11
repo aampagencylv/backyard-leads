@@ -1,4 +1,4 @@
-<!-- Backyard Marketing Pros Email Signature -->
+<!-- Email signature — org-branded, BMP-shaped layout -->
 <div>
 <span style="color: #363636"><span style="font-family: Arial, sans-serif">
 <table id="signature" cellpadding="0" cellspacing="0" border="0" style="font-family: sans-serif; line-height: 1.4; box-sizing: initial; max-width: 580px; color: #363636; border-collapse: collapse;">
@@ -17,8 +17,8 @@
                       <td valign="top" style="padding-bottom: 8px;">
                         <p style="margin: 0 0 2px 0; color: #000000; font-weight: 700; font-size: 16px; font-family: Arial, sans-serif;">{{ user.first_name }} {{ user.last_name }}</p>
                         <p style="margin: 0 0 10px 0; font-size: 14px; font-family: Arial, sans-serif; color: #333;">{{ user.nickname }}</p>
-                        <a href="https://backyardmarketingpros.com/">
-                          <img src="https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz.png" width="220" style="display: block; max-width: 100%;" alt="Backyard Marketing Pros">
+                        <a href="{{ brand.website_url }}">
+                          <img src="{{ brand.logo_url }}" width="220" style="display: block; max-width: 100%;" alt="{{ brand.company_name }}">
                         </a>
                       </td>
                     </tr>
@@ -28,7 +28,7 @@
                       <td style="padding: 6px 0;">
                         <table cellpadding="0" cellspacing="0" border="0" width="480" style="border-collapse: collapse;">
                           <tr>
-                            <td style="height: 3px; background-color: #1e4634; font-size: 0; line-height: 0;">&nbsp;</td>
+                            <td style="height: 3px; background-color: {{ brand.secondary_color }}; font-size: 0; line-height: 0;">&nbsp;</td>
                           </tr>
                         </table>
                       </td>
@@ -38,10 +38,10 @@
                     <tr>
                       <td valign="top">
                         <p style="margin: 0 0 4px 0; font-size: 12px; font-family: Arial, sans-serif; white-space: nowrap;">
-                          <span style="font-weight: 700; color: #1e4634;">O:</span>
+                          <span style="font-weight: 700; color: {{ brand.secondary_color }};">O:</span>
                           <a href="tel:702-707-4622" style="text-decoration: none; color: #333;">702-707-4622</a>
                           <span>&nbsp;|&nbsp;</span>
-                          <span style="font-weight: 700; color: #FF723F;">M:</span>
+                          <span style="font-weight: 700; color: {{ brand.primary_color }};">M:</span>
                           <a href="tel:{{ user.phone_number }}" style="text-decoration: none; color: #333;">{{ user.phone_number }}</a>
                         </p>
                       </td>
@@ -51,11 +51,11 @@
                     <tr>
                       <td valign="top">
                         <p style="margin: 0 0 8px 0; font-size: 12px; font-family: Arial, sans-serif; white-space: nowrap;">
-                          <span style="font-weight: 700; color: #1e4634;">E:</span>
+                          <span style="font-weight: 700; color: {{ brand.secondary_color }};">E:</span>
                           <a href="mailto:{{ user.email }}" style="text-decoration: none; color: #333;">{{ user.email }}</a>
                           <span>&nbsp;|&nbsp;</span>
-                          <span style="font-weight: 700; color: #FF723F;">W:</span>
-                          <a href="https://backyardmarketingpros.com/" style="text-decoration: none; color: #333;">www.backyardmarketingpros.com</a>
+                          <span style="font-weight: 700; color: {{ brand.primary_color }};">W:</span>
+                          <a href="{{ brand.website_url }}" style="text-decoration: none; color: #333;">{{ brand.website_display }}</a>
                         </p>
                       </td>
                     </tr>
@@ -64,8 +64,8 @@
                     <!-- Schedule Discovery Call CTA -->
                     <tr>
                       <td valign="top" style="padding-top: 4px;">
-                        <a href="{{ user.scheduling_url }}" style="display: inline-block; padding: 8px 16px; background: #FF723F; color: #ffffff; text-decoration: none; border-radius: 6px; font-size: 12px; font-family: Arial, sans-serif; font-weight: bold;">
-                          📅 Schedule a Discovery Call
+                        <a href="{{ user.scheduling_url }}" style="display: inline-block; padding: 8px 16px; background: {{ brand.primary_color }}; color: #ffffff; text-decoration: none; border-radius: 6px; font-size: 12px; font-family: Arial, sans-serif; font-weight: bold;">
+                          📅 Schedule A Discovery Call
                         </a>
                       </td>
                     </tr>

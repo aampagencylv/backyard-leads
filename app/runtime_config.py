@@ -144,6 +144,7 @@ async def get_org_brand(db: AsyncSession) -> dict:
         "accent_bg_color": _hex(getattr(rc, "brand_accent_bg_color", None), "#FFF8F0"),
         "logo_url":        (getattr(rc, "brand_logo_url", None) or "").strip(),
         "company_name":    (getattr(rc, "brand_company_name", None) or "Backyard Marketing Pros").strip(),
+        "website_url":     (getattr(rc, "brand_website_url", None) or "https://backyardmarketingpros.com").strip(),
     }
 
 
@@ -154,6 +155,7 @@ async def set_org_brand(
     accent_bg_color: Optional[str] = None,
     logo_url: Optional[str] = None,
     company_name: Optional[str] = None,
+    website_url: Optional[str] = None,
 ) -> RuntimeConfig:
     rc = await _get_or_create(db)
     def _hex(v, fb):
@@ -169,6 +171,11 @@ async def set_org_brand(
         rc.brand_logo_url = logo_url.strip()[:500] or None
     if company_name is not None:
         rc.brand_company_name = company_name.strip()[:120] or "Backyard Marketing Pros"
+    if website_url is not None:
+        v = website_url.strip()[:500]
+        if v and not v.lower().startswith(("http://", "https://")):
+            v = "https://" + v
+        rc.brand_website_url = v or "https://backyardmarketingpros.com"
     rc.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(rc)

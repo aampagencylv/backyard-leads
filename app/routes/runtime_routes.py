@@ -63,6 +63,7 @@ class UpdateRuntimeConfigRequest(BaseModel):
     brand_accent_bg_color: Optional[str] = None
     brand_logo_url: Optional[str] = None
     brand_company_name: Optional[str] = None
+    brand_website_url: Optional[str] = None
 
 
 def _tenant_payload(rc, settings_obj) -> dict:
@@ -84,6 +85,7 @@ def _tenant_payload(rc, settings_obj) -> dict:
             "accent_bg_color": getattr(rc, "brand_accent_bg_color", None) or "#FFF8F0",
             "logo_url":        getattr(rc, "brand_logo_url", None) or "",
             "company_name":    getattr(rc, "brand_company_name", None) or "Backyard Marketing Pros",
+            "website_url":     getattr(rc, "brand_website_url", None) or "https://backyardmarketingpros.com",
         },
         "apollo": {
             "set": bool(apollo_key),
@@ -297,6 +299,7 @@ async def update_runtime_config(
     _brand_fields = (
         req.brand_primary_color, req.brand_secondary_color,
         req.brand_accent_bg_color, req.brand_logo_url, req.brand_company_name,
+        req.brand_website_url,
     )
     if any(v is not None for v in _brand_fields):
         await set_org_brand(
@@ -306,6 +309,7 @@ async def update_runtime_config(
             accent_bg_color=req.brand_accent_bg_color,
             logo_url=req.brand_logo_url,
             company_name=req.brand_company_name,
+            website_url=req.brand_website_url,
         )
 
     _audit_fields = (

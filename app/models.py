@@ -497,6 +497,9 @@ class RuntimeConfig(Base):
     brand_accent_bg_color = Column(String(20), nullable=False, default="#FFF8F0")
     brand_logo_url = Column(Text, nullable=True)
     brand_company_name = Column(String(120), nullable=False, default="Backyard Marketing Pros")
+    # Homepage URL used in email signatures + footers. White-label tenants
+    # point this at their own marketing site.
+    brand_website_url = Column(Text, nullable=False, default="https://backyardmarketingpros.com")
 
     # Audit-report branding — per-surface overrides on top of org brand.
     # Empty → render falls back to brand_logo_url (footer) or no banner

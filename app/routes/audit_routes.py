@@ -1047,7 +1047,7 @@ async def _email_competitor_report(db, *, report, company, to_email: str) -> Non
     )
 
     import json
-    sig_html = render_signature(sender_user)
+    sig_html = await render_signature(db, sender_user)
     result = await send_email(
         to_email=to_email,
         subject=subject,

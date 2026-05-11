@@ -75,7 +75,7 @@ async def send_single_email(
     tracked_body = await wrap_html_links(
         db, email.body, contact_id=contact.id, company_id=company.id, email_id=email.id, label="body_link",
     )
-    sig_html = render_signature(user)
+    sig_html = await render_signature(db, user)
     tracked_signature = await wrap_html_links(
         db, sig_html, contact_id=contact.id, company_id=company.id, email_id=email.id, label="signature_link",
     )
@@ -164,7 +164,7 @@ async def send_next_in_sequence(
     tracked_body = await wrap_html_links(
         db, email.body, contact_id=contact.id, company_id=company.id, email_id=email.id, label="body_link",
     )
-    sig_html = render_signature(user)
+    sig_html = await render_signature(db, user)
     tracked_signature = await wrap_html_links(
         db, sig_html, contact_id=contact.id, company_id=company.id, email_id=email.id, label="signature_link",
     )
@@ -492,7 +492,7 @@ class UpdateProfileRequest(BaseModel):
     dial_mode: Optional[str] = None  # 'browser' | 'bridge'
 
 
-def _profile_payload(user: User) -> dict:
+async def _profile_payload(db: AsyncSession, user: User) -> dict:
     sender = get_sender_info(user.first_name, user.full_name)
     return {
         "id": user.id,
@@ -510,7 +510,7 @@ def _profile_payload(user: User) -> dict:
         "dial_mode": user.dial_mode or "browser",
         "send_from": sender["from_email"],
         "reply_to": sender["reply_to"],
-        "signature_html": render_signature(user),
+        "signature_html": await render_signature(db, user),
         "brief_enabled": bool(getattr(user, "brief_enabled", True)),
         "brief_hour": int(getattr(user, "brief_hour", 7) or 7),
         "timezone": getattr(user, "timezone", None) or "America/Phoenix",
@@ -519,8 +519,8 @@ def _profile_payload(user: User) -> dict:
 
 
 @router.get("/profile")
-async def get_profile(user: User = Depends(get_current_user)):
-    return _profile_payload(user)
+async def get_profile(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    return await _profile_payload(db, user)
 
 
 @router.patch("/profile")
@@ -540,7 +540,7 @@ async def update_profile(
         user.dial_mode = req.dial_mode
     await db.commit()
     await db.refresh(user)
-    return _profile_payload(user)
+    return await _profile_payload(db, user)
 
 
 # ============================================================
@@ -911,7 +911,7 @@ async def send_adhoc_email(
     tracked_body = await wrap_html_links(
         db, clean_body, contact_id=contact.id, company_id=company.id, email_id=ge.id, label="body_link",
     )
-    sig_html = render_signature(user)
+    sig_html = await render_signature(db, user)
     tracked_signature = await wrap_html_links(
         db, sig_html, contact_id=contact.id, company_id=company.id, email_id=ge.id, label="signature_link",
     )
