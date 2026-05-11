@@ -823,6 +823,29 @@ async def resend_webhook(request: Request, db: AsyncSession = Depends(get_db)):
                                 content=f"Reply received; sequence auto-paused ({len(pending)} emails)"))
         await db.commit()
 
+    # ============================================================
+    # Auto-sync Missive label after any of the above status changes
+    # (best-effort, fire-and-forget — never blocks the webhook reply)
+    # ============================================================
+    if event_type in ("email.bounced", "email.complained", "email.replied", "email.opened", "email.clicked"):
+        try:
+            from app.services.missive_client import is_configured as _missive_ok, sync_status_label
+            if _missive_ok() and contact_id:
+                c2 = (await db.execute(select(Contact).where(Contact.id == int(contact_id)))).scalar_one_or_none()
+                if c2 and c2.missive_conversation_id and company and company.status:
+                    contact_name = f"{(c2.first_name or '').strip()} {(c2.last_name or '').strip()}".strip() or (c2.email or "")
+                    import asyncio as _asyncio
+                    _asyncio.create_task(sync_status_label(
+                        conversation_id=c2.missive_conversation_id,
+                        new_status=company.status,
+                        contact_name=contact_name,
+                        company_name=company.name or "",
+                        actor="Prospector (auto)",
+                    ))
+        except Exception:
+            # Sidecar action — must never break the webhook
+            log.exception("Missive auto-sync skipped")
+
     return {"status": "ok", "event": event_type, "company_id": company_id}
 
 

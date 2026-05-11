@@ -88,6 +88,7 @@ async def init_db():
         "scripts.migrate_org_brand",
         "scripts.migrate_email_events",
         "scripts.migrate_brand_website",
+        "scripts.migrate_missive_link",
     ):
         try:
             mod = __import__(_migration_module, fromlist=["main"])

@@ -256,6 +256,13 @@ class Contact(Base):
     phone_type_checked_at = Column(DateTime, nullable=True)
     phone_carrier = Column(String(80), nullable=True)  # e.g. "Verizon Wireless"
 
+    # Missive conversation linkage — populated the first time a BDR
+    # opens this contact's thread in Missive (sidebar pushes it back
+    # to us). Lets status-change hooks fire write-back actions like
+    # 'apply Replied label' or 'add comment' against the right thread.
+    missive_conversation_id = Column(String(64), nullable=True, index=True)
+    missive_conversation_seen_at = Column(DateTime, nullable=True)
+
     # Personalization context cache (Netrows /people/posts)
     recent_posts_json = Column(Text, nullable=True)  # JSON array of {text, posted_at, url, likes}
     posts_fetched_at = Column(DateTime, nullable=True)

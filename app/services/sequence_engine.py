@@ -478,6 +478,92 @@ async def process_pending_steps(db: AsyncSession, max_per_tick: int = 50) -> dic
 
 
 # ============================================================
+# Manual single-step execution (sidebar / chrome ext / admin trigger)
+# ============================================================
+
+async def execute_step_now(
+    db: AsyncSession,
+    step_id: int,
+    triggered_by_user_id: Optional[int] = None,
+) -> dict:
+    """Fire ONE specific step right now, bypassing the scheduled_send_at
+    gate. Used by the Missive sidebar 'Send next step now' button and
+    will back the Chrome extension's send action.
+
+    Still respects everything else the engine cares about: skip-if
+    rules, send-window guards for iMessage, the per-sender send cap.
+    Returns {fired, step_id, step_type, reason, error?}."""
+    now = datetime.now(timezone.utc)
+    step = (await db.execute(
+        select(GeneratedEmail).where(GeneratedEmail.id == step_id)
+    )).scalar_one_or_none()
+    if not step:
+        return {"fired": False, "reason": "step_not_found"}
+    if step.is_sent or step.paused_at or step.skipped_at:
+        return {"fired": False, "reason": f"step_unavailable (sent={bool(step.is_sent)} paused={bool(step.paused_at)} skipped={bool(step.skipped_at)})"}
+
+    contact = (await db.execute(select(Contact).where(Contact.id == step.contact_id))).scalar_one_or_none()
+    company = (await db.execute(select(Company).where(Company.id == step.company_id))).scalar_one_or_none()
+    if not contact or not company:
+        return {"fired": False, "reason": "missing_contact_or_company"}
+
+    # Skip-if check — same as auto-run path
+    skip_conds = []
+    try:
+        skip_conds = json.loads(step.skip_if_json) if step.skip_if_json else []
+    except (TypeError, ValueError):
+        skip_conds = []
+    skip_reason = evaluate_skip(contact, skip_conds)
+    if skip_reason:
+        step.skipped_at = now
+        step.skip_reason = skip_reason
+        db.add(Activity(
+            company_id=company.id, contact_id=contact.id,
+            user_id=triggered_by_user_id,
+            activity_type="sequence_step_skipped",
+            content=f"[Manual] Skipped {step.step_type} step #{step.sequence_order} — reason: {skip_reason}",
+        ))
+        await db.commit()
+        return {"fired": False, "reason": f"skip_if: {skip_reason}"}
+
+    # Dispatch by type
+    try:
+        if step.step_type == "email":
+            ok, msg = await _handle_email(db, step, contact, company)
+            if ok:
+                step.is_sent = True
+                step.sent_at = now
+                db.add(Activity(
+                    company_id=company.id, contact_id=contact.id,
+                    user_id=triggered_by_user_id,
+                    activity_type="sequence_step_manual_send",
+                    content=f"[Manual] Sent {step.step_type} step #{step.sequence_order}: {step.subject}",
+                ))
+                await db.commit()
+                return {"fired": True, "step_id": step.id, "step_type": step.step_type}
+            return {"fired": False, "reason": msg}
+        elif step.step_type == "imessage":
+            ok, msg = await _handle_imessage(db, step, contact, company)
+            if ok:
+                step.is_sent = True
+                step.sent_at = now
+                await db.commit()
+                return {"fired": True, "step_id": step.id, "step_type": step.step_type}
+            return {"fired": False, "reason": msg}
+        elif step.step_type in ("call", "linkedin"):
+            ok, msg = await _handle_create_task(db, step, contact, company, step.step_type)
+            if ok:
+                await db.commit()
+                return {"fired": True, "step_id": step.id, "step_type": step.step_type, "result": "task_created"}
+            return {"fired": False, "reason": msg}
+        else:
+            return {"fired": False, "reason": f"unknown_step_type:{step.step_type}"}
+    except Exception as e:
+        logger.exception(f"execute_step_now({step_id}) failed: {e}")
+        return {"fired": False, "reason": "exception", "error": str(e)}
+
+
+# ============================================================
 # Pause / resume / start
 # ============================================================
 

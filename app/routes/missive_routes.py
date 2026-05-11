@@ -224,6 +224,32 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
     }}
 
     let _lastConversationIds = [];
+    let _lastConv = null;          // The current Missive conversation object
+    let _lastProbeEmail = '';      // The address we used to look up context
+    let _teamEmails = new Set();   // Lowercased team-member emails from /api/integrations/context
+
+    // Pick the most likely PROSPECT email out of a conversation. Skips
+    // any address that belongs to a team member (cached on first fetch).
+    function pickProspectEmail(conv) {{
+      if (!conv) return '';
+      const candidates = [];
+      const latest = conv.latest_message;
+      if (latest) {{
+        if (latest.from_field && latest.from_field.address) candidates.push(latest.from_field.address);
+        (latest.to_fields  || []).forEach(f => f && f.address && candidates.push(f.address));
+        (latest.cc_fields  || []).forEach(f => f && f.address && candidates.push(f.address));
+      }}
+      (conv.authors || []).forEach(a => a && a.address && candidates.push(a.address));
+      // Prefer the first candidate that's NOT a team member
+      for (const addr of candidates) {{
+        const a = (addr || '').trim().toLowerCase();
+        if (!a) continue;
+        if (_teamEmails.has(a)) continue;
+        return addr;
+      }}
+      // No external address found — fall back to whatever's there
+      return candidates[0] || '';
+    }}
 
     async function handleChangeConversations(conversationIds) {{
       _lastConversationIds = conversationIds || [];
@@ -251,46 +277,117 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
         root.innerHTML = `<div class="empty">Could not load conversation: ${{escapeHtml(String(e))}}</div>`;
         return;
       }}
+      _lastConv = conv;
 
-      const latest = conv && conv.latest_message;
-      // Choose the prospect address: the from_field if it's NOT one of OUR users,
-      // otherwise the to_fields. Best heuristic without per-user data — operator
-      // can refine later.
-      let probeEmail = '';
-      if (latest && latest.from_field && latest.from_field.address) {{
-        probeEmail = latest.from_field.address;
-      }} else if (latest && latest.to_fields && latest.to_fields[0]) {{
-        probeEmail = latest.to_fields[0].address;
-      }} else if (conv && conv.authors && conv.authors[0]) {{
-        probeEmail = conv.authors[0].address;
-      }}
+      // First pass uses whatever team emails we already cached; the
+      // backend will return a fresh list which we'll persist for next time.
+      let probeEmail = pickProspectEmail(conv);
 
       if (!probeEmail) {{
         root.innerHTML = '<div class="empty">No email address on this conversation.</div>';
         return;
       }}
 
-      const ctx = await jwtAuthFetch('/api/integrations/context?email=' + encodeURIComponent(probeEmail));
+      _lastProbeEmail = probeEmail;
+
+      // Pass conversation_id so the backend persists the contact↔conv link
+      const ctx = await jwtAuthFetch(
+        '/api/integrations/context?email=' + encodeURIComponent(probeEmail)
+        + '&conversation_id=' + encodeURIComponent(conv.id || '')
+      );
       if (!ctx) {{
         root.innerHTML = '<div class="empty">Failed to look up context.</div>';
         return;
       }}
+      // Refresh the team-emails cache from the backend response so next
+      // conversation switch has the correct heuristic immediately.
+      if (Array.isArray(ctx.team_emails)) {{
+        _teamEmails = new Set(ctx.team_emails.map(e => (e || '').trim().toLowerCase()));
+        // If we initially guessed wrong (matched a team member), retry
+        // with the prospect-filtered pick.
+        const better = pickProspectEmail(conv);
+        if (better && better.toLowerCase() !== probeEmail.toLowerCase()) {{
+          _lastProbeEmail = better;
+          const ctx2 = await jwtAuthFetch(
+            '/api/integrations/context?email=' + encodeURIComponent(better)
+            + '&conversation_id=' + encodeURIComponent(conv.id || '')
+          );
+          if (ctx2) {{
+            _currentContext = ctx2;
+            if (!ctx2.found) {{ renderNotFound(better, ctx2); return; }}
+            renderContext(ctx2);
+            return;
+          }}
+        }}
+      }}
       _currentContext = ctx;
 
       if (!ctx.found) {{
-        root.innerHTML = `
-          <div class="section">
-            <div class="label">Not in Prospector</div>
-            <h3>${{escapeHtml(probeEmail)}}</h3>
-            <p style="color:#666;margin:8px 0 12px">This contact hasn't been added yet.</p>
-            <div class="actions">
-              <button class="btn" onclick="window.open(APP_URL + '/?add_email=' + encodeURIComponent('${{probeEmail}}'), '_blank')">Add to Prospector</button>
-            </div>
-          </div>`;
+        renderNotFound(probeEmail, ctx);
         return;
       }}
 
       renderContext(ctx);
+    }}
+
+    function renderNotFound(probeEmail, ctx) {{
+      root.innerHTML = `
+        <div class="section">
+          <div class="label">Not in Prospector</div>
+          <h3>${{escapeHtml(probeEmail)}}</h3>
+          <p style="color:#666;margin:8px 0 12px">This contact hasn't been added yet.</p>
+          <div class="actions">
+            <button class="btn" onclick="quickAdd('${{escapeHtml(probeEmail)}}')">Quick add</button>
+            <button class="btn secondary" onclick="window.open(APP_URL + '/?add_email=' + encodeURIComponent('${{probeEmail}}'), '_blank')">Open in Prospector</button>
+          </div>
+        </div>`;
+    }}
+
+    async function quickAdd(emailAddr) {{
+      // Pull a sensible default for the name from the Missive conversation
+      let firstName = '', lastName = '';
+      try {{
+        const latest = _lastConv && _lastConv.latest_message;
+        const f = latest && latest.from_field;
+        if (f && f.address && f.address.toLowerCase() === emailAddr.toLowerCase()) {{
+          const parts = (f.name || '').trim().split(/\\s+/);
+          firstName = parts[0] || '';
+          lastName = parts.slice(1).join(' ') || '';
+        }}
+      }} catch (e) {{}}
+      try {{
+        const fields = await Missive.openForm({{
+          name: 'Add prospect to Prospector',
+          fields: [
+            {{ name: 'first_name', label: 'First name', initial: firstName }},
+            {{ name: 'last_name',  label: 'Last name',  initial: lastName }},
+            {{ name: 'company_name', label: 'Company (optional)', initial: '' }},
+            {{ name: 'title', label: 'Title (optional)', initial: '' }},
+          ],
+          buttons: [{{ name: 'add', label: 'Add to Prospector' }}],
+          autoClose: true,
+        }});
+        const get = (k) => (fields.find(x => x.name === k) || {{}}).value || '';
+        const r = await jwtAuthFetch('/api/integrations/sidebar/quick-add', {{
+          method: 'POST',
+          body: JSON.stringify({{
+            email: emailAddr,
+            first_name: get('first_name'),
+            last_name: get('last_name'),
+            company_name: get('company_name'),
+            title: get('title'),
+          }}),
+        }});
+        if (r && (r.created || r.contact_id)) {{
+          Missive.alert({{ title: 'Added to Prospector', message: emailAddr + ' is now in your CRM.' }});
+          // Re-render with the now-found record
+          handleChangeConversations(_lastConversationIds);
+        }} else {{
+          Missive.alert({{ title: 'Add failed', message: 'Could not add the contact.' }});
+        }}
+      }} catch (e) {{
+        // openForm rejects on cancel — silently ignore
+      }}
     }}
 
     function renderContext(ctx) {{
@@ -302,11 +399,57 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
       const statusPill = co.status ? `<span class="pill pill-status-${{co.status}}">${{escapeHtml(co.status)}}</span>` : '';
       const tierPill   = co.lead_score_tier ? `<span class="pill pill-tier-${{co.lead_score_tier}}" title="Lead score ${{co.lead_score}}">${{escapeHtml(co.lead_score_tier)}} · ${{co.lead_score}}</span>` : '';
 
+      // Contact-detail row: phone tap-to-call, LinkedIn open-in-tab, copy-email
+      const contactLinks = [];
+      if (c.phone) contactLinks.push(`<a href="tel:${{escapeHtml(c.phone)}}" title="Call">📞 ${{escapeHtml(c.phone)}}</a>`);
+      if (c.email) contactLinks.push(`<a href="#" onclick="copyEmail('${{escapeHtml(c.email)}}');return false" title="Copy email">✉️ ${{escapeHtml(c.email)}}</a>`);
+      if (c.linkedin_url) contactLinks.push(`<a href="${{escapeHtml(c.linkedin_url)}}" target="_blank" title="LinkedIn profile">💼 LinkedIn</a>`);
+      const contactLinksHtml = contactLinks.length ? `<div style="margin-top:6px;font-size:12px;display:flex;gap:10px;flex-wrap:wrap">${{contactLinks.join('')}}</div>` : '';
+
+      // Last engagement row — opens / clicks
+      const lastOpened  = ctx.last_opened_at  ? `Opened ${{escapeHtml(fmtRel(ctx.last_opened_at))}}` : '';
+      const lastClicked = ctx.last_clicked_at ? `Clicked ${{escapeHtml(fmtRel(ctx.last_clicked_at))}}` : '';
+      const engagementHtml = (lastOpened || lastClicked) ? `
+        <div class="section">
+          <div class="label">Engagement</div>
+          <div style="font-size:12px;color:#555">
+            ${{lastOpened ? `<div>👁️ ${{lastOpened}}</div>` : ''}}
+            ${{lastClicked ? `<div>🖱️ ${{lastClicked}}</div>` : ''}}
+          </div>
+        </div>` : '';
+
+      let recentEmailsHtml = '';
+      if (ctx.recent_emails && ctx.recent_emails.length) {{
+        recentEmailsHtml = `
+          <div class="section">
+            <div class="label">Recent sequence steps</div>
+            ${{ctx.recent_emails.map(em => {{
+              const when = em.sent_at ? fmtRel(em.sent_at) : 'queued';
+              const flags = [];
+              if (em.bounced_at)    flags.push(`<span style="color:#c62828">bounced</span>`);
+              if (em.complained_at) flags.push(`<span style="color:#c62828">spam</span>`);
+              if (em.open_count)    flags.push(`<span style="color:#1565c0">${{em.open_count}}× open</span>`);
+              if (!em.is_sent)      flags.push(`<span style="color:#888">queued</span>`);
+              return `
+                <div class="activity">
+                  <div style="display:flex;justify-content:space-between;gap:6px">
+                    <div style="flex:1;min-width:0">
+                      <span class="activity-type">${{escapeHtml(em.step_type || 'email')}}</span>
+                      <span class="activity-when">· ${{escapeHtml(when)}}</span>
+                      ${{flags.length ? ` · ${{flags.join(' · ')}}` : ''}}
+                    </div>
+                  </div>
+                  <div style="color:#444;font-size:12px;text-overflow:ellipsis;overflow:hidden;white-space:nowrap">${{escapeHtml(em.subject || '')}}</div>
+                </div>`;
+            }}).join('')}}
+          </div>`;
+      }}
+
       let activityHtml = '';
       if (ctx.activities && ctx.activities.length) {{
         activityHtml = `
           <div class="section">
-            <div class="label">Recent activity</div>
+            <div class="label">Activity timeline</div>
             ${{ctx.activities.map(a => `
               <div class="activity">
                 <span class="activity-type">${{escapeHtml(a.type)}}</span>
@@ -341,6 +484,8 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
       }}
 
       const appCompanyUrl = APP_URL + '/?company_id=' + co.id;
+      const missiveOk = !!ctx.missive_configured;
+
       root.innerHTML = `
         <div class="section">
           <div class="row">
@@ -350,18 +495,107 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
             </div>
           </div>
           <div style="margin-top:6px">${{statusPill}} ${{tierPill}}</div>
+          ${{contactLinksHtml}}
         </div>
 
         ${{seqHtml}}
         ${{auditHtml}}
+        ${{engagementHtml}}
+        ${{recentEmailsHtml}}
         ${{activityHtml}}
 
         <div class="section actions">
           <button class="btn" onclick="window.open('${{appCompanyUrl}}', '_blank')">Open in Prospector</button>
+          ${{seq && seq.next_step ? `<button class="btn secondary" onclick="sendNextStep()">Send next step now</button>` : ''}}
           ${{audit ? '' : `<button class="btn secondary" onclick="generateAuditNow()">Generate audit</button>`}}
+        </div>
+
+        <div class="section actions">
+          <button class="btn secondary" onclick="logNote()">📝 Log note</button>
+          <button class="btn secondary" onclick="logCall()">📞 Log call</button>
           ${{seq ? `<button class="btn secondary" onclick="pauseSequence()">Pause sequence</button>` : ''}}
+          ${{missiveOk ? `<button class="btn secondary" onclick="syncMissiveTag()">🏷️ Sync status to label</button>` : ''}}
         </div>
       `;
+    }}
+
+    async function copyEmail(addr) {{
+      try {{
+        await Missive.writeToClipboard(addr);
+        Missive.alert({{ title: 'Copied', message: addr }});
+      }} catch (e) {{}}
+    }}
+
+    async function _logActivityForm(kindLabel, defaultKind) {{
+      const c  = _currentContext && _currentContext.contact;  if (!c) return;
+      const co = _currentContext && _currentContext.company;  if (!co) return;
+      try {{
+        const fields = await Missive.openForm({{
+          name: kindLabel,
+          fields: [
+            {{ name: 'text', label: 'Notes', initial: '' }},
+          ],
+          buttons: [{{ name: 'save', label: 'Save to Prospector' }}],
+          autoClose: true,
+        }});
+        const text = ((fields.find(x => x.name === 'text') || {{}}).value || '').trim();
+        if (!text) return;
+        const r = await jwtAuthFetch('/api/integrations/sidebar/log-activity', {{
+          method: 'POST',
+          body: JSON.stringify({{
+            contact_id: c.id,
+            company_id: co.id,
+            text: text,
+            activity_type: defaultKind,
+          }}),
+        }});
+        if (r && r.id) {{
+          Missive.alert({{ title: 'Logged', message: kindLabel + ' saved to the Prospector timeline.' }});
+          handleChangeConversations(_lastConversationIds);
+        }} else {{
+          Missive.alert({{ title: 'Save failed', message: 'Could not log the activity.' }});
+        }}
+      }} catch (e) {{
+        // user cancelled
+      }}
+    }}
+    function logNote() {{ _logActivityForm('Log a note', 'note'); }}
+    function logCall() {{ _logActivityForm('Log a call', 'call_logged'); }}
+
+    async function sendNextStep() {{
+      const c = _currentContext && _currentContext.contact;
+      if (!c) return;
+      const r = await jwtAuthFetch('/api/integrations/sidebar/send-next-step', {{
+        method: 'POST',
+        body: JSON.stringify({{ contact_id: c.id }}),
+      }});
+      if (r && r.fired) {{
+        Missive.alert({{ title: 'Step fired', message: 'Sent step #' + r.step_id + ' (' + (r.step_type || 'email') + ').' }});
+        handleChangeConversations(_lastConversationIds);
+      }} else if (r) {{
+        Missive.alert({{ title: 'No step fired', message: r.reason || 'No pending step.' }});
+      }} else {{
+        Missive.alert({{ title: 'Send failed', message: 'Could not fire the next step.' }});
+      }}
+    }}
+
+    async function syncMissiveTag() {{
+      const c = _currentContext && _currentContext.contact;
+      if (!c || !_lastConv || !_lastConv.id) return;
+      const r = await jwtAuthFetch('/api/integrations/sidebar/missive-sync-tag', {{
+        method: 'POST',
+        body: JSON.stringify({{
+          contact_id: c.id,
+          conversation_id: _lastConv.id,
+        }}),
+      }});
+      if (r && r.ok) {{
+        Missive.alert({{ title: 'Label synced', message: 'Applied "' + (r.label_name || r.status_applied) + '" to this conversation.' }});
+      }} else if (r && r.error) {{
+        Missive.alert({{ title: 'Sync failed', message: r.error }});
+      }} else {{
+        Missive.alert({{ title: 'Sync failed', message: 'Could not apply label.' }});
+      }}
     }}
 
     async function generateAuditNow() {{
