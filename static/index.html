@@ -5719,7 +5719,7 @@ function verify(secret, rawBody, header) {
                                         ${c.emails.every(e => !e.is_sent) ? 'Start Sequence' : 'Send Next Step'}
                                     </button>
                                     ${c.emails.some(e => !e.is_sent && !e.paused_at) ? `<button class="btn btn-secondary btn-sm" onclick="pauseSequence(${c.id})">Pause</button>` : ''}
-                                    ${c.emails.some(e => e.paused_at) ? `<button class="btn btn-success btn-sm" onclick="resumeSequence(${c.id})">Resume Now</button><button class="btn btn-secondary btn-sm" onclick="rescheduleSequence(${c.id})">Reschedule</button>` : ''}
+                                    ${c.emails.some(e => e.paused_at) ? `<button class="btn btn-success btn-sm" onclick="resumeSequence(${c.id})">Resume Now</button><button class="btn btn-secondary btn-sm" onclick="rescheduleSequence(${c.id})">Reschedule</button><button class="btn btn-sm" onclick="reworkSequenceAfterCall(${c.id})" style="background:var(--bmp-orange);color:white">Rework After Call</button>` : ''}
                                 </div>
                             </div>
                         ` : ''}
@@ -6518,6 +6518,57 @@ function verify(secret, rawBody, header) {
                 document.getElementById('modal-root').innerHTML = '';
                 _refreshCurrentCompany();
             }
+        }
+
+        async function reworkSequenceAfterCall(contactId) {
+            // Find the most recent call activity for this contact
+            const contact = await api(`/api/contacts/${contactId}`);
+            if (!contact) return;
+            const company = await api(`/api/companies/${contact.company_id}/full`);
+            if (!company) return;
+            const calls = (company.activities || []).filter(a => a.type === 'call' && a.contact_id === contactId).slice(0, 3);
+            const latestCall = calls[0];
+
+            const root = document.getElementById('modal-root');
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:560px">
+                        <h2>Rework Sequence After Call</h2>
+                        <p style="font-size:13px;color:#666;margin-bottom:12px">Describe how the call went. AI will delete the remaining generic steps and generate new follow-ups that reference your actual conversation.</p>
+                        ${latestCall ? `<div style="background:#f5f7f5;border-radius:6px;padding:10px;margin-bottom:12px;font-size:12px;color:#555"><strong>Last call:</strong> ${escapeHtml(latestCall.content || '')}${latestCall.has_transcript ? ' (transcript available — will be used)' : ''}</div>` : ''}
+                        <div class="form-group">
+                            <label>How did the call go? What should the follow-ups focus on?</label>
+                            <textarea id="rework-notes" rows="5" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px" placeholder="e.g. Good call, interested in our Growth package. Main concern is cost. Wants to see a proposal. Said to follow up next week. Wife is the co-decision maker."></textarea>
+                        </div>
+                        <div class="modal-actions" style="display:flex;gap:8px;margin-top:16px">
+                            <button class="btn btn-secondary" onclick="document.getElementById('modal-root').innerHTML=''">Cancel</button>
+                            <button class="btn btn-primary" onclick="submitRework(${contactId}, ${latestCall ? latestCall.id : 'null'})">Generate New Follow-ups</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function submitRework(contactId, activityId) {
+            const notes = document.getElementById('rework-notes').value.trim();
+            if (!notes) { toast('Describe how the call went', 'error'); return; }
+            document.getElementById('modal-root').innerHTML = '';
+            return withWorking({
+                title: 'Reworking sequence',
+                hint: 'AI is reading your notes and rewriting the follow-up steps to match the conversation.',
+                estimatedSeconds: 30,
+            }, async () => {
+                const payload = { call_notes: notes };
+                if (activityId) payload.activity_id = activityId;
+                const data = await api(`/api/sequences/rework/${contactId}`, {
+                    method: 'POST',
+                    body: JSON.stringify(payload),
+                });
+                if (data) {
+                    toast(`Sequence reworked — ${data.deleted} old steps replaced with ${data.created} new ones`);
+                    _refreshCurrentCompany();
+                }
+            });
         }
 
         async function triggerPostCallSequence(activityId) {

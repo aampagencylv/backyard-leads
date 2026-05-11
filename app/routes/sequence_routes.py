@@ -158,6 +158,121 @@ async def resume(
     return {"resumed": n, "resume_at": resume_at_dt.isoformat() if resume_at_dt else "now"}
 
 
+class ReworkRequest(BaseModel):
+    call_notes: str
+    activity_id: Optional[int] = None  # If provided, pulls transcript/summary from this call
+
+
+@router.post("/rework/{contact_id}")
+async def rework_sequence(
+    contact_id: int,
+    body: ReworkRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Delete remaining unsent steps and regenerate them based on call context.
+    The BDR provides call notes; if an activity_id is given, the transcript
+    and AI summary from that call are also fed to the generator."""
+    contact = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    company = (await db.execute(select(Company).where(Company.id == contact.company_id))).scalar_one_or_none()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    transcript = None
+    summary = None
+    if body.activity_id:
+        act = (await db.execute(select(Activity).where(Activity.id == body.activity_id))).scalar_one_or_none()
+        if act:
+            transcript = act.transcript
+            summary = act.call_summary
+
+    # Count and delete remaining unsent steps
+    remaining = (await db.execute(
+        select(GeneratedEmail).where(
+            GeneratedEmail.contact_id == contact_id,
+            GeneratedEmail.sequence_label == "main",
+            GeneratedEmail.is_sent == False,
+            GeneratedEmail.skipped_at.is_(None),
+        ).order_by(GeneratedEmail.sequence_order)
+    )).scalars().all()
+
+    deleted = len(remaining)
+    # Find the highest sent step's order to continue numbering from
+    last_sent = (await db.execute(
+        select(GeneratedEmail).where(
+            GeneratedEmail.contact_id == contact_id,
+            GeneratedEmail.sequence_label == "main",
+            GeneratedEmail.is_sent == True,
+        ).order_by(GeneratedEmail.sequence_order.desc())
+    )).scalars().first()
+    start_order = (last_sent.sequence_order + 1) if last_sent else 1
+
+    for r in remaining:
+        await db.delete(r)
+    await db.flush()
+
+    # Generate new steps
+    from app.services.email_generator import generate_reworked_sequence
+    from app.runtime_config import get_messaging_direction
+    direction = await get_messaging_direction(db)
+
+    steps = await generate_reworked_sequence(
+        business_name=company.name,
+        business_type=company.business_type or company.industry or "backyard professional",
+        contact_name=contact.full_name,
+        call_notes=body.call_notes,
+        transcript=transcript,
+        summary=summary,
+        remaining_step_count=min(deleted, 7) or 5,
+        messaging_direction=direction,
+    )
+
+    now = datetime.now(timezone.utc)
+    skip_map = {
+        "email": ["no_email", "opted_out"],
+        "imessage": ["no_phone", "opted_out", "landline"],
+        "call": ["no_phone"],
+        "linkedin": ["no_linkedin"],
+    }
+    from app.services.sequence_engine import evaluate_skip
+
+    created = 0
+    for idx, s in enumerate(steps, start=start_order):
+        stype = s["step_type"]
+        skip_conds = skip_map.get(stype, [])
+        skip_reason = evaluate_skip(contact, skip_conds) if skip_conds else None
+
+        ge = GeneratedEmail(
+            contact_id=contact.id,
+            company_id=company.id,
+            step_type=stype,
+            email_type=f"rework_{idx}",
+            subject=s.get("subject", f"follow-up {idx}"),
+            body=s.get("body", ""),
+            sequence_order=idx,
+            send_delay_days=s["day"],
+            scheduled_send_at=now + timedelta(days=s["day"]),
+            skip_if_json=json.dumps(skip_conds),
+            auto_execute=stype in ("email", "imessage"),
+            sequence_label="main",
+            skipped_at=now if skip_reason else None,
+            skip_reason=skip_reason,
+        )
+        db.add(ge)
+        created += 1
+
+    db.add(Activity(
+        company_id=company.id, contact_id=contact.id, user_id=user.id,
+        activity_type="sequence_reworked",
+        content=f"Sequence reworked after call — {deleted} old steps removed, {created} new steps generated from call context",
+    ))
+    await db.commit()
+
+    return {"deleted": deleted, "created": created}
+
+
 @router.post("/run-now")
 async def run_now(
     db: AsyncSession = Depends(get_db),

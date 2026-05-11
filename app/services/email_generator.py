@@ -628,3 +628,100 @@ Return JSON only, no other text:
             {"step_type": "imessage", "day": 2, "subject": "iMessage bump (post-call)", "body": f"Hey {first_name or 'there'} — bumping my email from a couple days ago"},
             {"step_type": "email",    "day": 5, "subject": "next steps?", "body": f"Hey {first_name or 'there'} — let me know if a quick call this week works."},
         ]
+
+
+REWORK_SYSTEM_PROMPT = """You are a sales copywriter for a marketing agency. You're rewriting a prospect's
+remaining outreach sequence based on a real conversation that just happened.
+
+The BDR spoke with the prospect and now the follow-ups need to reflect what was discussed,
+their objections, their timeline, and what they said they needed. Generic "just checking in"
+messages won't cut it — each step should reference something specific from the conversation.
+
+Rules:
+- First-name only, casual professional tone
+- No sign-off lines (no "Best," no "Cheers,")
+- Reference specific things from the call notes/transcript
+- Each step should move the deal forward, not just "touch base"
+- Mix channels: email for detailed follow-ups, iMessage for quick nudges, calls for closing
+- If the prospect gave a timeline ("call me in 2 weeks"), respect that in the spacing
+"""
+
+
+async def generate_reworked_sequence(
+    business_name: str,
+    business_type: str,
+    contact_name: Optional[str],
+    call_notes: str,
+    transcript: Optional[str] = None,
+    summary: Optional[str] = None,
+    remaining_step_count: int = 5,
+    messaging_direction: Optional[str] = None,
+) -> list[dict]:
+    """Generate a reworked follow-up sequence based on call context.
+    Returns a list of step dicts with: step_type, day, subject, body."""
+    first_name = _extract_first_name(contact_name)
+
+    transcript_block = ""
+    if transcript and len(transcript.strip()) > 100:
+        t = transcript.strip()
+        if len(t) > 4000:
+            t = t[:4000] + "\n[truncated]"
+        transcript_block = f"\nCall transcript:\n{t}\n"
+
+    summary_block = f"\nAI call summary:\n{summary}\n" if summary else ""
+
+    user_prompt = f"""Rewrite this prospect's follow-up sequence based on our actual conversation.
+
+Business: {business_name}
+Type: {business_type}
+Contact: {first_name or "(unknown)"}
+
+BDR's call notes:
+{call_notes}
+{summary_block}{transcript_block}
+Generate {remaining_step_count} follow-up steps. Mix of email, iMessage, and call.
+Space them out appropriately based on what the prospect said about timing.
+
+Return JSON only, no other text. Array of objects:
+[
+  {{"step_type": "email"|"imessage"|"call", "day": <days_from_now>, "subject": "...", "body": "..."}}
+]
+"""
+
+    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    response = await client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=3000,
+        system=_compose_system_prompt(REWORK_SYSTEM_PROMPT, messaging_direction),
+        messages=[{"role": "user", "content": user_prompt}],
+    )
+    from app.services.credit_meter import meter_standalone as _meter_ai
+    await _meter_ai(action_type="ai_email_gen", action_ref="rework_sequence",
+                    raw_cost_override_usd=0.02,
+                    metadata={"max_tokens": 3000, "kind": "rework_sequence"})
+
+    text = response.content[0].text
+    try:
+        if "```json" in text:
+            text = text.split("```json")[1].split("```")[0]
+        elif "```" in text:
+            text = text.split("```")[1].split("```")[0]
+        steps = json.loads(text)
+        if not isinstance(steps, list):
+            raise ValueError("Expected a JSON array")
+        result = []
+        for s in steps:
+            result.append({
+                "step_type": s.get("step_type", "email"),
+                "day": int(s.get("day", 0)),
+                "subject": (s.get("subject") or "follow-up").strip(),
+                "body": (s.get("body") or "").strip(),
+            })
+        return result
+    except (json.JSONDecodeError, KeyError, AttributeError, ValueError):
+        # Fallback
+        return [
+            {"step_type": "email", "day": 1, "subject": "following up on our conversation", "body": f"Hi {first_name or 'there'} — wanted to follow up on what we discussed. {call_notes[:200]}"},
+            {"step_type": "imessage", "day": 3, "subject": "quick bump", "body": f"Hey {first_name or 'there'} — did you get my email? Let me know your thoughts."},
+            {"step_type": "call", "day": 5, "subject": "follow-up call", "body": f"Call to follow up on conversation. Reference: {call_notes[:150]}"},
+        ]
