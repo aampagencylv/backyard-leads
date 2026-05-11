@@ -1903,6 +1903,17 @@ function verify(secret, rawBody, header) {
                         <input type="text" id="settings-scheduling-url" placeholder="Leave blank for default BMP iClosed link, or paste your own">
                         <button type="button" class="btn btn-sm" style="margin-top:6px;font-size:12px;padding:4px 10px" onclick="document.getElementById('settings-scheduling-url').value='https://app.iclosed.io/e/backyardmarketingpros/discovery-call'">Use team iClosed link</button>
                     </div>
+                    <div class="form-group">
+                        <label>Timezone</label>
+                        <select id="settings-timezone" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px">
+                            <option value="America/Phoenix">Phoenix (MST, no DST)</option>
+                            <option value="America/Los_Angeles">Pacific (LA / Vegas DST)</option>
+                            <option value="America/Denver">Mountain (Denver, DST)</option>
+                            <option value="America/Chicago">Central (Chicago)</option>
+                            <option value="America/New_York">Eastern (NY)</option>
+                            <option value="Etc/UTC">UTC</option>
+                        </select>
+                    </div>
                     <div style="background:#f5f7f5;border-radius:8px;padding:12px;margin:16px 0;font-size:13px">
                         <div><strong>Sends from:</strong> <span id="settings-send-from" style="color:var(--bmp-green)"></span></div>
                         <div><strong>Replies go to:</strong> <span id="settings-reply-to" style="color:var(--bmp-green)"></span></div>
@@ -8113,6 +8124,8 @@ hmac.compare_digest(expected, header)</pre>
                 audioPanel.classList.toggle('hidden', dialMode !== 'browser');
                 if (dialMode === 'browser') loadAudioDevices();
             }
+            const tzSelect = document.getElementById('settings-timezone');
+            if (tzSelect) tzSelect.value = data.timezone || 'America/Phoenix';
             document.getElementById('settings-sending-enabled').checked = data.sending_enabled;
             document.getElementById('settings-send-from').textContent = data.send_from;
             document.getElementById('settings-reply-to').textContent = data.reply_to;
@@ -9408,14 +9421,27 @@ hmac.compare_digest(expected, header)</pre>
                         </div>
                         <div class="form-group"><label>Email</label><input type="email" id="invite-email" placeholder="name@backyardmarketingpros.com"></div>
                         <div class="form-group"><label>Title</label><input type="text" id="invite-title" placeholder="Business Development Rep"></div>
-                        <div class="form-group">
-                            <label>Role</label>
-                            <select id="invite-role" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px">
-                                <option value="sales_rep">Sales Rep</option>
-                                <option value="admin">Admin</option>
-                                <option value="read_only">Read Only</option>
-                                ${superOption}
-                            </select>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+                            <div class="form-group">
+                                <label>Role</label>
+                                <select id="invite-role" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px">
+                                    <option value="sales_rep">Sales Rep</option>
+                                    <option value="admin">Admin</option>
+                                    <option value="read_only">Read Only</option>
+                                    ${superOption}
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Timezone</label>
+                                <select id="invite-tz" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px">
+                                    <option value="America/Phoenix">Phoenix (MST, no DST)</option>
+                                    <option value="America/Los_Angeles">Pacific (LA / Vegas DST)</option>
+                                    <option value="America/Denver">Mountain (Denver, DST)</option>
+                                    <option value="America/Chicago">Central (Chicago)</option>
+                                    <option value="America/New_York">Eastern (NY)</option>
+                                    <option value="Etc/UTC">UTC</option>
+                                </select>
+                            </div>
                         </div>
                         <div class="modal-actions" style="display:flex;gap:8px;margin-top:16px">
                             <button class="btn btn-secondary" onclick="document.getElementById('modal-root').innerHTML=''">Cancel</button>
@@ -9435,6 +9461,7 @@ hmac.compare_digest(expected, header)</pre>
                     email: document.getElementById('invite-email').value,
                     title: document.getElementById('invite-title').value,
                     role: document.getElementById('invite-role').value,
+                    timezone: document.getElementById('invite-tz').value,
                 }),
             });
             if (data) {
@@ -11606,6 +11633,7 @@ hmac.compare_digest(expected, header)</pre>
                     nickname: document.getElementById('settings-nickname').value,
                     phone_number: document.getElementById('settings-phone-number').value,
                     scheduling_url: document.getElementById('settings-scheduling-url').value,
+                    timezone: document.getElementById('settings-timezone').value,
                 }),
             });
             if (!data) return;

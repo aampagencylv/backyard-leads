@@ -280,6 +280,7 @@ class InviteUserRequest(BaseModel):
     last_name: str
     role: str = "sales_rep"
     title: Optional[str] = None
+    timezone: Optional[str] = None
 
 
 @router.post("/users/invite")
@@ -312,6 +313,16 @@ async def invite_user(
     import secrets
     temp_password = secrets.token_urlsafe(12)
 
+    # Validate timezone if provided
+    user_tz = "America/Phoenix"  # default
+    if req.timezone:
+        from zoneinfo import ZoneInfo
+        try:
+            ZoneInfo(req.timezone)
+            user_tz = req.timezone
+        except (KeyError, Exception):
+            pass  # fall back to default
+
     new_user = User(
         email=req.email.lower(),
         first_name=req.first_name.strip(),
@@ -319,6 +330,7 @@ async def invite_user(
         nickname=req.title or "",
         hashed_password=hash_password(temp_password),
         role=req.role,
+        timezone=user_tz,
     )
     db.add(new_user)
     await db.commit()

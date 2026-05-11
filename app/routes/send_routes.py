@@ -490,6 +490,7 @@ class UpdateProfileRequest(BaseModel):
     # Phase 4: dial preferences
     personal_phone_number: Optional[str] = None  # E.164, used for bridge mode
     dial_mode: Optional[str] = None  # 'browser' | 'bridge'
+    timezone: Optional[str] = None
 
 
 async def _profile_payload(db: AsyncSession, user: User) -> dict:
@@ -539,6 +540,13 @@ async def update_profile(
         user.sending_enabled = req.sending_enabled
     if req.dial_mode is not None and req.dial_mode in ("browser", "bridge"):
         user.dial_mode = req.dial_mode
+    if req.timezone is not None:
+        from zoneinfo import ZoneInfo
+        try:
+            ZoneInfo(req.timezone)
+            user.timezone = req.timezone
+        except (KeyError, Exception):
+            pass
     await db.commit()
     await db.refresh(user)
     return await _profile_payload(db, user)
