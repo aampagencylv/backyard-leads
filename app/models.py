@@ -369,6 +369,16 @@ class GeneratedEmail(Base):
     # threads correctly.
     reply_token = Column(String(40), unique=True, index=True, nullable=True)
 
+    # Resend webhook event timestamps. Populated by /api/send/webhook/resend
+    # as events arrive. opened_at is the FIRST open; open_count increments
+    # on each subsequent open. bounced_at/complained_at being set is what
+    # the engine uses to skip a contact's remaining steps.
+    delivered_at = Column(DateTime, nullable=True)
+    opened_at = Column(DateTime, nullable=True)
+    open_count = Column(Integer, default=0, nullable=False)
+    bounced_at = Column(DateTime, nullable=True)
+    complained_at = Column(DateTime, nullable=True)
+
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     contact = relationship("Contact", back_populates="emails")

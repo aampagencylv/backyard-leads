@@ -625,12 +625,41 @@ async def _create_engagement_task(
     ))
 
 
-def _verify_resend_signature(payload_bytes: bytes, signature: str) -> bool:
-    secret = settings.resend_webhook_secret
+async def _resolve_resend_webhook_secret() -> str:
+    """DB-first with env fallback — same pattern as the inbound route so
+    the secret can be rotated from the Settings UI without an env change."""
+    try:
+        from app.runtime_config import get_resend_webhook_secret
+        from app.database import async_session
+        async with async_session() as _db:
+            return await get_resend_webhook_secret(_db)
+    except Exception:
+        return (settings.resend_webhook_secret or "").strip()
+
+
+def _verify_svix(raw_body: bytes, headers: dict, secret: str) -> bool:
+    """Verify a Svix-signed webhook (Resend uses Svix). When no secret is
+    configured we accept the request — necessary for bootstrap before the
+    operator pastes the secret into Settings."""
     if not secret:
-        return True  # skip verification if no secret configured
-    expected = hmac.new(secret.encode(), payload_bytes, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature)
+        return True
+    try:
+        from svix.webhooks import Webhook  # type: ignore
+    except ImportError:
+        import logging
+        logging.getLogger("bmp.resend_webhook").error(
+            "svix library not installed — accepting unverified payload"
+        )
+        return True
+    try:
+        Webhook(secret).verify(raw_body, headers)
+        return True
+    except Exception as e:
+        import logging
+        logging.getLogger("bmp.resend_webhook").warning(
+            f"signature verification failed: {e}"
+        )
+        return False
 
 
 @router.post("/webhook/resend")
@@ -641,9 +670,20 @@ async def resend_webhook(request: Request, db: AsyncSession = Depends(get_db)):
             email.bounced, email.complained, email.delivery_delayed
     Plus: synthetic 'email.replied' (we don't get this from Resend; it comes from
     a Gmail forwarding webhook handler — Tier 1 follow-up work).
+
+    Auth: Svix signatures (svix-id / svix-timestamp / svix-signature headers).
+    Without verification, anyone who guesses the URL could mark prospects as
+    bounced / complained — which would silently pause their sequences and
+    bias the deliverability dashboard.
     """
+    import logging
+    log = logging.getLogger("bmp.resend_webhook")
     payload_bytes = await request.body()
-    # Resend uses Svix; signature verification can be added here when ready.
+
+    secret = await _resolve_resend_webhook_secret()
+    headers = {k.lower(): v for k, v in request.headers.items()}
+    if not _verify_svix(payload_bytes, headers, secret):
+        raise HTTPException(status_code=401, detail="invalid signature")
 
     try:
         payload = await request.json()
@@ -670,23 +710,40 @@ async def resend_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     if not company:
         return {"status": "ok", "note": "company not found"}
 
-    if event_type == "email.delivered" and email_id:
+    now = datetime.now(timezone.utc)
+    log.info(f"event={event_type} company={company_id} contact={contact_id} email={email_id}")
+
+    em: Optional[GeneratedEmail] = None
+    if email_id:
         em = (await db.execute(select(GeneratedEmail).where(GeneratedEmail.id == int(email_id)))).scalar_one_or_none()
-        if em and not em.is_sent:
-            em.is_sent = True
-            em.sent_at = datetime.now(timezone.utc)
-            await db.commit()
+
+    if event_type == "email.delivered":
+        if em:
+            if not em.is_sent:
+                em.is_sent = True
+                em.sent_at = em.sent_at or now
+            if not em.delivered_at:
+                em.delivered_at = now
+        await db.commit()
 
     elif event_type == "email.opened":
-        # Track opens; auto-qualify + auto-task after 3+
+        # Per-email open count + first-open timestamp on the GeneratedEmail row
+        if em:
+            if not em.opened_at:
+                em.opened_at = now
+            em.open_count = (em.open_count or 0) + 1
+        # Per-company open counter — used for "opened 3+ times" auto-qualify.
+        # Read it off the enrichment_summary blob for backwards-compat, but
+        # also write [opened] for each event so historical aggregation still
+        # works for older companies.
         summary = company.enrichment_summary or ""
-        open_count = summary.count("[opened]") + 1
-        if open_count >= 3 and company.status in ("sequencing", "contacted"):
+        company_open_count = summary.count("[opened]") + 1
+        if company_open_count >= 3 and company.status in ("sequencing", "contacted"):
             company.status = "qualified"
             company.enrichment_summary = summary + " [Auto-qualified: opened 3+ times]"
             await _advance_deal_from_sequence(db, company.id)
             await _create_engagement_task(db, company, int(contact_id) if contact_id else None,
-                                          reason=f"opened {open_count}× recently")
+                                          reason=f"opened {company_open_count}× recently")
         else:
             company.enrichment_summary = summary + " [opened]"
         if contact_id:
@@ -695,7 +752,11 @@ async def resend_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         await db.commit()
 
     elif event_type == "email.clicked":
-        # Strong intent — auto-qualify immediately + auto-task
+        # We turned off Resend's click tracking — our /t/{token} wrapper owns
+        # clicks now. If a stray event lands (e.g. an in-flight email sent
+        # before we flipped the dashboard toggle), still attribute it
+        # correctly so we don't lose data.
+        log.info(f"email.clicked received — note that our own /t/{{token}} is the canonical source")
         if company.status in ("sequencing", "contacted"):
             company.status = "qualified"
             company.enrichment_summary = (company.enrichment_summary or "") + " [Auto-qualified: clicked link]"
@@ -708,6 +769,8 @@ async def resend_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         await db.commit()
 
     elif event_type == "email.bounced":
+        if em and not em.bounced_at:
+            em.bounced_at = now
         company.status = "not_interested"
         company.enrichment_summary = (company.enrichment_summary or "") + " [Email bounced]"
         if contact_id:
@@ -722,7 +785,6 @@ async def resend_webhook(request: Request, db: AsyncSession = Depends(get_db)):
                         GeneratedEmail.paused_at.is_(None),
                     )
                 )).scalars().all()
-                now = datetime.now(timezone.utc)
                 for e in pending:
                     e.paused_at = now
             db.add(Activity(company_id=company_id, contact_id=int(contact_id),
@@ -730,6 +792,8 @@ async def resend_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         await db.commit()
 
     elif event_type == "email.complained":
+        if em and not em.complained_at:
+            em.complained_at = now
         company.status = "not_interested"
         company.enrichment_summary = (company.enrichment_summary or "") + " [Marked as spam]"
         if contact_id:
