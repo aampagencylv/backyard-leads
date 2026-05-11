@@ -394,6 +394,7 @@
                 <a href="#" onclick="event.preventDefault();openStandaloneDialer()" style="color:var(--bmp-orange)">Dial a Number</a>
                 <a data-page="developer" id="nav-developer" onclick="showPage('developer')" class="hidden">Developer</a>
                 <a data-page="dns-health" id="nav-dns-health" onclick="showPage('dns-health')" class="hidden">🩺 DNS Health</a>
+                <a data-page="reputation" id="nav-reputation" onclick="showPage('reputation')" class="hidden">📈 Deliverability</a>
                 <a data-page="settings" onclick="showPage('settings')">Settings</a>
             </nav>
             <div class="sidebar-user">
@@ -1540,6 +1541,56 @@ function verify(secret, rawBody, header) {
                 </div>
             </div>
 
+            <div id="page-reputation" class="hidden">
+                <div class="page-header" style="margin-bottom:16px">
+                    <h1 style="margin:0">📈 Deliverability</h1>
+                    <p style="font-size:13px;color:#666;margin-top:4px">Bounce, complaint, open, and delivery rates over the recent window — overall and broken down by recipient mailbox (Gmail / Outlook / Yahoo / etc.). Pulled live from Resend webhook events. Admin only.</p>
+                </div>
+
+                <div class="search-box" style="max-width:1200px;margin-bottom:14px">
+                    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+                        <div>
+                            <span id="rep-overall-pill" style="display:inline-block;padding:4px 12px;border-radius:999px;font-weight:600;font-size:12px;background:#eee;color:#666">— not run yet —</span>
+                            <span id="rep-overall-note" style="margin-left:10px;font-size:12px;color:#888"></span>
+                        </div>
+                        <div style="flex:1"></div>
+                        <label style="font-size:12px;color:#666">Window:
+                            <select id="rep-window" onchange="loadReputation()" style="margin-left:6px;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px">
+                                <option value="7">Last 7 days</option>
+                                <option value="14">Last 14 days</option>
+                                <option value="30" selected>Last 30 days</option>
+                                <option value="90">Last 90 days</option>
+                            </select>
+                        </label>
+                        <span id="rep-generated-at" style="font-size:12px;color:#999"></span>
+                        <button class="btn btn-primary btn-sm" onclick="loadReputation()">Refresh</button>
+                    </div>
+                </div>
+
+                <div id="rep-overall-cards" style="max-width:1200px;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:14px"></div>
+
+                <div class="search-box" style="max-width:1200px;margin-bottom:14px">
+                    <h3 style="margin:0 0 10px;font-size:14px;color:#666">By recipient mailbox</h3>
+                    <div id="rep-by-domain" style="overflow-x:auto"></div>
+                </div>
+
+                <div class="search-box" style="max-width:1200px;margin-bottom:14px">
+                    <h3 style="margin:0 0 10px;font-size:14px;color:#666">Daily activity</h3>
+                    <div id="rep-trend" style="height:140px;display:flex;align-items:flex-end;gap:2px;overflow-x:auto;border-bottom:1px solid #eee;padding-bottom:4px"></div>
+                    <div style="display:flex;gap:18px;font-size:11px;color:#666;margin-top:8px;flex-wrap:wrap">
+                        <span><span style="display:inline-block;width:10px;height:10px;background:#43a047;border-radius:2px;vertical-align:middle"></span> delivered</span>
+                        <span><span style="display:inline-block;width:10px;height:10px;background:#1e88e5;border-radius:2px;vertical-align:middle"></span> opened</span>
+                        <span><span style="display:inline-block;width:10px;height:10px;background:#fb8c00;border-radius:2px;vertical-align:middle"></span> bounced</span>
+                        <span><span style="display:inline-block;width:10px;height:10px;background:#e53935;border-radius:2px;vertical-align:middle"></span> complained</span>
+                    </div>
+                </div>
+
+                <div class="search-box" style="max-width:1200px">
+                    <h3 style="margin:0 0 10px;font-size:14px;color:#666">Recent bounces & complaints</h3>
+                    <div id="rep-offenders" style="overflow-x:auto"></div>
+                </div>
+            </div>
+
             <div id="page-dns-health" class="hidden">
                 <div class="page-header" style="margin-bottom:16px">
                     <h1 style="margin:0">🩺 DNS Health</h1>
@@ -2495,6 +2546,10 @@ function verify(secret, rawBody, header) {
                     // status which is platform-level, not per-tenant).
                     const navDns = document.getElementById('nav-dns-health');
                     if (navDns) navDns.classList.toggle('hidden', user.role !== 'super_admin');
+                    // Deliverability dashboard — admin+ (helps the team
+                    // spot sender-reputation issues before they snowball).
+                    const navRep = document.getElementById('nav-reputation');
+                    if (navRep) navRep.classList.toggle('hidden', !isAdminPlus);
                     // Auto-start the product tour for new users — onboarding_step 0 = never seen,
                     // 99 = skipped, 100 = completed. Anything between starts mid-tour.
                     if (typeof user.onboarding_step === 'number' && user.onboarding_step < 99) {
@@ -3117,6 +3172,15 @@ function verify(secret, rawBody, header) {
                 }
                 runDnsHealth();
             }
+            if (page === 'reputation') {
+                if (!currentUser || (currentUser.role !== 'admin' && currentUser.role !== 'super_admin')) {
+                    target.classList.add('hidden');
+                    showPage('dashboard');
+                    toast('Deliverability is admin only');
+                    return;
+                }
+                loadReputation();
+            }
             if (page === 'autopilot') loadCampaigns();
             if (page === 'developer') {
                 // Admin-only — refuse the visit if a sales_rep deep-links here
@@ -3138,6 +3202,126 @@ function verify(secret, rawBody, header) {
             document.querySelectorAll('.dev-content').forEach(el => {
                 el.classList.toggle('hidden', el.id !== `dev-tab-${tabName}`);
             });
+        }
+
+        // ============ Deliverability / Reputation (admin+) ============
+        // Pulls /api/admin/reputation/summary and renders 4 overall cards
+        // (delivery %, open %, bounce %, complaint %), a per-domain table,
+        // a daily-trend bar chart, and a recent-offenders list. All in
+        // pure HTML+CSS — no chart lib dep.
+        async function loadReputation() {
+            const days = parseInt(document.getElementById('rep-window')?.value || '30', 10);
+            const ts = document.getElementById('rep-generated-at');
+            ts.textContent = 'loading…';
+            const data = await api(`/api/admin/reputation/summary?days=${days}`);
+            if (!data) {
+                ts.textContent = '';
+                toast('Failed to load deliverability summary');
+                return;
+            }
+            try { ts.textContent = `Generated: ${new Date(data.generated_at).toLocaleString()}`; } catch (e) { ts.textContent = ''; }
+
+            // Overall pill
+            const ov = data.overall;
+            const PILL = {
+                ok:    { bg: '#e8f5e9', fg: '#1b5e20', label: 'Healthy' },
+                warn:  { bg: '#fff8e1', fg: '#ef6c00', label: 'Watch' },
+                error: { bg: '#ffebee', fg: '#c62828', label: 'Action needed' },
+            };
+            const p = PILL[ov.status] || PILL.ok;
+            const overallPill = document.getElementById('rep-overall-pill');
+            overallPill.textContent = p.label;
+            overallPill.style.background = p.bg;
+            overallPill.style.color = p.fg;
+            document.getElementById('rep-overall-note').textContent =
+                (ov.status_reasons && ov.status_reasons.length)
+                    ? `Triggered by: ${ov.status_reasons.join(', ')}`
+                    : `${ov.delivered.toLocaleString()} delivered / ${ov.sent.toLocaleString()} sent in last ${data.window_days} days`;
+
+            // Overall cards
+            const card = (label, value, status, footnote) => {
+                const c = PILL[status] || PILL.ok;
+                return `
+                <div class="search-box" style="margin:0;border-left:4px solid ${status==='error'?'#e53935':status==='warn'?'#fb8c00':'#43a047'}">
+                    <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:0.5px">${escapeHtml(label)}</div>
+                    <div style="font-size:28px;font-weight:700;margin:4px 0 2px">${escapeHtml(value)}</div>
+                    <div style="font-size:11px;color:#888">${escapeHtml(footnote)}</div>
+                </div>`;
+            };
+            const t = data.thresholds;
+            const bounceStatus = ov.bounce_pct >= t.bounce_error_pct ? 'error' : ov.bounce_pct >= t.bounce_warn_pct ? 'warn' : 'ok';
+            const complaintStatus = ov.complaint_pct >= t.complaint_error_pct ? 'error' : ov.complaint_pct >= t.complaint_warn_pct ? 'warn' : 'ok';
+            const openStatus = (ov.delivered >= t.min_volume_for_open_warn && ov.open_pct < t.open_warn_pct) ? 'warn' : 'ok';
+            document.getElementById('rep-overall-cards').innerHTML =
+                card('Delivery', `${ov.delivery_pct}%`, 'ok', `${ov.delivered.toLocaleString()} of ${ov.sent.toLocaleString()} sent`) +
+                card('Open rate', `${ov.open_pct}%`, openStatus, `${ov.opened.toLocaleString()} opens · warn < ${t.open_warn_pct}%`) +
+                card('Bounce rate', `${ov.bounce_pct}%`, bounceStatus, `${ov.bounced.toLocaleString()} bounces · err ≥ ${t.bounce_error_pct}%`) +
+                card('Complaint rate', `${ov.complaint_pct}%`, complaintStatus, `${ov.complained.toLocaleString()} marked spam · err ≥ ${t.complaint_error_pct}%`);
+
+            // Per-domain table
+            const domainHtml = !data.by_domain.length ? '<div style="font-size:12px;color:#999;padding:12px">No data yet for this window.</div>' : `
+                <table style="width:100%;border-collapse:collapse;font-size:13px">
+                    <thead><tr style="border-bottom:2px solid #eee;text-align:left">
+                        <th style="padding:8px">Mailbox</th>
+                        <th style="padding:8px;text-align:right">Sent</th>
+                        <th style="padding:8px;text-align:right">Delivered</th>
+                        <th style="padding:8px;text-align:right">Open %</th>
+                        <th style="padding:8px;text-align:right">Bounce %</th>
+                        <th style="padding:8px;text-align:right">Complaint %</th>
+                    </tr></thead>
+                    <tbody>
+                    ${data.by_domain.map(d => {
+                        const bColor = d.bounce_pct >= t.bounce_error_pct ? '#c62828' : d.bounce_pct >= t.bounce_warn_pct ? '#ef6c00' : '#444';
+                        const cColor = d.complaint_pct >= t.complaint_error_pct ? '#c62828' : d.complaint_pct >= t.complaint_warn_pct ? '#ef6c00' : '#444';
+                        return `<tr style="border-bottom:1px solid #f3f3f3">
+                            <td style="padding:8px;font-weight:500">${escapeHtml(d.domain)}</td>
+                            <td style="padding:8px;text-align:right">${d.sent.toLocaleString()}</td>
+                            <td style="padding:8px;text-align:right">${d.delivered.toLocaleString()}</td>
+                            <td style="padding:8px;text-align:right">${d.open_pct}%</td>
+                            <td style="padding:8px;text-align:right;color:${bColor};font-weight:${bColor==='#444'?'400':'600'}">${d.bounce_pct}%</td>
+                            <td style="padding:8px;text-align:right;color:${cColor};font-weight:${cColor==='#444'?'400':'600'}">${d.complaint_pct}%</td>
+                        </tr>`;
+                    }).join('')}
+                    </tbody>
+                </table>`;
+            document.getElementById('rep-by-domain').innerHTML = domainHtml;
+
+            // Daily trend bar chart — 4 stacked bars per day, normalized to
+            // max(delivered) so the chart shows shape even on bad days
+            const trend = data.trend;
+            const maxDelivered = Math.max(1, ...trend.map(d => d.delivered + d.bounced + d.complained));
+            const trendHtml = trend.map(d => {
+                const h = (n) => Math.max(0, Math.round(n * 130 / maxDelivered));
+                const tip = `${d.date}\n${d.delivered} delivered · ${d.opened} opened · ${d.bounced} bounced · ${d.complained} complained`;
+                return `<div title="${escapeHtml(tip)}" style="display:flex;flex-direction:column;justify-content:flex-end;width:18px;flex-shrink:0;cursor:default">
+                    <div style="background:#e53935;width:100%;height:${h(d.complained)}px"></div>
+                    <div style="background:#fb8c00;width:100%;height:${h(d.bounced)}px"></div>
+                    <div style="background:#1e88e5;width:100%;height:${h(d.opened)}px"></div>
+                    <div style="background:#43a047;width:100%;height:${h(Math.max(0, d.delivered - d.opened))}px"></div>
+                </div>`;
+            }).join('');
+            document.getElementById('rep-trend').innerHTML = trendHtml || '<div style="font-size:12px;color:#999;padding:12px">No data in this window.</div>';
+
+            // Recent offenders
+            const offHtml = !data.recent_offenders.length ? '<div style="font-size:12px;color:#888;padding:12px">None — clean window.</div>' : `
+                <table style="width:100%;border-collapse:collapse;font-size:13px">
+                    <thead><tr style="border-bottom:2px solid #eee;text-align:left">
+                        <th style="padding:8px">When</th>
+                        <th style="padding:8px">Type</th>
+                        <th style="padding:8px">Contact email</th>
+                        <th style="padding:8px">Company</th>
+                    </tr></thead>
+                    <tbody>
+                    ${data.recent_offenders.map(o => `
+                        <tr style="border-bottom:1px solid #f3f3f3">
+                            <td style="padding:8px;color:#666;font-size:12px">${escapeHtml(fmtRelative(o.at))}</td>
+                            <td style="padding:8px;font-weight:600;color:${o.kind==='complained'?'#c62828':'#fb8c00'}">${escapeHtml(o.kind)}</td>
+                            <td style="padding:8px;font-family:monospace;font-size:12px">${escapeHtml(o.email || '')}</td>
+                            <td style="padding:8px"><a href="#" onclick="openCompanyDetail(${o.company_id});return false" style="color:var(--bmp-green)">View company →</a></td>
+                        </tr>`).join('')}
+                    </tbody>
+                </table>`;
+            document.getElementById('rep-offenders').innerHTML = offHtml;
         }
 
         // ============ DNS Health (super_admin only) ============
