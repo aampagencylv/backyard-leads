@@ -1165,6 +1165,81 @@ this add-on becomes the second SKU after the base seat price.
 
 ---
 
+## ✅ Shipped 2026-05-10 — 2026-05-11 (Missive sidebar + Chrome extension + PWA)
+
+Massive late-evening session. Order shipped:
+
+### Subdomain split (SaaS-ready surface architecture)
+1. **`audit.backyardmarketingpros.com`** subdomain — all `/report/{token}` URLs in cold emails + SMS + audit CTAs route through this. CNAME-ready for white-label tenants.
+2. **`schedule.backyardmarketingpros.com`** subdomain — native scheduler `/book/{slug}` lives here. Same FastAPI backend serves all three subdomains via Nginx server_name routing.
+3. Per-surface CSS-variable + Nginx vhosts + Let's Encrypt certs done for both.
+4. Memory file `project_backyard_leads_subdomains.md` documents the three-surface split.
+
+### Email deliverability stack
+5. **DNS Health monitor** (`🩺 DNS Health` in sidebar, super-admin only) — runs DoH lookups against Google Public DNS for SPF / DKIM / DMARC / MX / open-pixel host + the three subdomain A records. Per-check OK/WARN/ERROR + overall pill.
+6. **Resend webhook hardened** — Svix signature verification now enforced (was a TODO). Added `delivered_at` / `opened_at` / `open_count` / `bounced_at` / `complained_at` columns on `GeneratedEmail`. Migration backfills delivered_at from sent_at on existing rows.
+7. **Deliverability dashboard** (`📈 Deliverability`, super-admin only) — overall + per-mailbox bounce/complaint/open rates, 7-day daily stacked-bar trend, recent offenders. Auto-sync of Missive labels on email.bounced / email.complained / email.replied / email.opened / email.clicked.
+8. **Plain-text alternative** on every outbound Resend send (Beautifulsoup-based html_to_plain_text with link preservation).
+9. **Pre-send spam score** (`app/services/spam_score.py`) — heuristic logged on every send, also exposed as `POST /api/admin/reputation/spam-check` for composer-side preview.
+
+### Org-branded email signature
+10. New `brand_website_url` field on RuntimeConfig + Org Brand panel input. Signature template now pulls colors / logo / company name / website from RuntimeConfig. `render_signature` is async; all 7 call sites updated.
+
+### Audit report polish
+11. CTAs renamed `"Schedule a Discovery Call"` → `"Schedule A Discovery Call"` everywhere; competitor report gains a top-section CTA + bottom CTA both wired to `audit_scheduler_type` (iclosed/native/custom).
+
+### Missive sidebar integration (v1 → v2.9, full feature parity)
+12. **v1: shell** — `/integrations/missive/sidebar` iframe loaded by Missive when a thread is open. Auth via `Missive.initiateCallback()` → `/integrations/missive/auth` form-encoded login → JWT stashed via `Missive.storeSet`. SecurityHeadersMiddleware exempts `/integrations/missive/*` so the iframe can embed.
+13. **v2: server-side Missive client** (`app/services/missive_client.py`) — wraps `GET /v1/users`, `GET /v1/shared_labels`, `POST /v1/posts` with 5-min in-process cache + a `sync_status_label()` helper. PAT auth.
+14. **v2: sender heuristic fix** — team-emails list (cached from /v1/users) filters out BDR addresses when picking the prospect from a thread.
+15. **v2: status → Missive label write-back** (manual button + auto on Resend webhook events). New `contacts.missive_conversation_id` + `seen_at` columns persist the thread-to-contact mapping.
+16. **v2.5: full action surface** — Call (deep-link to dialer) / iMessage (inline form, Blooio) / Schedule meeting (deep-link to `openScheduleModal`) / Add task (inline form with due-date pills) / LinkedIn / Copy email / Status quick-change dropdown / Inline note save / Save as call / Pinned notes / Open tasks (with complete checkbox) / Other contacts at company / Recent sequence steps / Activity timeline.
+17. **v2.6 → v2.8: button polish + inline forms** replacing `Missive.openForm` (which was unreliable). In-iframe toast system replacing `Missive.alert`. Color-scheme: light to prevent dark-mode breakage. Deep-link tokens for cross-tab SSO (Schedule meeting / Call in new tab).
+18. **v2.9: iMessage inline form** — same pattern as Add Task, fully reliable.
+
+### Vendor-name cloak
+19. Swept user-visible strings to neutral terms across frontend + backend: Blooio → "iMessage service" / Netrows → "data enrichment" / Hunter → "email finder" / Resend → "email service" / Anthropic+Claude → "AI" / SimilarWeb → "traffic insights". Apollo kept (intentional BYO). Code identifiers + env vars + comments unchanged.
+
+### Chrome extension (Manifest v3)
+20. **`/integrations/embed/sidebar`** — generic, SDK-free version of the Missive sidebar; auth via URL `?t=<jwt>`, context switches via `postMessage({type:'set_email'})` or `set_linkedin`.
+21. **`chrome-extension/`** scaffolded — manifest, background service worker (JWT in chrome.storage.local + popup⇄tabs broadcast), popup with login form, content scripts for Gmail + LinkedIn. Auth-expiry → red `!` badge → popup re-login → auto-clears.
+22. **v2 polish** — Gmail panel only shows on open thread / compose (not inbox list). `document.body.style.marginRight` shifts Gmail content so they sit side-by-side. Reveal-tab on right edge restores collapsed panel. Latest expanded-message From parsing (was "any email on page"). LinkedIn: profile-URL → `Contact.linkedin_url` fuzzy match. Quick-add with email input when probe is a LinkedIn URL.
+23. **Install panel in Settings → Integrations** — version badge + Download button (streams the zipped folder via `/integrations/extension/download`, rebuilt per request from the on-disk folder so it tracks main) + collapsible 6-step install instructions.
+
+### PWA
+24. **v1: installable** — webmanifest at `/manifest.webmanifest`, service worker at `/sw.js` (scope: `/`), 5 generated PNG icons (192/512/maskable/180/32), iOS Safari PWA meta block, `beforeinstallprompt` install pill, `appinstalled` cleanup. iOS Add-to-Home-Screen friendly.
+25. **v2: mobile-responsive** — comprehensive `@media (max-width: 900px)` block. Sidebar becomes slide-in drawer with hamburger + backdrop. All multi-column grids collapse to single column. Modals go full-screen with `safe-area-inset` padding for iOS notch + home indicator. Pipeline kanban → horizontal scroll-snap. Inputs forced to 16px font (no iOS zoom). 44px+ tap targets per Apple HIG. AI chat launcher floats above home indicator.
+26. **SW controllerchange auto-reload** — installed PWAs reload once when a new SW takes over so v2.x updates land without manual cache clear.
+27. **Contacts page mobile polish** — card header stacks vertically, dot-separated meta becomes tappable chips, action buttons 2-up grid. Same treatment to Companies + Pipeline action rows.
+28. **Deliverability dashboard locked to super-admin** (was admin+) — matches DNS Health, prevents platform-internal metrics leaking to tenant admins.
+
+### Migrations added (idempotent, auto-chained in init_db)
+- `migrate_email_events.py` — adds delivered/opened/open_count/bounced/complained timestamps + backfill
+- `migrate_brand_website.py` — adds runtime_config.brand_website_url
+- `migrate_missive_link.py` — adds contacts.missive_conversation_id (indexed)
+
+### Action items waiting on Steve
+
+1. **Create 6 Missive shared labels** matching `STATUS_TO_LABEL_NAME` (`Qualified Lead`, `Replied`, `Converted`, `Not Interested`, `In Sequence`, `Contacted`) — or tell me different names to use. Without them, tag-sync silently no-ops.
+2. **Decide on Chrome Web Store submission timing** — code is multi-tenant-ready *except* `APP_URL` is hardcoded. ~3 hours to add a first-run "what's your Prospector URL?" screen + branded icons + privacy policy. Mostly tied to SaaS launch readiness.
+3. **Upload proper PWA icons** if you want branded ones — current ones are a flat green "P" placeholder. Drop replacement PNGs into `static/pwa/` (192 / 512 / maskable / 180 / 32).
+4. **Test the Missive sidebar end-to-end** — open Linda's thread, try every action button (Call, iMessage, Schedule meeting, Add task, status dropdown, Sync label). Sidebar v2.9 should have no SDK-popup breakage.
+5. **Side-load + test the Chrome extension** — Settings → Integrations → Chrome extension → 📥 Download → drag into `chrome://extensions`. Test in Gmail (open a thread, try every action) and LinkedIn (visit any `/in/<slug>` profile).
+
+### Next session priorities (in rough order)
+
+1. **More mobile polish per page** — Steve called out Contacts (done), but Tasks / Calendar / Pipeline detail / Audit Reports settings page / DNS Health probably need similar treatment.
+2. **Email deliverability follow-ups still pending** —
+    - Apply org brand to sequence email **bodies** (not just signatures — the message HTML container is still hardcoded BMP styling)
+    - Pre-send spam score UI in the composer (backend endpoint exists; just needs a "🛡️ Check" button + inline issue display in the email editor)
+    - "Send Next Step Now" execute_step_now path is wired but worth integration-testing end-to-end
+3. **Postgres migration** (Phase 4, deferred to SaaS milestone) — still the right move pre-multi-tenant. Plumbing the database_url change + an Alembic migration of the SQLite schema is ~2 days; the actual data move on prod is ~1 hour.
+4. **Docker + CI smoke tests** — still pending. A Dockerfile + a minimal GitHub Actions workflow (`pytest -q` + smoke-curl prod after deploy) prevents the "I shipped a broken endpoint and didn't notice" failure mode.
+5. **Web Push notifications** — biggest single PWA-quality upgrade. Notify BDR of hot replies / new HOT leads via the home-screen icon's badge even when the app is closed. ~1 day; gives the team a real reason to keep the PWA installed.
+6. **Capacitor wrapper** — when ready for App Store / Play Store presence. ~2-3 weeks total including review.
+
+---
+
 ## ✅ Shipped 2026-05-08 (continuing session — Steve stepped away with approval)
 
 Seven commits landed end-to-end. Order shipped:
