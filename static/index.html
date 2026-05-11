@@ -2,9 +2,24 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Prospector | Backyard Marketing Pros</title>
-    <link rel="icon" href="https://backyardmarketingpros.com/wp-content/uploads/2024/08/cropped-BMP_Favicon-32x32.png" sizes="32x32">
+
+    <!-- PWA: web app manifest + theme color -->
+    <link rel="manifest" href="/manifest.webmanifest">
+    <meta name="theme-color" content="#1B5E20">
+    <meta name="application-name" content="Prospector">
+
+    <!-- iOS Safari PWA hooks. iOS doesn't fully use the webmanifest;
+         these meta tags + the apple-touch-icon are what get the
+         "Add to Home Screen" treatment right. -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Prospector">
+    <link rel="apple-touch-icon" href="/static/pwa/apple-touch-icon-180.png">
+
+    <link rel="icon" href="/static/pwa/favicon-32.png" sizes="32x32">
+    <link rel="icon" href="/static/pwa/icon-192.png" sizes="192x192">
     <style>
         :root {
             --bmp-green: #1B5E20;
@@ -2272,6 +2287,98 @@ function verify(secret, rawBody, header) {
         let token = localStorage.getItem('token');
         let currentUser = null;
         if (token) checkAuth();
+
+        // ============ PWA service worker ============
+        // Register on every load — the SW itself decides what to cache.
+        // Fires on every page navigation but the browser dedupes; an
+        // existing registration just keeps running.
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js', { scope: '/' })
+                    .catch((e) => console.warn('[sw] register failed:', e));
+            });
+        }
+
+        // ============ PWA install prompt ============
+        // Capture beforeinstallprompt so we can offer an in-app
+        // "Install" button later (Chrome / Edge / Android). iOS Safari
+        // doesn't fire this event; users add via Share → Add to Home
+        // Screen. We surface a hint banner for both cases.
+        let _deferredInstallPrompt = null;
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            _deferredInstallPrompt = e;
+            _maybeShowInstallHint();
+        });
+        window.addEventListener('appinstalled', () => {
+            _deferredInstallPrompt = null;
+            localStorage.setItem('pwa_installed', '1');
+            const hint = document.getElementById('pwa-install-hint');
+            if (hint) hint.remove();
+        });
+        function _isStandalone() {
+            return window.matchMedia('(display-mode: standalone)').matches
+                || window.navigator.standalone === true;
+        }
+        function _isIosSafari() {
+            const ua = navigator.userAgent || '';
+            return /iPhone|iPad|iPod/i.test(ua)
+                && /Safari/i.test(ua)
+                && !/CriOS|FxiOS|EdgiOS/i.test(ua);
+        }
+        function _maybeShowInstallHint() {
+            // Skip when already installed, already dismissed, or running
+            // inside the standalone-mode app shell.
+            if (_isStandalone()) return;
+            if (localStorage.getItem('pwa_installed') === '1') return;
+            if (localStorage.getItem('pwa_install_dismissed') === '1') return;
+            if (document.getElementById('pwa-install-hint')) return;
+            // Only nudge once we have a known user (login is done) —
+            // login screen would be weird.
+            if (!currentUser) {
+                setTimeout(_maybeShowInstallHint, 1500);
+                return;
+            }
+            const isIos = _isIosSafari();
+            const canPrompt = !!_deferredInstallPrompt;
+            if (!canPrompt && !isIos) return;
+            const hint = document.createElement('div');
+            hint.id = 'pwa-install-hint';
+            hint.style.cssText = 'position:fixed;left:50%;bottom:20px;transform:translateX(-50%);' +
+                'background:#1B5E20;color:white;padding:12px 16px;border-radius:10px;' +
+                'box-shadow:0 6px 24px rgba(0,0,0,0.18);z-index:99998;' +
+                'font-size:13px;font-weight:500;display:flex;align-items:center;gap:12px;' +
+                'max-width:92vw';
+            const label = canPrompt
+                ? '📱 Install Prospector to your home screen'
+                : '📱 Tap Share → Add to Home Screen';
+            hint.innerHTML = `
+                <span style="flex:1">${label}</span>
+                ${canPrompt ? '<button id="pwa-install-btn" style="background:#FF7A36;color:white;border:0;padding:6px 12px;border-radius:6px;font-weight:600;cursor:pointer">Install</button>' : ''}
+                <button id="pwa-install-x" title="Hide" style="background:transparent;color:white;border:0;cursor:pointer;font-size:18px;line-height:1">✕</button>`;
+            document.body.appendChild(hint);
+            const x = document.getElementById('pwa-install-x');
+            if (x) x.addEventListener('click', () => {
+                localStorage.setItem('pwa_install_dismissed', '1');
+                hint.remove();
+            });
+            const btn = document.getElementById('pwa-install-btn');
+            if (btn) btn.addEventListener('click', async () => {
+                btn.disabled = true;
+                if (_deferredInstallPrompt) {
+                    _deferredInstallPrompt.prompt();
+                    const choice = await _deferredInstallPrompt.userChoice;
+                    _deferredInstallPrompt = null;
+                    if (choice && choice.outcome !== 'accepted') {
+                        localStorage.setItem('pwa_install_dismissed', '1');
+                    }
+                    hint.remove();
+                }
+            });
+        }
+        // Also try once after first checkAuth completes (in case the
+        // browser fired beforeinstallprompt before we were ready)
+        setTimeout(_maybeShowInstallHint, 3000);
 
         function escapeHtml(text) {
             if (text === null || text === undefined) return '';

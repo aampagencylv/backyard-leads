@@ -260,6 +260,36 @@ async def serve_app():
     return HTMLResponse(html, headers={"Cache-Control": "no-store, max-age=0"})
 
 
+# ============================================================
+# PWA — service worker + manifest must be served from root, not
+# /static/, so the SW scope can be "/" (a SW served from /static/sw.js
+# can only control /static/* — useless for our app shell).
+# ============================================================
+
+@app.get("/sw.js")
+async def pwa_service_worker():
+    from fastapi.responses import FileResponse
+    return FileResponse(
+        "static/sw.js",
+        media_type="application/javascript",
+        # The SW file itself must NEVER be cached aggressively — when
+        # we ship a new version we need browsers to pick it up on the
+        # very next page load. The SW content then handles cache-busting
+        # for everything else via its own SW_VERSION constant.
+        headers={"Cache-Control": "no-store, max-age=0", "Service-Worker-Allowed": "/"},
+    )
+
+
+@app.get("/manifest.webmanifest")
+async def pwa_manifest():
+    from fastapi.responses import FileResponse
+    return FileResponse(
+        "static/manifest.webmanifest",
+        media_type="application/manifest+json",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "app": "Backyard Leads"}
