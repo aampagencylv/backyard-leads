@@ -331,12 +331,13 @@ def build_outbound_twiml(
             voice="Polly.Joanna-Neural",
         )
 
-    dial = Dial(caller_id=caller_id)
+    dial_kwargs = {"caller_id": caller_id}
     if record_calls:
-        dial.record = "record-from-answer-dual"
+        dial_kwargs["record"] = "record-from-answer-dual"
         if recording_status_callback:
-            dial.recording_status_callback = recording_status_callback
-            dial.recording_status_callback_event = "completed"
+            dial_kwargs["recording_status_callback"] = recording_status_callback
+            dial_kwargs["recording_status_callback_event"] = "completed"
+    dial = Dial(**dial_kwargs)
     dial.number(to_number)
     response.append(dial)
     return str(response)
@@ -416,12 +417,13 @@ def build_bridge_twiml(
             "Connecting your call now. This call may be recorded.",
             voice="Polly.Joanna-Neural",
         )
-    dial = Dial(caller_id=caller_id, timeout=30)
+    dial_kwargs = {"caller_id": caller_id, "timeout": 30}
     if record_calls:
-        dial.record = "record-from-answer-dual"
+        dial_kwargs["record"] = "record-from-answer-dual"
         if recording_status_callback:
-            dial.recording_status_callback = recording_status_callback
-            dial.recording_status_callback_event = "completed"
+            dial_kwargs["recording_status_callback"] = recording_status_callback
+            dial_kwargs["recording_status_callback_event"] = "completed"
+    dial = Dial(**dial_kwargs)
     dial.number(prospect_number)
     response.append(dial)
     return str(response)
