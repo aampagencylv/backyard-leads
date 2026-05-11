@@ -24,6 +24,22 @@ async def main():
             user = assigned_phones.get(n.phone_number)
             label = f"{n.phone_number} ({user.full_name})" if user else f"{n.phone_number} (unassigned)"
 
+            if not user:
+                # Clear webhooks on unassigned numbers so they don't ring our system
+                try:
+                    import httpx
+                    clear_payload = {"VoiceUrl": "", "VoiceMethod": "POST", "StatusCallback": "", "SmsUrl": ""}
+                    async with httpx.AsyncClient(timeout=15) as client:
+                        await client.post(
+                            f"https://api.twilio.com/2010-04-01/Accounts/{creds.account_sid}/IncomingPhoneNumbers/{n.sid}.json",
+                            data=clear_payload,
+                            auth=(creds.account_sid, creds.auth_token),
+                        )
+                    print(f"  ⊘ {label} — webhooks cleared (unassigned)")
+                except Exception as e:
+                    print(f"  ✗ {label} — clear FAILED: {e}")
+                continue
+
             try:
                 await configure_inbound_voice_url(
                     creds, n.sid,

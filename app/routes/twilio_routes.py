@@ -213,6 +213,7 @@ async def assign_twilio_number(
             raise HTTPException(status_code=400,
                                 detail=f"Number {req.phone_number} is already assigned to {clash.full_name or clash.email}")
 
+    old_number = target.twilio_phone_number
     target.twilio_phone_number = (req.phone_number or "").strip() or None
     if not target.twilio_identity:
         target.twilio_identity = f"bmp_user_{target.id}"
@@ -222,12 +223,25 @@ async def assign_twilio_number(
     await db.commit()
     await db.refresh(target)
 
-    # Re-configure the assigned number's inbound webhook so calls actually
-    # route to this rep's browser/personal phone.
-    if target.twilio_phone_number:
-        try:
-            creds = await get_twilio_credentials(db)
-            owned = await list_owned_numbers(creds)
+    try:
+        creds = await get_twilio_credentials(db)
+        owned = await list_owned_numbers(creds)
+
+        # Clear webhooks on the OLD number if it's being unassigned
+        if old_number and old_number != target.twilio_phone_number:
+            old_match = next((n for n in owned if n.phone_number == old_number), None)
+            if old_match and old_match.sid:
+                try:
+                    await configure_inbound_voice_url(
+                        creds, old_match.sid,
+                        voice_url="",
+                        status_callback="",
+                    )
+                except TwilioError:
+                    pass
+
+        # Configure webhooks on the NEW number
+        if target.twilio_phone_number:
             match = next((n for n in owned if n.phone_number == target.twilio_phone_number), None)
             if match and match.sid:
                 public = settings.public_url.rstrip('/')
@@ -236,16 +250,8 @@ async def assign_twilio_number(
                     voice_url=f"{public}/api/twilio/voice/inbound",
                     status_callback=f"{public}/api/twilio/voice/status",
                 )
-                # SMS inbound webhook too — best effort
-                try:
-                    await configure_sms_webhook(
-                        creds, match.sid,
-                        sms_url=f"{public}/api/twilio/sms/inbound",
-                    )
-                except TwilioError:
-                    pass
-        except TwilioError:
-            pass  # number is still assigned in our DB even if Twilio webhook setup fails
+    except TwilioError:
+        pass  # number is still assigned in our DB even if Twilio webhook setup fails
 
     return {
         "user_id": target.id,
