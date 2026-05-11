@@ -80,7 +80,7 @@ async def test(
 ):
     api_key = await get_blooio_api_key(db)
     if not api_key:
-        raise HTTPException(status_code=400, detail="No Blooio API key configured. Save one in Settings → API Keys.")
+        raise HTTPException(status_code=400, detail="iMessage service not configured. Save the API key in Settings → Platform Credentials.")
     result = await blooio_test(api_key)
     if result.error:
         raise HTTPException(status_code=502, detail=result.error)
@@ -141,11 +141,11 @@ async def send_imessage(
 
     api_key = await get_blooio_api_key(db)
     if not api_key:
-        raise HTTPException(status_code=400, detail="Blooio not configured. Add an API key in Settings.")
+        raise HTTPException(status_code=400, detail="iMessage service not configured. Add an API key in Settings.")
 
     result = await blooio_send(api_key, contact.phone, req.text)
     if not result.success:
-        raise HTTPException(status_code=502, detail=f"Blooio rejected: {result.error}")
+        raise HTTPException(status_code=502, detail=f"iMessage delivery failed: {result.error}")
 
     activity = Activity(
         company_id=contact.company_id,
@@ -224,7 +224,7 @@ async def generate_message(
     from app.config import settings as app_settings
     from app.runtime_config import get_messaging_direction
     if not app_settings.anthropic_api_key:
-        raise HTTPException(status_code=400, detail="Anthropic API key not configured")
+        raise HTTPException(status_code=400, detail="AI service not configured")
     direction = await get_messaging_direction(db)
 
     try:
@@ -239,7 +239,7 @@ async def generate_message(
             messaging_direction=direction,
         )
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Claude error: {e}")
+        raise HTTPException(status_code=502, detail=f"AI service error: {e}")
 
     return {
         "body": result.get("body", ""),
@@ -316,7 +316,7 @@ async def capability(
 ):
     api_key = await get_blooio_api_key(db)
     if not api_key:
-        raise HTTPException(status_code=400, detail="Blooio not configured")
+        raise HTTPException(status_code=400, detail="iMessage service not configured")
     cap = await check_capability(api_key, phone)
     return {
         "imessage": cap.imessage,
@@ -359,7 +359,7 @@ async def webhook_setup(
 
     api_key = await get_blooio_api_key(db)
     if not api_key:
-        raise HTTPException(status_code=400, detail="Blooio not configured")
+        raise HTTPException(status_code=400, detail="iMessage service not configured")
 
     from app.config import settings as app_settings
     from app.services.blooio_messaging import BLOOIO_BASE
@@ -372,7 +372,7 @@ async def webhook_setup(
     async with httpx.AsyncClient(timeout=15) as client:
         list_r = await client.get(f"{BLOOIO_BASE}/webhooks", headers=headers)
         if list_r.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"Blooio list webhooks {list_r.status_code}: {list_r.text[:200]}")
+            raise HTTPException(status_code=502, detail=f"iMessage gateway list webhooks {list_r.status_code}: {list_r.text[:200]}")
         existing = list_r.json() or {}
         items = existing if isinstance(existing, list) else (existing.get("data") or existing.get("webhooks") or [])
         for w in items:
@@ -398,7 +398,7 @@ async def webhook_setup(
         }
         create_r = await client.post(f"{BLOOIO_BASE}/webhooks", headers=headers, json=payload)
         if create_r.status_code not in (200, 201):
-            raise HTTPException(status_code=502, detail=f"Blooio create webhook {create_r.status_code}: {create_r.text[:200]}")
+            raise HTTPException(status_code=502, detail=f"iMessage gateway create webhook {create_r.status_code}: {create_r.text[:200]}")
         created = create_r.json() or {}
         return {
             "registered": True,

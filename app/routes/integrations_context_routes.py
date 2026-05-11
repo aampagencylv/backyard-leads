@@ -719,7 +719,7 @@ async def sidebar_send_imessage(
         from app.services.blooio_messaging import send_message as blooio_send
         api_key = await get_blooio_api_key(db)
         if not api_key:
-            return {"ok": False, "reason": "Blooio not configured"}
+            return {"ok": False, "reason": "iMessage service not configured"}
         result = await blooio_send(api_key=api_key, to_phone=contact.phone, text=body)
         if not getattr(result, "ok", False):
             return {"ok": False, "reason": getattr(result, "error", "send failed")}

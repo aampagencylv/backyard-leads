@@ -133,7 +133,7 @@ async def send_message(
     if not to_e164:
         return BlooioSendResult(False, error=f"Invalid phone: {to_phone}")
     if not api_key:
-        return BlooioSendResult(False, error="No Blooio API key configured")
+        return BlooioSendResult(False, error="iMessage service not configured")
 
     payload = {
         "text": text,

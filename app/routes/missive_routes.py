@@ -556,7 +556,7 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
           <div class="label" style="color:#0a558c">💬 Send iMessage to ${{escapeHtml(c.phone)}}</div>
           <textarea id="new-imessage-body" placeholder="Type your message…" rows="3"
             style="width:100%;border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box;background:white;color:#1a1a1a"></textarea>
-          <div style="font-size:11px;color:#666;margin-top:6px">Sent through your Blooio iMessage gateway. Logs to the activity timeline. Respects opt-out + landline guardrails.</div>
+          <div style="font-size:11px;color:#666;margin-top:6px">Sent through your iMessage gateway. Logs to the activity timeline. Respects opt-out + landline guardrails.</div>
           <div style="display:flex;gap:6px;margin-top:10px">
             <button class="btn" onclick="submitIMessage()" style="flex:1">Send iMessage</button>
             <button class="btn secondary" onclick="cancelIMessage()">Cancel</button>

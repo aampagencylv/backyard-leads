@@ -801,7 +801,7 @@ async def enrich_company(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Crawl website, log marketing problems, look up contacts via Apollo/Hunter."""
+    """Crawl website, log marketing problems, look up contacts."""
     result = await db.execute(select(Company).where(Company.id == company_id))
     company = result.scalar_one_or_none()
     if not company:
@@ -1204,8 +1204,8 @@ async def enrich_company(
         company_id=company.id, user_id=user.id, activity_type="enriched",
         content=(
             f"Enriched: {len(json.loads(company.problems_found) if company.problems_found else [])} problems · "
-            f"Netrows found {netrows_found}/added {netrows_added} · "
-            f"Hunter found {hunter_found}/added {hunter_added}"
+            f"{netrows_found + hunter_found} contacts found · "
+            f"{netrows_added + hunter_added} added"
         ),
         metadata_json=json.dumps({
             "netrows_found": netrows_found, "netrows_added": netrows_added,
@@ -1687,7 +1687,7 @@ async def refresh_reviews(
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
     if not await get_netrows_api_key(db):
-        raise HTTPException(status_code=400, detail="Netrows API key not configured")
+        raise HTTPException(status_code=400, detail="Data enrichment not configured")
 
     seed = company.google_place_id or f"{company.name} {company.city or ''}".strip()
     mr = await netrows_maps_reviews(seed, await get_netrows_api_key(db))
@@ -1743,7 +1743,7 @@ async def clear_company_enrichment(
     db.add(Activity(
         company_id=company.id, user_id=user.id,
         activity_type="enrichment_cleared",
-        content=f"Cleared Netrows-derived fields ({len(cleared)}): {', '.join(cleared) or 'none'}",
+        content=f"Cleared enrichment-derived fields ({len(cleared)}): {', '.join(cleared) or 'none'}",
     ))
     await db.commit()
     return {"cleared_fields": cleared, "message": "Re-enrich now to rebuild from scratch"}
@@ -1765,7 +1765,7 @@ async def refresh_instagram_posts(
         raise HTTPException(status_code=400, detail="No Instagram URL on this company. Add one or re-enrich to scrape it from the website.")
     nr_key = await get_netrows_api_key(db)
     if not nr_key:
-        raise HTTPException(status_code=400, detail="Netrows API key not configured")
+        raise HTTPException(status_code=400, detail="Data enrichment not configured")
 
     from app.services.netrows_enrichment import instagram_recent_posts as _ig
     from app.services.credit_meter import meter, make_idem_key
@@ -1814,14 +1814,14 @@ async def refresh_company_insights(
         raise HTTPException(status_code=400, detail="Company has no website / domain to look up")
     nr_key = await get_netrows_api_key(db)
     if not nr_key:
-        raise HTTPException(status_code=400, detail="Netrows API key not configured")
+        raise HTTPException(status_code=400, detail="Data enrichment not configured")
 
     from app.services.netrows_enrichment import company_insights as _insights
     from app.services.credit_meter import meter, make_idem_key
 
     ci = await _insights(company.website or company.domain, nr_key)
     if ci is None:
-        return {"found": False, "message": "Insights endpoint returned no data — domain may not be in Netrows' database"}
+        return {"found": False, "message": "Insights returned no data — domain may not be in our data pipeline"}
     payload = {
         "revenue_range": ci.revenue_range,
         "funding_stage": ci.funding_stage,
@@ -1864,7 +1864,7 @@ async def refresh_company_yelp(
         raise HTTPException(status_code=400, detail="Company needs name + city/state for Yelp search")
     nr_key = await get_netrows_api_key(db)
     if not nr_key:
-        raise HTTPException(status_code=400, detail="Netrows API key not configured")
+        raise HTTPException(status_code=400, detail="Data enrichment not configured")
 
     from app.services.netrows_enrichment import (
         yelp_business_search, yelp_business_details, yelp_business_reviews,
@@ -1947,7 +1947,7 @@ async def refresh_company_indeed(
         raise HTTPException(status_code=400, detail="Company name required")
     nr_key = await get_netrows_api_key(db)
     if not nr_key:
-        raise HTTPException(status_code=400, detail="Netrows API key not configured")
+        raise HTTPException(status_code=400, detail="Data enrichment not configured")
 
     from app.services.netrows_enrichment import indeed_jobs_for_company
     from app.services.credit_meter import meter, make_idem_key

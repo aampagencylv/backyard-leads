@@ -1544,7 +1544,7 @@ function verify(secret, rawBody, header) {
             <div id="page-reputation" class="hidden">
                 <div class="page-header" style="margin-bottom:16px">
                     <h1 style="margin:0">📈 Deliverability</h1>
-                    <p style="font-size:13px;color:#666;margin-top:4px">Bounce, complaint, open, and delivery rates over the recent window — overall and broken down by recipient mailbox (Gmail / Outlook / Yahoo / etc.). Pulled live from Resend webhook events. Admin only.</p>
+                    <p style="font-size:13px;color:#666;margin-top:4px">Bounce, complaint, open, and delivery rates over the recent window — overall and broken down by recipient mailbox (Gmail / Outlook / Yahoo / etc.). Pulled live from delivery webhook events. Admin only.</p>
                 </div>
 
                 <div class="search-box" style="max-width:1200px;margin-bottom:14px">
@@ -2227,7 +2227,7 @@ function verify(secret, rawBody, header) {
                 <textarea id="ai-chat-input" rows="1" placeholder="Ask anything — 'hot leads in Phoenix', 'brief on Smith Pools', 'schedule call with John'…" onkeydown="aiChatHandleKey(event)" oninput="aiChatAutoSize(this)" style="flex:1;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px;resize:none;max-height:120px;font-family:inherit"></textarea>
                 <button id="ai-chat-send" onclick="sendAiChat()" style="background:#1B5E20;color:white;border:0;padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600">Send</button>
             </div>
-            <div style="font-size:10px;color:#888;margin-top:4px;text-align:right">Powered by Claude · uses your CRM data</div>
+            <div style="font-size:10px;color:#888;margin-top:4px;text-align:right">AI assistant · uses your CRM data</div>
         </div>
     </div>
 
@@ -4774,7 +4774,7 @@ function verify(secret, rawBody, header) {
                                     </div>
                                     ${c.title ? `<div style="font-size:11px;color:#888">${escapeHtml(c.title)}</div>` : ''}
                                     ${c.email ? `<div style="font-size:11px;color:var(--bmp-orange)">${escapeHtml(c.email)}</div>` : '<div style="font-size:11px;color:#ccc">no email</div>'}
-                                    ${c.phone ? `<div style="font-size:11px"><a class="call-link" onclick="event.stopPropagation();callContact(${c.id})">${escapeHtml(c.phone)}</a>${renderPhoneTypeBadge(c)}${c.do_not_text ? ` · <span style="color:#c0392b">opted out</span>` : (c.phone_type === 'landline' ? '' : ` · <a class="sms-link" onclick="event.stopPropagation();openSmsComposer(${c.id})" style="color:#0b93f6;cursor:pointer;text-decoration:none;border-bottom:1px dotted #0b93f6" title="iMessage via Blooio">💬 Message</a>`)}</div>` : ''}
+                                    ${c.phone ? `<div style="font-size:11px"><a class="call-link" onclick="event.stopPropagation();callContact(${c.id})">${escapeHtml(c.phone)}</a>${renderPhoneTypeBadge(c)}${c.do_not_text ? ` · <span style="color:#c0392b">opted out</span>` : (c.phone_type === 'landline' ? '' : ` · <a class="sms-link" onclick="event.stopPropagation();openSmsComposer(${c.id})" style="color:#0b93f6;cursor:pointer;text-decoration:none;border-bottom:1px dotted #0b93f6" title="Send iMessage">💬 Message</a>`)}</div>` : ''}
                                     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;font-size:11px">
                                         ${c.email && !c.unsubscribed_at ? `<a onclick="event.stopPropagation();openAdhocComposer(${c.id})" style="color:var(--bmp-orange);cursor:pointer;text-decoration:none;border-bottom:1px dotted var(--bmp-orange)" title="Send a one-off email">📧 Send Email</a>` : ''}
                                         <a onclick="event.stopPropagation();openScheduleModal(${c.id})" style="color:#1a73e8;cursor:pointer;text-decoration:none;border-bottom:1px dotted #1a73e8;font-weight:600" title="Pick a time on your calendar + send the invite">📅 Schedule</a>
@@ -5180,7 +5180,7 @@ function verify(secret, rawBody, header) {
         }
 
         function renderContacts(contacts) {
-            if (!contacts.length) return '<p style="font-size:12px;color:#888;margin:8px 0">No contacts yet. Add one or click Enrich to find contacts via Netrows/Hunter.</p>';
+            if (!contacts.length) return '<p style="font-size:12px;color:#888;margin:8px 0">No contacts yet. Add one or click Enrich to find contacts.</p>';
             return contacts.map(c => {
                 const cardId = `contact-${c.id}`;
                 return `
@@ -5197,7 +5197,7 @@ function verify(secret, rawBody, header) {
                                 ${c.email ? `<a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a>` : '<em>no email</em>'}
                                 ${c.email && !c.unsubscribed_at ? ` · <a onclick="event.stopPropagation();openAdhocComposer(${c.id})" style="color:var(--bmp-orange);cursor:pointer;text-decoration:none;border-bottom:1px dotted var(--bmp-orange)" title="Send a one-off email">📧 Email</a>` : ''}
                                 ${c.phone ? ` · <a class="call-link" onclick="event.stopPropagation();callContact(${c.id})">${escapeHtml(c.phone)}</a>${renderPhoneTypeBadge(c)}` : ''}
-                                ${c.phone && !c.do_not_text && c.phone_type !== 'landline' ? ` · <a class="sms-link" onclick="event.stopPropagation();openSmsComposer(${c.id})" style="color:#0b93f6;cursor:pointer;text-decoration:none;border-bottom:1px dotted #0b93f6" title="iMessage via Blooio">💬 Message</a>` : ''}
+                                ${c.phone && !c.do_not_text && c.phone_type !== 'landline' ? ` · <a class="sms-link" onclick="event.stopPropagation();openSmsComposer(${c.id})" style="color:#0b93f6;cursor:pointer;text-decoration:none;border-bottom:1px dotted #0b93f6" title="Send iMessage">💬 Message</a>` : ''}
                                 ${c.unsubscribed_at ? ' · <span style="color:#c0392b">UNSUBSCRIBED (email)</span>' : ''}
                                 ${c.do_not_text ? ' · <span style="color:#c0392b">OPTED OUT (messaging)</span>' : ''}
                                 ${c.email_status === 'bounced' ? ' · <span style="color:#c0392b">BOUNCED</span>' : ''}
@@ -5409,7 +5409,7 @@ function verify(secret, rawBody, header) {
         }
 
         function renderReviews(reviews) {
-            if (!reviews.length) return '<p style="font-size:12px;color:#888">No reviews loaded yet. Click 🔄 Refresh to pull from Google Maps via Netrows.</p>';
+            if (!reviews.length) return '<p style="font-size:12px;color:#888">No reviews loaded yet. Click 🔄 Refresh to pull the latest.</p>';
             // Surface owner replies first — they're the personalization gold
             const withOwnerReply = reviews.filter(r => r.owner_reply);
             const others = reviews.filter(r => !r.owner_reply).slice(0, 5);
@@ -5443,7 +5443,7 @@ function verify(secret, rawBody, header) {
         }
 
         async function refreshReviews(companyId) {
-            toast('Pulling reviews via Netrows...');
+            toast('Pulling reviews…');
             const data = await api(`/api/companies/${companyId}/refresh-reviews`, { method: 'POST' });
             if (data) {
                 toast(`${data.reviews_count} reviews · ${data.owner_replies_count} owner replies`);
@@ -5452,7 +5452,7 @@ function verify(secret, rawBody, header) {
         }
 
         async function refreshContactPosts(contactId) {
-            toast('Pulling LinkedIn posts via Netrows...');
+            toast('Pulling LinkedIn posts…');
             const data = await api(`/api/contacts/${contactId}/refresh-posts`, { method: 'POST' });
             if (data) {
                 toast(`${data.posts_count} posts loaded`);
@@ -5462,7 +5462,7 @@ function verify(secret, rawBody, header) {
         }
 
         async function lookupContactEmail(contactId) {
-            toast('Looking up verified email via Netrows...');
+            toast('Looking up verified email…');
             const data = await api(`/api/contacts/${contactId}/lookup-email`, {
                 method: 'POST',
                 body: JSON.stringify({}),
@@ -5862,7 +5862,7 @@ function verify(secret, rawBody, header) {
         }
 
         async function clearCompanyEnrichment(companyId) {
-            if (!confirm('Clear all Netrows-derived enrichment fields (employees, industry, founded, description, specialties, LinkedIn) so we can re-enrich cleanly? Contacts + deals + sequences will not be touched.')) return;
+            if (!confirm('Clear all enrichment-derived fields (employees, industry, founded, description, specialties, LinkedIn) so we can re-enrich cleanly? Contacts + deals + sequences will not be touched.')) return;
             const data = await api(`/api/companies/${companyId}/clear-enrichment`, { method: 'POST' });
             if (!data) return;
             toast(`Cleared ${data.cleared_fields.length} field${data.cleared_fields.length === 1 ? '' : 's'} — running fresh enrich…`);
@@ -5901,7 +5901,7 @@ function verify(secret, rawBody, header) {
             toast('Refreshing company insights…');
             const data = await api(`/api/companies/${companyId}/refresh-insights`, { method: 'POST' });
             if (data) {
-                toast(data.found ? 'Insights updated' : 'No data returned (domain not in Netrows DB)');
+                toast(data.found ? 'Insights updated' : 'No data returned for this domain');
                 openCompanyDetail(companyId);
             }
         }
@@ -5936,7 +5936,7 @@ function verify(secret, rawBody, header) {
             // 20-45s depending on which providers respond.
             return withWorking({
                 title: 'Enriching company',
-                hint: 'Running the full enrichment waterfall: website scan → Apollo → Netrows → Hunter → SimilarWeb → tech stack → public records. Usually 20-45 seconds.',
+                hint: 'Running the full enrichment waterfall: website scan → contact data → email verification → traffic insights → tech stack → public records. Usually 20-45 seconds.',
                 estimatedSeconds: 35,
             }, async () => {
                 const data = await api(`/api/companies/${companyId}/enrich`, { method: 'POST' });
@@ -9007,7 +9007,7 @@ hmac.compare_digest(expected, header)</pre>
             if (aCurrent) {
                 aCurrent.textContent = a.set
                     ? `Current: ${a.masked} — Apollo enrichment will run alongside our standard chain.`
-                    : 'Apollo enrichment is optional. Leave blank to use only the included Netrows + Hunter chain.';
+                    : 'Apollo enrichment is optional. Leave blank to use only the built-in data pipeline.';
             }
 
             // Netrows (platform-tier — only populated when payload includes it,

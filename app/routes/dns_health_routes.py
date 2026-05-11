@@ -48,15 +48,15 @@ def _build_checks() -> list[dict]:
             "type": "TXT",
             "expect_substr": "include:amazonses.com",
             "severity_if_missing": "error",
-            "purpose": "Required for SPF to pass on every outbound email — Resend uses Amazon SES under the hood.",
+            "purpose": "Required for SPF to pass on every outbound email.",
         },
         {
-            "label": "DKIM (Resend selector)",
+            "label": "DKIM signing key",
             "host": f"resend._domainkey.{mail}",
             "type": "TXT",
             "expect_substr": "p=",
             "severity_if_missing": "error",
-            "purpose": "Resend's public key — required for DKIM signature verification at the receiving mailbox.",
+            "purpose": "DKIM public key — required for signature verification at the receiving mailbox.",
         },
         {
             "label": "DMARC policy",
@@ -72,7 +72,7 @@ def _build_checks() -> list[dict]:
             "type": "MX",
             "expect_substr": "amazonaws.com",
             "severity_if_missing": "error",
-            "purpose": "Resend Inbound runs on AWS SES — replies to r-<token>@" + mail + " route here and get POSTed to /api/email/inbound.",
+            "purpose": "Inbound mail receiver — replies to r-<token>@" + mail + " route here and get POSTed to /api/email/inbound.",
         },
         {
             "label": "Open-pixel host",
@@ -80,7 +80,7 @@ def _build_checks() -> list[dict]:
             "type": "CNAME",
             "expect_substr": "resend-dns",
             "severity_if_missing": "warn",
-            "purpose": "Branded host for Resend's open-tracking pixel. Missing → opens still work, but pixel uses a generic Resend host instead of ours.",
+            "purpose": "Branded host for the open-tracking pixel. Missing → opens still work, but pixel uses a generic host instead of ours.",
         },
         # Three public surfaces, all A → same VPS
         {

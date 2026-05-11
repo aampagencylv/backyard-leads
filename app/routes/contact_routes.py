@@ -575,7 +575,7 @@ async def refresh_contact_posts(
     if not contact.linkedin_url:
         raise HTTPException(status_code=400, detail="Contact has no LinkedIn URL on file")
     if not await get_netrows_api_key(db):
-        raise HTTPException(status_code=400, detail="Netrows API key not configured")
+        raise HTTPException(status_code=400, detail="Data enrichment not configured")
 
     posts = await netrows_linkedin_posts(contact.linkedin_url, await get_netrows_api_key(db), limit=5)
     contact.recent_posts_json = json.dumps([{
@@ -603,7 +603,7 @@ async def refresh_contact_linkedin_profile(
         raise HTTPException(status_code=400, detail="Contact has no LinkedIn URL on file")
     nr_key = await get_netrows_api_key(db)
     if not nr_key:
-        raise HTTPException(status_code=400, detail="Netrows API key not configured")
+        raise HTTPException(status_code=400, detail="Data enrichment not configured")
 
     from app.services.netrows_enrichment import person_profile_by_url
     profile = await person_profile_by_url(contact.linkedin_url, nr_key)
@@ -682,7 +682,7 @@ async def lookup_contact_email(
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
     if not await get_netrows_api_key(db):
-        raise HTTPException(status_code=400, detail="Netrows API key not configured")
+        raise HTTPException(status_code=400, detail="Data enrichment not configured")
 
     # Resolve domain
     domain = req.domain
@@ -712,7 +712,7 @@ async def lookup_contact_email(
         contact.linkedin_url = found.linkedin_url
     db.add(Activity(company_id=contact.company_id, contact_id=contact.id, user_id=user.id,
                     activity_type="email_found",
-                    content=f"Email found via Netrows: {found.email} ({found.email_status})"))
+                    content=f"Email found: {found.email} ({found.email_status})"))
     await db.commit()
     await db.refresh(contact)
     return _contact_summary(contact)
@@ -735,7 +735,7 @@ async def verify_contact_email(
     if not contact.email:
         raise HTTPException(status_code=400, detail="Contact has no email to verify")
     if not settings.hunter_api_key:
-        raise HTTPException(status_code=400, detail="Hunter API key not configured")
+        raise HTTPException(status_code=400, detail="Email finder not configured")
 
     result = await hunter_verify_email(contact.email, settings.hunter_api_key)
     hunter_result = result.get("result", "unknown")

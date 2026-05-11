@@ -110,7 +110,7 @@ async def _handle_email(db: AsyncSession, step: GeneratedEmail, contact: Contact
     from app.services.signature import render_signature
 
     if not settings.resend_api_key:
-        return False, "Resend not configured"
+        return False, "Email service not configured"
 
     # Hard gate: verify the contact's email before we send. Hunter $0.04
     # one-time per email; cached on contact.email_status so subsequent
@@ -189,7 +189,7 @@ async def _handle_email(db: AsyncSession, step: GeneratedEmail, contact: Contact
         unsubscribe_token=contact.unsubscribe_token,
     )
     if not result.get("success"):
-        return False, f"Resend rejected: {result.get('error', 'unknown')}"
+        return False, f"Email send failed: {result.get('error', 'unknown')}"
     # Stamp the sender so future cap-checks count this email correctly
     step.sent_by_user_id = sender_user.id
     # Note: step.reply_token was set BEFORE the send (see compute_reply_to call above)
@@ -218,7 +218,7 @@ async def _handle_imessage(db: AsyncSession, step: GeneratedEmail, contact: Cont
 
     api_key = await get_blooio_api_key(db)
     if not api_key:
-        return False, "Blooio not configured"
+        return False, "iMessage service not configured"
 
     # If the step body is a template placeholder (or missing), generate fresh.
     # Heuristic: if body starts with "AUTO:" or is empty, regenerate using
@@ -270,9 +270,9 @@ async def _handle_imessage(db: AsyncSession, step: GeneratedEmail, contact: Cont
     try:
         result = await blooio_send(api_key, contact.phone, text_body)
     except Exception as e:
-        return False, f"Blooio error: {e}"
+        return False, f"iMessage error: {e}"
     if not result.success:
-        return False, f"Blooio rejected: {result.error}"
+        return False, f"iMessage delivery failed: {result.error}"
 
     db.add(Activity(
         company_id=company.id, contact_id=contact.id,

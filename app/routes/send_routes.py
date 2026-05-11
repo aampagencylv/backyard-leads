@@ -61,7 +61,7 @@ async def send_single_email(
         raise HTTPException(status_code=404, detail="Company not found")
 
     if not settings.resend_api_key:
-        raise HTTPException(status_code=500, detail="Resend API key not configured")
+        raise HTTPException(status_code=500, detail="Email service not configured")
     if not user.sending_enabled:
         raise HTTPException(status_code=403, detail="Sending is disabled for your account. Enable it in Settings.")
 
@@ -151,7 +151,7 @@ async def send_next_in_sequence(
     if not company:
         raise HTTPException(status_code=404, detail="Company not found for this email")
     if not settings.resend_api_key:
-        raise HTTPException(status_code=500, detail="Resend API key not configured")
+        raise HTTPException(status_code=500, detail="Email service not configured")
     if not user.sending_enabled:
         raise HTTPException(status_code=403, detail="Sending is disabled for your account.")
 
@@ -894,7 +894,7 @@ async def send_adhoc_email(
         raise HTTPException(status_code=404, detail="Company not found")
 
     if not settings.resend_api_key:
-        raise HTTPException(status_code=500, detail="Resend API key not configured")
+        raise HTTPException(status_code=500, detail="Email service not configured")
     if not user.sending_enabled:
         raise HTTPException(status_code=403, detail="Sending is disabled for your account.")
 
