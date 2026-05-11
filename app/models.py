@@ -1172,3 +1172,33 @@ class Booking(Base):
     cancelled_reason = Column(Text, nullable=True)
 
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+class Feedback(Base):
+    """Team feedback / bug reports submitted via the in-app form."""
+    __tablename__ = "feedback"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    category = Column(String(40), nullable=False, default="feedback")  # feedback, bug, feature
+    message = Column(Text, nullable=False)
+    page = Column(String(80), nullable=True)  # which page they were on
+    resolved = Column(Boolean, default=False)
+    admin_notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+class PendingDeletion(Base):
+    """Soft-delete holding area. BDR deletions land here for admin approval."""
+    __tablename__ = "pending_deletions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    requested_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    entity_type = Column(String(20), nullable=False)  # company, contact, deal
+    entity_id = Column(Integer, nullable=False)
+    entity_name = Column(String(255), nullable=True)  # snapshot for display
+    reason = Column(String(255), nullable=True)
+    status = Column(String(20), nullable=False, default="pending")  # pending, approved, rejected
+    reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)

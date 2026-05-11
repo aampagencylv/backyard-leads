@@ -2386,6 +2386,28 @@ function verify(secret, rawBody, header) {
                     </div>
                 </div>
 
+                <!-- Pending Deletions (admin only) -->
+                <div id="pending-deletions-section" class="hidden" style="margin-top:16px">
+                    <div class="search-box" style="max-width:800px">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                            <h3 style="margin:0">Pending Deletions <span id="pending-del-count" style="font-size:12px;color:#888;font-weight:400"></span></h3>
+                            <button class="btn btn-secondary btn-sm" onclick="loadPendingDeletions()">Refresh</button>
+                        </div>
+                        <div id="pending-deletions-list"><p style="font-size:12px;color:#888">Loading...</p></div>
+                    </div>
+                </div>
+
+                <!-- Team Feedback (admin only) -->
+                <div id="feedback-section" class="hidden" style="margin-top:16px">
+                    <div class="search-box" style="max-width:800px">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                            <h3 style="margin:0">Team Feedback</h3>
+                            <button class="btn btn-secondary btn-sm" onclick="loadFeedbackList()">Refresh</button>
+                        </div>
+                        <div id="feedback-list"><p style="font-size:12px;color:#888">Loading...</p></div>
+                    </div>
+                </div>
+
                 <!-- Integrations: API keys + outbound webhooks.
                      Visible to all logged-in users (each manages their own
                      keys + hooks); admins additionally see everyone's. -->
@@ -2524,6 +2546,9 @@ function verify(secret, rawBody, header) {
 
     <!-- Modal mount point -->
     <div id="modal-root"></div>
+
+    <!-- Feedback button — bottom-left floating -->
+    <button id="feedback-btn" onclick="openFeedbackForm()" class="hidden" style="position:fixed;bottom:20px;left:20px;background:#2c3e50;color:white;border:none;border-radius:50%;width:44px;height:44px;font-size:18px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.3);z-index:999" title="Send feedback or report a bug">?</button>
 
     <!-- Global "working" overlay — shown during long-running operations
          (sequence generation, audit, enrichment, etc.). Blocks the UI
@@ -3015,6 +3040,8 @@ function verify(secret, rawBody, header) {
                     // AI chatbot launcher — visible only to logged-in users
                     const aiLauncher = document.getElementById('ai-chat-launcher');
                     if (aiLauncher) aiLauncher.classList.remove('hidden');
+                    const feedbackBtn = document.getElementById('feedback-btn');
+                    if (feedbackBtn) feedbackBtn.classList.remove('hidden');
                     loadDashboard();
                     refreshNavBadges();
                     startNotificationPoller();
@@ -8320,6 +8347,11 @@ hmac.compare_digest(expected, header)</pre>
             if (teamSection) teamSection.classList.toggle('hidden', !isAdminPlus);
             if (isAdminPlus) loadTeamMembers();
 
+            const delSection = document.getElementById('pending-deletions-section');
+            if (delSection) { delSection.classList.toggle('hidden', !isAdminPlus); if (isAdminPlus) loadPendingDeletions(); }
+            const fbSection = document.getElementById('feedback-section');
+            if (fbSection) { fbSection.classList.toggle('hidden', !isAdminPlus); if (isAdminPlus) loadFeedbackList(); }
+
             const tenantKeys = document.getElementById('tenant-keys-section');
             if (tenantKeys) tenantKeys.classList.toggle('hidden', !isAdminPlus);
 
@@ -11795,6 +11827,135 @@ hmac.compare_digest(expected, header)</pre>
             document.getElementById('signature-preview').innerHTML = data.signature_html || '';
             document.getElementById('user-name').textContent = data.name;
         }
+        // ============ Feedback Form ============
+        function openFeedbackForm() {
+            const currentPage = document.querySelector('.sidebar-nav a.active')?.dataset?.page || 'unknown';
+            const root = document.getElementById('modal-root');
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:440px">
+                        <h2>Send Feedback</h2>
+                        <p style="font-size:13px;color:#666;margin-bottom:12px">Bug report, feature request, or anything on your mind. Goes straight to the team.</p>
+                        <div class="form-group">
+                            <label>Type</label>
+                            <select id="feedback-category" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px">
+                                <option value="bug">Bug / Something broke</option>
+                                <option value="feature">Feature request</option>
+                                <option value="feedback" selected>General feedback</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>What's on your mind?</label>
+                            <textarea id="feedback-message" rows="4" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px" placeholder="Describe the issue or idea..."></textarea>
+                        </div>
+                        <div class="modal-actions" style="display:flex;gap:8px;margin-top:12px">
+                            <button class="btn btn-secondary" onclick="document.getElementById('modal-root').innerHTML=''">Cancel</button>
+                            <button class="btn btn-primary" onclick="submitFeedback('${currentPage}')">Send</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function submitFeedback(page) {
+            const msg = document.getElementById('feedback-message').value.trim();
+            if (!msg) { toast('Write something first', 'error'); return; }
+            const data = await api('/api/feedback', {
+                method: 'POST',
+                body: JSON.stringify({
+                    category: document.getElementById('feedback-category').value,
+                    message: msg,
+                    page: page,
+                }),
+            });
+            if (data) {
+                toast('Feedback sent — thank you!');
+                document.getElementById('modal-root').innerHTML = '';
+            }
+        }
+
+        // ============ Soft Delete (BDR → admin approval) ============
+        async function requestDeletion(entityType, entityId, entityName) {
+            if (!confirm('Request deletion of ' + entityName + '? An admin will review and approve.')) return;
+            const reason = prompt('Quick reason (optional):') || '';
+            const data = await api('/api/deletions/request', {
+                method: 'POST',
+                body: JSON.stringify({ entity_type: entityType, entity_id: entityId, reason: reason }),
+            });
+            if (data) {
+                toast('Deletion requested — pending admin approval');
+                _refreshCurrentCompany();
+            }
+        }
+
+        // ============ Pending Deletions (admin) ============
+        async function loadPendingDeletions() {
+            const data = await api('/api/deletions/pending');
+            const el = document.getElementById('pending-deletions-list');
+            const countEl = document.getElementById('pending-del-count');
+            if (!data || data.length === 0) {
+                el.innerHTML = '<p style="font-size:12px;color:#888">No pending deletions.</p>';
+                if (countEl) countEl.textContent = '';
+                return;
+            }
+            if (countEl) countEl.textContent = `(${data.length} pending)`;
+            el.innerHTML = data.map(d => `
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:10px;border:1px solid #f0f0f0;border-radius:6px;margin-bottom:6px">
+                    <div>
+                        <strong>${escapeHtml(d.entity_name || '(unknown)')}</strong>
+                        <span style="font-size:11px;color:#888;margin-left:6px">${d.entity_type}</span>
+                        <div style="font-size:11px;color:#888">Requested by ${escapeHtml(d.requested_by_name)} · ${d.reason ? escapeHtml(d.reason) : 'no reason given'}</div>
+                    </div>
+                    <div style="display:flex;gap:6px">
+                        <button class="btn btn-danger btn-xs" onclick="approveDeletion(${d.id})">Approve Delete</button>
+                        <button class="btn btn-secondary btn-xs" onclick="rejectDeletion(${d.id})">Reject</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function approveDeletion(id) {
+            if (!confirm('Permanently delete this item?')) return;
+            await api('/api/deletions/' + id + '/approve', { method: 'POST' });
+            toast('Deletion approved');
+            loadPendingDeletions();
+        }
+
+        async function rejectDeletion(id) {
+            await api('/api/deletions/' + id + '/reject', { method: 'POST' });
+            toast('Deletion rejected — item restored');
+            loadPendingDeletions();
+        }
+
+        // ============ Team Feedback (admin) ============
+        async function loadFeedbackList() {
+            const data = await api('/api/feedback?resolved=false');
+            const el = document.getElementById('feedback-list');
+            if (!data || data.length === 0) {
+                el.innerHTML = '<p style="font-size:12px;color:#888">No open feedback.</p>';
+                return;
+            }
+            const catColors = { bug: '#c0392b', feature: '#2980b9', feedback: '#27ae60' };
+            el.innerHTML = data.map(f => `
+                <div style="padding:10px;border:1px solid #f0f0f0;border-radius:6px;margin-bottom:6px">
+                    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+                        <div>
+                            <span style="font-size:10px;background:${catColors[f.category] || '#888'};color:white;padding:2px 6px;border-radius:3px;text-transform:uppercase">${f.category}</span>
+                            <span style="font-size:11px;color:#888;margin-left:8px">${escapeHtml(f.user_name)} · ${f.page || ''} · ${f.created_at ? new Date(f.created_at).toLocaleDateString() : ''}</span>
+                        </div>
+                        <button class="btn btn-secondary btn-xs" onclick="resolveFeedback(${f.id})">Resolve</button>
+                    </div>
+                    <p style="font-size:13px;margin:6px 0 0">${escapeHtml(f.message)}</p>
+                </div>
+            `).join('');
+        }
+
+        async function resolveFeedback(id) {
+            await api('/api/feedback/' + id + '?resolved=true', { method: 'PATCH' });
+            toast('Marked as resolved');
+            loadFeedbackList();
+        }
+
         let _platformReparented = false;
         function _reparentToPlatform() {
             if (_platformReparented) return;

@@ -259,6 +259,26 @@ async def delete_deal(
     from app.scoping import check_deal_access
     if not check_deal_access(deal, user):
         raise HTTPException(status_code=404, detail="Deal not found")
+    # BDR/BDR+ can't delete directly — route to admin approval queue
+    if user.role in ("sales_rep", "senior_rep"):
+        from app.models import PendingDeletion
+        from sqlalchemy import select as _sel
+        existing = (await db.execute(
+            _sel(PendingDeletion).where(
+                PendingDeletion.entity_type == "deal",
+                PendingDeletion.entity_id == deal_id,
+                PendingDeletion.status == "pending",
+            )
+        )).scalar_one_or_none()
+        if existing:
+            return {"pending": True, "message": "Deletion already pending admin approval"}
+        db.add(PendingDeletion(
+            requested_by=user.id, entity_type="deal",
+            entity_id=deal_id, entity_name=deal.name,
+        ))
+        await db.commit()
+        return {"pending": True, "message": "Deletion requested — pending admin approval"}
+
     cid = deal.company_id
     await db.delete(deal)
     db.add(Activity(company_id=cid, user_id=user.id, activity_type="deal_deleted",

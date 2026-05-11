@@ -361,6 +361,25 @@ async def delete_contact(
     from app.scoping import check_contact_access
     if not await check_contact_access(contact, user, db):
         raise HTTPException(status_code=404, detail="Contact not found")
+    # BDR/BDR+ can't delete directly — route to admin approval queue
+    if user.role in ("sales_rep", "senior_rep"):
+        from app.models import PendingDeletion
+        existing = (await db.execute(
+            select(PendingDeletion).where(
+                PendingDeletion.entity_type == "contact",
+                PendingDeletion.entity_id == contact_id,
+                PendingDeletion.status == "pending",
+            )
+        )).scalar_one_or_none()
+        if existing:
+            return {"pending": True, "message": "Deletion already pending admin approval"}
+        db.add(PendingDeletion(
+            requested_by=user.id, entity_type="contact",
+            entity_id=contact_id, entity_name=contact.full_name or contact.email or "(no name)",
+        ))
+        await db.commit()
+        return {"pending": True, "message": "Deletion requested — pending admin approval"}
+
     company_id = contact.company_id
     await db.delete(contact)
     db.add(Activity(company_id=company_id, user_id=user.id, activity_type="contact_removed",
