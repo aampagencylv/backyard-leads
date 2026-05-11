@@ -182,6 +182,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://prospector.backyardmarketingpros.com",
+        "https://audit.backyardmarketingpros.com",
         "https://backyardmarketingpros.com",
         "https://www.backyardmarketingpros.com",
     ],

@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     # user addresses since no real person has a username that long + random.
     inbound_reply_domain: str = "go.backyardmarketingpros.com"
     public_url: str = "https://prospector.backyardmarketingpros.com"
+    # Audit reports live on their own subdomain so links in cold emails
+    # don't expose the internal CRM hostname. Same backend serves both —
+    # Nginx routes audit.backyardmarketingpros.com to the same FastAPI
+    # app, and /report/* / /book/* paths respond identically on both
+    # hostnames. Override in .env if your audit subdomain differs.
+    audit_public_url: str = "https://audit.backyardmarketingpros.com"
     bmp_postal_address: str = "Backyard Marketing Pros, Las Vegas, NV"  # CAN-SPAM requires a real postal address; override in .env
 
     # Google OAuth — per-user Google Calendar integration for the native

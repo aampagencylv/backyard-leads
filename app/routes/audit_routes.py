@@ -111,7 +111,11 @@ async def generate_audit_report(
     )
 
     token = existing.token if existing else secrets.token_urlsafe(16)
-    public_url = settings.public_url.rstrip("/")
+    # Audit-facing URL — embedded in the rendered HTML (compare/share
+    # links) and returned to the caller for email/SMS use. Booking
+    # widgets linked from the audit can also live on this subdomain;
+    # same backend serves both hostnames.
+    public_url = settings.audit_public_url.rstrip("/")
     # Pull org-level audit-report branding overrides (header banner,
     # footer logo, side panels, scheduler choice). Empty values fall
     # back to BMP defaults.
@@ -292,7 +296,7 @@ async def view_competitor_report(
         return HTMLResponse(_render_generating_page(token, company_name))
 
     # Not booked — bounce them back to the gate
-    public_url = settings.public_url.rstrip("/")
+    public_url = settings.audit_public_url.rstrip("/")
     compare_url = f"{public_url}/report/{token}/compare"
     return HTMLResponse(
         f"<html><body><div style='font-family:sans-serif;text-align:center;padding:60px'>"
@@ -422,7 +426,7 @@ async def request_competitor_comparison(
     # iClosed confirms a real booking, and the polling JS on this gate page
     # auto-redirects to /competitors once generation completes.
 
-    public_url = settings.public_url.rstrip("/")
+    public_url = settings.audit_public_url.rstrip("/")
     competitors_url = f"{public_url}/report/{token}/competitors"
 
     company_name = company.name if company else "Your Business"
@@ -848,7 +852,7 @@ async def get_company_audit(
         return {"exists": False}
 
     import json
-    public_url = settings.public_url.rstrip("/")
+    public_url = settings.audit_public_url.rstrip("/")
 
     return {
         "exists": True,
@@ -864,7 +868,7 @@ async def get_company_audit(
         "last_viewed_at": report.last_viewed_at.isoformat() if report.last_viewed_at else None,
         "generated_at": report.generated_at.isoformat() if report.generated_at else None,
         "has_competitor_report": bool(report.competitor_html),
-        "competitor_url": f"{settings.public_url.rstrip('/')}/report/{report.token}/competitors" if report.competitor_html else None,
+        "competitor_url": f"{public_url}/report/{report.token}/competitors" if report.competitor_html else None,
     }
 
 
@@ -945,7 +949,7 @@ async def _generate_competitor_report_bg(report_id: int):
 
                 # Create task notifying BDR that the report is ready
                 if company.assigned_to:
-                    public_url = settings.public_url.rstrip("/")
+                    public_url = settings.audit_public_url.rstrip("/")
                     db.add(Task(
                         company_id=company.id,
                         user_id=company.assigned_to,
@@ -1010,7 +1014,7 @@ async def _email_competitor_report(db, *, report, company, to_email: str) -> Non
         return  # No one available to send from — silent skip
 
     sender = get_sender_info(sender_user.first_name, sender_user.full_name)
-    public_url = settings.public_url.rstrip("/")
+    public_url = settings.audit_public_url.rstrip("/")
     report_url = f"{public_url}/report/{report.token}/competitors"
     company_name = company.name or "your business"
 

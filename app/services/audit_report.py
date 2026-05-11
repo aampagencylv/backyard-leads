@@ -317,7 +317,10 @@ async def ensure_audit_for_company(db, company) -> Optional[str]:
 
     if not company or not getattr(company, "id", None):
         return None
-    public_url = _settings.public_url.rstrip("/")
+    # `public_url` here is the AUDIT subdomain — it's the link we put in
+    # cold emails / SMS, and it's also baked into the rendered HTML
+    # (compare button → audit_public_url/report/{token}/compare).
+    public_url = _settings.audit_public_url.rstrip("/")
 
     existing = (await db.execute(
         _s(AuditReportModel).where(AuditReportModel.company_id == company.id)
