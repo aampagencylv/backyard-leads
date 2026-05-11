@@ -79,6 +79,22 @@ async def send_email(
         text_body = html_to_plain_text(html_body)
     except Exception:
         text_body = body  # last-ditch fallback to the raw input
+
+    # Pre-send spam score — log it on every send so the reputation
+    # dashboard can later correlate score → bounce/complaint rates.
+    # Never blocks the send; this is observability, not enforcement.
+    try:
+        from app.services.spam_score import score_email
+        _sc = score_email(subject=subject, html_body=html_body, plain_body=text_body)
+        import logging
+        _level = {"ok": logging.DEBUG, "watch": logging.INFO, "high": logging.WARNING}.get(_sc["bucket"], logging.INFO)
+        logging.getLogger("bmp.spam_score").log(
+            _level,
+            f"score={_sc['score']} bucket={_sc['bucket']} email_id={email_id} contact={contact_id}"
+            + (f" issues={[i['kind'] for i in _sc['issues']]}" if _sc["issues"] else "")
+        )
+    except Exception:
+        pass
     payload = {
         "from": from_address,
         "to": [to_email],

@@ -24,12 +24,36 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select, func, and_, or_, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import require_admin
+from app.auth import require_admin, get_current_user
 from app.database import get_db
 from app.models import GeneratedEmail, Contact, User
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/admin/reputation", tags=["admin-reputation"])
 log = logging.getLogger("bmp.reputation")
+
+
+class SpamCheckRequest(BaseModel):
+    subject: str
+    html_body: Optional[str] = None
+    plain_body: Optional[str] = None
+
+
+@router.post("/spam-check")
+async def spam_check(
+    req: SpamCheckRequest,
+    _user: User = Depends(get_current_user),  # any authenticated user — editors call this from the email composer
+) -> dict:
+    """Score the provided email content against the local heuristic.
+    Returns the same shape as score_email — caller renders it inline
+    in the editor. Auth: any signed-in user (this is a non-mutating
+    check used in the composer preview)."""
+    from app.services.spam_score import score_email
+    return score_email(
+        subject=req.subject,
+        html_body=req.html_body,
+        plain_body=req.plain_body,
+    )
 
 
 def _classify_bounce(rate_pct: float) -> str:
