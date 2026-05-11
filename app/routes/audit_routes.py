@@ -191,6 +191,59 @@ async def generate_audit_report(
 
 
 # ============================================================
+# Admin: re-render all existing audit reports with current template
+# ============================================================
+
+@router.post("/api/audit/refresh-all")
+async def refresh_all_reports(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    """Inject CTA buttons into existing audit reports that are missing them.
+    Reports generated before the CTA code was added only have static HTML
+    without booking links. This patches them in-place."""
+    from app.runtime_config import _get_or_create as _get_rc
+    rc = await _get_rc(db)
+    public_url = settings.audit_public_url.rstrip("/")
+    booking_url = await _resolve_audit_booking_url(db, rc, public_url)
+    if not booking_url:
+        booking_url = settings.iclosed_booking_url or "https://app.iclosed.io/e/backyardmarketingpros/discovery-call"
+
+    reports = (await db.execute(select(AuditReportModel))).scalars().all()
+    updated = 0
+    for r in reports:
+        if not r.html_content:
+            continue
+        if "Schedule A Discovery Call" in r.html_content:
+            continue  # already has CTA
+
+        html = r.html_content
+        from html import escape as _esc
+
+        # Inject header CTA — right before the closing </div> of the header
+        header_cta = f'<a href="{_esc(booking_url)}" target="_blank" style="display:inline-block;background:#FF723F;color:white;padding:10px 22px;border-radius:6px;text-decoration:none;font-weight:600;font-size:14px;margin-top:8px">📅 Schedule A Discovery Call</a>'
+        # Insert after the first <h1> tag's parent div
+        if "</h1>" in html:
+            html = html.replace("</h1>", f"</h1>{header_cta}", 1)
+
+        # Inject footer CTA — before </body>
+        footer_cta = f'''
+        <div style="background:linear-gradient(135deg,#1a5c2e,#2d8a4e);color:white;padding:40px;text-align:center;margin-top:30px;border-radius:12px">
+            <h2 style="margin:0 0 10px;font-size:22px">Ready to get found by AI?</h2>
+            <p style="margin:0 0 16px;font-size:15px;opacity:0.9">Let us show you exactly how to fix these issues and start showing up in AI search results.</p>
+            <a href="{_esc(booking_url)}" target="_blank" style="display:inline-block;background:#E65100;color:white;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:700;font-size:16px">📅 Schedule A Discovery Call</a>
+        </div>'''
+        if "</body>" in html:
+            html = html.replace("</body>", f"{footer_cta}\n</body>")
+
+        r.html_content = html
+        updated += 1
+
+    await db.commit()
+    return {"refreshed": updated, "total": len(reports)}
+
+
+# ============================================================
 # Public report page — no auth (token is the auth)
 # ============================================================
 
