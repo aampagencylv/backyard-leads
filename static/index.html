@@ -3037,8 +3037,9 @@ function verify(secret, rawBody, header) {
                     if (navRep) navRep.classList.toggle('hidden', user.role !== 'super_admin');
                     const navPlatform = document.getElementById('nav-platform');
                     if (navPlatform) navPlatform.classList.toggle('hidden', user.role !== 'super_admin');
-                    // Move super-admin sections to Platform page so Settings stays clean
-                    if (isSuper) _reparentToPlatform();
+                    // Move super-admin sections to Platform page so Settings stays clean.
+                    // Defer to next tick so login flow completes first.
+                    if (isSuper) setTimeout(() => { try { _reparentToPlatform(); } catch(e) { console.warn('reparent:', e); } }, 500);
                     // Find Leads + Auto Pilot — hidden from basic sales_rep.
                     // senior_rep (BDR+) and above can search for leads.
                     const canSearch = (user.role !== 'sales_rep' && user.role !== 'read_only');
