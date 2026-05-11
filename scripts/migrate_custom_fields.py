@@ -86,6 +86,15 @@ async def main() -> None:
                 seeded += 1
         if seeded:
             print(f"+ seeded {seeded} default custom field definitions")
+
+        # Safety net: re-activate any default fields that got accidentally
+        # deactivated (e.g. by a UI bug or bulk action). Default fields
+        # should always be active unless explicitly archived by an admin.
+        reactivated = (await conn.execute(
+            text("UPDATE custom_field_definitions SET is_active = 1 WHERE is_default = 1 AND is_active = 0")
+        )).rowcount
+        if reactivated:
+            print(f"+ re-activated {reactivated} default fields that were accidentally deactivated")
     print("Migration complete.")
 
 
