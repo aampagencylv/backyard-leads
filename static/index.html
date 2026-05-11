@@ -258,6 +258,180 @@
         @media (max-width: 1100px) { .dashboard-2col, .kpi-strip { grid-template-columns: repeat(3, 1fr); } }
         @media (max-width: 720px) { .dashboard-2col, .kpi-strip { grid-template-columns: 1fr; } }
 
+        /* =========================================================
+           Mobile responsive — applied below 900px (phones + small
+           tablets). Desktop styles above stay intact unchanged.
+           ========================================================= */
+
+        /* Hamburger toggle — desktop hides it; mobile shows it */
+        .nav-toggle {
+            display: none;
+            background: transparent;
+            border: 0;
+            color: #333;
+            font-size: 22px;
+            line-height: 1;
+            cursor: pointer;
+            padding: 6px 10px;
+            border-radius: 6px;
+        }
+        .nav-toggle:hover { background: rgba(0,0,0,0.05); }
+
+        /* Sidebar backdrop on mobile */
+        .sidebar-backdrop {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.4);
+            z-index: 998;
+        }
+        .sidebar-backdrop.show {
+            display: block;
+        }
+
+        @media (max-width: 900px) {
+            /* iOS notch + Dynamic Island — pad the top bar so it doesn't
+               sit under the status bar when running as a PWA */
+            .app-container {
+                padding-top: env(safe-area-inset-top);
+                padding-bottom: env(safe-area-inset-bottom);
+            }
+
+            /* Sidebar becomes a slide-in drawer */
+            .sidebar {
+                width: 280px;
+                z-index: 999;
+                transform: translateX(-100%);
+                transition: transform 0.22s ease;
+                box-shadow: 4px 0 24px rgba(0,0,0,0.2);
+            }
+            .sidebar.open { transform: translateX(0); }
+
+            /* Main content fills the screen */
+            .main-content {
+                margin-left: 0;
+                padding: 14px;
+                padding-bottom: max(20px, env(safe-area-inset-bottom));
+            }
+
+            /* Show the hamburger */
+            .nav-toggle { display: inline-flex; align-items: center; justify-content: center; }
+
+            /* Top bar: pin the hamburger left, shrink the search font a bit */
+            .top-bar { padding: 6px 8px; margin-bottom: 14px; gap: 6px; }
+            .top-bar input { font-size: 16px; /* 16px prevents iOS zoom-on-focus */ padding: 8px 10px; }
+
+            /* Page headers — stack title above actions */
+            .page-header { flex-direction: column; align-items: flex-start; gap: 8px; margin-bottom: 16px; }
+            .page-header h1 { font-size: 20px; }
+
+            /* All multi-column grids collapse */
+            .search-form,
+            .search-form-advanced,
+            .dashboard-2col,
+            .dashboard-3col,
+            .kpi-strip,
+            .pipeline-columns,
+            .companies-grid,
+            .form-row,
+            .form-row-2,
+            .form-row-3 {
+                grid-template-columns: 1fr !important;
+                gap: 10px !important;
+            }
+
+            /* Tables: enable horizontal scroll instead of mangling layout */
+            .panel, .search-box { padding: 14px; border-radius: 10px; }
+            .panel table, .search-box table {
+                display: block;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                max-width: 100%;
+            }
+
+            /* Modals — full screen on phones, sticky bottom-action footer */
+            .modal-backdrop {
+                align-items: stretch !important;
+                padding: 0 !important;
+            }
+            .modal-card {
+                max-width: 100% !important;
+                width: 100% !important;
+                height: 100vh;
+                max-height: 100vh;
+                border-radius: 0 !important;
+                padding: 16px !important;
+                padding-top: max(16px, env(safe-area-inset-top)) !important;
+                padding-bottom: max(16px, env(safe-area-inset-bottom)) !important;
+                overflow-y: auto !important;
+            }
+
+            /* Buttons — 44px+ tap targets per Apple HIG */
+            .btn, .btn-primary, .btn-secondary, .btn-success, .btn-danger {
+                min-height: 44px;
+                padding: 10px 14px;
+                font-size: 14px;
+            }
+            .btn-sm, .btn-xs { min-height: 36px; }
+
+            /* Forms: full-width inputs + 16px font to prevent iOS zoom */
+            input[type="text"], input[type="email"], input[type="tel"],
+            input[type="password"], input[type="number"], input[type="url"],
+            input[type="search"], input[type="date"], input[type="datetime-local"],
+            select, textarea {
+                font-size: 16px;
+                min-height: 44px;
+                box-sizing: border-box;
+            }
+            textarea { min-height: 80px; }
+            .form-group label { font-size: 13px; }
+
+            /* Company cards — single column with reduced padding */
+            .company-card { padding: 14px; }
+            .company-card-header h3 { font-size: 15px; }
+            .company-card-meta { font-size: 12px; }
+            .company-card-meta span { display: block; margin: 0 0 2px; }
+
+            /* Pipeline kanban — horizontal scroll on phones */
+            .pipeline-columns {
+                display: flex !important;
+                flex-direction: row !important;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                scroll-snap-type: x mandatory;
+                gap: 12px !important;
+            }
+            .pipeline-columns > * {
+                flex: 0 0 80vw;
+                scroll-snap-align: start;
+            }
+
+            /* AI chat launcher — keep above the iOS home indicator */
+            #ai-chat-launcher {
+                bottom: max(20px, env(safe-area-inset-bottom)) !important;
+            }
+            /* And the chat panel: full-width on narrow screens */
+            #ai-chat-panel {
+                width: calc(100vw - 20px) !important;
+                max-width: 480px;
+                right: 10px !important;
+                bottom: max(80px, env(safe-area-inset-bottom)) !important;
+            }
+
+            /* Working overlay — keep it readable on mobile */
+            #working-overlay > div {
+                width: calc(100vw - 40px);
+                max-width: 360px;
+            }
+        }
+
+        /* Phone-only tighter — below 480px (compact phones) */
+        @media (max-width: 480px) {
+            .page-header h1 { font-size: 18px; }
+            .sidebar-brand img { width: 140px; }
+            .panel, .search-box { padding: 12px; }
+        }
+
         /* Pipeline bars */
         .pipeline-bar-row { display: grid; grid-template-columns: 110px 1fr 200px; gap: 12px; align-items: center; padding: 6px 0; font-size: 13px; }
         .pipeline-bar-row .stage-label { font-weight: 500; text-transform: capitalize; color: #555; }
@@ -391,7 +565,8 @@
 
     <!-- ===================== APP SCREEN ===================== -->
     <div id="app-screen" class="app-container hidden">
-        <aside class="sidebar">
+        <div id="sidebar-backdrop" class="sidebar-backdrop" onclick="closeSidebar()"></div>
+        <aside class="sidebar" id="sidebar">
             <div class="sidebar-brand">
                 <img src="https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz_white-text.png" alt="BMP" onerror="this.src='https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz.png'">
                 <small>Prospector + CRM</small>
@@ -422,6 +597,7 @@
 
             <!-- Top global search -->
             <div class="top-bar">
+                <button class="nav-toggle" onclick="toggleSidebar()" aria-label="Menu" title="Menu">☰</button>
                 <span style="color:#888;font-size:13px">🔍</span>
                 <input type="text" id="global-search" placeholder="Search companies, contacts, emails, phones..." autocomplete="off"
                        oninput="onGlobalSearchInput(this.value)" onblur="setTimeout(()=>document.getElementById('search-results-dropdown').classList.add('hidden'),200)">
@@ -3333,7 +3509,35 @@ function verify(secret, rawBody, header) {
         function showAuthError(msg) { const el = document.getElementById('auth-error'); el.textContent = msg; el.style.display = 'block'; }
 
         // ============ Page nav ============
+        // ============ Mobile sidebar drawer ============
+        function toggleSidebar() {
+            const sb = document.getElementById('sidebar');
+            const bd = document.getElementById('sidebar-backdrop');
+            if (!sb || !bd) return;
+            const open = sb.classList.contains('open');
+            if (open) closeSidebar();
+            else openSidebar();
+        }
+        function openSidebar() {
+            const sb = document.getElementById('sidebar');
+            const bd = document.getElementById('sidebar-backdrop');
+            if (sb) sb.classList.add('open');
+            if (bd) bd.classList.add('show');
+        }
+        function closeSidebar() {
+            const sb = document.getElementById('sidebar');
+            const bd = document.getElementById('sidebar-backdrop');
+            if (sb) sb.classList.remove('open');
+            if (bd) bd.classList.remove('show');
+        }
+
         function showPage(page) {
+            // Auto-close the mobile drawer on every nav click
+            closeSidebar();
+            return _showPageInner(page);
+        }
+
+        function _showPageInner(page) {
             const target = document.getElementById(`page-${page}`);
             if (!target) {
                 console.error(`page-${page} not found`);
