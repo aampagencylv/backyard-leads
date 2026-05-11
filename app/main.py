@@ -42,6 +42,7 @@ from app.routes import (
     upload_routes,
     mcp_routes,
     ai_chat_routes,
+    dns_health_routes,
 )
 
 
@@ -230,6 +231,7 @@ app.include_router(scheduler_routes.booking_page_router)
 app.include_router(upload_routes.router)
 app.include_router(mcp_routes.router)
 app.include_router(ai_chat_routes.router)
+app.include_router(dns_health_routes.router)
 
 # Serve static frontend + user-uploaded files (logos, etc.).
 # var/uploads/ is gitignored and persists across deploys; ensure the

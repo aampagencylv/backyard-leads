@@ -393,6 +393,7 @@
                 <a data-page="autopilot" onclick="showPage('autopilot')" style="margin-top:12px;border-top:1px solid rgba(255,255,255,0.1);padding-top:12px">Auto Pilot</a>
                 <a href="#" onclick="event.preventDefault();openStandaloneDialer()" style="color:var(--bmp-orange)">Dial a Number</a>
                 <a data-page="developer" id="nav-developer" onclick="showPage('developer')" class="hidden">Developer</a>
+                <a data-page="dns-health" id="nav-dns-health" onclick="showPage('dns-health')" class="hidden">🩺 DNS Health</a>
                 <a data-page="settings" onclick="showPage('settings')">Settings</a>
             </nav>
             <div class="sidebar-user">
@@ -1539,6 +1540,27 @@ function verify(secret, rawBody, header) {
                 </div>
             </div>
 
+            <div id="page-dns-health" class="hidden">
+                <div class="page-header" style="margin-bottom:16px">
+                    <h1 style="margin:0">🩺 DNS Health</h1>
+                    <p style="font-size:13px;color:#666;margin-top:4px">Background sanity-check on every DNS record we depend on for email auth and prospect-facing surfaces. Queried via Google Public DNS (DoH) — independent of the VPS resolver. Super-admin only.</p>
+                </div>
+
+                <div class="search-box" style="max-width:1100px;margin-bottom:14px">
+                    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+                        <div style="font-size:13px;color:#666">
+                            <span id="dnsh-overall-pill" style="display:inline-block;padding:4px 12px;border-radius:999px;font-weight:600;font-size:12px;background:#eee;color:#666">— not run yet —</span>
+                            <span id="dnsh-summary" style="margin-left:10px;color:#888"></span>
+                        </div>
+                        <div style="flex:1"></div>
+                        <span id="dnsh-checked-at" style="font-size:12px;color:#999"></span>
+                        <button class="btn btn-primary btn-sm" onclick="runDnsHealth()">Run checks</button>
+                    </div>
+                </div>
+
+                <div id="dnsh-results" style="max-width:1100px"></div>
+            </div>
+
             <div id="page-settings" class="hidden">
                 <div class="page-header"><h1>Settings</h1></div>
                 <div class="search-box" style="max-width:600px">
@@ -2469,6 +2491,10 @@ function verify(secret, rawBody, header) {
                     if (navDev) navDev.classList.toggle('hidden', !isAdminPlus);
                     const navAudit = document.getElementById('nav-audit-reports');
                     if (navAudit) navAudit.classList.toggle('hidden', !isAdminPlus);
+                    // DNS Health — super_admin only (it surfaces email auth
+                    // status which is platform-level, not per-tenant).
+                    const navDns = document.getElementById('nav-dns-health');
+                    if (navDns) navDns.classList.toggle('hidden', user.role !== 'super_admin');
                     // Auto-start the product tour for new users — onboarding_step 0 = never seen,
                     // 99 = skipped, 100 = completed. Anything between starts mid-tour.
                     if (typeof user.onboarding_step === 'number' && user.onboarding_step < 99) {
@@ -3081,6 +3107,16 @@ function verify(secret, rawBody, header) {
             if (page === 'settings') loadSettings();
             if (page === 'calendar') loadCalendarPage();
             if (page === 'audit-reports') loadAuditReportsPage();
+            if (page === 'dns-health') {
+                // Super-admin only — refuse deep-links from lower roles
+                if (!currentUser || currentUser.role !== 'super_admin') {
+                    target.classList.add('hidden');
+                    showPage('dashboard');
+                    toast('DNS Health is super-admin only');
+                    return;
+                }
+                runDnsHealth();
+            }
             if (page === 'autopilot') loadCampaigns();
             if (page === 'developer') {
                 // Admin-only — refuse the visit if a sales_rep deep-links here
@@ -3102,6 +3138,75 @@ function verify(secret, rawBody, header) {
             document.querySelectorAll('.dev-content').forEach(el => {
                 el.classList.toggle('hidden', el.id !== `dev-tab-${tabName}`);
             });
+        }
+
+        // ============ DNS Health (super_admin only) ============
+        // Pings /api/admin/dns/health, which runs DoH lookups for every
+        // record we depend on (SPF/DKIM/DMARC + the three public subdomains)
+        // and returns per-check status. Renders a card per check.
+        async function runDnsHealth() {
+            const overall = document.getElementById('dnsh-overall-pill');
+            const summary = document.getElementById('dnsh-summary');
+            const ts = document.getElementById('dnsh-checked-at');
+            const results = document.getElementById('dnsh-results');
+            if (!results) return;
+            overall.textContent = 'Running…';
+            overall.style.background = '#eee';
+            overall.style.color = '#666';
+            summary.textContent = '';
+            results.innerHTML = '<div style="padding:20px;color:#888">Querying DNS over HTTPS…</div>';
+            const data = await api('/api/admin/dns/health');
+            if (!data) {
+                overall.textContent = 'Error';
+                overall.style.background = '#ffebee';
+                overall.style.color = '#c62828';
+                results.innerHTML = '<div style="padding:20px;color:#c62828">Failed to load DNS health (check console).</div>';
+                return;
+            }
+            // Pill colors per status
+            const PILL = {
+                ok:    { bg: '#e8f5e9', fg: '#1b5e20', label: 'All green' },
+                warn:  { bg: '#fff8e1', fg: '#ef6c00', label: 'Warnings' },
+                error: { bg: '#ffebee', fg: '#c62828', label: 'Action needed' },
+            };
+            const p = PILL[data.overall] || PILL.error;
+            overall.textContent = p.label;
+            overall.style.background = p.bg;
+            overall.style.color = p.fg;
+            summary.textContent = `${data.summary.ok}/${data.summary.total} OK · ${data.summary.warn} warn · ${data.summary.error} error`;
+            try {
+                const when = new Date(data.checked_at);
+                ts.textContent = `Last checked: ${when.toLocaleString()} · ${data.doh_provider}`;
+            } catch (e) { ts.textContent = data.doh_provider; }
+
+            const BADGE = {
+                ok:    { bg: '#e8f5e9', fg: '#1b5e20', dot: '#43a047', label: 'OK' },
+                warn:  { bg: '#fff8e1', fg: '#ef6c00', dot: '#fb8c00', label: 'WARN' },
+                error: { bg: '#ffebee', fg: '#c62828', dot: '#e53935', label: 'ERROR' },
+            };
+            results.innerHTML = data.checks.map(c => {
+                const b = BADGE[c.status] || BADGE.error;
+                const values = (c.values || []).filter(Boolean);
+                const valueRows = values.length ?
+                    values.map(v => `<code style="display:block;background:#f7f7f7;padding:6px 10px;border-radius:4px;font-size:12px;word-break:break-all;margin-top:4px">${escapeHtml(v)}</code>`).join('') :
+                    '<div style="font-size:12px;color:#999;font-style:italic">(no record returned)</div>';
+                const note = c.note ? `<div style="margin-top:6px;font-size:12px;color:${c.status==='error'?'#c62828':c.status==='warn'?'#ef6c00':'#666'}">${escapeHtml(c.note)}</div>` : '';
+                return `
+                <div class="search-box" style="margin-bottom:12px;border-left:4px solid ${b.dot}">
+                    <div style="display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap">
+                        <div style="flex:1;min-width:280px">
+                            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                                <span style="font-weight:600;font-size:14px">${escapeHtml(c.label)}</span>
+                                <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${b.dot}"></span>
+                                <span style="background:${b.bg};color:${b.fg};padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600">${b.label}</span>
+                            </div>
+                            <div style="font-size:12px;color:#888;margin-top:2px">${escapeHtml(c.type)} record · <code style="background:#f0f0f0;padding:1px 6px;border-radius:3px">${escapeHtml(c.host)}</code></div>
+                            <div style="font-size:12px;color:#666;margin-top:8px">${escapeHtml(c.purpose || '')}</div>
+                        </div>
+                        <div style="flex:2;min-width:340px">${valueRows}${note}</div>
+                    </div>
+                </div>`;
+            }).join('');
         }
 
         async function refreshNavBadges() {
