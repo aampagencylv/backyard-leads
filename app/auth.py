@@ -126,8 +126,9 @@ async def require_sales_rep(user: User = Depends(get_current_user)) -> User:
 # the ladder.
 
 ROLE_ASSIGNABLE = {
-    "super_admin": {"super_admin", "admin", "sales_rep", "read_only"},
-    "admin":       {"admin", "sales_rep", "read_only"},  # NO super_admin
+    "super_admin": {"super_admin", "admin", "senior_rep", "sales_rep", "read_only"},
+    "admin":       {"admin", "senior_rep", "sales_rep", "read_only"},  # NO super_admin
+    "senior_rep":  set(),
     "sales_rep":   set(),
     "read_only":   set(),
 }

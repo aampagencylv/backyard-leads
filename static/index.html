@@ -659,14 +659,14 @@
             </div>
             <nav class="sidebar-nav">
                 <a class="active" data-page="dashboard" onclick="showPage('dashboard')">Dashboard</a>
-                <a data-page="search" onclick="showPage('search')">Find Leads</a>
+                <a data-page="search" id="nav-find-leads" onclick="showPage('search')">Find Leads</a>
                 <a data-page="companies" onclick="showPage('companies')">Companies <span id="nav-companies-count" class="nav-badge"></span></a>
                 <a data-page="contacts" onclick="showPage('contacts')">Contacts <span id="nav-contacts-count" class="nav-badge"></span></a>
                 <a data-page="pipeline" onclick="showPage('pipeline')">Pipeline <span id="nav-pipeline-count" class="nav-badge"></span></a>
                 <a data-page="tasks" onclick="showPage('tasks')">Tasks <span id="nav-tasks-count" class="nav-badge"></span></a>
                 <a data-page="calendar" onclick="showPage('calendar')">📅 Calendar</a>
                 <a data-page="audit-reports" id="nav-audit-reports" onclick="showPage('audit-reports')" class="hidden">📊 Audit Reports</a>
-                <a data-page="autopilot" onclick="showPage('autopilot')" style="margin-top:12px;border-top:1px solid rgba(255,255,255,0.1);padding-top:12px">Auto Pilot</a>
+                <a data-page="autopilot" id="nav-autopilot" onclick="showPage('autopilot')" style="margin-top:12px;border-top:1px solid rgba(255,255,255,0.1);padding-top:12px">Auto Pilot</a>
                 <a href="#" onclick="event.preventDefault();openStandaloneDialer()" style="color:var(--bmp-orange)">Dial a Number</a>
                 <a data-page="developer" id="nav-developer" onclick="showPage('developer')" class="hidden">Developer</a>
                 <a data-page="dns-health" id="nav-dns-health" onclick="showPage('dns-health')" class="hidden">🩺 DNS Health</a>
@@ -3020,6 +3020,13 @@ function verify(secret, rawBody, header) {
                     // that tenant admins shouldn't see when this goes SaaS).
                     const navRep = document.getElementById('nav-reputation');
                     if (navRep) navRep.classList.toggle('hidden', user.role !== 'super_admin');
+                    // Find Leads + Auto Pilot — hidden from basic sales_rep.
+                    // senior_rep (BDR+) and above can search for leads.
+                    const canSearch = (user.role !== 'sales_rep' && user.role !== 'read_only');
+                    const navFind = document.getElementById('nav-find-leads');
+                    if (navFind) navFind.classList.toggle('hidden', !canSearch);
+                    const navAutopilot = document.getElementById('nav-autopilot');
+                    if (navAutopilot) navAutopilot.classList.toggle('hidden', !isAdminPlus);
                     // Auto-start the product tour for new users — onboarding_step 0 = never seen,
                     // 99 = skipped, 100 = completed. Anything between starts mid-tour.
                     if (typeof user.onboarding_step === 'number' && user.onboarding_step < 99) {
@@ -9334,8 +9341,9 @@ hmac.compare_digest(expected, header)</pre>
             // can grant the super_admin role (and only to super_admin users
             // already — preventing self-promotion via dropdown).
             const assignable = isSuper
-                ? ['super_admin', 'admin', 'sales_rep', 'read_only']
-                : ['admin', 'sales_rep', 'read_only'];
+                ? ['super_admin', 'admin', 'senior_rep', 'sales_rep', 'read_only']
+                : ['admin', 'senior_rep', 'sales_rep', 'read_only'];
+            const roleLabels = { super_admin: 'Super Admin', admin: 'Admin', senior_rep: 'BDR+', sales_rep: 'BDR', read_only: 'Read Only' };
 
             panel.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
                 <thead>
@@ -9361,9 +9369,9 @@ hmac.compare_digest(expected, header)</pre>
                         // options so it doesn't visually flip just because the
                         // viewer can't grant it.
                         const roleOptions = [...new Set([u.role, ...assignable])]
-                            .map(r => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${r.replace('_',' ')}</option>`).join('');
+                            .map(r => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${roleLabels[r] || r.replace('_',' ')}</option>`).join('');
                         const roleCell = locked
-                            ? `<span style="color:#888;font-size:12px">${u.role.replace('_',' ')}</span>`
+                            ? `<span style="color:#888;font-size:12px">${roleLabels[u.role] || u.role.replace('_',' ')}</span>`
                             : `<select onchange="updateUserRole(${u.id}, this.value)" style="padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px">${roleOptions}</select>`;
                         const sendCell = locked
                             ? `<span style="color:#888;font-size:12px">${u.sending_enabled ? '✓' : '—'}</span>`
@@ -9425,7 +9433,8 @@ hmac.compare_digest(expected, header)</pre>
                             <div class="form-group">
                                 <label>Role</label>
                                 <select id="invite-role" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px">
-                                    <option value="sales_rep">Sales Rep</option>
+                                    <option value="sales_rep">BDR (no Find Leads)</option>
+                                    <option value="senior_rep">BDR+ (can Find Leads)</option>
                                     <option value="admin">Admin</option>
                                     <option value="read_only">Read Only</option>
                                     ${superOption}

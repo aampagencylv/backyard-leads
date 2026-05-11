@@ -241,7 +241,7 @@ async def update_user_role(
     Admins cannot modify super_admins, cannot grant the super_admin role,
     and cannot demote the last super_admin (which would lock the system
     out of platform settings)."""
-    if req.role not in ("super_admin", "admin", "sales_rep", "read_only"):
+    if req.role not in ("super_admin", "admin", "senior_rep", "sales_rep", "read_only"):
         raise HTTPException(status_code=400, detail="Invalid role")
 
     target = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
@@ -303,7 +303,7 @@ async def invite_user(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    if req.role not in ("super_admin", "admin", "sales_rep", "read_only"):
+    if req.role not in ("super_admin", "admin", "senior_rep", "sales_rep", "read_only"):
         raise HTTPException(status_code=400, detail="Invalid role")
 
     if req.role not in role_assignable_by(user):
