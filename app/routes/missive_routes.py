@@ -548,6 +548,21 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
       }}
       const actionBtnsHtml = actionBtns.length ? `<div class="action-grid">${{actionBtns.join('')}}</div>` : '';
 
+      // Inline iMessage compose form (hidden until quickIMessage()).
+      // Same INSIDE-the-iframe pattern as Add Task — bypasses
+      // Missive.openForm which was unreliable.
+      const imessageFormHtml = c.phone ? `
+        <div id="imessage-form" class="section" style="display:none;background:#eaf4ff;border:1px solid #b9dcff;border-radius:8px">
+          <div class="label" style="color:#0a558c">💬 Send iMessage to ${{escapeHtml(c.phone)}}</div>
+          <textarea id="new-imessage-body" placeholder="Type your message…" rows="3"
+            style="width:100%;border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box;background:white;color:#1a1a1a"></textarea>
+          <div style="font-size:11px;color:#666;margin-top:6px">Sent through your Blooio iMessage gateway. Logs to the activity timeline. Respects opt-out + landline guardrails.</div>
+          <div style="display:flex;gap:6px;margin-top:10px">
+            <button class="btn" onclick="submitIMessage()" style="flex:1">Send iMessage</button>
+            <button class="btn secondary" onclick="cancelIMessage()">Cancel</button>
+          </div>
+        </div>` : '';
+
       // Inline task-creation form (hidden until toggleAddTask()). Kept
       // INSIDE the iframe so we don't depend on Missive.openForm — the
       // SDK's choices field type was inconsistent and the popup wasn't
@@ -755,6 +770,7 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
           </div>
         </div>
 
+        ${{imessageFormHtml}}
         ${{addTaskFormHtml}}
         ${{notesHtml}}
         ${{tasksHtml}}
@@ -918,29 +934,47 @@ def _render_sidebar_html(app_url: str, audit_url: str) -> str:
       window.open(url, 'prospector-schedule');
     }}
 
-    async function quickIMessage() {{
+    function quickIMessage() {{
+      // Expand the inline iMessage form (built into renderContext so
+      // it's already in the DOM). No SDK popup — full control.
+      const form = document.getElementById('imessage-form');
+      if (!form) return;
+      const willShow = form.style.display === 'none';
+      form.style.display = willShow ? 'block' : 'none';
+      if (willShow) {{
+        const ta = document.getElementById('new-imessage-body');
+        if (ta) {{ ta.value = ''; setTimeout(() => ta.focus(), 30); }}
+        form.scrollIntoView({{ behavior: 'smooth', block: 'nearest' }});
+      }}
+    }}
+
+    async function submitIMessage() {{
       const c = _currentContext && _currentContext.contact;
-      if (!c || !c.phone) return;
-      try {{
-        const fields = await Missive.openForm({{
-          name: 'Send iMessage',
-          fields: [{{ name: 'body', label: `To ${{c.phone}}`, initial: '' }}],
-          buttons: [{{ name: 'send', label: 'Send iMessage' }}],
-          autoClose: true,
-        }});
-        const body = ((fields.find(x => x.name === 'body') || {{}}).value || '').trim();
-        if (!body) return;
-        const r = await jwtAuthFetch('/api/integrations/sidebar/send-imessage', {{
-          method: 'POST',
-          body: JSON.stringify({{ contact_id: c.id, body }}),
-        }});
-        if (r && r.ok) {{
-          toast('iMessage sent', 'success');
-          handleChangeConversations(_lastConversationIds);
-        }} else if (r) {{
-          toast('Not sent: ' + (r.reason || 'unknown error'), 'error');
-        }}
-      }} catch (e) {{ /* cancelled */ }}
+      if (!c) return;
+      const ta = document.getElementById('new-imessage-body');
+      const body = ((ta && ta.value) || '').trim();
+      if (!body) {{
+        toast('Type a message first', 'error');
+        ta && ta.focus();
+        return;
+      }}
+      const r = await jwtAuthFetch('/api/integrations/sidebar/send-imessage', {{
+        method: 'POST',
+        body: JSON.stringify({{ contact_id: c.id, body }}),
+      }});
+      if (r && r.ok) {{
+        toast('iMessage sent', 'success');
+        const form = document.getElementById('imessage-form');
+        if (form) form.style.display = 'none';
+        handleChangeConversations(_lastConversationIds);
+      }} else if (r) {{
+        toast('Not sent: ' + (r.reason || 'unknown error'), 'error');
+      }}
+    }}
+
+    function cancelIMessage() {{
+      const form = document.getElementById('imessage-form');
+      if (form) form.style.display = 'none';
     }}
 
     async function copyEmail(addr) {{
