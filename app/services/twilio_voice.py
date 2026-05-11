@@ -370,20 +370,25 @@ def build_voicemail_twiml(
     company_name: str,
     rep_first_name: Optional[str] = None,
     recording_status_callback: Optional[str] = None,
+    custom_greeting_url: Optional[str] = None,
 ) -> str:
-    """TwiML that plays a greeting + records a voicemail."""
+    """TwiML that plays a greeting + records a voicemail.
+    If custom_greeting_url is provided, plays that audio file instead of TTS."""
     from twilio.twiml.voice_response import VoiceResponse
 
     response = VoiceResponse()
-    greeting = (
-        f"You've reached {rep_first_name} at {company_name}. "
-        if rep_first_name else
-        f"Thanks for calling {company_name}. "
-    )
-    response.say(
-        greeting + "Please leave a message after the tone and we'll get back to you shortly.",
-        voice="Polly.Joanna-Neural",
-    )
+    if custom_greeting_url:
+        response.play(custom_greeting_url)
+    else:
+        greeting = (
+            f"You've reached {rep_first_name} at {company_name}. "
+            if rep_first_name else
+            f"Thanks for calling {company_name}. "
+        )
+        response.say(
+            greeting + "Please leave a message after the tone and we'll get back to you shortly.",
+            voice="Polly.Joanna-Neural",
+        )
     record_kwargs = dict(
         max_length=120,
         play_beep=True,

@@ -515,6 +515,7 @@ async def _profile_payload(db: AsyncSession, user: User) -> dict:
         "brief_hour": int(getattr(user, "brief_hour", 7) or 7),
         "timezone": getattr(user, "timezone", None) or "America/Phoenix",
         "last_brief_sent_at": user.last_brief_sent_at.isoformat() if getattr(user, "last_brief_sent_at", None) else None,
+        "voicemail_greeting_url": getattr(user, "voicemail_greeting_url", None),
     }
 
 

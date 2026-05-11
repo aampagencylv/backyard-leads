@@ -546,6 +546,11 @@ async def voice_inbound(request: Request):
         )
         return Response(content=twiml, media_type="application/xml")
 
+    # Resolve custom greeting URL for this rep (used if call goes to voicemail)
+    custom_greeting_url = None
+    if rep.voicemail_greeting_url:
+        custom_greeting_url = f"{settings.public_url.rstrip('/')}{rep.voicemail_greeting_url}"
+
     public = settings.public_url.rstrip('/')
     voicemail_url = f"{public}/api/twilio/voice/inbound-voicemail?from={from_number}&rep_id={rep.id}"
     twiml = parse_inbound_twiml(
@@ -563,11 +568,14 @@ async def inbound_voicemail(request: Request):
     qp = dict(request.query_params)
     rep_id = qp.get("rep_id")
     rep_first_name = None
+    custom_greeting_url = None
     if rep_id:
         async with async_session() as db:
             rep = (await db.execute(select(User).where(User.id == int(rep_id)))).scalar_one_or_none()
             if rep:
                 rep_first_name = rep.first_name
+                if rep.voicemail_greeting_url:
+                    custom_greeting_url = f"{settings.public_url.rstrip('/')}{rep.voicemail_greeting_url}"
 
     public = settings.public_url.rstrip('/')
     recording_callback = f"{public}/api/twilio/voice/voicemail-recording?from={qp.get('from','')}&rep_id={rep_id or ''}"
@@ -575,6 +583,7 @@ async def inbound_voicemail(request: Request):
         company_name="Backyard Marketing Pros",
         rep_first_name=rep_first_name,
         recording_status_callback=recording_callback,
+        custom_greeting_url=custom_greeting_url,
     )
     return Response(content=twiml, media_type="application/xml")
 

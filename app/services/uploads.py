@@ -44,6 +44,18 @@ ALLOWED_IMAGE_TYPES: dict[str, str] = {
 
 MAX_LOGO_BYTES = 2 * 1024 * 1024  # 2 MB
 
+ALLOWED_AUDIO_TYPES: dict[str, str] = {
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+    "audio/wav": "wav",
+    "audio/wave": "wav",
+    "audio/x-wav": "wav",
+    "audio/ogg": "ogg",
+    "audio/webm": "webm",
+    "audio/mp4": "m4a",
+}
+MAX_AUDIO_BYTES = 10 * 1024 * 1024  # 10 MB
+
 
 def ensure_upload_dirs() -> None:
     """Called from main.py at startup so the StaticFiles mount has a
@@ -96,3 +108,30 @@ def save_image(
     # paste into other tools later.
     public = settings.public_url.rstrip("/")
     return f"{public}/uploads/{category}/{int(user_id)}/{filename}"
+
+
+def save_audio(
+    content: bytes, content_type: str, *, category: str, user_id: int,
+) -> str:
+    """Persist an audio file. Returns the relative URL path (not absolute)
+    so the voicemail TwiML builder can construct the full URL at runtime."""
+    if not category or not category.replace("_", "").isalnum():
+        raise UploadValidationError("Invalid upload category")
+    ct = (content_type or "").lower().split(";", 1)[0].strip()
+    if ct not in ALLOWED_AUDIO_TYPES:
+        raise UploadValidationError(
+            f"Unsupported audio type: {ct}. Use MP3, WAV, OGG, or WebM."
+        )
+    ext = ALLOWED_AUDIO_TYPES[ct]
+    if len(content) > MAX_AUDIO_BYTES:
+        raise UploadValidationError(
+            f"File too large ({len(content) // 1024}KB). Max is {MAX_AUDIO_BYTES // 1024 // 1024}MB."
+        )
+
+    user_dir = UPLOAD_BASE / category / str(int(user_id))
+    user_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{secrets.token_urlsafe(12)}.{ext}"
+    fpath = user_dir / filename
+    fpath.write_bytes(content)
+
+    return f"/uploads/{category}/{int(user_id)}/{filename}"

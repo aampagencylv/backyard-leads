@@ -1914,6 +1914,28 @@ function verify(secret, rawBody, header) {
                     <p style="font-size:13px;color:#666;margin-bottom:16px">This is what your signature looks like. Edit your profile fields above to update it.</p>
                     <div id="signature-preview" style="background:#fff;border:1px solid #e5e7eb;border-radius:6px;padding:16px"></div>
                 </div>
+                <!-- 📞 Voicemail Greeting -->
+                <div class="search-box" style="max-width:600px;margin-top:16px">
+                    <h3>📞 Voicemail Greeting</h3>
+                    <p style="font-size:13px;color:#666;margin-bottom:12px">Upload a custom voicemail greeting or record one here. When callers reach your voicemail, they'll hear this instead of the default text-to-speech.</p>
+                    <div id="vm-current" style="margin-bottom:12px"></div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+                        <label class="btn btn-secondary btn-sm" style="cursor:pointer">
+                            Upload Audio
+                            <input type="file" accept="audio/mpeg,audio/mp3,audio/wav,audio/ogg,audio/webm,audio/mp4,.mp3,.wav,.ogg,.webm,.m4a" onchange="uploadVoicemailGreeting(this)" style="display:none">
+                        </label>
+                        <button class="btn btn-secondary btn-sm" id="vm-record-btn" onclick="toggleVoicemailRecording()">🎙 Record</button>
+                        <button class="btn btn-danger btn-sm hidden" id="vm-delete-btn" onclick="deleteVoicemailGreeting()">Remove Custom Greeting</button>
+                    </div>
+                    <div id="vm-recorder" class="hidden" style="background:#f9f9f9;border:1px solid #e5e7eb;border-radius:8px;padding:12px;margin-bottom:12px">
+                        <div style="display:flex;align-items:center;gap:12px">
+                            <div id="vm-rec-indicator" style="width:12px;height:12px;border-radius:50%;background:#ccc"></div>
+                            <span id="vm-rec-timer" style="font-size:14px;font-weight:600;font-variant-numeric:tabular-nums">0:00</span>
+                            <button class="btn btn-danger btn-sm" id="vm-rec-stop" onclick="stopVoicemailRecording()" disabled>Stop</button>
+                        </div>
+                    </div>
+                    <p style="font-size:11px;color:#999">Accepted formats: MP3, WAV, OGG, WebM. Max 10MB. If no custom greeting is set, callers hear a default text-to-speech message.</p>
+                </div>
                 <!-- 🎨 Org Brand — single source of truth for the tenant's
                      identity. Applies to emails, audit reports, booking
                      pages, and the app UI itself. Tenant-tier (admin can
@@ -8122,6 +8144,9 @@ hmac.compare_digest(expected, header)</pre>
             }
             // Calendar settings live on the dedicated /calendar page now.
 
+            // Voicemail greeting
+            _renderVoicemailGreetingState(data.voicemail_greeting_url);
+
             // Role-gated Settings panels:
             //   admin+         → team management, tenant-tier keys, AI tone, Twilio numbers
             //   super_admin    → everything above + platform credentials section
@@ -11594,6 +11619,116 @@ hmac.compare_digest(expected, header)</pre>
             const enabled = document.getElementById('settings-sending-enabled').checked;
             await api('/api/send/profile', { method: 'PATCH', body: JSON.stringify({ sending_enabled: enabled }) });
             toast(enabled ? 'Sending enabled' : 'Sending disabled');
+        }
+
+        // ============ Voicemail Greeting ============
+        let _vmMediaRecorder = null;
+        let _vmRecChunks = [];
+        let _vmRecTimer = null;
+        let _vmRecSeconds = 0;
+
+        function _renderVoicemailGreetingState(url) {
+            const container = document.getElementById('vm-current');
+            const deleteBtn = document.getElementById('vm-delete-btn');
+            if (url) {
+                const fullUrl = url.startsWith('http') ? url : (window.location.origin + url);
+                container.innerHTML = '<div style="background:#f0faf0;border:1px solid #c3e6c3;border-radius:6px;padding:10px;display:flex;align-items:center;gap:10px"><span style="font-size:13px;color:var(--bmp-green);font-weight:600">Custom greeting active</span><audio controls src="' + fullUrl + '" style="height:32px;flex:1"></audio></div>';
+                deleteBtn.classList.remove('hidden');
+            } else {
+                container.innerHTML = '<div style="background:#f5f5f5;border-radius:6px;padding:10px;font-size:13px;color:#888">Using default text-to-speech greeting</div>';
+                deleteBtn.classList.add('hidden');
+            }
+        }
+
+        async function uploadVoicemailGreeting(input) {
+            const file = input.files[0];
+            if (!file) return;
+            const form = new FormData();
+            form.append('file', file);
+            const resp = await fetch('/api/uploads/voicemail-greeting', {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') },
+                body: form,
+            });
+            if (resp.ok) {
+                const data = await resp.json();
+                toast('Voicemail greeting uploaded');
+                _renderVoicemailGreetingState(data.url);
+            } else {
+                const err = await resp.json().catch(() => ({}));
+                toast(err.detail || 'Upload failed', 'error');
+            }
+            input.value = '';
+        }
+
+        async function deleteVoicemailGreeting() {
+            if (!confirm('Remove your custom voicemail greeting? Callers will hear the default text-to-speech.')) return;
+            const resp = await fetch('/api/uploads/voicemail-greeting', {
+                method: 'DELETE',
+                headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') },
+            });
+            if (resp.ok) {
+                toast('Custom greeting removed');
+                _renderVoicemailGreetingState(null);
+            }
+        }
+
+        async function toggleVoicemailRecording() {
+            const recorder = document.getElementById('vm-recorder');
+            if (_vmMediaRecorder && _vmMediaRecorder.state === 'recording') {
+                stopVoicemailRecording();
+                return;
+            }
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                _vmRecChunks = [];
+                _vmMediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+                _vmMediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) _vmRecChunks.push(e.data); };
+                _vmMediaRecorder.onstop = async () => {
+                    stream.getTracks().forEach(t => t.stop());
+                    const blob = new Blob(_vmRecChunks, { type: 'audio/webm' });
+                    const form = new FormData();
+                    form.append('file', blob, 'voicemail-greeting.webm');
+                    const resp = await fetch('/api/uploads/voicemail-greeting', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') },
+                        body: form,
+                    });
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        toast('Voicemail greeting recorded and saved');
+                        _renderVoicemailGreetingState(data.url);
+                    } else {
+                        toast('Failed to save recording', 'error');
+                    }
+                    recorder.classList.add('hidden');
+                    document.getElementById('vm-record-btn').textContent = '🎙 Record';
+                };
+                _vmMediaRecorder.start();
+                recorder.classList.remove('hidden');
+                document.getElementById('vm-record-btn').textContent = '⏹ Stop Recording';
+                document.getElementById('vm-rec-stop').disabled = false;
+                document.getElementById('vm-rec-indicator').style.background = '#c0392b';
+                _vmRecSeconds = 0;
+                document.getElementById('vm-rec-timer').textContent = '0:00';
+                _vmRecTimer = setInterval(() => {
+                    _vmRecSeconds++;
+                    const m = Math.floor(_vmRecSeconds / 60);
+                    const s = _vmRecSeconds % 60;
+                    document.getElementById('vm-rec-timer').textContent = m + ':' + String(s).padStart(2, '0');
+                }, 1000);
+            } catch (e) {
+                toast('Microphone access denied. Check your browser permissions.', 'error');
+            }
+        }
+
+        function stopVoicemailRecording() {
+            if (_vmMediaRecorder && _vmMediaRecorder.state === 'recording') {
+                _vmMediaRecorder.stop();
+            }
+            if (_vmRecTimer) { clearInterval(_vmRecTimer); _vmRecTimer = null; }
+            document.getElementById('vm-rec-indicator').style.background = '#ccc';
+            document.getElementById('vm-rec-stop').disabled = true;
         }
     </script>
 </body>

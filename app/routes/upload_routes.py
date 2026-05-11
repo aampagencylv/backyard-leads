@@ -15,7 +15,8 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from app.auth import get_current_user
 from app.models import User
 from app.services.uploads import (
-    ALLOWED_IMAGE_TYPES, MAX_LOGO_BYTES, UploadValidationError, save_image,
+    ALLOWED_IMAGE_TYPES, ALLOWED_AUDIO_TYPES, MAX_LOGO_BYTES, MAX_AUDIO_BYTES,
+    UploadValidationError, save_image, save_audio,
 )
 
 log = logging.getLogger("bmp.uploads")
@@ -60,3 +61,67 @@ async def upload_logo(
             detail="Could not save the upload. Try again or paste a URL instead.",
         )
     return {"url": url, "size_bytes": len(content), "content_type": file.content_type}
+
+
+@router.post("/voicemail-greeting")
+async def upload_voicemail_greeting(
+    file: UploadFile = File(...),
+    user: User = Depends(get_current_user),
+):
+    """Upload a custom voicemail greeting audio file. Saves the relative
+    URL on the User model so inbound calls play it instead of TTS."""
+    if file.content_type and file.content_type not in ALLOWED_AUDIO_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Audio type '{file.content_type}' not allowed. "
+                   "Use MP3, WAV, OGG, or WebM.",
+        )
+    content = await file.read()
+    if len(content) > MAX_AUDIO_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File too large ({len(content) // 1024}KB). Max is {MAX_AUDIO_BYTES // 1024 // 1024}MB.",
+        )
+    try:
+        relative_url = save_audio(
+            content,
+            content_type=file.content_type or "audio/mpeg",
+            category="voicemail",
+            user_id=user.id,
+        )
+    except UploadValidationError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        log.exception(f"Voicemail greeting upload failed for user {user.id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not save the upload. Try again.",
+        )
+
+    # Save on user profile
+    from app.database import get_db
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy import select
+    from app.database import async_session
+    async with async_session() as db:
+        u = (await db.execute(select(User).where(User.id == user.id))).scalar_one_or_none()
+        if u:
+            u.voicemail_greeting_url = relative_url
+            await db.commit()
+
+    return {"url": relative_url, "size_bytes": len(content), "content_type": file.content_type}
+
+
+@router.delete("/voicemail-greeting")
+async def delete_voicemail_greeting(
+    user: User = Depends(get_current_user),
+):
+    """Remove custom voicemail greeting — reverts to TTS."""
+    from app.database import async_session
+    from sqlalchemy import select
+    async with async_session() as db:
+        u = (await db.execute(select(User).where(User.id == user.id))).scalar_one_or_none()
+        if u:
+            u.voicemail_greeting_url = None
+            await db.commit()
+    return {"deleted": True}

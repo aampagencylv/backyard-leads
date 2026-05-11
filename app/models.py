@@ -68,6 +68,10 @@ class User(Base):
     dial_mode = Column(String(20), nullable=False, default="browser")
     personal_phone_number = Column(String(40), nullable=True)  # E.164; required when dial_mode='bridge'
 
+    # Custom voicemail greeting — if set, plays this audio file instead of TTS.
+    # Stored as a relative URL served by the app (e.g. /uploads/voicemail/3/greeting.mp3)
+    voicemail_greeting_url = Column(String(500), nullable=True)
+
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     searches = relationship("Search", back_populates="user")
