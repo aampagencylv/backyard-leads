@@ -1930,6 +1930,37 @@ function verify(secret, rawBody, header) {
     <!-- Modal mount point -->
     <div id="modal-root"></div>
 
+    <!-- AI chatbot widget (Ask Prospector). Floating button bottom-right;
+         expands into a chat panel anchored to the same corner. Visibility
+         is gated to logged-in users — checkAuth toggles `hidden` off. -->
+    <div id="ai-chat-launcher" class="hidden" style="position:fixed;bottom:18px;right:18px;z-index:9000">
+        <button onclick="toggleAiChat()" id="ai-chat-fab"
+                style="background:linear-gradient(135deg,#1B5E20,#0D3B13);color:white;border:0;width:56px;height:56px;border-radius:28px;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,0.18);font-size:22px;display:flex;align-items:center;justify-content:center;transition:transform 0.18s"
+                title="Ask Prospector — your AI assistant">🤖</button>
+    </div>
+
+    <!-- Chat panel — slides up from the launcher when toggled open. -->
+    <div id="ai-chat-panel" class="hidden" style="position:fixed;bottom:88px;right:18px;width:420px;max-width:calc(100vw - 36px);height:min(620px, calc(100vh - 130px));background:white;border-radius:14px;box-shadow:0 10px 40px rgba(0,0,0,0.18);z-index:9001;display:flex;flex-direction:column;overflow:hidden">
+        <div style="background:linear-gradient(135deg,#1B5E20,#0D3B13);color:white;padding:12px 16px;display:flex;justify-content:space-between;align-items:center">
+            <div>
+                <div style="font-weight:600;font-size:15px">🤖 Ask Prospector</div>
+                <div style="font-size:11px;opacity:0.8">Search · brief · schedule · note — just ask</div>
+            </div>
+            <div style="display:flex;gap:4px">
+                <button onclick="clearAiChat()" style="background:transparent;border:0;color:white;cursor:pointer;font-size:11px;opacity:0.8;padding:4px 6px" title="Start a new conversation">↻ New</button>
+                <button onclick="toggleAiChat()" style="background:transparent;border:0;color:white;cursor:pointer;font-size:18px;line-height:1;padding:0 4px" title="Close">×</button>
+            </div>
+        </div>
+        <div id="ai-chat-messages" style="flex:1;overflow-y:auto;padding:14px 16px;background:#fafafa;display:flex;flex-direction:column;gap:10px"></div>
+        <div style="border-top:1px solid #eee;padding:10px 12px;background:white">
+            <div style="display:flex;gap:6px;align-items:flex-end">
+                <textarea id="ai-chat-input" rows="1" placeholder="Ask anything — 'hot leads in Phoenix', 'brief on Smith Pools', 'schedule call with John'…" onkeydown="aiChatHandleKey(event)" oninput="aiChatAutoSize(this)" style="flex:1;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px;resize:none;max-height:120px;font-family:inherit"></textarea>
+                <button id="ai-chat-send" onclick="sendAiChat()" style="background:#1B5E20;color:white;border:0;padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600">Send</button>
+            </div>
+            <div style="font-size:10px;color:#888;margin-top:4px;text-align:right">Powered by Claude · uses your CRM data</div>
+        </div>
+    </div>
+
     <script>
         // ============ State + helpers ============
         let token = localStorage.getItem('token');
@@ -2137,6 +2168,9 @@ function verify(secret, rawBody, header) {
                     document.getElementById('auth-screen').classList.add('hidden');
                     document.getElementById('app-screen').classList.remove('hidden');
                     document.getElementById('user-name').textContent = user.name;
+                    // AI chatbot launcher — visible only to logged-in users
+                    const aiLauncher = document.getElementById('ai-chat-launcher');
+                    if (aiLauncher) aiLauncher.classList.remove('hidden');
                     loadDashboard();
                     refreshNavBadges();
                     startNotificationPoller();
@@ -2552,6 +2586,185 @@ function verify(secret, rawBody, header) {
             localStorage.removeItem('token');
             token = null;
             location.reload();
+        }
+
+        // ============================================================
+        // 🤖 AI Chatbot (Ask Prospector) — frontend
+        // ============================================================
+        //
+        // Floating button + chat panel. Conversation history lives in
+        // localStorage so refreshing the page doesn't wipe it. Every
+        // turn posts the full history to POST /api/ai/chat; the server
+        // runs the Anthropic tool-use loop against the MCP tool layer
+        // and returns the final assistant reply + a summary of any
+        // tools it called along the way (we surface those inline so
+        // the user sees what the AI did, not just what it said).
+
+        const AI_CHAT_STORAGE_KEY = 'bmp_ai_chat_history';
+        let _aiChatHistory = [];
+        let _aiChatBusy = false;
+
+        function _aiChatLoad() {
+            try {
+                const raw = localStorage.getItem(AI_CHAT_STORAGE_KEY);
+                _aiChatHistory = raw ? JSON.parse(raw) : [];
+            } catch (e) {
+                _aiChatHistory = [];
+            }
+        }
+
+        function _aiChatPersist() {
+            try {
+                // Cap stored history at last 50 messages to bound size
+                const trimmed = _aiChatHistory.slice(-50);
+                localStorage.setItem(AI_CHAT_STORAGE_KEY, JSON.stringify(trimmed));
+            } catch (e) { /* localStorage full / disabled — non-fatal */ }
+        }
+
+        function _aiChatRender() {
+            const box = document.getElementById('ai-chat-messages');
+            if (!box) return;
+            if (!_aiChatHistory.length) {
+                box.innerHTML = `<div style="color:#888;font-size:13px;padding:20px;text-align:center;line-height:1.7">
+                    <div style="font-size:32px;margin-bottom:8px">🤖</div>
+                    <div><strong style="color:#444">What can I help you with?</strong></div>
+                    <div style="margin-top:10px;font-size:12px">Try:</div>
+                    <div style="display:flex;flex-direction:column;gap:4px;margin-top:6px;align-items:center">
+                        <a onclick="aiChatPrompt('Show me hot leads I should call today')" style="color:var(--bmp-green);cursor:pointer;font-size:12px;text-decoration:underline">"Show me hot leads I should call today"</a>
+                        <a onclick="aiChatPrompt('Brief me on Proficient Patios — talking points for a call')" style="color:var(--bmp-green);cursor:pointer;font-size:12px;text-decoration:underline">"Brief me on Proficient Patios"</a>
+                        <a onclick="aiChatPrompt('What replies are awaiting my response this week?')" style="color:var(--bmp-green);cursor:pointer;font-size:12px;text-decoration:underline">"What replies are awaiting me?"</a>
+                        <a onclick="aiChatPrompt('What is my pipeline value this quarter?')" style="color:var(--bmp-green);cursor:pointer;font-size:12px;text-decoration:underline">"What's my pipeline this quarter?"</a>
+                    </div>
+                </div>`;
+                return;
+            }
+            box.innerHTML = _aiChatHistory.map(m => {
+                if (m.role === 'user') {
+                    return `<div style="align-self:flex-end;max-width:85%;background:#1B5E20;color:white;padding:8px 12px;border-radius:14px 14px 4px 14px;font-size:13px;line-height:1.5;white-space:pre-wrap;word-wrap:break-word">${escapeHtml(m.content)}</div>`;
+                }
+                // assistant
+                let toolsBadge = '';
+                if (m.tool_calls && m.tool_calls.length) {
+                    const names = m.tool_calls.map(t => t.name).join(', ');
+                    toolsBadge = `<div style="font-size:10px;color:#888;margin-top:4px;font-style:italic">→ called ${m.tool_calls.length} tool${m.tool_calls.length === 1 ? '' : 's'}: ${escapeHtml(names)}</div>`;
+                }
+                return `<div style="align-self:flex-start;max-width:90%;background:white;color:#222;padding:9px 12px;border-radius:14px 14px 14px 4px;font-size:13px;line-height:1.55;white-space:pre-wrap;word-wrap:break-word;border:1px solid #eee">${escapeHtml(m.content)}${toolsBadge}</div>`;
+            }).join('');
+            // Scroll to bottom
+            box.scrollTop = box.scrollHeight;
+        }
+
+        function toggleAiChat() {
+            const panel = document.getElementById('ai-chat-panel');
+            const open = panel.classList.contains('hidden');
+            if (open) {
+                _aiChatLoad();
+                _aiChatRender();
+                panel.classList.remove('hidden');
+                setTimeout(() => document.getElementById('ai-chat-input')?.focus(), 50);
+            } else {
+                panel.classList.add('hidden');
+            }
+        }
+
+        function clearAiChat() {
+            if (!_aiChatHistory.length) return;
+            if (!confirm('Start a new conversation? This clears the current chat history.')) return;
+            _aiChatHistory = [];
+            _aiChatPersist();
+            _aiChatRender();
+        }
+
+        function aiChatPrompt(text) {
+            const input = document.getElementById('ai-chat-input');
+            if (input) { input.value = text; aiChatAutoSize(input); }
+            sendAiChat();
+        }
+
+        function aiChatAutoSize(el) {
+            el.style.height = 'auto';
+            el.style.height = Math.min(120, el.scrollHeight) + 'px';
+        }
+
+        function aiChatHandleKey(e) {
+            // Enter to send; Shift+Enter for newline
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendAiChat();
+            }
+        }
+
+        async function sendAiChat() {
+            if (_aiChatBusy) return;
+            const input = document.getElementById('ai-chat-input');
+            const text = (input?.value || '').trim();
+            if (!text) return;
+            _aiChatBusy = true;
+            input.value = '';
+            aiChatAutoSize(input);
+
+            // Push the user message, render immediately, then push a
+            // "thinking" placeholder we'll replace once the response
+            // lands.
+            _aiChatHistory.push({ role: 'user', content: text });
+            _aiChatHistory.push({ role: 'assistant', content: '…', _pending: true });
+            _aiChatRender();
+            _aiChatPersist();
+
+            // Disable send button visually
+            const sendBtn = document.getElementById('ai-chat-send');
+            if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = '…'; }
+
+            try {
+                // The backend wants the conversation history MINUS the
+                // pending placeholder. Strip it out before sending.
+                const payload = _aiChatHistory
+                    .filter(m => !m._pending)
+                    .map(m => ({ role: m.role, content: m.content }));
+                const data = await api('/api/ai/chat', {
+                    method: 'POST',
+                    body: JSON.stringify({ messages: payload }),
+                });
+                // Replace the pending placeholder with the real reply
+                const pendingIdx = _aiChatHistory.findIndex(m => m._pending);
+                if (data && data.reply) {
+                    if (pendingIdx >= 0) {
+                        _aiChatHistory[pendingIdx] = {
+                            role: 'assistant',
+                            content: data.reply,
+                            tool_calls: data.tool_calls || [],
+                        };
+                    } else {
+                        _aiChatHistory.push({
+                            role: 'assistant',
+                            content: data.reply,
+                            tool_calls: data.tool_calls || [],
+                        });
+                    }
+                } else {
+                    // api() already toasted the error; surface inline too
+                    if (pendingIdx >= 0) {
+                        _aiChatHistory[pendingIdx] = {
+                            role: 'assistant',
+                            content: '⚠️ Could not reach the AI service. Please try again in a moment.',
+                        };
+                    }
+                }
+            } catch (e) {
+                const pendingIdx = _aiChatHistory.findIndex(m => m._pending);
+                if (pendingIdx >= 0) {
+                    _aiChatHistory[pendingIdx] = {
+                        role: 'assistant',
+                        content: `⚠️ Error: ${e.message || e}`,
+                    };
+                }
+            } finally {
+                _aiChatBusy = false;
+                if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Send'; }
+                _aiChatPersist();
+                _aiChatRender();
+                input?.focus();
+            }
         }
         function showRegister() { document.getElementById('login-form').classList.add('hidden'); document.getElementById('register-form').classList.remove('hidden'); }
         function showLogin() { document.getElementById('login-form').classList.remove('hidden'); document.getElementById('register-form').classList.add('hidden'); }
