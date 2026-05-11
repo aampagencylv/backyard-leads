@@ -37,7 +37,12 @@ log = logging.getLogger("bmp.middleware")
 # traceback. Tracebacks go to journalctl with the request ID for ops.
 
 class RequestIdAndErrorHandler(BaseHTTPMiddleware):
-    """First in the chain — stamps request_id, catches everything."""
+    """First in the chain — stamps request_id, catches everything.
+
+    Sets the request_id contextvar so every log record fired anywhere
+    in the request lifecycle carries the same id. Also stamps Sentry
+    scope so any captured exception has the request_id as a tag,
+    making the dashboard searchable by rid."""
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         rid = (request.headers.get("x-request-id") or "")[:64].strip()
@@ -45,16 +50,22 @@ class RequestIdAndErrorHandler(BaseHTTPMiddleware):
             rid = uuid.uuid4().hex[:16]
         request.state.request_id = rid
 
+        # Stamp the contextvar + Sentry scope before any handler runs.
+        # Anything logged or excepted from here on carries the rid.
+        from app.observability import set_request_context, capture_exception
+        set_request_context(request_id=rid, path=request.url.path)
+
         try:
             response = await call_next(request)
         except Exception as e:
             # Anything that escaped the route's own try/except.
-            # Swallow + log + return safe JSON so we never leak
-            # internals to the client.
+            # Swallow + log + capture to Sentry + return safe JSON.
             log.exception(
-                f"unhandled rid={rid} method={request.method} "
+                f"unhandled method={request.method} "
                 f"path={request.url.path} error={type(e).__name__}: {e}"
             )
+            capture_exception(e, request_method=request.method,
+                              request_path=request.url.path)
             return JSONResponse(
                 {"detail": "Internal server error", "request_id": rid},
                 status_code=500,

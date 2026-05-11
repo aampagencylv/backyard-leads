@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     google_oauth_client_id: str = ""
     google_oauth_client_secret: str = ""
 
+    # Sentry DSN — optional. Leave empty to disable error monitoring.
+    # When set, unhandled exceptions get captured with full request
+    # context. Free tier handles 5k events/month.
+    sentry_dsn: str = ""
+
     class Config:
         env_file = ".env"
 

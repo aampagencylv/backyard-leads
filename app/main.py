@@ -1,5 +1,12 @@
 import asyncio
 import logging
+# Configure observability before importing anything else that logs.
+# This way the very first log lines (route registration, etc.) carry
+# our format + rid placeholder.
+from app.observability import configure_logging, configure_sentry
+configure_logging()
+configure_sentry()  # no-op when SENTRY_DSN unset
+
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
