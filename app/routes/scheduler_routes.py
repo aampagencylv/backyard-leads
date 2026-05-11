@@ -310,6 +310,7 @@ async def upcoming_bookings(
             "contact_id": b.contact_id,
             "google_event_link": b.google_event_link,
             "google_meet_link": b.google_meet_link,
+            "prospect_timezone": getattr(b, "prospect_timezone", None),
         })
     return {
         "host_timezone": user.timezone or "America/Phoenix",
@@ -874,6 +875,7 @@ async def confirm_booking(
                     meet_link = e["uri"]
                     break
 
+    prospect_tz = (body.viewer_timezone or "").strip() or None
     booking = Booking(
         host_user_id=user.id,
         starts_at=starts_at,
@@ -882,6 +884,7 @@ async def confirm_booking(
         prospect_email=body.email.strip().lower()[:255],
         prospect_phone=(body.phone or "").strip()[:40] or None,
         prospect_message=(body.message or "").strip()[:2000] or None,
+        prospect_timezone=prospect_tz,
         answers_json=json.dumps(answers_clean) if answers_clean else None,
         company_id=company_id,
         contact_id=contact_id,
@@ -961,17 +964,44 @@ async def _send_booking_confirmation_email(booking_id: int, *, host_name: str) -
             local_part = (host.first_name or "bookings").lower()
             display_name = f"{host.first_name or 'BMP Bookings'} from BMP"
             from_addr = f"{display_name} <{local_part}@{settings.send_domain}>"
-            subject = (
-                f"Confirmed: "
-                f"{b.starts_at.astimezone(timezone.utc).strftime('%a %b %-d at %-I:%M %p UTC')} "
-                f"with {host_name}"
-            )
+            from zoneinfo import ZoneInfo
+            # Format time in the prospect's timezone (or UTC fallback)
+            p_tz_name = b.prospect_timezone or "UTC"
+            try:
+                p_tz = ZoneInfo(p_tz_name)
+            except Exception:
+                p_tz = timezone.utc
+                p_tz_name = "UTC"
+            prospect_local = b.starts_at.replace(tzinfo=timezone.utc).astimezone(p_tz)
+            # Format time in the host's timezone
+            h_tz_name = host.timezone or "America/Phoenix"
+            try:
+                h_tz = ZoneInfo(h_tz_name)
+            except Exception:
+                h_tz = timezone.utc
+                h_tz_name = "UTC"
+            host_local = b.starts_at.replace(tzinfo=timezone.utc).astimezone(h_tz)
+
+            tz_short = {"America/Phoenix": "MST", "America/Los_Angeles": "PT", "America/Denver": "MT",
+                        "America/Chicago": "CT", "America/New_York": "ET", "Etc/UTC": "UTC"}
+            p_tz_label = tz_short.get(p_tz_name, p_tz_name.split("/")[-1])
+            h_tz_label = tz_short.get(h_tz_name, h_tz_name.split("/")[-1])
+
+            when_prospect = prospect_local.strftime('%A, %B %-d at %-I:%M %p') + f" {p_tz_label}"
+            when_host = host_local.strftime('%-I:%M %p') + f" {h_tz_label}"
+
+            subject = f"Confirmed: {prospect_local.strftime('%a %b %-d at %-I:%M %p')} {p_tz_label} with {host_name}"
+
             link = b.google_event_link or ""
             first = b.prospect_name.split()[0] if b.prospect_name else ""
-            when = b.starts_at.astimezone(timezone.utc).strftime('%A, %B %-d at %-I:%M %p UTC')
+            # Show prospect's time prominently, host's time in parentheses if different
+            if p_tz_name != h_tz_name:
+                time_line = f"<strong>{when_prospect}</strong> ({when_host} {host_name}'s time)"
+            else:
+                time_line = f"<strong>{when_prospect}</strong>"
             html = (
                 f"<p>Hi {first},</p>"
-                f"<p>You're booked with {host_name} on <strong>{when}</strong>. "
+                f"<p>You're booked with {host_name} on {time_line}. "
                 "A Google Calendar invite is already in your inbox.</p>"
                 + (f'<p><a href="{link}">View the meeting on your calendar</a></p>' if link else "")
                 + f"<p>Talk soon,<br>{host_name}</p>"

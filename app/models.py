@@ -1152,6 +1152,7 @@ class Booking(Base):
     prospect_email = Column(String(255), nullable=False, index=True)
     prospect_phone = Column(String(40), nullable=True)
     prospect_message = Column(Text, nullable=True)
+    prospect_timezone = Column(String(80), nullable=True)  # IANA tz, e.g. "America/Phoenix"
 
     # Linkage back to CRM (best-effort match on email at booking time)
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=True)
