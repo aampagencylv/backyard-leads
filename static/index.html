@@ -1738,6 +1738,27 @@ function verify(secret, rawBody, header) {
                         </div>
                         <div style="font-size:11px;color:#888;margin-top:6px">After saving the integration in Missive, open any conversation — the panel will load on the right. First load asks you to sign in to Prospector once; the token persists across sessions per BDR via Missive's storage API.</div>
                     </div>
+
+                    <div class="form-group">
+                        <label>Chrome extension — Gmail + LinkedIn</label>
+                        <p style="font-size:12px;color:#888;margin:4px 0 10px">Same CRM sidebar as the Missive panel, inside Gmail and LinkedIn. Auto-detects the prospect on each thread / profile, pushes the panel onto the right side, slides out on collapse. <strong>Version:</strong> <span id="chrome-ext-version" style="font-family:ui-monospace,Menlo,monospace">checking…</span></p>
+                        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                            <button class="btn btn-primary" onclick="downloadChromeExtension()" id="chrome-ext-download-btn">📥 Download extension (.zip)</button>
+                            <button class="btn btn-secondary btn-sm" onclick="toggleChromeExtInstructions()">Install instructions</button>
+                        </div>
+                        <div id="chrome-ext-instructions" style="display:none;margin-top:12px;padding:12px;background:#fff8f0;border:1px solid #ffd9b3;border-radius:8px;font-size:12px;color:#333;line-height:1.7">
+                            <strong>One-time install (~30 seconds):</strong>
+                            <ol style="margin:8px 0 0 18px;padding:0">
+                                <li>Click <strong>📥 Download</strong> above — saves <code>prospector-crm-v{version}.zip</code> to your Downloads folder</li>
+                                <li>Unzip it (double-click on Mac, right-click → Extract All on Windows). You'll get a folder called <code>prospector-crm/</code></li>
+                                <li>Open <code>chrome://extensions</code> in Chrome</li>
+                                <li>Toggle <strong>Developer mode</strong> ON (top right corner)</li>
+                                <li>Click <strong>Load unpacked</strong> → pick the <code>prospector-crm/</code> folder</li>
+                                <li>Click the puzzle-piece icon in Chrome's toolbar → pin <strong>Prospector CRM</strong> → click it once → sign in with your Prospector email/password</li>
+                            </ol>
+                            <div style="margin-top:10px;font-size:11px;color:#666"><strong>Updating later:</strong> click Download again, replace the old folder with the new one, then go to <code>chrome://extensions</code> and click the circular ↻ refresh icon on the Prospector CRM card.</div>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Platform-tier settings (super_admin only): everything the
@@ -7583,6 +7604,56 @@ hmac.compare_digest(expected, header)</pre>
             }
         }
 
+        function toggleChromeExtInstructions() {
+            const el = document.getElementById('chrome-ext-instructions');
+            if (!el) return;
+            el.style.display = el.style.display === 'none' ? 'block' : 'none';
+        }
+
+        async function downloadChromeExtension() {
+            // Auth fetch returns a Blob — the api() helper expects JSON,
+            // so we go around it. Use the same Bearer token though.
+            const btn = document.getElementById('chrome-ext-download-btn');
+            const origLabel = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Preparing…';
+            try {
+                const r = await fetch('/integrations/extension/download', {
+                    headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('token') || '') },
+                });
+                if (!r.ok) {
+                    toast('Download failed (HTTP ' + r.status + ')');
+                    return;
+                }
+                const blob = await r.blob();
+                const disposition = r.headers.get('Content-Disposition') || '';
+                const m = disposition.match(/filename="([^"]+)"/);
+                const fname = m ? m[1] : 'prospector-crm.zip';
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = fname;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                toast('Downloaded — see Install instructions');
+            } catch (e) {
+                toast('Download failed: ' + (e.message || e));
+            } finally {
+                btn.disabled = false;
+                btn.textContent = origLabel;
+            }
+        }
+
+        async function loadChromeExtensionVersion() {
+            try {
+                const v = await api('/integrations/extension/version');
+                const el = document.getElementById('chrome-ext-version');
+                if (el && v && v.version) el.textContent = 'v' + v.version;
+            } catch (e) { /* non-fatal */ }
+        }
+
         async function loadSettings() {
             const data = await api('/api/send/profile');
             if (!data) return;
@@ -7620,6 +7691,9 @@ hmac.compare_digest(expected, header)</pre>
             if (missiveUrlEl) {
                 missiveUrlEl.value = window.location.origin + '/integrations/missive/sidebar';
             }
+
+            // Chrome extension version badge
+            loadChromeExtensionVersion();
 
             // Morning brief settings — populate from /me payload
             const briefEnabled = document.getElementById('brief-enabled');
