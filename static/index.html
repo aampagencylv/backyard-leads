@@ -5739,21 +5739,39 @@ function verify(secret, rawBody, header) {
                             <strong style="font-size:12px;color:var(--bmp-green);text-transform:uppercase;letter-spacing:0.5px">Outreach Sequence (${c.emails.length} steps)</strong>
                             <span class="sequence-toggle" onclick="toggleSequence('${cardId}')" style="margin-top:0">Expand ▼</span>
                         </div>
-                        ${c.email && !c.unsubscribed_at && c.emails.some(e => !e.is_sent) ? `
-                            <div style="background:var(--bmp-cream);border:1px solid #e8d5c4;border-radius:8px;padding:12px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center">
+                        ${c.emails.some(e => !e.is_sent) ? (() => {
+                            const isPaused = c.emails.some(e => e.paused_at);
+                            const allUnsent = c.emails.every(e => !e.is_sent);
+                            const sent = c.emails.filter(e => e.is_sent).length;
+                            const total = c.emails.length;
+                            if (isPaused) {
+                                return `<div style="background:#fff3e0;border:2px solid #ff9800;border-radius:8px;padding:14px;margin-bottom:10px">
+                                    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+                                        <div>
+                                            <strong style="font-size:14px;color:#e65100">⏸ Sequence Paused</strong>
+                                            <div style="font-size:11px;color:#888;margin-top:2px">${sent}/${total} steps completed</div>
+                                        </div>
+                                        <div style="display:flex;gap:6px;flex-wrap:wrap">
+                                            <button class="btn btn-success btn-sm" onclick="resumeSequence(${c.id})" style="font-size:13px;padding:8px 16px">▶ Resume Now</button>
+                                            <button class="btn btn-secondary btn-sm" onclick="rescheduleSequence(${c.id})">📅 Reschedule</button>
+                                            <button class="btn btn-sm" onclick="reworkSequenceAfterCall(${c.id})" style="background:var(--bmp-orange);color:white">✏️ Rework After Call</button>
+                                        </div>
+                                    </div>
+                                </div>`;
+                            }
+                            return `<div style="background:var(--bmp-cream);border:1px solid #e8d5c4;border-radius:8px;padding:12px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center">
                                 <div>
-                                    <strong style="font-size:13px">${c.emails.every(e => !e.is_sent) ? 'Ready to start' : 'Sequence in progress'}</strong>
-                                    <div style="font-size:11px;color:#888">${c.emails.filter(e => e.is_sent).length}/${c.emails.length} steps completed · Sending to ${escapeHtml(c.email)}</div>
+                                    <strong style="font-size:13px">${allUnsent ? 'Ready to start' : 'Sequence in progress'}</strong>
+                                    <div style="font-size:11px;color:#888">${sent}/${total} steps completed${c.email ? ' · Sending to ' + escapeHtml(c.email) : ''}</div>
                                 </div>
                                 <div style="display:flex;gap:6px">
-                                    <button class="btn btn-success btn-sm" onclick="sendNextInSequence(${c.id})" style="font-size:13px;padding:8px 16px">
-                                        ${c.emails.every(e => !e.is_sent) ? 'Start Sequence' : 'Send Next Step'}
-                                    </button>
-                                    ${c.emails.some(e => !e.is_sent && !e.paused_at) ? `<button class="btn btn-secondary btn-sm" onclick="pauseSequence(${c.id})">Pause</button>` : ''}
-                                    ${c.emails.some(e => e.paused_at) ? `<button class="btn btn-success btn-sm" onclick="resumeSequence(${c.id})">Resume Now</button><button class="btn btn-secondary btn-sm" onclick="rescheduleSequence(${c.id})">Reschedule</button><button class="btn btn-sm" onclick="reworkSequenceAfterCall(${c.id})" style="background:var(--bmp-orange);color:white">Rework After Call</button>` : ''}
+                                    ${c.email && !c.unsubscribed_at ? `<button class="btn btn-success btn-sm" onclick="sendNextInSequence(${c.id})" style="font-size:13px;padding:8px 16px">
+                                        ${allUnsent ? 'Start Sequence' : 'Send Next Step'}
+                                    </button>` : ''}
+                                    <button class="btn btn-secondary btn-sm" onclick="pauseSequence(${c.id})">Pause</button>
                                 </div>
-                            </div>
-                        ` : ''}
+                            </div>`;
+                        })() : ''}
                         <div class="sequence-body" id="${cardId}-seq" style="display:none">
                             ${c.emails.map((e, i) => {
                                 const card = renderEmailCard(e, c.id, c.linkedin_url);
