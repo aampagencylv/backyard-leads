@@ -85,6 +85,7 @@ async def init_db():
         "scripts.migrate_apikey_scope",
         "scripts.migrate_audit_branding",
         "scripts.migrate_audit_layout",
+        "scripts.migrate_org_brand",
     ):
         try:
             mod = __import__(_migration_module, fromlist=["main"])

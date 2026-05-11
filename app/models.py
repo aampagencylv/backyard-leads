@@ -472,9 +472,26 @@ class RuntimeConfig(Base):
     # only. DB-first with env fallback so rotation doesn't need a redeploy.
     google_maps_api_key = Column(Text, nullable=True)
 
-    # Audit-report branding — two image URLs (uploaded via /api/uploads/logo
-    # or any direct https URL). When unset, render_report_html falls back
-    # to the hardcoded BMP defaults so existing reports keep their look.
+    # Org-wide brand. Single source of truth for the org's identity —
+    # primary color, secondary (accent) color, soft tint, logo image,
+    # company display name. Every surface that needs branding (emails,
+    # audit reports, booking pages, app UI accents) falls back to
+    # these values when its own override is empty.
+    #
+    # Hierarchy:
+    #   email / app UI         → always use org brand
+    #   audit report           → use audit_report_* if set, else brand_*
+    #   booking page (per-user)→ use SchedulingConfig.* if set, else brand_*
+    brand_primary_color = Column(String(20), nullable=False, default="#E65100")
+    brand_secondary_color = Column(String(20), nullable=False, default="#1B5E20")
+    brand_accent_bg_color = Column(String(20), nullable=False, default="#FFF8F0")
+    brand_logo_url = Column(Text, nullable=True)
+    brand_company_name = Column(String(120), nullable=False, default="Backyard Marketing Pros")
+
+    # Audit-report branding — per-surface overrides on top of org brand.
+    # Empty → render falls back to brand_logo_url (footer) or no banner
+    # (header). Set explicitly when you want an audit-specific image
+    # that differs from the org logo.
     audit_report_header_url = Column(Text, nullable=True)
     audit_report_logo_url = Column(Text, nullable=True)
 

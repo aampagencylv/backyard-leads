@@ -1564,6 +1564,68 @@ function verify(secret, rawBody, header) {
                     <p style="font-size:13px;color:#666;margin-bottom:16px">This is what your signature looks like. Edit your profile fields above to update it.</p>
                     <div id="signature-preview" style="background:#fff;border:1px solid #e5e7eb;border-radius:6px;padding:16px"></div>
                 </div>
+                <!-- 🎨 Org Brand — single source of truth for the tenant's
+                     identity. Applies to emails, audit reports, booking
+                     pages, and the app UI itself. Tenant-tier (admin can
+                     manage). -->
+                <div id="org-brand-section" class="search-box hidden" style="max-width:640px;margin-top:16px">
+                    <h3 style="margin:0 0 6px">🎨 Brand</h3>
+                    <p style="font-size:12px;color:#666;margin:0 0 14px">Single source of truth for your brand. Applies everywhere — outbound emails get a branded header, the audit report uses these colors + logo, the booking page inherits these defaults, and the app UI accent matches. Audit reports and the booking page can still override individually for special cases.</p>
+
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px">
+                        <div>
+                            <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Primary color</label>
+                            <div style="display:flex;gap:6px;align-items:center">
+                                <input type="color" id="brand-primary-color" oninput="onBrandColorInput('primary')" onchange="saveOrgBrand()" style="width:42px;height:32px;padding:2px;border:1px solid #ddd;border-radius:4px;cursor:pointer">
+                                <input type="text" id="brand-primary-hex" oninput="onBrandHexInput('primary')" onblur="saveOrgBrand()" maxlength="7" placeholder="#E65100" style="flex:1;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:12px;font-family:monospace">
+                            </div>
+                            <div style="font-size:10px;color:#888;margin-top:3px">Buttons, accents, headers.</div>
+                        </div>
+                        <div>
+                            <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Secondary color</label>
+                            <div style="display:flex;gap:6px;align-items:center">
+                                <input type="color" id="brand-secondary-color" oninput="onBrandColorInput('secondary')" onchange="saveOrgBrand()" style="width:42px;height:32px;padding:2px;border:1px solid #ddd;border-radius:4px;cursor:pointer">
+                                <input type="text" id="brand-secondary-hex" oninput="onBrandHexInput('secondary')" onblur="saveOrgBrand()" maxlength="7" placeholder="#1B5E20" style="flex:1;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:12px;font-family:monospace">
+                            </div>
+                            <div style="font-size:10px;color:#888;margin-top:3px">Email header, section titles.</div>
+                        </div>
+                        <div>
+                            <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Soft accent</label>
+                            <div style="display:flex;gap:6px;align-items:center">
+                                <input type="color" id="brand-accent-color" oninput="onBrandColorInput('accent')" onchange="saveOrgBrand()" style="width:42px;height:32px;padding:2px;border:1px solid #ddd;border-radius:4px;cursor:pointer">
+                                <input type="text" id="brand-accent-hex" oninput="onBrandHexInput('accent')" onblur="saveOrgBrand()" maxlength="7" placeholder="#FFF8F0" style="flex:1;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:12px;font-family:monospace">
+                            </div>
+                            <div style="font-size:10px;color:#888;margin-top:3px">Tinted backgrounds.</div>
+                        </div>
+                    </div>
+
+                    <div style="margin-bottom:14px">
+                        <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Logo</label>
+                        <div style="display:flex;gap:6px;align-items:stretch;flex-wrap:wrap">
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('brand-logo-file').click()">📤 Upload</button>
+                            <input type="file" id="brand-logo-file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" onchange="uploadOrgBrandLogo(this)" style="display:none">
+                            <input id="brand-logo-url" oninput="renderBrandPreview()" onchange="saveOrgBrand()" placeholder="…or paste an https://… URL" style="flex:1;min-width:200px;padding:7px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="clearOrgBrandLogo()" title="Remove">✕</button>
+                        </div>
+                        <div style="font-size:11px;color:#888;margin-top:4px">PNG / SVG with transparent background works best. ~200×60 sweet spot.</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Company display name</label>
+                        <input id="brand-company-name" oninput="renderBrandPreview()" onchange="saveOrgBrand()" maxlength="120" placeholder="Backyard Marketing Pros">
+                    </div>
+
+                    <div style="margin-top:14px">
+                        <div style="font-size:12px;color:#666;margin-bottom:6px">Preview</div>
+                        <div id="brand-preview" style="border:1px solid #e6e6e6;border-radius:8px;overflow:hidden;background:white"></div>
+                    </div>
+
+                    <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+                        <button class="btn btn-secondary btn-xs" onclick="resetOrgBrand()">Reset to BMP defaults</button>
+                        <span id="brand-save-status" style="font-size:11px;color:#888"></span>
+                    </div>
+                </div>
+
                 <!-- Tenant-tier settings (visible to admin + super_admin).
                      SaaS model: the platform supplies enrichment / carrier /
                      AI / email infrastructure. The ONE customer-supplied
@@ -7067,6 +7129,9 @@ hmac.compare_digest(expected, header)</pre>
             const messagingSection = document.getElementById('messaging-direction-section');
             if (messagingSection) messagingSection.classList.toggle('hidden', !isAdminPlus);
 
+            const orgBrandSection = document.getElementById('org-brand-section');
+            if (orgBrandSection) orgBrandSection.classList.toggle('hidden', !isAdminPlus);
+
             const auditBrandingSection = document.getElementById('audit-branding-section');
             if (auditBrandingSection) auditBrandingSection.classList.toggle('hidden', !isAdminPlus);
 
@@ -8374,6 +8439,19 @@ hmac.compare_digest(expected, header)</pre>
         async function loadRuntimeConfig() {
             const cfg = await api('/api/runtime-config');
             if (!cfg) return;
+
+            // Org brand (tenant-tier)
+            const b = cfg.brand || {};
+            const setBrandField = (id, v) => { const el = document.getElementById(id); if (el != null) el.value = v || ''; };
+            setBrandField('brand-primary-color', b.primary_color || '#E65100');
+            setBrandField('brand-primary-hex',   b.primary_color || '#E65100');
+            setBrandField('brand-secondary-color', b.secondary_color || '#1B5E20');
+            setBrandField('brand-secondary-hex',   b.secondary_color || '#1B5E20');
+            setBrandField('brand-accent-color',  b.accent_bg_color || '#FFF8F0');
+            setBrandField('brand-accent-hex',    b.accent_bg_color || '#FFF8F0');
+            setBrandField('brand-logo-url',      b.logo_url || '');
+            setBrandField('brand-company-name',  b.company_name || 'Backyard Marketing Pros');
+            renderBrandPreview();
 
             // Apollo BYO-key (tenant-tier — visible to admin+)
             const a = cfg.apollo || {};
@@ -9984,6 +10062,177 @@ hmac.compare_digest(expected, header)</pre>
                 body: JSON.stringify({ google_maps_api_key: value }),
             });
             if (data) { toast('Google Maps key saved'); loadRuntimeConfig(); }
+        }
+
+        // ============================================================
+        // 🎨 Org Brand — single source of truth for tenant identity
+        // ============================================================
+        //
+        // Applies the org brand colors to the running app on boot via
+        // CSS variable injection, plus drives the Settings → Brand
+        // panel for editing.
+
+        function _isHexColor(s) { return typeof s === 'string' && /^#[0-9a-fA-F]{6}$/.test(s); }
+
+        function _applyBrandToAppUI(primary, secondary, accent) {
+            // Re-skin the entire app by overriding the BMP-named CSS
+            // variables. Existing components already reference these
+            // via var(--bmp-orange) etc., so this propagates instantly.
+            const root = document.documentElement;
+            if (_isHexColor(primary))   root.style.setProperty('--bmp-orange', primary);
+            if (_isHexColor(secondary)) root.style.setProperty('--bmp-green', secondary);
+            if (_isHexColor(accent))    root.style.setProperty('--bmp-cream', accent);
+        }
+
+        async function applyOrgBrandAtBoot() {
+            // Public endpoint — works without auth so login + booking
+            // pages can also pick up the brand. We just want the colors
+            // here; nothing sensitive comes back.
+            try {
+                const r = await fetch('/api/brand');
+                if (!r.ok) return;
+                const b = await r.json();
+                _applyBrandToAppUI(b.primary_color, b.secondary_color, b.accent_bg_color);
+            } catch (e) {
+                // Brand is best-effort; defaults stay if anything fails.
+            }
+        }
+        // Fire at script-load. Re-fires after every saveOrgBrand so
+        // admins see their changes live without a refresh.
+        applyOrgBrandAtBoot();
+
+        // Color picker → hex text + preview
+        function onBrandColorInput(which) {
+            const c = document.getElementById(`brand-${which}-color`)?.value || '';
+            const hex = document.getElementById(`brand-${which}-hex`);
+            if (hex) hex.value = c;
+            renderBrandPreview();
+        }
+
+        function onBrandHexInput(which) {
+            const v = (document.getElementById(`brand-${which}-hex`)?.value || '').trim();
+            if (_isHexColor(v)) {
+                const c = document.getElementById(`brand-${which}-color`);
+                if (c) c.value = v;
+            }
+            renderBrandPreview();
+        }
+
+        function _currentBrandFromInputs() {
+            const get = id => (document.getElementById(id)?.value || '').trim();
+            return {
+                primary:   get('brand-primary-hex')   || get('brand-primary-color')   || '#E65100',
+                secondary: get('brand-secondary-hex') || get('brand-secondary-color') || '#1B5E20',
+                accent:    get('brand-accent-hex')    || get('brand-accent-color')    || '#FFF8F0',
+                logo:      get('brand-logo-url'),
+                company:   get('brand-company-name') || 'Backyard Marketing Pros',
+            };
+        }
+
+        function renderBrandPreview() {
+            const b = _currentBrandFromInputs();
+            const box = document.getElementById('brand-preview');
+            if (!box) return;
+            const safeP = _isHexColor(b.primary)   ? b.primary   : '#E65100';
+            const safeS = _isHexColor(b.secondary) ? b.secondary : '#1B5E20';
+            const safeA = _isHexColor(b.accent)    ? b.accent    : '#FFF8F0';
+            const logoBlock = b.logo
+                ? `<img src="${escapeHtml(b.logo)}" style="max-height:36px;max-width:160px;display:block" onerror="this.style.display='none'">`
+                : `<div style="font-weight:700;color:white;font-size:16px">${escapeHtml(b.company)}</div>`;
+            box.innerHTML = `
+                <div style="background:${safeS};color:white;padding:14px 18px;display:flex;justify-content:space-between;align-items:center">
+                    ${logoBlock}
+                    <span style="background:${safeP};color:white;padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600">📅 Schedule a Call</span>
+                </div>
+                <div style="padding:14px 18px;background:${safeA};font-size:12px;color:#444;border-top:1px solid rgba(0,0,0,0.05)">
+                    Sample email body / audit content / booking slot picker styling.
+                </div>
+                <div style="padding:10px 18px;display:flex;justify-content:flex-end;background:white">
+                    <button type="button" style="background:${safeP};color:white;border:0;padding:7px 14px;border-radius:5px;font-size:12px;cursor:default">Primary action</button>
+                </div>
+            `;
+            // Apply live to app UI as the user drags — visible immediately
+            _applyBrandToAppUI(b.primary, b.secondary, b.accent);
+        }
+
+        let _orgBrandSaveTimer = null;
+        async function saveOrgBrand() {
+            if (_orgBrandSaveTimer) clearTimeout(_orgBrandSaveTimer);
+            _orgBrandSaveTimer = setTimeout(async () => {
+                const b = _currentBrandFromInputs();
+                const status = document.getElementById('brand-save-status');
+                if (status) { status.textContent = 'Saving…'; status.style.color = '#888'; }
+                const data = await api('/api/runtime-config', {
+                    method: 'PATCH',
+                    body: JSON.stringify({
+                        brand_primary_color:   b.primary,
+                        brand_secondary_color: b.secondary,
+                        brand_accent_bg_color: b.accent,
+                        brand_logo_url:        b.logo,
+                        brand_company_name:    b.company,
+                    }),
+                });
+                if (status) {
+                    if (data) {
+                        status.textContent = '✓ Saved';
+                        status.style.color = '#1b5e20';
+                        setTimeout(() => { if (status.textContent === '✓ Saved') status.textContent = ''; }, 2000);
+                    } else {
+                        status.textContent = '✗ Save failed';
+                        status.style.color = '#c0392b';
+                    }
+                }
+            }, 300);
+        }
+
+        async function uploadOrgBrandLogo(inputEl) {
+            const file = inputEl.files && inputEl.files[0];
+            if (!file) return;
+            const fd = new FormData();
+            fd.append('file', file);
+            const token = localStorage.getItem('access_token');
+            try {
+                const r = await fetch('/api/uploads/logo', {
+                    method: 'POST',
+                    headers: { Authorization: `Bearer ${token}` },
+                    body: fd,
+                });
+                const data = await r.json().catch(() => ({}));
+                if (!r.ok || !data.url) {
+                    toast(data.detail || 'Upload failed');
+                    inputEl.value = '';
+                    return;
+                }
+                document.getElementById('brand-logo-url').value = data.url;
+                renderBrandPreview();
+                await saveOrgBrand();
+                toast(`✓ Logo uploaded · ${Math.round(data.size_bytes/1024)}KB`);
+                inputEl.value = '';
+            } catch (e) {
+                toast(`Upload failed: ${e.message || e}`);
+                inputEl.value = '';
+            }
+        }
+
+        function clearOrgBrandLogo() {
+            document.getElementById('brand-logo-url').value = '';
+            renderBrandPreview();
+            saveOrgBrand();
+        }
+
+        function resetOrgBrand() {
+            if (!confirm('Reset brand to BMP defaults? Colors revert, logo is cleared.')) return;
+            const set = (id, v) => { const el = document.getElementById(id); if (el != null) el.value = v; };
+            set('brand-primary-color', '#E65100');
+            set('brand-primary-hex',   '#E65100');
+            set('brand-secondary-color', '#1B5E20');
+            set('brand-secondary-hex',   '#1B5E20');
+            set('brand-accent-color',  '#FFF8F0');
+            set('brand-accent-hex',    '#FFF8F0');
+            set('brand-logo-url',      '');
+            set('brand-company-name',  'Backyard Marketing Pros');
+            renderBrandPreview();
+            saveOrgBrand();
         }
 
         // ============================================================

@@ -25,6 +25,8 @@ from app.runtime_config import (
     set_apollo_api_key,
     set_google_maps_api_key,
     set_audit_branding,
+    set_org_brand,
+    get_org_brand,
     DEFAULT_MESSAGING_DIRECTION,
     mask_key,
 )
@@ -55,6 +57,12 @@ class UpdateRuntimeConfigRequest(BaseModel):
     audit_scheduler_type: Optional[str] = None    # 'iclosed' | 'native' | 'custom'
     audit_native_user_id: Optional[int] = None
     audit_custom_url: Optional[str] = None
+    # Org-wide brand — single source of truth for the tenant's identity
+    brand_primary_color: Optional[str] = None
+    brand_secondary_color: Optional[str] = None
+    brand_accent_bg_color: Optional[str] = None
+    brand_logo_url: Optional[str] = None
+    brand_company_name: Optional[str] = None
 
 
 def _tenant_payload(rc, settings_obj) -> dict:
@@ -70,6 +78,13 @@ def _tenant_payload(rc, settings_obj) -> dict:
     """
     apollo_key = (rc.apollo_api_key or "").strip()
     return {
+        "brand": {
+            "primary_color":   getattr(rc, "brand_primary_color", None) or "#E65100",
+            "secondary_color": getattr(rc, "brand_secondary_color", None) or "#1B5E20",
+            "accent_bg_color": getattr(rc, "brand_accent_bg_color", None) or "#FFF8F0",
+            "logo_url":        getattr(rc, "brand_logo_url", None) or "",
+            "company_name":    getattr(rc, "brand_company_name", None) or "Backyard Marketing Pros",
+        },
         "apollo": {
             "set": bool(apollo_key),
             "masked": mask_key(apollo_key),
@@ -166,6 +181,18 @@ def _payload(rc, settings_obj, *, include_platform: bool) -> dict:
     if include_platform:
         out.update(_platform_payload(rc, settings_obj))
     return out
+
+
+@router.get("/brand")
+async def get_brand(
+    db: AsyncSession = Depends(get_db),
+):
+    """Public org brand — colors + logo + company name. No auth so the
+    login page + public booking pages can pick up the brand too. This
+    is the same data exposed inside /api/runtime-config's `brand` key,
+    just without the admin gate. It's deliberately a small, public-by-
+    design surface — nothing sensitive lives here."""
+    return await get_org_brand(db)
 
 
 @router.get("/runtime-config")
@@ -266,6 +293,21 @@ async def update_runtime_config(
         await set_apollo_api_key(db, req.apollo_api_key)
     if req.messaging_direction is not None:
         await set_messaging_direction(db, req.messaging_direction)
+    # Org brand — tenant-tier, admin can manage
+    _brand_fields = (
+        req.brand_primary_color, req.brand_secondary_color,
+        req.brand_accent_bg_color, req.brand_logo_url, req.brand_company_name,
+    )
+    if any(v is not None for v in _brand_fields):
+        await set_org_brand(
+            db,
+            primary_color=req.brand_primary_color,
+            secondary_color=req.brand_secondary_color,
+            accent_bg_color=req.brand_accent_bg_color,
+            logo_url=req.brand_logo_url,
+            company_name=req.brand_company_name,
+        )
+
     _audit_fields = (
         req.audit_report_header_url, req.audit_report_logo_url,
         req.audit_left_image_url, req.audit_left_message,
@@ -322,6 +364,8 @@ async def update_runtime_config(
         "audit_left_image_url", "audit_left_message",
         "audit_right_image_url", "audit_right_message",
         "audit_scheduler_type", "audit_native_user_id", "audit_custom_url",
+        "brand_primary_color", "brand_secondary_color", "brand_accent_bg_color",
+        "brand_logo_url", "brand_company_name",
     ):
         val = getattr(req, field_name)
         if val is not None:

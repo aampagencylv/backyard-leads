@@ -21,6 +21,32 @@ from app.config import settings
 router = APIRouter(tags=["audit"])
 
 
+async def _resolve_audit_assets(db, rc) -> dict:
+    """Compute the audit report's effective branding by layering
+    audit-specific overrides on top of org brand. Returns the kwargs
+    to pass to render_report_html.
+
+    Hierarchy:
+      header_url      = audit_report_header_url (no org fallback —
+                        the header is intentionally audit-only)
+      footer_logo_url = audit_report_logo_url, falling back to
+                        brand_logo_url so the org logo carries over
+                        for free when audit-specific isn't set
+    """
+    from app.runtime_config import get_org_brand
+    brand = await get_org_brand(db)
+    audit_header = getattr(rc, "audit_report_header_url", None) or ""
+    audit_logo = getattr(rc, "audit_report_logo_url", None) or ""
+    return {
+        "header_url":      (audit_header or "").strip(),
+        "footer_logo_url": (audit_logo or brand["logo_url"] or "").strip(),
+        "left_image_url":  getattr(rc, "audit_left_image_url", "") or "",
+        "left_message":    getattr(rc, "audit_left_message", "") or "",
+        "right_image_url": getattr(rc, "audit_right_image_url", "") or "",
+        "right_message":   getattr(rc, "audit_right_message", "") or "",
+    }
+
+
 async def _resolve_audit_booking_url(db, rc, public_url: str) -> str:
     """Pick the right Schedule-a-Call destination based on the org's
     audit_scheduler_type setting. Falls back to '' (caller will then
@@ -92,15 +118,11 @@ async def generate_audit_report(
     from app.runtime_config import _get_or_create as _get_rc
     rc = await _get_rc(db)
     booking_url = await _resolve_audit_booking_url(db, rc, public_url)
+    assets = await _resolve_audit_assets(db, rc)
     html = render_report_html(
         report, token, public_url,
-        header_url=getattr(rc, "audit_report_header_url", "") or "",
-        footer_logo_url=getattr(rc, "audit_report_logo_url", "") or "",
-        left_image_url=getattr(rc, "audit_left_image_url", "") or "",
-        left_message=getattr(rc, "audit_left_message", "") or "",
-        right_image_url=getattr(rc, "audit_right_image_url", "") or "",
-        right_message=getattr(rc, "audit_right_message", "") or "",
         booking_url_override=booking_url,
+        **assets,
     )
 
     if existing:

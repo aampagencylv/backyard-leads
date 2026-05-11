@@ -124,6 +124,57 @@ async def set_blooio_signing_secret(db: AsyncSession, value: str) -> RuntimeConf
     return rc
 
 
+_HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$") if False else None  # placeholder; real re below
+import re as _re
+_HEX_RE = _re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+async def get_org_brand(db: AsyncSession) -> dict:
+    """Single source of truth for org branding. Every surface that
+    needs to display org-level brand pulls from here. Returns a dict
+    with normalized hex colors + the logo URL + company name. Safe to
+    call without a config row — defaults are baked in."""
+    rc = await _get_or_create(db)
+    def _hex(v, fb):
+        v = (v or "").strip()
+        return v if _HEX_RE.match(v) else fb
+    return {
+        "primary_color":   _hex(getattr(rc, "brand_primary_color", None), "#E65100"),
+        "secondary_color": _hex(getattr(rc, "brand_secondary_color", None), "#1B5E20"),
+        "accent_bg_color": _hex(getattr(rc, "brand_accent_bg_color", None), "#FFF8F0"),
+        "logo_url":        (getattr(rc, "brand_logo_url", None) or "").strip(),
+        "company_name":    (getattr(rc, "brand_company_name", None) or "Backyard Marketing Pros").strip(),
+    }
+
+
+async def set_org_brand(
+    db: AsyncSession, *,
+    primary_color: Optional[str] = None,
+    secondary_color: Optional[str] = None,
+    accent_bg_color: Optional[str] = None,
+    logo_url: Optional[str] = None,
+    company_name: Optional[str] = None,
+) -> RuntimeConfig:
+    rc = await _get_or_create(db)
+    def _hex(v, fb):
+        v = (v or "").strip()
+        return v if _HEX_RE.match(v) else fb
+    if primary_color is not None:
+        rc.brand_primary_color = _hex(primary_color, rc.brand_primary_color or "#E65100")
+    if secondary_color is not None:
+        rc.brand_secondary_color = _hex(secondary_color, rc.brand_secondary_color or "#1B5E20")
+    if accent_bg_color is not None:
+        rc.brand_accent_bg_color = _hex(accent_bg_color, rc.brand_accent_bg_color or "#FFF8F0")
+    if logo_url is not None:
+        rc.brand_logo_url = logo_url.strip()[:500] or None
+    if company_name is not None:
+        rc.brand_company_name = company_name.strip()[:120] or "Backyard Marketing Pros"
+    rc.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(rc)
+    return rc
+
+
 async def set_audit_branding(
     db: AsyncSession, *,
     header_url: Optional[str] = None,

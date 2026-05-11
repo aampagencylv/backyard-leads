@@ -1040,15 +1040,23 @@ async def render_booking_page(slug: str, db: AsyncSession = Depends(get_db)):
             "<p>The host hasn't connected their calendar.</p></body></html>",
             status_code=503, headers=no_cache_headers,
         )
-    # Pull brand customization from the host's config so the CSS
-    # variables get baked into the page at render time — avoids the
-    # "flash of default colors" you'd get if we set them via JS after
-    # the API call. Cache-Control: no-store means brand changes are
-    # visible immediately on the next page load.
+    # Brand resolution: per-user SchedulingConfig override → org brand.
+    # The per-user fields were seeded with BMP defaults historically, so
+    # we treat values matching the legacy defaults as "unset" and inherit
+    # from org brand. This way an org brand change cascades to every
+    # rep's booking page automatically — but reps who customized
+    # explicitly keep their customization.
+    from app.runtime_config import get_org_brand
     cfg = await _get_or_create_config(db, user.id)
-    brand = _normalize_hex(cfg.brand_color, _DEFAULT_BRAND)
-    accent = _normalize_hex(cfg.accent_bg_color, _DEFAULT_ACCENT_BG)
-    logo_url = cfg.logo_url or ""
+    org = await get_org_brand(db)
+    def _resolve(per_user, org_value, legacy_default):
+        v = (per_user or "").strip()
+        if not v or v.lower() == legacy_default.lower():
+            return org_value
+        return v
+    brand = _resolve(cfg.brand_color, org["primary_color"], _DEFAULT_BRAND)
+    accent = _resolve(cfg.accent_bg_color, org["accent_bg_color"], _DEFAULT_ACCENT_BG)
+    logo_url = (cfg.logo_url or "").strip() or org["logo_url"]
     return HTMLResponse(
         _render_booking_html(slug, brand=brand, accent=accent, logo_url=logo_url),
         headers=no_cache_headers,
