@@ -14,7 +14,7 @@ from sqlalchemy import select
 
 from app.database import get_db
 from app.models import User, Company, Activity, Task, AuditReportModel
-from app.auth import get_current_user
+from app.auth import get_current_user, require_admin
 from app.services.audit_report import generate_audit, render_report_html
 from app.config import settings
 
