@@ -21,6 +21,29 @@ from app.config import settings
 router = APIRouter(tags=["audit"])
 
 
+async def _resolve_audit_booking_url(db, rc, public_url: str) -> str:
+    """Pick the right Schedule-a-Call destination based on the org's
+    audit_scheduler_type setting. Falls back to '' (caller will then
+    use the default iClosed URL)."""
+    scheduler_type = (getattr(rc, "audit_scheduler_type", None) or "iclosed").lower()
+    if scheduler_type == "iclosed":
+        return ""  # render_report_html falls back to settings.iclosed_booking_url
+    if scheduler_type == "custom":
+        return (getattr(rc, "audit_custom_url", "") or "").strip()
+    if scheduler_type == "native":
+        user_id = getattr(rc, "audit_native_user_id", None)
+        if not user_id:
+            return ""  # not configured yet → fall back to iClosed
+        host = (await db.execute(
+            select(User).where(User.id == int(user_id), User.is_active == True)
+        )).scalar_one_or_none()
+        if host and host.booking_slug and host.google_refresh_token:
+            return f"{public_url.rstrip('/')}/book/{host.booking_slug}"
+        # Picked user no longer has a booking page → fall back
+        return ""
+    return ""
+
+
 def _const_eq(a: str, b: str) -> bool:
     """Constant-time string compare. Use for webhook-secret checks so
     timing differences don't leak the secret one byte at a time."""
@@ -63,15 +86,21 @@ async def generate_audit_report(
 
     token = existing.token if existing else secrets.token_urlsafe(16)
     public_url = settings.public_url.rstrip("/")
-    # Pull org-level audit-report branding overrides (header banner +
-    # footer logo). Empty values → render_report_html falls back to
-    # the BMP defaults.
+    # Pull org-level audit-report branding overrides (header banner,
+    # footer logo, side panels, scheduler choice). Empty values fall
+    # back to BMP defaults.
     from app.runtime_config import _get_or_create as _get_rc
     rc = await _get_rc(db)
+    booking_url = await _resolve_audit_booking_url(db, rc, public_url)
     html = render_report_html(
         report, token, public_url,
         header_url=getattr(rc, "audit_report_header_url", "") or "",
         footer_logo_url=getattr(rc, "audit_report_logo_url", "") or "",
+        left_image_url=getattr(rc, "audit_left_image_url", "") or "",
+        left_message=getattr(rc, "audit_left_message", "") or "",
+        right_image_url=getattr(rc, "audit_right_image_url", "") or "",
+        right_message=getattr(rc, "audit_right_message", "") or "",
+        booking_url_override=booking_url,
     )
 
     if existing:

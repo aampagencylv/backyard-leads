@@ -478,6 +478,26 @@ class RuntimeConfig(Base):
     audit_report_header_url = Column(Text, nullable=True)
     audit_report_logo_url = Column(Text, nullable=True)
 
+    # Audit-report side panel content (left + right of the centered report
+    # body). Each side independently supports an image URL + a short
+    # message. When BOTH sides are empty, the report renders in its
+    # original single-column centered layout; otherwise it switches to a
+    # 3-column grid with the sidebars (collapsing to stacked on mobile).
+    audit_left_image_url = Column(Text, nullable=True)
+    audit_left_message = Column(Text, nullable=True)
+    audit_right_image_url = Column(Text, nullable=True)
+    audit_right_message = Column(Text, nullable=True)
+
+    # Scheduler selector for the "Schedule a Discovery Call" CTA on the
+    # audit report. Org-wide setting; the whole team's audits use the
+    # same scheduler.
+    #   'iclosed' → existing iClosed booking URL (settings.iclosed_booking_url)
+    #   'native'  → /book/{slug} for the picked rep (audit_native_user_id)
+    #   'custom'  → audit_custom_url verbatim
+    audit_scheduler_type = Column(String(20), nullable=False, default="iclosed")
+    audit_native_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    audit_custom_url = Column(Text, nullable=True)
+
     # Apollo BYO-key — the ONE customer-supplied integration in the SaaS
     # model. Tenants who already pay Apollo can plug their key in to unlock
     # decision-maker contacts + direct dials for verticals where Apollo's

@@ -48,6 +48,13 @@ class UpdateRuntimeConfigRequest(BaseModel):
     google_maps_api_key: Optional[str] = None  # Platform-tier (super_admin only)
     audit_report_header_url: Optional[str] = None  # Tenant-tier (admin can set)
     audit_report_logo_url: Optional[str] = None    # Tenant-tier (admin can set)
+    audit_left_image_url: Optional[str] = None
+    audit_left_message: Optional[str] = None
+    audit_right_image_url: Optional[str] = None
+    audit_right_message: Optional[str] = None
+    audit_scheduler_type: Optional[str] = None    # 'iclosed' | 'native' | 'custom'
+    audit_native_user_id: Optional[int] = None
+    audit_custom_url: Optional[str] = None
 
 
 def _tenant_payload(rc, settings_obj) -> dict:
@@ -75,6 +82,13 @@ def _tenant_payload(rc, settings_obj) -> dict:
         "audit_branding": {
             "header_url": (getattr(rc, "audit_report_header_url", None) or ""),
             "logo_url": (getattr(rc, "audit_report_logo_url", None) or ""),
+            "left_image_url":  (getattr(rc, "audit_left_image_url", None) or ""),
+            "left_message":    (getattr(rc, "audit_left_message", None) or ""),
+            "right_image_url": (getattr(rc, "audit_right_image_url", None) or ""),
+            "right_message":   (getattr(rc, "audit_right_message", None) or ""),
+            "scheduler_type":  (getattr(rc, "audit_scheduler_type", None) or "iclosed"),
+            "native_user_id":  getattr(rc, "audit_native_user_id", None),
+            "custom_url":      (getattr(rc, "audit_custom_url", None) or ""),
         },
     }
 
@@ -172,6 +186,37 @@ async def get_runtime_config(
     return _payload(rc, settings, include_platform=(user.role == "super_admin"))
 
 
+@router.get("/runtime-config/native-scheduler-hosts")
+async def list_native_scheduler_hosts(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Used by the Audit Reports settings page to populate the
+    'pick which rep's booking page' dropdown when scheduler_type
+    is 'native'. Lists active users who have connected Google
+    Calendar and have a booking_slug assigned."""
+    if user.role not in ("admin", "super_admin"):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Admin access required")
+    from sqlalchemy import select
+    rows = (await db.execute(
+        select(User).where(
+            User.is_active == True,
+            User.google_refresh_token.isnot(None),
+            User.booking_slug.isnot(None),
+        ).order_by(User.first_name, User.last_name)
+    )).scalars().all()
+    return [
+        {
+            "id": u.id,
+            "name": u.full_name or u.email,
+            "email": u.email,
+            "booking_slug": u.booking_slug,
+        }
+        for u in rows
+    ]
+
+
 @router.get("/runtime-config/messaging-default")
 async def get_messaging_default(
     user: User = Depends(get_current_user),
@@ -221,11 +266,24 @@ async def update_runtime_config(
         await set_apollo_api_key(db, req.apollo_api_key)
     if req.messaging_direction is not None:
         await set_messaging_direction(db, req.messaging_direction)
-    if req.audit_report_header_url is not None or req.audit_report_logo_url is not None:
+    _audit_fields = (
+        req.audit_report_header_url, req.audit_report_logo_url,
+        req.audit_left_image_url, req.audit_left_message,
+        req.audit_right_image_url, req.audit_right_message,
+        req.audit_scheduler_type, req.audit_native_user_id, req.audit_custom_url,
+    )
+    if any(v is not None for v in _audit_fields):
         await set_audit_branding(
             db,
             header_url=req.audit_report_header_url,
             logo_url=req.audit_report_logo_url,
+            left_image_url=req.audit_left_image_url,
+            left_message=req.audit_left_message,
+            right_image_url=req.audit_right_image_url,
+            right_message=req.audit_right_message,
+            scheduler_type=req.audit_scheduler_type,
+            native_user_id=req.audit_native_user_id,
+            custom_url=req.audit_custom_url,
         )
 
     # Platform-tier writes (super_admin only)
@@ -261,6 +319,9 @@ async def update_runtime_config(
         "resend_webhook_secret", "messaging_direction", "apollo_api_key",
         "google_maps_api_key",
         "audit_report_header_url", "audit_report_logo_url",
+        "audit_left_image_url", "audit_left_message",
+        "audit_right_image_url", "audit_right_message",
+        "audit_scheduler_type", "audit_native_user_id", "audit_custom_url",
     ):
         val = getattr(req, field_name)
         if val is not None:

@@ -389,6 +389,7 @@
                 <a data-page="pipeline" onclick="showPage('pipeline')">Pipeline <span id="nav-pipeline-count" class="nav-badge"></span></a>
                 <a data-page="tasks" onclick="showPage('tasks')">Tasks <span id="nav-tasks-count" class="nav-badge"></span></a>
                 <a data-page="calendar" onclick="showPage('calendar')">📅 Calendar</a>
+                <a data-page="audit-reports" id="nav-audit-reports" onclick="showPage('audit-reports')" class="hidden">📊 Audit Reports</a>
                 <a data-page="autopilot" onclick="showPage('autopilot')" style="margin-top:12px;border-top:1px solid rgba(255,255,255,0.1);padding-top:12px">Auto Pilot</a>
                 <a href="#" onclick="event.preventDefault();openStandaloneDialer()" style="color:var(--bmp-orange)">Dial a Number</a>
                 <a data-page="developer" id="nav-developer" onclick="showPage('developer')" class="hidden">Developer</a>
@@ -1418,6 +1419,126 @@ function verify(secret, rawBody, header) {
                 </div>
             </div>
 
+            <!-- =========================================================
+                 📊 Audit Reports — dedicated settings page for the AI
+                 Findability audit branding + layout + scheduler.
+                 Admin-only (hidden from sales_reps via #nav-audit-reports
+                 class toggle in checkAuth).
+                 ========================================================= -->
+            <div id="page-audit-reports" class="hidden">
+                <div class="page-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+                    <div>
+                        <h1 style="margin:0">📊 Audit Reports</h1>
+                        <p style="margin:4px 0 0;font-size:13px;color:#666">Brand the AI Findability audit your prospects see — banner, sidebars, footer, and which scheduler the CTA points to. Applies to every audit your team generates.</p>
+                    </div>
+                </div>
+
+                <!-- Branding (header + footer) — same controls as before, just relocated here -->
+                <div class="search-box" style="max-width:880px">
+                    <h3 style="margin:0 0 6px;font-size:15px">🎨 Header banner + footer logo</h3>
+                    <p style="font-size:12px;color:#888;margin:0 0 14px">Header sits across the top of the report; footer logo at the bottom. Both default to BMP's images if you leave them blank.</p>
+                    <div class="form-group" style="margin-bottom:14px">
+                        <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Header banner</label>
+                        <p style="font-size:11px;color:#888;margin:0 0 6px">Wide image — 1200×360 works well.</p>
+                        <div style="display:flex;gap:6px;align-items:stretch;flex-wrap:wrap">
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('ar-header-file').click()">📤 Upload</button>
+                            <input type="file" id="ar-header-file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" onchange="uploadAuditAssetFile('header', this)" style="display:none">
+                            <input id="ar-header-url" oninput="previewAuditAll()" onchange="saveAuditConfig()" placeholder="…or paste an https://… URL" style="flex:1;min-width:220px;padding:7px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="clearAuditAsset('header')" title="Revert to default">✕</button>
+                        </div>
+                        <div id="ar-header-preview" style="margin-top:8px"></div>
+                    </div>
+                    <div class="form-group">
+                        <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Footer logo</label>
+                        <p style="font-size:11px;color:#888;margin:0 0 6px">Caps at 200×60. Transparent PNG / SVG looks best.</p>
+                        <div style="display:flex;gap:6px;align-items:stretch;flex-wrap:wrap">
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('ar-logo-file').click()">📤 Upload</button>
+                            <input type="file" id="ar-logo-file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" onchange="uploadAuditAssetFile('logo', this)" style="display:none">
+                            <input id="ar-logo-url" oninput="previewAuditAll()" onchange="saveAuditConfig()" placeholder="…or paste an https://… URL" style="flex:1;min-width:220px;padding:7px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="clearAuditAsset('logo')" title="Revert to default">✕</button>
+                        </div>
+                        <div id="ar-logo-preview" style="margin-top:8px"></div>
+                    </div>
+                </div>
+
+                <!-- Side panels — left + right of the centered report body -->
+                <div class="search-box" style="max-width:880px;margin-top:18px">
+                    <h3 style="margin:0 0 6px;font-size:15px">📐 Side panels</h3>
+                    <p style="font-size:12px;color:#888;margin:0 0 14px">Optional content on either side of the report body. Each side can have an image, a message, or both. Leave both sides blank to keep the original single-column layout.</p>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
+                        <!-- LEFT -->
+                        <div>
+                            <h4 style="margin:0 0 8px;font-size:13px;color:#444">⬅️ Left side</h4>
+                            <div style="display:flex;gap:6px;align-items:stretch;flex-wrap:wrap;margin-bottom:6px">
+                                <button type="button" class="btn btn-secondary btn-xs" onclick="document.getElementById('ar-left-image-file').click()">📤 Upload</button>
+                                <input type="file" id="ar-left-image-file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" onchange="uploadAuditAssetFile('left-image', this)" style="display:none">
+                                <input id="ar-left-image-url" oninput="previewAuditAll()" onchange="saveAuditConfig()" placeholder="…or paste an https://… URL" style="flex:1;min-width:120px;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:12px">
+                                <button type="button" class="btn btn-secondary btn-xs" onclick="clearAuditAsset('left-image')" title="Clear">✕</button>
+                            </div>
+                            <textarea id="ar-left-message" oninput="previewAuditAll()" onchange="saveAuditConfig()" rows="4" placeholder="Optional message text. Renders below the image. Supports plain text + newlines." maxlength="1500" style="width:100%;padding:7px;border:1px solid #ddd;border-radius:4px;font-size:13px;font-family:inherit;box-sizing:border-box"></textarea>
+                        </div>
+                        <!-- RIGHT -->
+                        <div>
+                            <h4 style="margin:0 0 8px;font-size:13px;color:#444">➡️ Right side</h4>
+                            <div style="display:flex;gap:6px;align-items:stretch;flex-wrap:wrap;margin-bottom:6px">
+                                <button type="button" class="btn btn-secondary btn-xs" onclick="document.getElementById('ar-right-image-file').click()">📤 Upload</button>
+                                <input type="file" id="ar-right-image-file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" onchange="uploadAuditAssetFile('right-image', this)" style="display:none">
+                                <input id="ar-right-image-url" oninput="previewAuditAll()" onchange="saveAuditConfig()" placeholder="…or paste an https://… URL" style="flex:1;min-width:120px;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:12px">
+                                <button type="button" class="btn btn-secondary btn-xs" onclick="clearAuditAsset('right-image')" title="Clear">✕</button>
+                            </div>
+                            <textarea id="ar-right-message" oninput="previewAuditAll()" onchange="saveAuditConfig()" rows="4" placeholder="Optional message text." maxlength="1500" style="width:100%;padding:7px;border:1px solid #ddd;border-radius:4px;font-size:13px;font-family:inherit;box-sizing:border-box"></textarea>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Scheduler selector — which booking system the audit CTA points to -->
+                <div class="search-box" style="max-width:880px;margin-top:18px">
+                    <h3 style="margin:0 0 6px;font-size:15px">📅 Schedule-a-Call destination</h3>
+                    <p style="font-size:12px;color:#888;margin:0 0 14px">Where the "Schedule a Discovery Call" button on every audit report sends prospects. Org-wide setting — the whole team's audits use this one destination.</p>
+                    <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px">
+                        <label style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border:1px solid #ddd;border-radius:6px;cursor:pointer">
+                            <input type="radio" name="ar-scheduler-type" value="iclosed" onchange="onAuditSchedulerChange()" style="margin-top:2px">
+                            <div>
+                                <div style="font-weight:600;font-size:13px">iClosed (current default)</div>
+                                <div style="font-size:11px;color:#666">Uses the iClosed booking widget URL configured in your iClosed account.</div>
+                            </div>
+                        </label>
+                        <label style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border:1px solid #ddd;border-radius:6px;cursor:pointer">
+                            <input type="radio" name="ar-scheduler-type" value="native" onchange="onAuditSchedulerChange()" style="margin-top:2px">
+                            <div>
+                                <div style="font-weight:600;font-size:13px">Native scheduler <span style="font-size:10px;color:#1b5e20;background:#e8f4ea;padding:1px 6px;border-radius:3px;font-weight:600;margin-left:4px">RECOMMENDED</span></div>
+                                <div style="font-size:11px;color:#666">Uses the built-in /book/{slug} page. Pick which rep's calendar the prospect lands on.</div>
+                            </div>
+                        </label>
+                        <label style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border:1px solid #ddd;border-radius:6px;cursor:pointer">
+                            <input type="radio" name="ar-scheduler-type" value="custom" onchange="onAuditSchedulerChange()" style="margin-top:2px">
+                            <div>
+                                <div style="font-weight:600;font-size:13px">Custom URL</div>
+                                <div style="font-size:11px;color:#666">Any URL — your own Calendly, HubSpot meetings, whatever.</div>
+                            </div>
+                        </label>
+                    </div>
+                    <div id="ar-scheduler-native-row" style="display:none;margin-bottom:10px">
+                        <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Which rep's booking page?</label>
+                        <select id="ar-native-user-id" onchange="saveAuditConfig()" style="width:100%;max-width:360px;padding:7px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                            <option value="">— Pick a rep —</option>
+                        </select>
+                        <div id="ar-native-help" style="font-size:11px;color:#888;margin-top:4px"></div>
+                    </div>
+                    <div id="ar-scheduler-custom-row" style="display:none">
+                        <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Booking URL</label>
+                        <input id="ar-custom-url" oninput="previewAuditAll()" onchange="saveAuditConfig()" placeholder="https://calendly.com/your-handle/discovery-call" style="width:100%;max-width:460px;padding:7px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                    </div>
+                </div>
+
+                <!-- Live preview -->
+                <div class="search-box" style="max-width:1200px;margin-top:18px">
+                    <h3 style="margin:0 0 6px;font-size:15px">👁️ Live preview</h3>
+                    <p style="font-size:12px;color:#888;margin:0 0 10px">Mini preview of the report layout — header, sidebars, body strip, CTA. Open a real audit to see the full thing.</p>
+                    <div id="ar-preview-frame" style="border:1px solid #e6e6e6;border-radius:8px;overflow:hidden;background:#f5f7f5;padding:14px"></div>
+                </div>
+            </div>
+
             <div id="page-settings" class="hidden">
                 <div class="page-header"><h1>Settings</h1></div>
                 <div class="search-box" style="max-width:600px">
@@ -1614,35 +1735,11 @@ function verify(secret, rawBody, header) {
                     </div>
                 </div>
 
-                <!-- Audit Report Branding — tenant-tier. Two image fields with
-                     direct uploads via the shared /api/uploads/logo endpoint. -->
-                <div id="audit-branding-section" class="search-box hidden" style="max-width:600px;margin-top:16px">
-                    <h3 style="margin:0 0 6px">📊 Audit Report Branding</h3>
-                    <p style="font-size:12px;color:#888;margin-bottom:14px">Customize the AI Findability audit report your prospects see. The header banner sits at the top of the report; the footer logo appears at the bottom. Leave blank to use the BMP defaults.</p>
-
-                    <div class="form-group" style="margin-bottom:14px">
-                        <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Header banner</label>
-                        <p style="font-size:11px;color:#888;margin:0 0 6px">Wide image — 1200×360 works well. Sits behind the report title, full-width.</p>
-                        <div style="display:flex;gap:6px;align-items:stretch;flex-wrap:wrap">
-                            <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('audit-header-file').click()">📤 Upload</button>
-                            <input type="file" id="audit-header-file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" onchange="uploadAuditImage('header', this)" style="display:none">
-                            <input id="audit-header-url" oninput="previewAuditHeader()" onchange="saveAuditBranding()" placeholder="…or paste an https://… URL" style="flex:1;min-width:220px;padding:7px;border:1px solid #ddd;border-radius:4px;font-size:13px">
-                            <button type="button" class="btn btn-secondary btn-sm" onclick="clearAuditImage('header')" title="Revert to default">✕</button>
-                        </div>
-                        <div id="audit-header-preview" style="margin-top:8px"></div>
-                    </div>
-
-                    <div class="form-group">
-                        <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Footer logo</label>
-                        <p style="font-size:11px;color:#888;margin:0 0 6px">Renders at the bottom of the report. Caps at 200×60, transparent PNG / SVG looks best.</p>
-                        <div style="display:flex;gap:6px;align-items:stretch;flex-wrap:wrap">
-                            <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('audit-logo-file').click()">📤 Upload</button>
-                            <input type="file" id="audit-logo-file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" onchange="uploadAuditImage('logo', this)" style="display:none">
-                            <input id="audit-logo-url" oninput="previewAuditLogo()" onchange="saveAuditBranding()" placeholder="…or paste an https://… URL" style="flex:1;min-width:220px;padding:7px;border:1px solid #ddd;border-radius:4px;font-size:13px">
-                            <button type="button" class="btn btn-secondary btn-sm" onclick="clearAuditImage('logo')" title="Revert to default">✕</button>
-                        </div>
-                        <div id="audit-logo-preview" style="margin-top:8px"></div>
-                    </div>
+                <!-- Audit Report branding has moved to its own dedicated
+                     page in the sidebar — keeps Settings focused. -->
+                <div id="audit-branding-section" class="search-box hidden" style="max-width:600px;margin-top:16px;background:#FFF8F0;border-left:3px solid var(--bmp-orange)">
+                    <h3 style="margin:0 0 4px;font-size:14px">📊 Audit Report settings moved</h3>
+                    <p style="font-size:12px;color:#666;margin:0">Branding, side panels, and the scheduler selector for the AI Findability audit now live on the <a href="#" onclick="event.preventDefault();showPage('audit-reports')" style="color:var(--bmp-orange);font-weight:600">Audit Reports page</a> in the sidebar.</p>
                 </div>
 
                 <!-- Morning Brief — daily TZ-aware digest email -->
@@ -2175,9 +2272,13 @@ function verify(secret, rawBody, header) {
                     refreshNavBadges();
                     startNotificationPoller();
                     if (user.role === 'admin' || user.role === 'super_admin') initAdminRepFilters();
-                    // Show admin-only nav items (Developer docs page)
+                    // Show admin-only nav items (Developer docs page,
+                    // Audit Reports settings page)
+                    const isAdminPlus = (user.role === 'admin' || user.role === 'super_admin');
                     const navDev = document.getElementById('nav-developer');
-                    if (navDev) navDev.classList.toggle('hidden', !(user.role === 'admin' || user.role === 'super_admin'));
+                    if (navDev) navDev.classList.toggle('hidden', !isAdminPlus);
+                    const navAudit = document.getElementById('nav-audit-reports');
+                    if (navAudit) navAudit.classList.toggle('hidden', !isAdminPlus);
                     // Auto-start the product tour for new users — onboarding_step 0 = never seen,
                     // 99 = skipped, 100 = completed. Anything between starts mid-tour.
                     if (typeof user.onboarding_step === 'number' && user.onboarding_step < 99) {
@@ -2789,6 +2890,7 @@ function verify(secret, rawBody, header) {
             if (page === 'tasks') loadTasks('mine');
             if (page === 'settings') loadSettings();
             if (page === 'calendar') loadCalendarPage();
+            if (page === 'audit-reports') loadAuditReportsPage();
             if (page === 'autopilot') loadCampaigns();
             if (page === 'developer') {
                 // Admin-only — refuse the visit if a sales_rep deep-links here
@@ -9882,6 +9984,216 @@ hmac.compare_digest(expected, header)</pre>
                 body: JSON.stringify({ google_maps_api_key: value }),
             });
             if (data) { toast('Google Maps key saved'); loadRuntimeConfig(); }
+        }
+
+        // ============================================================
+        // 📊 Audit Reports settings page
+        // ============================================================
+        //
+        // Mirrors the Calendar Settings layout — branding, side panels,
+        // scheduler selector, live preview. The previous "Audit
+        // Report Branding" panel that lived inside Settings has been
+        // moved here, alongside the new sidebar + scheduler controls.
+
+        let _arNativeHosts = [];  // cached host list for the dropdown
+
+        async function loadAuditReportsPage() {
+            // Fetch runtime config + the native-host list in parallel
+            const [cfg, hosts] = await Promise.all([
+                api('/api/runtime-config'),
+                api('/api/runtime-config/native-scheduler-hosts').catch(() => []),
+            ]);
+            _arNativeHosts = hosts || [];
+
+            // Populate the native-host dropdown
+            const sel = document.getElementById('ar-native-user-id');
+            if (sel) {
+                sel.innerHTML = '<option value="">— Pick a rep —</option>' +
+                    _arNativeHosts.map(h => `<option value="${h.id}">${escapeHtml(h.name)} (/book/${escapeHtml(h.booking_slug)})</option>`).join('');
+            }
+            const helpEl = document.getElementById('ar-native-help');
+            if (helpEl) {
+                if (!_arNativeHosts.length) {
+                    helpEl.innerHTML = '<span style="color:#c0392b">No reps have connected Google Calendar yet. Connect one in Calendar → Settings, then return here.</span>';
+                } else {
+                    helpEl.textContent = `${_arNativeHosts.length} rep${_arNativeHosts.length === 1 ? '' : 's'} available.`;
+                }
+            }
+
+            const ab = (cfg && cfg.audit_branding) || {};
+            const set = (id, val) => { const el = document.getElementById(id); if (el != null) el.value = val || ''; };
+            set('ar-header-url', ab.header_url);
+            set('ar-logo-url', ab.logo_url);
+            set('ar-left-image-url', ab.left_image_url);
+            set('ar-left-message', ab.left_message);
+            set('ar-right-image-url', ab.right_image_url);
+            set('ar-right-message', ab.right_message);
+            set('ar-custom-url', ab.custom_url);
+            if (sel && ab.native_user_id) sel.value = String(ab.native_user_id);
+
+            const schedType = ab.scheduler_type || 'iclosed';
+            document.querySelectorAll('input[name="ar-scheduler-type"]').forEach(r => {
+                r.checked = (r.value === schedType);
+            });
+            _arRenderSchedulerFields(schedType);
+            previewAuditAll();
+        }
+
+        function _arRenderSchedulerFields(type) {
+            document.getElementById('ar-scheduler-native-row').style.display =
+                (type === 'native') ? '' : 'none';
+            document.getElementById('ar-scheduler-custom-row').style.display =
+                (type === 'custom') ? '' : 'none';
+        }
+
+        function onAuditSchedulerChange() {
+            const checked = document.querySelector('input[name="ar-scheduler-type"]:checked');
+            if (!checked) return;
+            _arRenderSchedulerFields(checked.value);
+            saveAuditConfig();
+        }
+
+        function previewAuditAll() {
+            const get = id => (document.getElementById(id)?.value || '').trim();
+            const header = get('ar-header-url');
+            const logo = get('ar-logo-url');
+            const leftImg = get('ar-left-image-url');
+            const leftMsg = get('ar-left-message');
+            const rightImg = get('ar-right-image-url');
+            const rightMsg = get('ar-right-message');
+            const hasLeft = !!(leftImg || leftMsg);
+            const hasRight = !!(rightImg || rightMsg);
+            const hasSides = hasLeft || hasRight;
+
+            const headerSafe = header || '/static/report-banner.jpg';
+            const logoSafe = logo || 'https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz-1024x269.png';
+
+            const sidePanel = (img, msg) => {
+                if (!(img || msg)) return '';
+                let html = '<aside style="background:transparent">';
+                if (img) html += `<img src="${escapeHtml(img)}" style="width:100%;border-radius:6px;display:block;margin-bottom:6px;max-height:140px;object-fit:cover" onerror="this.style.display='none'">`;
+                if (msg) html += `<div style="background:white;border-radius:6px;padding:8px 10px;font-size:11px;color:#444;line-height:1.4;white-space:pre-wrap">${escapeHtml(msg.slice(0, 240))}</div>`;
+                html += '</aside>';
+                return html;
+            };
+
+            const center = `<div style="flex:1;min-width:0">
+                <div style="border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.06)">
+                    <img src="${escapeHtml(headerSafe)}" style="width:100%;display:block;max-height:80px;object-fit:cover;background:#0D3B13" onerror="this.style.display='none'">
+                    <div style="background:linear-gradient(135deg,#0D3B13,#1B5E20);color:white;padding:14px 16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+                        <div>
+                            <div style="font-size:14px;font-weight:600">AI Findability Report</div>
+                            <div style="font-size:11px;color:rgba(255,255,255,0.8)">Sample Company · Phoenix, AZ</div>
+                        </div>
+                        <span style="background:#FF723F;color:white;padding:5px 10px;border-radius:5px;font-size:10px;font-weight:600">📅 Schedule a Call</span>
+                    </div>
+                </div>
+                <div style="background:white;border-radius:6px;padding:10px;margin-top:8px;font-size:11px;color:#666;text-align:center">⋯ report body ⋯</div>
+                <div style="text-align:center;margin-top:8px">
+                    <img src="${escapeHtml(logoSafe)}" style="max-height:30px;max-width:140px" onerror="this.style.display='none'">
+                </div>
+            </div>`;
+
+            const frame = document.getElementById('ar-preview-frame');
+            if (!frame) return;
+            if (hasSides) {
+                let cols = 'minmax(0,1fr)';
+                if (hasLeft && hasRight) cols = 'minmax(120px,180px) minmax(0,1fr) minmax(120px,180px)';
+                else if (hasLeft) cols = 'minmax(120px,180px) minmax(0,1fr)';
+                else cols = 'minmax(0,1fr) minmax(120px,180px)';
+                frame.innerHTML = `<div style="display:grid;grid-template-columns:${cols};gap:10px;align-items:start">
+                    ${sidePanel(leftImg, leftMsg)}
+                    ${center}
+                    ${sidePanel(rightImg, rightMsg)}
+                </div>`;
+            } else {
+                frame.innerHTML = `<div style="max-width:520px;margin:0 auto">${center}</div>`;
+            }
+        }
+
+        async function uploadAuditAssetFile(kind, inputEl) {
+            // kind: 'header' | 'logo' | 'left-image' | 'right-image'
+            const file = inputEl.files && inputEl.files[0];
+            if (!file) return;
+            const fd = new FormData();
+            fd.append('file', file);
+            const token = localStorage.getItem('access_token');
+            try {
+                const r = await fetch('/api/uploads/logo', {
+                    method: 'POST',
+                    headers: { Authorization: `Bearer ${token}` },
+                    body: fd,
+                });
+                const data = await r.json().catch(() => ({}));
+                if (!r.ok || !data.url) {
+                    toast(data.detail || 'Upload failed');
+                    inputEl.value = '';
+                    return;
+                }
+                const targetMap = {
+                    'header':      'ar-header-url',
+                    'logo':        'ar-logo-url',
+                    'left-image':  'ar-left-image-url',
+                    'right-image': 'ar-right-image-url',
+                };
+                const targetId = targetMap[kind];
+                if (targetId) {
+                    document.getElementById(targetId).value = data.url;
+                    previewAuditAll();
+                    await saveAuditConfig();
+                    toast(`✓ Uploaded · ${Math.round(data.size_bytes/1024)}KB`);
+                }
+                inputEl.value = '';
+            } catch (e) {
+                toast(`Upload failed: ${e.message || e}`);
+                inputEl.value = '';
+            }
+        }
+
+        function clearAuditAsset(kind) {
+            const targetMap = {
+                'header':      'ar-header-url',
+                'logo':        'ar-logo-url',
+                'left-image':  'ar-left-image-url',
+                'right-image': 'ar-right-image-url',
+            };
+            const id = targetMap[kind];
+            if (id) {
+                document.getElementById(id).value = '';
+                previewAuditAll();
+                saveAuditConfig();
+            }
+        }
+
+        let _arSaveTimer = null;
+        async function saveAuditConfig() {
+            // Debounce — textareas fire onchange when the user blurs
+            // but the rapid radio-change + textarea-change sequence can
+            // stack saves. 300ms collapse is plenty.
+            if (_arSaveTimer) clearTimeout(_arSaveTimer);
+            _arSaveTimer = setTimeout(async () => {
+                const get = id => (document.getElementById(id)?.value || '').trim();
+                const checked = document.querySelector('input[name="ar-scheduler-type"]:checked');
+                const schedType = checked ? checked.value : 'iclosed';
+                const nativeId = get('ar-native-user-id');
+                const data = await api('/api/runtime-config', {
+                    method: 'PATCH',
+                    body: JSON.stringify({
+                        audit_report_header_url: get('ar-header-url'),
+                        audit_report_logo_url:   get('ar-logo-url'),
+                        audit_left_image_url:    get('ar-left-image-url'),
+                        audit_left_message:      get('ar-left-message'),
+                        audit_right_image_url:   get('ar-right-image-url'),
+                        audit_right_message:     get('ar-right-message'),
+                        audit_scheduler_type:    schedType,
+                        audit_native_user_id:    nativeId ? parseInt(nativeId, 10) : null,
+                        audit_custom_url:        get('ar-custom-url'),
+                    }),
+                });
+                if (data) {
+                    // silent success — preview already reflects the save
+                }
+            }, 300);
         }
 
         // ============================================================

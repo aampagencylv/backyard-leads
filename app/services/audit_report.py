@@ -297,15 +297,31 @@ DEFAULT_FOOTER_LOGO = "https://backyardmarketingpros.com/wp-content/uploads/2024
 def render_report_html(
     report: AuditReport, token: str, public_url: str = "",
     *, header_url: str = "", footer_logo_url: str = "",
+    left_image_url: str = "", left_message: str = "",
+    right_image_url: str = "", right_message: str = "",
+    booking_url_override: str = "",
 ) -> str:
     """Render the audit report as a branded HTML page.
 
-    `header_url` + `footer_logo_url` are optional org-level overrides
-    (set in Settings → Platform Credentials → Audit Report Branding).
-    Empty strings fall back to the BMP defaults so the existing look
-    keeps working when no override is configured."""
+    Kwargs are all optional org-level overrides set in Settings →
+    Audit Reports. Empty strings fall back to defaults.
+
+    Side panels: when EITHER side has an image or message, we switch
+    from the single-column centered layout to a 3-column grid with
+    sticky sidebars (collapses to stacked on narrow viewports).
+
+    booking_url_override: when set, replaces the default iClosed URL
+    on the 'Schedule a Discovery Call' CTAs. Used to route to the
+    native scheduler (/book/{slug}) or a custom URL."""
     header_img = (header_url or "").strip() or DEFAULT_HEADER_BANNER
     footer_img = (footer_logo_url or "").strip() or DEFAULT_FOOTER_LOGO
+    left_img = (left_image_url or "").strip()
+    left_msg = (left_message or "").strip()
+    right_img = (right_image_url or "").strip()
+    right_msg = (right_message or "").strip()
+    has_left = bool(left_img or left_msg)
+    has_right = bool(right_img or right_msg)
+    has_sides = has_left or has_right
 
     def score_color(score):
         if score >= 70:
@@ -353,11 +369,67 @@ def render_report_html(
     """
 
     compare_url = f"{public_url}/report/{token}/compare" if public_url else f"/report/{token}/compare"
-    # Direct iClosed booking link for the final CTA — same widget as the
-    # competitor-gate page, but no gating; "ready to talk" prospects can
-    # book straight from the audit without clicking through the comparison.
+    # CTA booking destination. When the audit settings haven't been
+    # touched we still default to the iClosed URL (preserves existing
+    # behavior). The caller can override to point at the native
+    # scheduler /book/{slug} or any custom URL.
     from app.config import settings as _settings
-    booking_url = _settings.iclosed_booking_url or "https://app.iclosed.io/e/backyardmarketingpros/discovery-call"
+    default_iclosed = _settings.iclosed_booking_url or "https://app.iclosed.io/e/backyardmarketingpros/discovery-call"
+    booking_url = (booking_url_override or "").strip() or default_iclosed
+
+    # Side panels — rendered only when content is configured. Each side
+    # can be: just an image, just a message, or both. When both sides
+    # are empty we keep the original single-column centered layout
+    # (no layout change for existing reports).
+    def _render_side(img: str, msg: str) -> str:
+        if not (img or msg):
+            return ""
+        parts = ['<aside style="position:sticky;top:20px">']
+        if img:
+            parts.append(
+                f'<img src="{_esc(img)}" alt="" '
+                'style="width:100%;border-radius:10px;display:block;margin-bottom:12px;'
+                'box-shadow:0 2px 8px rgba(0,0,0,0.06)" '
+                'onerror="this.style.display=\'none\'">'
+            )
+        if msg:
+            # Convert newlines to <br>; trim aggressively long content
+            safe_msg = _esc(msg[:1500]).replace("\n", "<br>")
+            parts.append(
+                '<div style="background:white;border-radius:10px;padding:14px 16px;'
+                'font-size:13px;line-height:1.6;color:#444;'
+                'box-shadow:0 2px 8px rgba(0,0,0,0.06)">'
+                f'{safe_msg}</div>'
+            )
+        parts.append("</aside>")
+        return "".join(parts)
+
+    left_panel = _render_side(left_img, left_msg)
+    right_panel = _render_side(right_img, right_msg)
+
+    if has_sides:
+        # Three-column grid layout. The grid template adapts to which
+        # sides are present so a single sidebar gets more space.
+        if has_left and has_right:
+            grid_cols = "minmax(180px,240px) minmax(0,1fr) minmax(180px,240px)"
+        elif has_left:
+            grid_cols = "minmax(180px,260px) minmax(0,1fr)"
+        else:
+            grid_cols = "minmax(0,1fr) minmax(180px,260px)"
+        outer_open = (
+            f'<div style="max-width:1200px;margin:0 auto;padding:20px">'
+            f'<div style="display:grid;grid-template-columns:{grid_cols};'
+            'gap:24px;align-items:start">'
+            + left_panel
+        )
+        outer_close = right_panel + '</div></div>'
+        # In the grid mode, our inner .container shouldn't apply its
+        # own max-width — override via inline style on the wrapping div.
+        container_open = '<div style="padding:0;max-width:none">'
+    else:
+        outer_open = ""
+        outer_close = ""
+        container_open = '<div class="container">'
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -389,10 +461,20 @@ def render_report_html(
         .footer {{ text-align: center; padding: 24px; color: #888; font-size: 12px; }}
         @media print {{ body {{ background: white; }} .container {{ padding: 0; }} }}
         @media (max-width: 600px) {{ .scores {{ grid-template-columns: 1fr; }} .header {{ padding: 24px; }} }}
+        /* Side-panel grid → stack on narrow viewports */
+        @media (max-width: 900px) {{
+            body > div[style*="display:grid"] {{
+                grid-template-columns: 1fr !important;
+            }}
+            aside[style*="position:sticky"] {{
+                position: static !important;
+            }}
+        }}
     </style>
 </head>
 <body>
-    <div class="container">
+    {outer_open}
+    {container_open}
         <div style="border-radius:12px;overflow:hidden;margin-bottom:24px;box-shadow:0 4px 16px rgba(0,0,0,0.1)">
             <img src="{_esc(header_img)}" alt="Header" style="width:100%;display:block;background:#0D3B13" onerror="this.style.display='none'">
             <div style="background:linear-gradient(135deg, #0D3B13 0%, #1B5E20 100%);color:white;padding:32px 40px;display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap">
@@ -554,6 +636,7 @@ def render_report_html(
             <p style="margin-top:4px">backyardmarketingpros.com</p>
         </div>
     </div>
+    {outer_close}
 
     <!-- Tracking beacon -->
     <script>

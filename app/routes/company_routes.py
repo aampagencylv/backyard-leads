@@ -1545,11 +1545,18 @@ async def pursue_companies(
                     token = _secrets.token_urlsafe(16)
                     public_url = settings.public_url.rstrip("/")
                     from app.runtime_config import _get_or_create as _get_rc
+                    from app.routes.audit_routes import _resolve_audit_booking_url
                     rc = await _get_rc(db)
+                    booking_url = await _resolve_audit_booking_url(db, rc, public_url)
                     html = render_report_html(
                         audit, token, public_url,
                         header_url=getattr(rc, "audit_report_header_url", "") or "",
                         footer_logo_url=getattr(rc, "audit_report_logo_url", "") or "",
+                        left_image_url=getattr(rc, "audit_left_image_url", "") or "",
+                        left_message=getattr(rc, "audit_left_message", "") or "",
+                        right_image_url=getattr(rc, "audit_right_image_url", "") or "",
+                        right_message=getattr(rc, "audit_right_message", "") or "",
+                        booking_url_override=booking_url,
                     )
                     audit_report = AuditReportModel(
                         company_id=company.id,

@@ -128,12 +128,34 @@ async def set_audit_branding(
     db: AsyncSession, *,
     header_url: Optional[str] = None,
     logo_url: Optional[str] = None,
+    left_image_url: Optional[str] = None,
+    left_message: Optional[str] = None,
+    right_image_url: Optional[str] = None,
+    right_message: Optional[str] = None,
+    scheduler_type: Optional[str] = None,
+    native_user_id: Optional[int] = None,
+    custom_url: Optional[str] = None,
 ) -> RuntimeConfig:
     rc = await _get_or_create(db)
     if header_url is not None:
         rc.audit_report_header_url = header_url.strip()[:500] or None
     if logo_url is not None:
         rc.audit_report_logo_url = logo_url.strip()[:500] or None
+    if left_image_url is not None:
+        rc.audit_left_image_url = left_image_url.strip()[:500] or None
+    if left_message is not None:
+        rc.audit_left_message = left_message.strip()[:1500] or None
+    if right_image_url is not None:
+        rc.audit_right_image_url = right_image_url.strip()[:500] or None
+    if right_message is not None:
+        rc.audit_right_message = right_message.strip()[:1500] or None
+    if scheduler_type is not None:
+        st = scheduler_type.strip().lower()
+        rc.audit_scheduler_type = st if st in ("iclosed", "native", "custom") else "iclosed"
+    if native_user_id is not None:
+        rc.audit_native_user_id = int(native_user_id) if native_user_id else None
+    if custom_url is not None:
+        rc.audit_custom_url = custom_url.strip()[:500] or None
     rc.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(rc)
