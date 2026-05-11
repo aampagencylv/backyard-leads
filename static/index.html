@@ -672,6 +672,7 @@
                 <a data-page="dns-health" id="nav-dns-health" onclick="showPage('dns-health')" class="hidden">🩺 DNS Health</a>
                 <a data-page="reputation" id="nav-reputation" onclick="showPage('reputation')" class="hidden">📈 Deliverability</a>
                 <a data-page="settings" onclick="showPage('settings')">Settings</a>
+                <a data-page="platform" id="nav-platform" onclick="showPage('platform')" class="hidden">🔧 Platform</a>
             </nav>
             <div class="sidebar-user">
                 <div id="user-name"></div>
@@ -2504,6 +2505,20 @@ function verify(secret, rawBody, header) {
                     </div>
                 </div>
             </div>
+
+            <!-- Platform page (super_admin only) — API keys, Twilio numbers,
+                 custom fields, audit branding, credits, audit log. Keeps the
+                 main Settings page clean for everyday use. -->
+            <div id="page-platform" class="hidden">
+                <div class="page-header"><h1>🔧 Platform Settings</h1></div>
+                <p style="font-size:13px;color:#666;margin-bottom:16px">API keys, integrations, Twilio numbers, custom fields, and other platform-level configuration. Only visible to super admins.</p>
+                <div id="platform-api-keys-mount"></div>
+                <div id="platform-twilio-mount"></div>
+                <div id="platform-integrations-mount"></div>
+                <div id="platform-custom-fields-mount"></div>
+                <div id="platform-credits-mount"></div>
+                <div id="platform-audit-log-mount"></div>
+            </div>
         </main>
     </div>
 
@@ -3020,6 +3035,10 @@ function verify(secret, rawBody, header) {
                     // that tenant admins shouldn't see when this goes SaaS).
                     const navRep = document.getElementById('nav-reputation');
                     if (navRep) navRep.classList.toggle('hidden', user.role !== 'super_admin');
+                    const navPlatform = document.getElementById('nav-platform');
+                    if (navPlatform) navPlatform.classList.toggle('hidden', user.role !== 'super_admin');
+                    // Move super-admin sections to Platform page so Settings stays clean
+                    if (isSuper) _reparentToPlatform();
                     // Find Leads + Auto Pilot — hidden from basic sales_rep.
                     // senior_rep (BDR+) and above can search for leads.
                     const canSearch = (user.role !== 'sales_rep' && user.role !== 'read_only');
@@ -3715,6 +3734,16 @@ function verify(secret, rawBody, header) {
                     return;
                 }
                 loadReputation();
+            }
+            if (page === 'platform') {
+                if (!currentUser || currentUser.role !== 'super_admin') {
+                    target.classList.add('hidden');
+                    showPage('dashboard');
+                    toast('Platform settings are super-admin only');
+                    return;
+                }
+                _reparentToPlatform();
+                loadSettings();  // triggers loadRuntimeConfig etc
             }
             if (page === 'autopilot') loadCampaigns();
             if (page === 'developer') {
@@ -11745,6 +11774,29 @@ hmac.compare_digest(expected, header)</pre>
             document.getElementById('signature-preview').innerHTML = data.signature_html || '';
             document.getElementById('user-name').textContent = data.name;
         }
+        let _platformReparented = false;
+        function _reparentToPlatform() {
+            if (_platformReparented) return;
+            _platformReparented = true;
+            // Move super-admin sections from Settings to Platform page
+            const moves = [
+                ['api-keys-section', 'platform-api-keys-mount'],
+                ['twilio-numbers-panel', 'platform-twilio-mount'],
+                ['integrations-section', 'platform-integrations-mount'],
+                ['custom-fields-section', 'platform-custom-fields-mount'],
+                ['credits-section', 'platform-credits-mount'],
+                ['audit-log-section', 'platform-audit-log-mount'],
+            ];
+            for (const [srcId, mountId] of moves) {
+                const src = document.getElementById(srcId);
+                const mount = document.getElementById(mountId);
+                if (src && mount) {
+                    src.classList.remove('hidden');
+                    mount.appendChild(src);
+                }
+            }
+        }
+
         async function toggleSending() {
             const enabled = document.getElementById('settings-sending-enabled').checked;
             await api('/api/send/profile', { method: 'PATCH', body: JSON.stringify({ sending_enabled: enabled }) });
