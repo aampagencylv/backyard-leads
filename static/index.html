@@ -2237,7 +2237,7 @@ function verify(secret, rawBody, header) {
                         <span></span>
                         <label style="color:#666">Send at</label>
                         <select id="brief-hour" onchange="saveBriefSettings()" style="padding:6px;border:1px solid #ddd;border-radius:4px;width:140px">
-                            ${Array.from({length:24}, (_,h) => `<option value="${h}">${h===0?'12 AM':h<12?h+' AM':h===12?'12 PM':(h-12)+' PM'}</option>`).join('')}
+                            <option value="5">5 AM</option><option value="6">6 AM</option><option value="7">7 AM</option><option value="8">8 AM</option><option value="9">9 AM</option><option value="10">10 AM</option><option value="11">11 AM</option><option value="12">12 PM</option><option value="13">1 PM</option><option value="14">2 PM</option><option value="15">3 PM</option><option value="16">4 PM</option><option value="17">5 PM</option><option value="18">6 PM</option>
                         </select>
                         <label style="color:#666">Timezone</label>
                         <select id="brief-tz" onchange="saveBriefSettings()" style="padding:6px;border:1px solid #ddd;border-radius:4px;width:240px">
