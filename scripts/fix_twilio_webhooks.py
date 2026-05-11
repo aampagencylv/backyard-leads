@@ -2,7 +2,7 @@
 import asyncio
 from app.database import async_session
 from app.runtime_config import get_twilio_credentials
-from app.services.twilio_voice import list_owned_numbers, configure_inbound_voice_url, configure_sms_webhook
+from app.services.twilio_voice import list_owned_numbers, configure_inbound_voice_url
 from app.models import User
 from app.config import settings
 from sqlalchemy import select
@@ -34,12 +34,20 @@ async def main():
             except Exception as e:
                 print(f"  ✗ {label} — voice webhook FAILED: {e}")
 
+            # SMS webhook — set via raw API since there's no helper function
             try:
-                await configure_sms_webhook(
-                    creds, n.sid,
-                    sms_url=f"{public}/api/twilio/sms/inbound",
-                )
-                print(f"  ✓ {label} — SMS webhook set")
+                import httpx
+                sms_payload = {"SmsUrl": f"{public}/api/twilio/sms/inbound", "SmsMethod": "POST"}
+                async with httpx.AsyncClient(timeout=15) as client:
+                    r = await client.post(
+                        f"https://api.twilio.com/2010-04-01/Accounts/{creds.account_sid}/IncomingPhoneNumbers/{n.sid}.json",
+                        data=sms_payload,
+                        auth=(creds.account_sid, creds.auth_token),
+                    )
+                if r.status_code == 200:
+                    print(f"  ✓ {label} — SMS webhook set")
+                else:
+                    print(f"  ✗ {label} — SMS webhook {r.status_code}: {r.text[:100]}")
             except Exception as e:
                 print(f"  ✗ {label} — SMS webhook FAILED: {e}")
 
