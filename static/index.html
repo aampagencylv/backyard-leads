@@ -75,7 +75,11 @@
         .sidebar-user { position: absolute; bottom: 0; width: 100%; padding: 16px 20px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 13px; color: rgba(255,255,255,0.5); }
         .sidebar-user .logout { color: var(--bmp-orange-light); cursor: pointer; }
 
-        .main-content { margin-left: 240px; flex: 1; padding: 30px; }
+        /* min-width:0 lets the flex child shrink below its content's natural width —
+           without it, a wide kanban / wide table expands main-content past the
+           viewport, body scrolls horizontally, and the top-bar slides over the
+           fixed sidebar. */
+        .main-content { margin-left: 240px; flex: 1; min-width: 0; padding: 30px; }
 
         /* Top search bar */
         .top-bar { background: white; border-radius: 10px; padding: 8px 12px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); display: flex; align-items: center; gap: 8px; position: relative; }
