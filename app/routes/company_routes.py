@@ -558,14 +558,23 @@ async def get_company_full(
     )
     contacts = contacts_result.scalars().all()
 
+    # Bulk-load all emails for all contacts in ONE query (avoids N+1 over network)
+    contact_ids = [c.id for c in contacts]
+    all_ge = []
+    if contact_ids:
+        all_ge = (await db.execute(
+            select(GeneratedEmail)
+            .where(GeneratedEmail.contact_id.in_(contact_ids))
+            .order_by(GeneratedEmail.sequence_order)
+        )).scalars().all()
+    # Group by contact
+    emails_by_contact: dict[int, list] = {}
+    for e in all_ge:
+        emails_by_contact.setdefault(e.contact_id, []).append(e)
+
     contacts_data = []
     for c in contacts:
-        emails_result = await db.execute(
-            select(GeneratedEmail)
-            .where(GeneratedEmail.contact_id == c.id)
-            .order_by(GeneratedEmail.sequence_order)
-        )
-        all_emails = emails_result.scalars().all()
+        all_emails = emails_by_contact.get(c.id, [])
         # Deduplicate: if a sequence was regenerated, old sent steps with the
         # same sequence_order coexist with new pending ones. Keep the newest
         # per sequence_order so the UI doesn't show duplicates.
@@ -574,16 +583,14 @@ async def get_company_full(
             key = e.sequence_order
             if key in seen_orders:
                 prev = seen_orders[key]
-                # Prefer the unsent (active) step; if both sent, keep newer
                 if prev.is_sent and not e.is_sent:
                     seen_orders[key] = e
                 elif not prev.is_sent and e.is_sent:
-                    pass  # keep prev (the active one)
+                    pass
                 elif e.id > prev.id:
                     seen_orders[key] = e
             else:
                 seen_orders[key] = e
-        # Also include any adhoc/one-off emails (sequence_order=0 or NULL)
         emails = sorted(seen_orders.values(), key=lambda e: (e.sequence_order or 0, e.id))
         contacts_data.append({
             "id": c.id,
