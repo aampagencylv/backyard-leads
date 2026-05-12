@@ -229,6 +229,75 @@ async def pause_campaign(
     return {"id": campaign.id, "status": "paused"}
 
 
+class UpdateCampaignRequest(BaseModel):
+    name: Optional[str] = None
+    max_prospects_per_day: Optional[int] = None
+    min_reviews: Optional[int] = None
+    max_reviews: Optional[int] = None
+    min_rating: Optional[float] = None
+    must_have_website: Optional[bool] = None
+    max_ai_visibility_score: Optional[int] = None
+    min_problems: Optional[int] = None
+    contact_required: Optional[bool] = None
+    contact_cooldown_days: Optional[int] = None
+    mode: Optional[str] = None  # moderate | full_auto
+    business_types: Optional[List[str]] = None
+    locations: Optional[List[str]] = None
+
+
+@router.patch("/{campaign_id}")
+async def update_campaign(
+    campaign_id: int,
+    req: UpdateCampaignRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Edit a campaign — works on running, paused, or draft campaigns.
+    Changes take effect on the next batch tick (running campaigns don't
+    need to be paused to edit)."""
+    campaign = (await db.execute(select(Campaign).where(Campaign.id == campaign_id))).scalar_one_or_none()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    if req.name is not None:
+        campaign.name = req.name.strip()[:255]
+    if req.max_prospects_per_day is not None:
+        campaign.max_prospects_per_day = max(1, min(500, int(req.max_prospects_per_day)))
+    if req.min_reviews is not None:
+        campaign.min_reviews = max(0, int(req.min_reviews))
+    if req.max_reviews is not None:
+        campaign.max_reviews = max(0, int(req.max_reviews))
+    if req.min_rating is not None:
+        campaign.min_rating = max(0, min(5, float(req.min_rating)))
+    if req.must_have_website is not None:
+        campaign.must_have_website = bool(req.must_have_website)
+    if req.max_ai_visibility_score is not None:
+        campaign.max_ai_visibility_score = max(0, min(100, int(req.max_ai_visibility_score)))
+    if req.min_problems is not None:
+        campaign.min_problems = max(0, int(req.min_problems))
+    if req.contact_required is not None:
+        campaign.contact_required = bool(req.contact_required)
+    if req.contact_cooldown_days is not None:
+        campaign.contact_cooldown_days = max(0, int(req.contact_cooldown_days))
+    if req.mode is not None and req.mode in ("moderate", "full_auto"):
+        campaign.mode = req.mode
+    if req.business_types is not None and len(req.business_types) > 0:
+        campaign.business_types = json.dumps(req.business_types)
+    if req.locations is not None and len(req.locations) > 0:
+        campaign.locations = json.dumps(req.locations)
+
+    await db.commit()
+    await db.refresh(campaign)
+    return {
+        "id": campaign.id,
+        "name": campaign.name,
+        "status": campaign.status,
+        "max_prospects_per_day": campaign.max_prospects_per_day,
+        "mode": campaign.mode,
+        "updated": True,
+    }
+
+
 @router.post("/{campaign_id}/stop")
 async def stop_campaign(
     campaign_id: int,
