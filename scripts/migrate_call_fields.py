@@ -21,27 +21,29 @@ COLUMNS = [
 ]
 
 
-async def _columns(conn, table: str) -> set[str]:
-    rows = (await conn.execute(text(f"PRAGMA table_info({table})"))).fetchall()
-    return {row[1] for row in rows}
-
-
-async def _indexes(conn, table: str) -> set[str]:
-    rows = (await conn.execute(text(f"PRAGMA index_list({table})"))).fetchall()
-    return {row[1] for row in rows}
+async def _index_exists(conn, name: str) -> bool:
+    """Cross-dialect index existence check."""
+    dialect = conn.engine.url.get_backend_name() if hasattr(conn, "engine") else conn.dialect.name
+    if dialect == "sqlite":
+        row = (await conn.execute(text(
+            "SELECT 1 FROM sqlite_master WHERE type='index' AND name=:n"
+        ), {"n": name})).first()
+        return row is not None
+    row = (await conn.execute(text(
+        "SELECT 1 FROM pg_indexes WHERE indexname=:n"
+    ), {"n": name})).first()
+    return row is not None
 
 
 async def main() -> None:
     async with engine.begin() as conn:
-        cols = await _columns(conn, "activities")
         for name, ddl in COLUMNS:
-            if not await column_exists(conn, "{table}", name):
+            if not await column_exists(conn, "activities", name):
                 await conn.execute(text(f"ALTER TABLE activities ADD COLUMN {name} {ddl}"))
                 print(f"+ added activities.{name}")
 
         # Index on twilio_call_sid for webhook lookups
-        idx = await _indexes(conn, "activities")
-        if "ix_activities_twilio_call_sid" not in idx:
+        if not await _index_exists(conn, "ix_activities_twilio_call_sid"):
             await conn.execute(text(
                 "CREATE INDEX ix_activities_twilio_call_sid ON activities(twilio_call_sid)"
             ))

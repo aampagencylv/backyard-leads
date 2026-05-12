@@ -338,8 +338,7 @@ async def main() -> None:
 
 
 async def _rebuild_activities(conn) -> None:
-    cols = await _columns(conn, "activities")
-    if not await column_exists(conn, "{table}", "lead_id"):
+    if not await column_exists(conn, "activities", "lead_id"):
         return  # already rebuilt
     await conn.execute(text("""
         CREATE TABLE activities_new (
@@ -366,8 +365,7 @@ async def _rebuild_activities(conn) -> None:
 
 
 async def _rebuild_tasks(conn) -> None:
-    cols = await _columns(conn, "tasks")
-    if not await column_exists(conn, "{table}", "lead_id"):
+    if not await column_exists(conn, "tasks", "lead_id"):
         return
     await conn.execute(text("""
         CREATE TABLE tasks_new (
@@ -395,8 +393,7 @@ async def _rebuild_tasks(conn) -> None:
 
 
 async def _rebuild_generated_emails(conn) -> None:
-    cols = await _columns(conn, "generated_emails")
-    if not await column_exists(conn, "{table}", "lead_id"):
+    if not await column_exists(conn, "generated_emails", "lead_id"):
         return
     await conn.execute(text("""
         CREATE TABLE generated_emails_new (

@@ -63,7 +63,7 @@ async def main() -> None:
         # custom_fields_json columns on companies + contacts
         for table in ("companies", "contacts"):
             cols = {r[1] for r in (await conn.execute(text(f"PRAGMA table_info({table})"))).fetchall()}
-            if not await column_exists(conn, "{table}", "custom_fields_json"):
+            if not await column_exists(conn, table, "custom_fields_json"):
                 await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN custom_fields_json TEXT"))
                 print(f"+ added {table}.custom_fields_json")
 

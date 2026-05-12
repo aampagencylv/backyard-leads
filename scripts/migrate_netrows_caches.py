@@ -29,16 +29,10 @@ COLUMNS = [
 ]
 
 
-async def _columns(conn, table: str) -> set[str]:
-    rows = (await conn.execute(text(f"PRAGMA table_info({table})"))).fetchall()
-    return {row[1] for row in rows}
-
-
 async def main() -> None:
     async with engine.begin() as conn:
         for table, name, ddl in COLUMNS:
-            cols = await _columns(conn, table)
-            if not await column_exists(conn, "{table}", name):
+            if not await column_exists(conn, table, name):
                 await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
                 print(f"+ added {table}.{name}")
     print("Migration complete.")
