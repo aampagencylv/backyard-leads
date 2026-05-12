@@ -93,6 +93,7 @@ async def init_db():
         "scripts.migrate_autopilot_window",
         "scripts.migrate_autopilot_per_channel",
         "scripts.migrate_booking_routing",
+        "scripts.migrate_call_diarization",
     ):
         try:
             mod = __import__(_migration_module, fromlist=["main"])

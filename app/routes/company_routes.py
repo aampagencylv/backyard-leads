@@ -741,6 +741,9 @@ async def get_company_full(
                 ),
                 "transcript": a.transcript,
                 "call_summary": a.call_summary,
+                # Diarization for the dual-channel waveform
+                "diarized_segments": (json.loads(a.diarized_segments_json) if a.diarized_segments_json else None),
+                "talk_ratio": (json.loads(a.talk_ratio_json) if a.talk_ratio_json else None),
             }
             for a in activities
         ],

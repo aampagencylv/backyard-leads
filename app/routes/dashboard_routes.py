@@ -36,6 +36,18 @@ HOT_LEAD_THRESHOLD = 3  # min score to qualify as "hot"
 STALE_DEAL_DAYS = 14
 
 
+def _parse_or_none(raw):
+    """Lazy JSON parse — returns None on empty/invalid so the client
+    can just check truthiness."""
+    if not raw:
+        return None
+    try:
+        import json as _json
+        return _json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+
+
 def _decay_weight(age_days: float) -> float:
     """Half-life decay: an event from 14 days ago counts as 0.5x today's event."""
     return 0.5 ** (age_days / ENGAGEMENT_DECAY_HALFLIFE_DAYS)
@@ -608,6 +620,11 @@ async def recent_calls(
             "has_summary": bool(a.call_summary),
             "transcript": a.transcript,
             "call_summary": a.call_summary,
+            # Structured diarization for the dual-channel waveform.
+            # Parsed client-side; null when transcription pre-dates the
+            # persistence change (backfill will fill these in).
+            "diarized_segments": _parse_or_none(a.diarized_segments_json),
+            "talk_ratio": _parse_or_none(a.talk_ratio_json),
             "call_rating": a.call_rating,
             "call_feedback": a.call_feedback,
             "rated_by": a.rated_by,

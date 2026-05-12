@@ -430,6 +430,13 @@ class Activity(Base):
     recording_url = Column(String(500), nullable=True)
     transcript = Column(Text, nullable=True)
     call_summary = Column(Text, nullable=True)  # AI-generated takeaways
+    # Structured speaker-diarization output from Deepgram.
+    # Array of {speaker:int, start:float, end:float, text:str}. Powers
+    # the dual-channel call-recording waveform on the dashboard.
+    diarized_segments_json = Column(Text, nullable=True)
+    # {"rep_words": int, "prospect_words": int, "rep_pct": float,
+    #  "prospect_pct": float} — computed at transcription time.
+    talk_ratio_json = Column(Text, nullable=True)
 
     # Call review / coaching feedback (admin rates BDR calls)
     call_rating = Column(Integer, nullable=True)  # 1-5 stars

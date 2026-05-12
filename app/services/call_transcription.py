@@ -91,8 +91,24 @@ async def _run_pipeline(activity_id: int) -> None:
             log.exception("Deepgram transcription failed for activity %s", activity_id)
             return
 
-        # Persist the transcript first — even if Claude summarization fails later
+        # Persist the transcript + structured diarization first — even
+        # if Claude summarization fails later. The dashboard waveform +
+        # talk-ratio panel both read these JSON blobs directly.
+        import json as _json
         act.transcript = transcript_text
+        # Normalize the talk_ratio dict to include prospect_pct too (the
+        # legacy helper only set rep_pct). UI reads both.
+        try:
+            tr = dict(talk_ratio or {})
+            rep_pct = float(tr.get("rep_pct") or 0.0)
+            tr["prospect_pct"] = round(max(0.0, 100.0 - rep_pct), 1)
+            act.talk_ratio_json = _json.dumps(tr)
+        except Exception:
+            act.talk_ratio_json = None
+        try:
+            act.diarized_segments_json = _json.dumps(diarized_segments or [])
+        except Exception:
+            act.diarized_segments_json = None
         await db.commit()
 
         # 2. Pull contact + company context for the prompt

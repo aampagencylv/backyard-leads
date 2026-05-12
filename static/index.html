@@ -4309,7 +4309,7 @@ function verify(secret, rawBody, header) {
                             ${c.has_summary ? `<button class="btn btn-secondary btn-xs" onclick="toggleCallExpand(${c.id},'summary')">✨</button>` : ''}
                         </div>
                     </div>
-                    ${inlineWaveformPlaceholder(c.id, c.recording_url)}
+                    ${inlineWaveformPlaceholder(c.id, c.recording_url, c.diarized_segments, c.talk_ratio, c.call_duration_seconds)}
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
                         <div style="font-size:13px">${stars(c.call_rating, c.id)}</div>
                         ${isAdmin ? `<button class="btn btn-secondary btn-xs" onclick="showCallFeedback(${c.id}, ${c.call_rating || 0}, '${escapeHtml(c.call_feedback || '')}')">Feedback</button>` : ''}
@@ -6334,7 +6334,7 @@ function verify(secret, rawBody, header) {
                     <div class="timeline-item">
                         ${baseRow}
                         <div class="timeline-meta" style="margin-top:4px">${direction}${dur ? ' · ' + dur : ''}${outcomeBadge}</div>
-                        ${inlineWaveformPlaceholder(a.id, a.recording_url)}
+                        ${inlineWaveformPlaceholder(a.id, a.recording_url, a.diarized_segments, a.talk_ratio, a.call_duration_seconds)}
                         ${buttons.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${buttons.join('')}</div>` : ''}
                         <div id="call-expand-${a.id}" style="display:none;margin-top:8px"></div>
                     </div>
@@ -6498,20 +6498,29 @@ function verify(secret, rawBody, header) {
         }
 
         // Inline waveform that renders by default (no click required).
-        // Returns an HTML placeholder + queues a lazy IntersectionObserver
-        // init so wavesurfer instances only spin up for rows actually on
-        // screen. The data-* attributes carry the args; mountInlineWaveforms()
-        // walks newly-rendered DOM and wires them up.
-        function inlineWaveformPlaceholder(activityId, recordingUrl) {
+        // Returns an HTML placeholder; mountInlineWaveforms() then walks
+        // newly-rendered DOM and wires up either:
+        //   - the CallRail-style dual-channel canvas player when the
+        //     activity has persisted diarization data, OR
+        //   - the simpler iMessage-style wavesurfer single-track player
+        //     as a fallback for calls transcribed before we persisted
+        //     speaker segments.
+        //
+        // Stashes the diarization payload in window._diarizationCache
+        // because cramming a large JSON blob into a data-attribute would
+        // be wasteful + fragile against escaping bugs.
+        if (!window._diarizationCache) window._diarizationCache = {};
+        function inlineWaveformPlaceholder(activityId, recordingUrl, diarized, talkRatio, durationSec) {
             if (!recordingUrl) return '';
+            window._diarizationCache[activityId] = {
+                diarized: diarized || null,
+                talkRatio: talkRatio || null,
+                duration: durationSec || null,
+            };
             return `<div class="inline-waveform" data-activity-id="${activityId}" data-recording-url="${escapeHtml(recordingUrl)}" style="margin-top:6px"></div>`;
         }
 
-        // Walk newly-rendered DOM and init wavesurfer in every placeholder
-        // immediately. Previously did lazy IntersectionObserver init, but
-        // with at most ~20 calls on screen the perf cost is negligible
-        // and lazy init was sometimes silently never firing for users
-        // whose dashboard widget was rendered while off-screen.
+        // Walk newly-rendered DOM and init the right renderer.
         function mountInlineWaveforms(rootEl) {
             const scope = rootEl || document;
             scope.querySelectorAll('.inline-waveform').forEach(node => {
@@ -6520,8 +6529,232 @@ function verify(secret, rawBody, header) {
                 const activityId = parseInt(node.dataset.activityId, 10);
                 const recordingUrl = node.dataset.recordingUrl;
                 if (!activityId || !recordingUrl) return;
-                renderCallWaveform(activityId, node, recordingUrl);
+                const cached = window._diarizationCache[activityId] || {};
+                if (cached.diarized && cached.diarized.length) {
+                    renderDualChannelWaveform(activityId, node, recordingUrl, cached.diarized, cached.talkRatio, cached.duration);
+                } else {
+                    renderCallWaveform(activityId, node, recordingUrl);
+                }
             });
+        }
+
+        // -----------------------------------------------------------
+        // Dual-channel CallRail-style waveform — Phase 2.
+        //
+        // Decodes the recording via Web Audio API, downsamples into
+        // ~200 amplitude buckets matching canvas width. For each bucket
+        // we determine which speaker is active at that time via the
+        // diarized_segments list — agent bars draw above the centerline
+        // in dark blue, customer bars below in light blue (matches the
+        // CallRail visual language).
+        //
+        // The HTML <audio> element drives actual playback; the canvas
+        // is purely visualization + scrubbing. Decouples decode-time
+        // from start-of-playback so the user can scrub immediately.
+        // -----------------------------------------------------------
+
+        const _dualChannelState = {};  // activityId → { ctx, audio, raf }
+
+        async function renderDualChannelWaveform(activityId, panel, recordingUrl, diarized, talkRatio, durationHint) {
+            const wrapId = `dc-wrap-${activityId}`;
+            const canvasId = `dc-canvas-${activityId}`;
+            const audioId = `dc-audio-${activityId}`;
+            const playBtnId = `dc-play-${activityId}`;
+            const timeId = `dc-time-${activityId}`;
+
+            const repPct = (talkRatio && talkRatio.rep_pct != null) ? Number(talkRatio.rep_pct) : null;
+            const prospectPct = (talkRatio && talkRatio.prospect_pct != null)
+                ? Number(talkRatio.prospect_pct)
+                : (repPct != null ? Math.max(0, 100 - repPct) : null);
+
+            panel.innerHTML = `
+                <div id="${wrapId}" style="background:white;border:1px solid #e8e8e8;border-radius:10px;padding:12px;margin-top:4px">
+                    <canvas id="${canvasId}" style="display:block;width:100%;height:90px;cursor:pointer"></canvas>
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px;flex-wrap:wrap;gap:8px">
+                        <div style="display:flex;align-items:center;gap:14px;font-size:11px;color:#555">
+                            ${repPct != null ? `<div style="display:flex;align-items:center;gap:6px"><span style="width:9px;height:9px;background:#1a4d8c;border-radius:2px"></span><strong>Agent:</strong> ${repPct.toFixed(0)}%</div>` : ''}
+                            ${prospectPct != null ? `<div style="display:flex;align-items:center;gap:6px"><span style="width:9px;height:9px;background:#7fb1e8;border-radius:2px"></span><strong>Customer:</strong> ${prospectPct.toFixed(0)}%</div>` : ''}
+                        </div>
+                        <div style="display:flex;align-items:center;gap:10px">
+                            <button id="${playBtnId}" type="button" aria-label="Play" style="width:36px;height:36px;border:none;border-radius:50%;background:#1a4d8c;color:white;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;padding-left:2px">▶</button>
+                            <span id="${timeId}" style="font-size:11px;color:#666;font-variant-numeric:tabular-nums;min-width:80px;text-align:right">--:-- / --:--</span>
+                        </div>
+                    </div>
+                    <audio id="${audioId}" preload="metadata" src="${recordingUrl}" style="display:none"></audio>
+                </div>
+            `;
+
+            const canvas = document.getElementById(canvasId);
+            const audio = document.getElementById(audioId);
+            const playBtn = document.getElementById(playBtnId);
+            const timeEl = document.getElementById(timeId);
+            const fmtTime = (s) => {
+                if (!isFinite(s) || s < 0) return '0:00';
+                const m = Math.floor(s / 60);
+                const sec = Math.floor(s % 60);
+                return `${m}:${String(sec).padStart(2, '0')}`;
+            };
+
+            // Pre-fetch + decode audio for peak data. The HTML <audio>
+            // element can play even while this is in flight.
+            let peaks = null;
+            let duration = null;
+            try {
+                const resp = await fetch(recordingUrl);
+                const buf = await resp.arrayBuffer();
+                const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                const ctx = new AudioCtx();
+                const decoded = await ctx.decodeAudioData(buf.slice(0));
+                duration = decoded.duration;
+                peaks = computePeaks(decoded, 220);
+                try { ctx.close(); } catch (e) {}
+            } catch (e) {
+                console.warn('dual-channel decode failed', e);
+                // Don't blow up — we still have HTML <audio> playback,
+                // just draw a flat baseline and skip the peaks.
+                duration = durationHint || (audio.duration || 0);
+                peaks = new Float32Array(220);
+            }
+
+            if (timeEl) timeEl.textContent = `${fmtTime(0)} / ${fmtTime(duration || 0)}`;
+
+            const draw = (progressFraction) => {
+                drawDualChannelWaveform(canvas, peaks, diarized, duration || 0, progressFraction || 0);
+            };
+            draw(0);
+
+            // Handle audio events
+            audio.addEventListener('play',  () => { if (playBtn) playBtn.textContent = '⏸'; });
+            audio.addEventListener('pause', () => { if (playBtn) playBtn.textContent = '▶'; });
+            audio.addEventListener('ended', () => { if (playBtn) playBtn.textContent = '▶'; });
+            audio.addEventListener('loadedmetadata', () => {
+                if (!duration) {
+                    duration = audio.duration;
+                    if (timeEl) timeEl.textContent = `${fmtTime(0)} / ${fmtTime(duration)}`;
+                    draw(0);
+                }
+            });
+            audio.addEventListener('timeupdate', () => {
+                const cur = audio.currentTime || 0;
+                const dur = duration || audio.duration || 1;
+                if (timeEl) timeEl.textContent = `${fmtTime(cur)} / ${fmtTime(dur)}`;
+                draw(cur / dur);
+            });
+            playBtn.onclick = () => {
+                if (audio.paused) audio.play().catch(err => console.warn('audio play failed', err));
+                else audio.pause();
+            };
+            canvas.addEventListener('click', (e) => {
+                if (!duration || !audio) return;
+                const rect = canvas.getBoundingClientRect();
+                const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+                audio.currentTime = duration * ratio;
+            });
+            // Cleanup hook
+            _dualChannelState[activityId] = { audio, peaks, duration };
+        }
+
+        // Bucket the decoded AudioBuffer into N peak values. We take
+        // the max abs amplitude across all channels in each bucket so
+        // mono-mixdown isn't required.
+        function computePeaks(audioBuffer, numBuckets) {
+            const chCount = audioBuffer.numberOfChannels;
+            const samples = audioBuffer.length;
+            const bucketSize = Math.max(1, Math.floor(samples / numBuckets));
+            const peaks = new Float32Array(numBuckets);
+            const channels = [];
+            for (let c = 0; c < chCount; c++) channels.push(audioBuffer.getChannelData(c));
+            for (let i = 0; i < numBuckets; i++) {
+                const start = i * bucketSize;
+                const end = Math.min(samples, start + bucketSize);
+                let m = 0;
+                for (let c = 0; c < chCount; c++) {
+                    const ch = channels[c];
+                    for (let j = start; j < end; j++) {
+                        const v = Math.abs(ch[j]);
+                        if (v > m) m = v;
+                    }
+                }
+                peaks[i] = m;
+            }
+            // Normalize so the loudest moment fills the canvas
+            let max = 0;
+            for (let i = 0; i < numBuckets; i++) if (peaks[i] > max) max = peaks[i];
+            if (max > 0) for (let i = 0; i < numBuckets; i++) peaks[i] /= max;
+            return peaks;
+        }
+
+        // Canvas draw — agent above, customer below, played portion in
+        // progress colors. Speaker is resolved per-column from the
+        // diarized segments list.
+        function drawDualChannelWaveform(canvas, peaks, diarized, duration, progressFraction) {
+            const dpr = window.devicePixelRatio || 1;
+            const cssW = canvas.clientWidth;
+            const cssH = canvas.clientHeight;
+            if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+                canvas.width = cssW * dpr;
+                canvas.height = cssH * dpr;
+            }
+            const ctx = canvas.getContext('2d');
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            ctx.clearRect(0, 0, cssW, cssH);
+
+            const mid = Math.floor(cssH / 2);
+            const numBars = peaks.length;
+            const barWidth = 2;
+            const gap = Math.max(1, Math.floor((cssW - numBars * barWidth) / numBars));
+            const stride = barWidth + gap;
+            const progressX = cssW * progressFraction;
+
+            // Faint center line
+            ctx.fillStyle = '#e5e5e5';
+            ctx.fillRect(0, mid - 0.5, cssW, 1);
+
+            // Helper: which speaker is talking at a given time? Returns
+            // 0 = agent (rep), 1+ = customer (prospect). Falls back to
+            // alternating if no segments (shouldn't happen for diarized).
+            const speakerAt = (t) => {
+                if (!diarized) return 0;
+                // Linear scan — segments are sorted; with ~50 segments
+                // per call this is plenty fast for 200 buckets.
+                for (let i = 0; i < diarized.length; i++) {
+                    const s = diarized[i];
+                    if (t >= s.start && t < s.end) return s.speaker;
+                }
+                return null;
+            };
+
+            const COLOR_AGENT = '#1a4d8c';
+            const COLOR_AGENT_PROGRESS = '#0d3263';
+            const COLOR_CUST = '#7fb1e8';
+            const COLOR_CUST_PROGRESS = '#5187c8';
+
+            for (let i = 0; i < numBars; i++) {
+                const x = Math.floor(i * stride);
+                if (x >= cssW) break;
+                const amp = peaks[i] || 0;
+                const barH = Math.max(1, Math.floor(amp * (mid - 4)));
+                const tCenter = duration * ((i + 0.5) / numBars);
+                const sp = speakerAt(tCenter);
+                const played = x < progressX;
+                if (sp === 0) {
+                    ctx.fillStyle = played ? COLOR_AGENT_PROGRESS : COLOR_AGENT;
+                    ctx.fillRect(x, mid - barH, barWidth, barH);
+                } else if (sp != null) {
+                    ctx.fillStyle = played ? COLOR_CUST_PROGRESS : COLOR_CUST;
+                    ctx.fillRect(x, mid + 1, barWidth, barH);
+                } else {
+                    // Silence / unknown — draw a tiny tick on the centerline
+                    ctx.fillStyle = '#ddd';
+                    ctx.fillRect(x, mid - 1, barWidth, 2);
+                }
+            }
+
+            // Progress cursor — a thin vertical line at the playhead
+            if (progressX > 0) {
+                ctx.fillStyle = 'rgba(0,0,0,0.3)';
+                ctx.fillRect(Math.floor(progressX), 4, 1, cssH - 8);
+            }
         }
 
         // When a call is fresh (< 5 min old) and has a recording but no
