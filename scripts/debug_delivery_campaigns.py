@@ -1,93 +1,75 @@
-"""Debug: check email delivery status and campaign health."""
-import sqlite3, pathlib
+"""Debug: check email delivery status and campaign health via the app's DB."""
+import asyncio
+from sqlalchemy import select, func, text
+from app.database import async_session
+from app.models import GeneratedEmail, Contact, Company, Activity, Campaign, User
 
-DB = pathlib.Path(__file__).resolve().parent.parent / "leads.db"
-con = sqlite3.connect(str(DB))
-cur = con.cursor()
+async def main():
+    async with async_session() as db:
+        print("=== Email status overview ===")
+        total = (await db.execute(select(func.count(GeneratedEmail.id)))).scalar() or 0
+        sent = (await db.execute(select(func.count(GeneratedEmail.id)).where(GeneratedEmail.is_sent == True))).scalar() or 0
+        pending = (await db.execute(select(func.count(GeneratedEmail.id)).where(
+            GeneratedEmail.is_sent == False, GeneratedEmail.paused_at.is_(None), GeneratedEmail.skipped_at.is_(None)
+        ))).scalar() or 0
+        paused = (await db.execute(select(func.count(GeneratedEmail.id)).where(GeneratedEmail.paused_at.isnot(None)))).scalar() or 0
+        skipped = (await db.execute(select(func.count(GeneratedEmail.id)).where(GeneratedEmail.skipped_at.isnot(None)))).scalar() or 0
+        print(f"  Total: {total}  Sent: {sent}  Pending: {pending}  Paused: {paused}  Skipped: {skipped}")
 
-print("=== Email status overview ===")
-total = cur.execute("SELECT COUNT(*) FROM generated_emails").fetchone()[0]
-sent = cur.execute("SELECT COUNT(*) FROM generated_emails WHERE is_sent = 1").fetchone()[0]
-pending = cur.execute("SELECT COUNT(*) FROM generated_emails WHERE is_sent = 0 AND paused_at IS NULL AND skipped_at IS NULL").fetchone()[0]
-paused = cur.execute("SELECT COUNT(*) FROM generated_emails WHERE paused_at IS NOT NULL").fetchone()[0]
-skipped = cur.execute("SELECT COUNT(*) FROM generated_emails WHERE skipped_at IS NOT NULL").fetchone()[0]
-print(f"  Total: {total}  Sent: {sent}  Pending: {pending}  Paused: {paused}  Skipped: {skipped}")
+        print("\n=== Last 10 emails (any status) ===")
+        rows = (await db.execute(
+            select(GeneratedEmail, Contact.email, Company.name)
+            .outerjoin(Contact, GeneratedEmail.contact_id == Contact.id)
+            .outerjoin(Company, GeneratedEmail.company_id == Company.id)
+            .order_by(GeneratedEmail.id.desc()).limit(10)
+        )).all()
+        for ge, to_email, co_name in rows:
+            status = "SENT" if ge.is_sent else ("PAUSED" if ge.paused_at else ("SKIPPED" if ge.skipped_at else "PENDING"))
+            print(f"  #{ge.id} {ge.step_type} {status} auto={ge.auto_execute} to={to_email} co={co_name}")
+            print(f"    scheduled={ge.scheduled_send_at} subject={(ge.subject or '')[:50]}")
+            if ge.skip_reason: print(f"    skip_reason={ge.skip_reason}")
 
-print("\n=== Last 10 emails (any status) ===")
-rows = cur.execute("""
-    SELECT ge.id, ge.step_type, ge.is_sent, ge.sent_at, ge.paused_at, ge.skipped_at, ge.skip_reason,
-           ge.scheduled_send_at, ge.auto_execute, c.email as to_email, co.name as company,
-           substr(ge.subject, 1, 50)
-    FROM generated_emails ge
-    LEFT JOIN contacts c ON ge.contact_id = c.id
-    LEFT JOIN companies co ON ge.company_id = co.id
-    ORDER BY ge.id DESC LIMIT 10
-""").fetchall()
-for r in rows:
-    status = "SENT" if r[2] else ("PAUSED" if r[4] else ("SKIPPED" if r[5] else "PENDING"))
-    print(f"  #{r[0]} {r[1]} {status} auto={r[8]} to={r[9]} co={r[10]}")
-    print(f"    scheduled={r[7]} subject={r[11]}")
-    if r[6]: print(f"    skip_reason={r[6]}")
+        print("\n=== Email activity events ===")
+        for ev_type in ('email_sent', 'email_delivered', 'email_opened', 'email_clicked', 'email_bounced', 'email_replied'):
+            cnt = (await db.execute(select(func.count(Activity.id)).where(Activity.activity_type == ev_type))).scalar() or 0
+            if cnt > 0:
+                print(f"  {ev_type}: {cnt}")
+        sent_acts = (await db.execute(select(func.count(Activity.id)).where(Activity.activity_type == 'email_sent'))).scalar() or 0
+        if sent_acts == 0:
+            print("  NO email_sent activities found")
 
-print("\n=== Resend webhook activity events ===")
-try:
-    for ev_type in ('email_sent', 'email_delivered', 'email_opened', 'email_clicked', 'email_bounced', 'email_replied'):
-        cnt = cur.execute("SELECT COUNT(*) FROM activities WHERE activity_type = ?", (ev_type,)).fetchone()[0]
-        if cnt > 0:
-            print(f"  {ev_type}: {cnt}")
-    # Check if any sent activities at all
-    sent_acts = cur.execute("SELECT COUNT(*) FROM activities WHERE activity_type = 'email_sent'").fetchone()[0]
-    if sent_acts == 0:
-        print("  NO email_sent activities found — emails may not be going out at all")
-except Exception as e:
-    print(f"  Error: {e}")
+        print("\n=== Campaigns ===")
+        campaigns = (await db.execute(select(Campaign).order_by(Campaign.id.desc()).limit(5))).scalars().all()
+        if campaigns:
+            for c in campaigns:
+                print(f"\n  Campaign #{c.id}: {c.name}")
+                print(f"    status={c.status} mode={c.mode}")
+                print(f"    prospects_today={c.prospects_today} max_per_day={c.max_prospects_per_day}")
+                print(f"    loc_idx={c.current_location_index}")
+                print(f"    created={c.created_at}")
+                # Check targets
+                try:
+                    from app.models import CampaignTarget
+                    tcount = (await db.execute(select(func.count(CampaignTarget.id)).where(CampaignTarget.campaign_id == c.id))).scalar() or 0
+                    print(f"    targets: {tcount}")
+                except Exception as e:
+                    print(f"    targets: error - {e}")
+        else:
+            print("  No campaigns found")
 
-print("\n=== Sequence engine errors (recent log) ===")
-try:
-    errors = cur.execute("""
-        SELECT COUNT(*) FROM activities WHERE activity_type LIKE '%error%' OR activity_type LIKE '%fail%'
-    """).fetchone()[0]
-    print(f"  Error activities: {errors}")
-except:
-    pass
+        print("\n=== Sequence engine recent errors (from server log) ===")
+        errors = (await db.execute(
+            select(Activity).where(Activity.activity_type.like('%error%')).order_by(Activity.created_at.desc()).limit(5)
+        )).scalars().all()
+        if errors:
+            for e in errors:
+                print(f"  {e.activity_type}: {(e.content or '')[:100]} at={e.created_at}")
+        else:
+            print("  No error activities")
 
-print("\n=== Campaigns ===")
-try:
-    cols = [r[1] for r in cur.execute("PRAGMA table_info(campaigns)").fetchall()]
-    campaigns = cur.execute("SELECT * FROM campaigns ORDER BY rowid DESC LIMIT 5").fetchall()
-    if campaigns:
-        for c in campaigns:
-            data = dict(zip(cols, c))
-            print(f"\n  Campaign #{data.get('id')}: {data.get('name', '?')}")
-            print(f"    status={data.get('status')} mode={data.get('mode')}")
-            print(f"    prospects_today={data.get('prospects_today')} max_per_day={data.get('max_prospects_per_day')}")
-            print(f"    loc_idx={data.get('current_location_index')}")
-            print(f"    created={data.get('created_at')}")
-            # Targets
-            try:
-                tcount = cur.execute("SELECT COUNT(*) FROM campaign_targets WHERE campaign_id = ?", (data['id'],)).fetchone()[0]
-                print(f"    targets: {tcount}")
-            except:
-                pass
-    else:
-        print("  No campaigns found")
-except Exception as e:
-    print(f"  Error reading campaigns: {e}")
+        print(f"\n=== Counts: companies={await _count(db, Company)} contacts={await _count(db, Contact)} users={await _count(db, User)} ===")
 
-print("\n=== Campaign runs (last 10) ===")
-try:
-    runs = cur.execute("""
-        SELECT id, campaign_id, status, companies_found, companies_qualified,
-               sequences_created, substr(error_message, 1, 100), created_at
-        FROM campaign_runs ORDER BY id DESC LIMIT 10
-    """).fetchall()
-    if runs:
-        for r in runs:
-            print(f"  Run #{r[0]} campaign={r[1]} status={r[2]} found={r[3]} qualified={r[4]} seqs={r[5]} at={r[7]}")
-            if r[6]: print(f"    error: {r[6]}")
-    else:
-        print("  No runs found")
-except Exception as e:
-    print(f"  Error: {e}")
+async def _count(db, model):
+    return (await db.execute(select(func.count(model.id)))).scalar() or 0
 
-con.close()
+asyncio.run(main())
