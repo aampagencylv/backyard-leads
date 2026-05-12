@@ -581,6 +581,11 @@
         .stage-closed_won { background: #d5f5e3; color: #1e8449; }
         .stage-closed_lost { background: #f2f3f4; color: #7f8c8d; }
         .toast { position: fixed; bottom: 20px; right: 20px; background: var(--bmp-green); color: white; padding: 12px 20px; border-radius: 8px; font-size: 14px; z-index: 1000; animation: slideUp 0.3s; }
+        /* Help / Feedback floating button — sits to the right of the
+           240px sidebar on desktop so it doesn't overlap the
+           Sign-out / user-info section. */
+        .feedback-btn-floating { position: fixed; bottom: 20px; left: 260px; background: #2c3e50; color: white; border: none; border-radius: 50%; width: 44px; height: 44px; font-size: 18px; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.3); z-index: 999; }
+        @media (max-width: 900px) { .feedback-btn-floating { left: 20px; } }
         @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } }
 
         /* Modal */
@@ -2807,8 +2812,11 @@ function verify(secret, rawBody, header) {
     <!-- Modal mount point -->
     <div id="modal-root"></div>
 
-    <!-- Feedback button — bottom-left floating -->
-    <button id="feedback-btn" onclick="openFeedbackForm()" class="hidden" style="position:fixed;bottom:20px;left:20px;background:#2c3e50;color:white;border:none;border-radius:50%;width:44px;height:44px;font-size:18px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.3);z-index:999" title="Send feedback or report a bug">?</button>
+    <!-- Feedback button — bottom-left floating; pushed past the 240px
+         sidebar so it doesn't overlap user-info / sign-out. On mobile
+         the sidebar is a hidden drawer, so the media query below moves
+         the button back to left:20px. -->
+    <button id="feedback-btn" onclick="openFeedbackForm()" class="hidden feedback-btn-floating" title="Send feedback or report a bug">?</button>
 
     <!-- Global "working" overlay — shown during long-running operations
          (sequence generation, audit, enrichment, etc.). Blocks the UI
@@ -11561,6 +11569,13 @@ hmac.compare_digest(expected, header)</pre>
             const token = data.token;
 
             try {
+                // Request browser-notification permission on first init so
+                // inbound calls can ring through even when the tab is in
+                // the background. Browsers won't show a popup if we already
+                // asked + got denied — that's a one-time decision.
+                if ('Notification' in window && Notification.permission === 'default') {
+                    try { Notification.requestPermission().catch(() => {}); } catch (_) {}
+                }
                 if (dialerState.device) {
                     dialerState.device.updateToken(token);
                 } else {
@@ -11603,6 +11618,33 @@ hmac.compare_digest(expected, header)</pre>
                         }
 
                         openInboundModal(inboundContact, fromNumber, call);
+                        // Background-tab desktop notification — fires
+                        // only when the tab isn't visible so an active
+                        // user isn't double-pinged. Click on the
+                        // notification focuses our tab; accepting/rejecting
+                        // still happens through the modal.
+                        try {
+                            if (document.visibilityState !== 'visible' && 'Notification' in window
+                                && Notification.permission === 'granted') {
+                                const title = contact
+                                    ? `📞 Incoming call — ${contact.name || fromNumber}`
+                                    : `📞 Incoming call from ${fromNumber || 'unknown'}`;
+                                const body = contact
+                                    ? `${contact.title || ''}${contact.title && companyName ? ' · ' : ''}${companyName || 'Known contact'}`
+                                    : 'Unknown number — not in your CRM';
+                                const n = new Notification(title, {
+                                    body, icon: '/static/pwa/icon-192.png',
+                                    tag: 'inbound-call-' + (call.parameters?.CallSid || Date.now()),
+                                    requireInteraction: true,
+                                });
+                                n.onclick = () => { window.focus(); n.close(); };
+                                // Stop the notification when the call modal closes
+                                if (call && typeof call.on === 'function') {
+                                    call.on('disconnect', () => { try { n.close(); } catch (_) {} });
+                                    call.on('reject', () => { try { n.close(); } catch (_) {} });
+                                }
+                            }
+                        } catch (_) { /* never break the dialer flow */ }
                     });
                 }
                 dialerState.tokenExpiresAt = now + (data.expires_in * 1000);

@@ -99,6 +99,90 @@ async def create_search(
     )
 
 
+class YellowPagesSearchRequest(BaseModel):
+    keyword: str
+    location: str  # "City, ST" or ZIP
+    pages: int = 1  # ~30 results per page
+
+
+@router.post("/yellow-pages")
+async def yellow_pages_search_endpoint(
+    req: YellowPagesSearchRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Alternative SMB lead source via Netrows /businesses/search.
+    Useful for rural-market or trade-specific searches that come up
+    thin on Google Maps. Same insert flow as the Maps search — every
+    result lands in companies with status='new' so the BDR can scan
+    + Pursue from the Companies page."""
+    from app.runtime_config import get_netrows_api_key
+    nr_key = await get_netrows_api_key(db)
+    if not nr_key:
+        raise HTTPException(status_code=400, detail="Netrows API key not configured")
+
+    from app.services.netrows_enrichment import yellow_pages_search
+    from app.services.domain_utils import normalize_domain
+
+    # Pull `pages` pages worth of results (cap at 3 to avoid runaway)
+    pages = max(1, min(3, int(req.pages or 1)))
+    all_results = []
+    for page in range(1, pages + 1):
+        results = await yellow_pages_search(req.keyword, req.location, nr_key, page=page)
+        if not results:
+            break
+        all_results.extend(results)
+
+    # Persist the search history row alongside the Maps searches so
+    # they share the activity feed.
+    search = Search(user_id=user.id, keyword=f"YP: {req.keyword}", location=req.location)
+    db.add(search)
+    await db.flush()
+
+    inserted = 0
+    skipped_dupes = 0
+    for biz in all_results:
+        if not biz.name:
+            continue
+        # Domain-dedupe against existing companies
+        if biz.website:
+            dom = normalize_domain(biz.website)
+            if dom:
+                existing = (await db.execute(
+                    select(Company).where(Company.domain == dom).limit(1)
+                )).scalar_one_or_none()
+                if existing:
+                    skipped_dupes += 1
+                    continue
+        db.add(Company(
+            search_id=search.id,
+            name=biz.name,
+            phone=biz.phone,
+            website=biz.website,
+            address=biz.street,
+            city=biz.city,
+            state=biz.state,
+            domain=normalize_domain(biz.website) if biz.website else None,
+            rating=biz.rating,
+            review_count=biz.review_count,
+            business_type=", ".join(biz.categories[:3]) if biz.categories else req.keyword,
+            status="new",
+        ))
+        inserted += 1
+    search.results_count = inserted
+    await db.commit()
+
+    return {
+        "search_id": search.id,
+        "source": "yellow_pages",
+        "keyword": req.keyword,
+        "location": req.location,
+        "raw_results": len(all_results),
+        "inserted": inserted,
+        "skipped_dupes": skipped_dupes,
+    }
+
+
 @router.get("/history")
 async def get_search_history(
     db: AsyncSession = Depends(get_db),

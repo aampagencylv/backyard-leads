@@ -51,13 +51,13 @@
 
 | # | What | Why |
 |---|---|---|
-| 1 | **Subscribe to Netrows Starter** (€49/mo) | Trial credits exhausted; nothing fires until you upgrade |
-| 2 | **Rotate the `pk_live_*` API key** in chat history → paste new one in **Settings → API Keys** | Original key was shared in our conversation |
-| 3 | **Set real BMP postal address** in `/opt/backyard-leads/.env` (`BMP_POSTAL_ADDRESS=...`) | CAN-SPAM requirement; placeholder is "Backyard Marketing Pros, Las Vegas, NV" |
-| 4 | **Configure Resend Inbound webhook** + paste `RESEND_WEBHOOK_SECRET` into VPS `.env` | Token-based reply catching is code-complete but accepts any payload until the secret is set; details in Phase A operator setup below |
-| 5 | **Set `ICLOSED_WEBHOOK_SECRET`** in VPS `.env` + update iClosed dashboard webhook URL to include `?t=<secret>` | Authoritative booking confirmation for the gated competitor report |
-| 6 | **Confirm each rep has `twilio_phone_number` assigned** under User → Edit | TwiML refuses to record calls without it — symptoms = no waveform appears on call activities |
-| 7 | **Set up Google OAuth** (full walkthrough below) | Required for the native scheduler — the `/book/{slug}` page won't work until each rep can connect their Google Calendar |
+| 1 | ✅ **Netrows Starter** subscribed | Done 2026-05-12 |
+| 2 | ✅ **Rotated `pk_live_*` Netrows key** | Done 2026-05-12 |
+| 3 | ✅ **BMP postal address** set in `.env` (`Backyard Marketing Pros · 4375 S Valley View Blvd Ste G · Las Vegas NV 89103`) | Done 2026-05-12 |
+| 4 | ✅ **`RESEND_WEBHOOK_SECRET`** set in VPS `.env` | Done 2026-05-12 |
+| 5 | ✅ **`ICLOSED_WEBHOOK_SECRET`** set | Done 2026-05-12 |
+| 6 | ✅ **Reps have `twilio_phone_number` assigned** | Done 2026-05-12 |
+| 7 | ✅ **Google OAuth** set up | Done 2026-05-12 |
 
 ### Google OAuth — full setup (one-time, ~10 min)
 
@@ -201,13 +201,13 @@ confirmed they're live. Each retains its design history in git.
 - [ ] **Dashboard MRR/ARR cards** — wire forecast API to dashboard KPI strip
 - [ ] **Saved views UI** — dropdown on Companies + Pipeline pages (API ready)
 
-### Tier 2 Netrows (~3 hr total)
-- [ ] `/businesses/search` (Yellow Pages) — alternative SMB owner finder
-- [ ] `/yelp/business-details` + `/yelp/business-reviews` — owner replies on Yelp = same value as Google Maps reviews
-- [ ] `/similarweb/website-overview` — real traffic data for qualifying (skip companies with <100 visitors/mo)
-- [ ] `/technographics/lookup` (BuiltWith) — confirm tech stack, stronger than our DIY website_intel
-- [ ] `/indeed/job-search` (by company) — what they're hiring for = budget signal
-- [ ] `/companies/by-domain` (LinkedIn) — staff count + founded year as qualifying inputs
+### Tier 2 Netrows — ✅ DONE (audit 2026-05-12)
+- [x] `/businesses/search` (Yellow Pages) — shipped 2026-05-12, `/api/search/yellow-pages` endpoint with domain-dedupe + Search history row
+- [x] `/yelp/business-search` + `business-details` + `business-reviews` — wrapped + wired via `/api/companies/{id}/refresh-yelp` + rendered on company detail
+- [x] `/similarweb/website-overview` — wrapped + wired into the regular enrich flow with 30-day TTL + UI panel
+- [x] `/technographics/lookup` (BuiltWith) — wrapped + wired into enrich flow + UI tech-stack panel
+- [x] `/indeed/job-search` — wrapped + dedicated `/api/companies/{id}/refresh-indeed` endpoint
+- [x] `/companies/by-domain` (LinkedIn) — wrapped inside `enrich_company_by_domain`, pulls employee count + founded year as part of the standard enrich step
 
 ### Tier 3 Netrows — Radar (~3 hr)
 - [ ] **Radar webhook receiver** at `/api/netrows/radar` (HMAC verified)
@@ -1164,6 +1164,13 @@ building the real billing layer — at which point we'll be wiring Stripe and
 this add-on becomes the second SKU after the base seat price.
 
 ---
+
+## ✅ Shipped 2026-05-12 (late session — Yellow Pages + inbound notifications + cleanup)
+
+1. **`/api/search/yellow-pages`** — Yellow Pages search wired into a real route. Domain-deduped insert into companies as `status='new'`, paginated (1–3 pages, ~30 results/page). Closes out the Tier 2 Netrows list.
+2. **Inbound call browser notification** — when a Twilio.Device inbound rings and the tab isn't focused, fires a desktop notification with caller name/company. Click focuses the tab. Auto-closes when the call ends. Requests `Notification.permission` on first dialer init (one-time prompt).
+3. **Floating help button overlap fixed** — `feedback-btn` was at `left: 20px` which overlapped the 240px sidebar's user-info section. Moved to `left: 260px` on desktop with a mobile media-query fallback to `left: 20px`.
+4. **Postal address + all operator setup items resolved** — `BMP_POSTAL_ADDRESS`, `RESEND_WEBHOOK_SECRET`, `ICLOSED_WEBHOOK_SECRET`, Google OAuth, Twilio phone assignments all completed by Steve.
 
 ## ✅ Shipped 2026-05-11 — 2026-05-12 (Call coaching, autopilot, team dashboard, polish)
 
