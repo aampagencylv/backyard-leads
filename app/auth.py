@@ -32,6 +32,44 @@ def create_access_token(data: dict) -> str:
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
+# ============================================================
+# Resource-scoped tokens for <audio>/<img> src attributes
+# ============================================================
+# Browser media elements can't send Authorization headers — they only
+# carry cookies (which we don't use). For URLs that need to embed in
+# native HTML elements (audio playback, etc.), we mint a short-lived
+# signed token that's appended as ?t=<jwt>. The token is scoped to a
+# specific resource so it can't be reused elsewhere if exfiltrated.
+
+RECORDING_TOKEN_TTL_MINUTES = 30
+
+
+def mint_recording_token(activity_id: int, user_id: int) -> str:
+    """Short-lived signed token for streaming a call recording.
+    Scoped to (activity_id, user_id). Used in the ?t= query param on
+    /api/twilio/recording/{id} so <audio> tags can authenticate."""
+    payload = {
+        "scope": "recording",
+        "act": activity_id,
+        "sub": str(user_id),
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=RECORDING_TOKEN_TTL_MINUTES),
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def verify_recording_token(token: str, activity_id: int) -> bool:
+    """Verify a recording token is valid + matches the requested activity."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError:
+        return False
+    if payload.get("scope") != "recording":
+        return False
+    if int(payload.get("act") or 0) != activity_id:
+        return False
+    return True
+
+
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),

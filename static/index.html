@@ -4162,11 +4162,11 @@ function verify(secret, rawBody, header) {
                             </div>
                         </div>
                         <div style="display:flex;gap:4px;flex-shrink:0">
-                            ${c.recording_url ? `<button class="btn btn-secondary btn-xs" onclick="toggleCallExpand(${c.id},'audio')">▶️</button>` : ''}
                             ${c.has_transcript ? `<button class="btn btn-secondary btn-xs" onclick="toggleCallExpand(${c.id},'transcript')">📄</button>` : ''}
                             ${c.has_summary ? `<button class="btn btn-secondary btn-xs" onclick="toggleCallExpand(${c.id},'summary')">✨</button>` : ''}
                         </div>
                     </div>
+                    ${inlineWaveformPlaceholder(c.id, c.recording_url)}
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
                         <div style="font-size:13px">${stars(c.call_rating, c.id)}</div>
                         ${isAdmin ? `<button class="btn btn-secondary btn-xs" onclick="showCallFeedback(${c.id}, ${c.call_rating || 0}, '${escapeHtml(c.call_feedback || '')}')">Feedback</button>` : ''}
@@ -4176,6 +4176,8 @@ function verify(secret, rawBody, header) {
                     <div id="call-expand-${c.id}" style="margin-top:4px"></div>
                 </div>
             `).join('');
+            mountInlineWaveforms(el);
+            schedulePendingTranscriptPolls('dashboard', data);
         }
 
         async function rateCall(activityId, rating) {
@@ -5594,6 +5596,8 @@ function verify(secret, rawBody, header) {
                 </div>
             `;
             loadCompanyTasks(d.id);
+            mountInlineWaveforms(el);
+            schedulePendingTranscriptPolls('company', d.timeline || [], d.id);
         }
 
         function renderSequencePanel(d, contactId) {
@@ -6083,7 +6087,6 @@ function verify(secret, rawBody, header) {
                     : '';
                 const direction = a.call_direction === 'inbound' ? '⬅️ inbound' : '➡️ outbound';
                 const buttons = [];
-                if (a.recording_url) buttons.push(`<button class="btn btn-secondary btn-xs" onclick="toggleCallExpand(${a.id},'audio')">▶️ Play</button>`);
                 if (a.recording_url && !a.transcript) buttons.push(`<button class="btn btn-secondary btn-xs" onclick="retranscribeCall(${a.id})">🔄 Transcribe</button>`);
                 if (a.transcript) buttons.push(`<button class="btn btn-secondary btn-xs" onclick="toggleCallExpand(${a.id},'transcript')">📄 Transcript</button>`);
                 if (a.call_summary) buttons.push(`<button class="btn btn-secondary btn-xs" onclick="toggleCallExpand(${a.id},'summary')">✨ Takeaways</button>`);
@@ -6092,7 +6095,8 @@ function verify(secret, rawBody, header) {
                     <div class="timeline-item">
                         ${baseRow}
                         <div class="timeline-meta" style="margin-top:4px">${direction}${dur ? ' · ' + dur : ''}${outcomeBadge}</div>
-                        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${buttons.join('')}</div>
+                        ${inlineWaveformPlaceholder(a.id, a.recording_url)}
+                        ${buttons.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${buttons.join('')}</div>` : ''}
                         <div id="call-expand-${a.id}" style="display:none;margin-top:8px"></div>
                     </div>
                 `;
@@ -6164,7 +6168,7 @@ function verify(secret, rawBody, header) {
             panel.style.display = 'block';
             const a = _callPanels[activityId] || {};
             if (view === 'audio') {
-                renderCallWaveform(activityId, panel);
+                renderCallWaveform(activityId, panel, a.recording_url);
             } else if (view === 'transcript') {
                 if (!a.transcript) { panel.innerHTML = '<p style="font-size:12px;color:#888">Transcript not ready yet.</p>'; return; }
                 panel.innerHTML = `<div style="background:#f9faf9;border-radius:6px;padding:10px 12px;font-size:12px;line-height:1.55;white-space:pre-wrap;max-height:340px;overflow-y:auto">${renderMarkdownLite(a.transcript)}</div>`;
@@ -6178,15 +6182,23 @@ function verify(secret, rawBody, header) {
         // Uses wavesurfer.js (loaded defer'd in the head). If the library
         // hasn't finished loading yet, we wait briefly and retry — by the
         // time a user clicks Play the script is virtually always loaded.
-        function renderCallWaveform(activityId, panel, attempt = 0) {
+        //
+        // recordingUrl is a pre-signed URL from the API (already includes
+        // ?t=<token>) — we can't construct it client-side because the
+        // bearer token can't be embedded in <audio src>.
+        function renderCallWaveform(activityId, panel, recordingUrl, attempt = 0) {
+            if (!recordingUrl) {
+                panel.innerHTML = '<p style="font-size:12px;color:#888;padding:10px">No recording.</p>';
+                return;
+            }
             if (typeof WaveSurfer === 'undefined') {
                 if (attempt < 20) {
                     panel.innerHTML = '<p style="font-size:12px;color:#888;padding:10px">Loading audio player…</p>';
-                    setTimeout(() => renderCallWaveform(activityId, panel, attempt + 1), 100);
+                    setTimeout(() => renderCallWaveform(activityId, panel, recordingUrl, attempt + 1), 100);
                     return;
                 }
                 // Fall back to native audio element if the CDN never loads
-                panel.innerHTML = `<audio controls preload="none" style="width:100%" src="/api/twilio/recording/${activityId}"></audio>`;
+                panel.innerHTML = `<audio controls preload="none" style="width:100%" src="${recordingUrl}"></audio>`;
                 return;
             }
             const playBtnId = `ws-play-${activityId}`;
@@ -6216,7 +6228,7 @@ function verify(secret, rawBody, header) {
                 barGap: 1,
                 barRadius: 1,
                 normalize: true,
-                url: `/api/twilio/recording/${activityId}`,
+                url: recordingUrl,
             });
             _wavesurfers[activityId] = ws;
             const playBtn = document.getElementById(playBtnId);
@@ -6232,9 +6244,93 @@ function verify(secret, rawBody, header) {
             ws.on('finish', () => { if (playBtn) playBtn.textContent = '▶'; });
             ws.on('error', (e) => {
                 console.error('wavesurfer error', e);
-                panel.innerHTML = `<audio controls preload="none" style="width:100%" src="/api/twilio/recording/${activityId}"></audio>`;
+                panel.innerHTML = `<audio controls preload="none" style="width:100%" src="${recordingUrl}"></audio>`;
             });
             playBtn.onclick = () => ws.playPause();
+        }
+
+        // Inline waveform that renders by default (no click required).
+        // Returns an HTML placeholder + queues a lazy IntersectionObserver
+        // init so wavesurfer instances only spin up for rows actually on
+        // screen. The data-* attributes carry the args; mountInlineWaveforms()
+        // walks newly-rendered DOM and wires them up.
+        function inlineWaveformPlaceholder(activityId, recordingUrl) {
+            if (!recordingUrl) return '';
+            return `<div class="inline-waveform" data-activity-id="${activityId}" data-recording-url="${escapeHtml(recordingUrl)}" style="margin-top:6px"></div>`;
+        }
+
+        // Shared IntersectionObserver — initialize wavesurfer when the
+        // placeholder scrolls within 200px of viewport. Once mounted, the
+        // observer disconnects that node.
+        const _waveformObserver = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (!entry.isIntersecting) return;
+                const node = entry.target;
+                _waveformObserver.unobserve(node);
+                const activityId = parseInt(node.dataset.activityId, 10);
+                const recordingUrl = node.dataset.recordingUrl;
+                if (!activityId || !recordingUrl) return;
+                renderCallWaveform(activityId, node, recordingUrl);
+            });
+        }, { rootMargin: '200px' });
+
+        function mountInlineWaveforms(rootEl) {
+            const scope = rootEl || document;
+            scope.querySelectorAll('.inline-waveform').forEach(node => {
+                if (node.dataset.mounted) return;
+                node.dataset.mounted = '1';
+                _waveformObserver.observe(node);
+            });
+        }
+
+        // When a call is fresh (< 5 min old) and has a recording but no
+        // transcript yet, Deepgram is still working on it. Poll the source
+        // every 20s for up to 3 minutes — when the transcript lands, the
+        // page re-renders itself and the 📄 Transcript button appears
+        // without the user needing to refresh.
+        const _activePollers = {};
+        function schedulePendingTranscriptPolls(source, items, contextId) {
+            if (!items || !items.length) return;
+            const now = Date.now();
+            const isFresh = (c) => {
+                const created = c.created_at ? new Date(c.created_at).getTime() : 0;
+                return created && (now - created) < 5 * 60 * 1000;
+            };
+            const pending = items.filter(c => {
+                const isCall = (c.type === 'call' || c.activity_type === 'call' || c.type === 'voicemail' || !c.type);
+                return isCall && c.recording_url && !c.transcript && !c.has_transcript && isFresh(c);
+            });
+            if (!pending.length) return;
+            const key = `${source}:${contextId || 'self'}`;
+            if (_activePollers[key]) return;  // already polling
+            let attempts = 0;
+            const tick = async () => {
+                attempts++;
+                if (attempts > 9) {  // ~3 minutes at 20s
+                    delete _activePollers[key];
+                    return;
+                }
+                try {
+                    if (source === 'dashboard') {
+                        await loadRecentCalls();
+                    } else if (source === 'company' && contextId) {
+                        // Only refetch if the user is still looking at this company
+                        const el = document.getElementById('company-detail');
+                        if (el && el.dataset.companyId == String(contextId)) {
+                            const data = await api(`/api/companies/${contextId}/full`);
+                            if (data) renderCompanyDetail(data);
+                            return;  // renderCompanyDetail will reschedule if still pending
+                        } else {
+                            delete _activePollers[key];
+                            return;
+                        }
+                    }
+                } catch (e) {
+                    console.warn('transcript poll failed', e);
+                }
+                _activePollers[key] = setTimeout(tick, 20000);
+            };
+            _activePollers[key] = setTimeout(tick, 20000);
         }
 
         async function retranscribeCall(activityId) {

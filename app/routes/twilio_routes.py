@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from app.database import get_db, async_session
 from app.models import User, Contact, Company, Activity, GeneratedEmail
-from app.auth import get_current_user
+from app.auth import get_current_user, verify_recording_token
 from app.runtime_config import get_twilio_credentials
 from urllib.parse import quote
 
@@ -688,8 +688,9 @@ async def inbound_lookup(
 @router.get("/recording/{activity_id}")
 async def proxy_recording(
     activity_id: int,
+    request: Request,
+    t: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
 ):
     """
     Proxy a Twilio recording through our auth — Twilio recording URLs
@@ -697,7 +698,29 @@ async def proxy_recording(
     safely embed in a browser <audio> tag. Browser hits this endpoint
     with our normal session auth; we re-fetch from Twilio with basic auth
     and stream the bytes back.
+
+    Auth: accepts either an Authorization: Bearer <jwt> header (standard
+    api() callers) OR a short-lived ?t=<recording-token> query param —
+    the latter is required because <audio>/<video> elements can't attach
+    custom headers. Tokens are minted server-side and scoped to a
+    specific activity_id.
     """
+    # 1. Try query-token auth first — this is the path <audio> uses.
+    if t and verify_recording_token(t, activity_id):
+        pass
+    else:
+        # 2. Fall back to bearer auth so api()-style callers still work.
+        auth_header = request.headers.get("authorization") or ""
+        token = auth_header.removeprefix("Bearer ").strip() if auth_header.lower().startswith("bearer ") else ""
+        if not token:
+            raise HTTPException(status_code=401, detail="Missing recording token")
+        try:
+            from jose import jwt as _jwt
+            from app.auth import SECRET_KEY as _SK, ALGORITHM as _ALG
+            _jwt.decode(token, _SK, algorithms=[_ALG])
+        except Exception:
+            raise HTTPException(status_code=401, detail="Invalid recording token")
+
     act = (await db.execute(select(Activity).where(Activity.id == activity_id))).scalar_one_or_none()
     if not act or not act.recording_url:
         raise HTTPException(status_code=404, detail="No recording on this activity")

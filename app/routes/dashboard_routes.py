@@ -18,7 +18,7 @@ from sqlalchemy import select, func, and_
 
 from app.database import get_db
 from app.models import User, Company, Contact, Deal, GeneratedEmail, Activity, Task
-from app.auth import get_current_user
+from app.auth import get_current_user, mint_recording_token
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
 
@@ -589,7 +589,14 @@ async def recent_calls(
             "call_direction": a.call_direction,
             "call_outcome": a.call_outcome,
             "call_duration_seconds": a.call_duration_seconds,
-            "recording_url": bool(a.recording_url),
+            "has_recording": bool(a.recording_url),
+            # Pre-signed streaming URL — the token is scoped to this
+            # activity_id only, expires in 30 minutes. Lets <audio>/wavesurfer
+            # play the file without needing to attach a bearer header.
+            "recording_url": (
+                f"/api/twilio/recording/{a.id}?t={mint_recording_token(a.id, user.id)}"
+                if a.recording_url else None
+            ),
             "has_transcript": bool(a.transcript),
             "has_summary": bool(a.call_summary),
             "transcript": a.transcript,

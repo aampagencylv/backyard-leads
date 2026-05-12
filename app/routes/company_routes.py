@@ -19,7 +19,7 @@ from pydantic import BaseModel
 
 from app.database import get_db
 from app.models import User, Company, Contact, Deal, GeneratedEmail, Activity, Task, Tag, company_tags, CustomFieldDefinition
-from app.auth import get_current_user
+from app.auth import get_current_user, mint_recording_token
 from app.services.website_intel import analyze_website, analysis_to_dict
 from app.services.email_generator import generate_cold_email, generate_follow_up, generate_linkedin_message
 from app.services.hunter_enrichment import search_domain as hunter_search
@@ -728,7 +728,14 @@ async def get_company_full(
                 "call_duration_seconds": a.call_duration_seconds,
                 "call_direction": a.call_direction,
                 "call_outcome": a.call_outcome,
-                "recording_url": a.recording_url,
+                "has_recording": bool(a.recording_url),
+                # Pre-signed streaming URL — token scoped to this activity_id,
+                # expires in 30 min. Lets <audio>/wavesurfer play without
+                # a bearer header (which media elements can't attach).
+                "recording_url": (
+                    f"/api/twilio/recording/{a.id}?t={mint_recording_token(a.id, user.id)}"
+                    if a.recording_url else None
+                ),
                 "transcript": a.transcript,
                 "call_summary": a.call_summary,
             }
