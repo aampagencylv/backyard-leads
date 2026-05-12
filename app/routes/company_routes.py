@@ -1652,6 +1652,9 @@ async def _ensure_contact(
             return None
 
     first, last = _split_name(name)
+    # If enrichment didn't return a name, try to infer from the email address
+    if not first and email:
+        first, last = _infer_name_from_email(email)
     has_primary = (await db.execute(
         select(Contact).where(Contact.company_id == company_id, Contact.is_primary == True)
     )).scalar_one_or_none()
@@ -1684,6 +1687,49 @@ def _split_name(full: str | None) -> tuple[str, str]:
         return "", ""
     parts = full.strip().split(maxsplit=1)
     return (parts[0], "") if len(parts) == 1 else (parts[0], parts[1])
+
+
+# Generic/role prefixes that should NOT be treated as a person's name.
+_GENERIC_PREFIXES = frozenset({
+    "info", "hello", "contact", "admin", "support", "sales", "office",
+    "billing", "service", "team", "help", "marketing", "construction",
+    "accounting", "hr", "jobs", "careers", "general", "mail", "enquiries",
+    "inquiries", "noreply", "no-reply", "notifications", "ops",
+})
+
+
+def _infer_name_from_email(email: str) -> tuple[str, str]:
+    """Try to extract a first/last name from an email local part.
+
+    Patterns handled:
+      jake.wozniak@domain   → Jake, Wozniak
+      jake_wozniak@domain   → Jake, Wozniak
+      jwozniak@domain       → (skip — ambiguous initial)
+      jake@domain           → Jake, ''
+      construction@domain   → '', '' (generic)
+    """
+    if not email or "@" not in email:
+        return "", ""
+    local = email.split("@")[0].lower().strip()
+    # Skip if it's a generic/role address
+    if local in _GENERIC_PREFIXES:
+        return "", ""
+    # Split on . or _ or -
+    import re
+    parts = re.split(r'[._\-]', local)
+    parts = [p for p in parts if p and len(p) > 1]  # drop single-char initials
+    if not parts:
+        return "", ""
+    # Filter out generic parts
+    parts = [p for p in parts if p not in _GENERIC_PREFIXES]
+    if not parts:
+        return "", ""
+    first = parts[0].capitalize()
+    last = parts[1].capitalize() if len(parts) > 1 else ""
+    # Sanity: if "first name" looks like a number or random chars, skip
+    if not first.isalpha():
+        return "", ""
+    return first, last
 
 
 def _company_summary(c: Company, assigned_name: Optional[str] = None) -> dict:
