@@ -840,21 +840,26 @@ async def iclosed_webhook(request: Request, db: AsyncSession = Depends(get_db)):
                             f"{when} — call to prep!",
                 due_date=datetime.now(timezone.utc),
             ))
-        # Advance any in-flight deal to qualified
+        # Advance any in-flight deal to the first configured middle
+        # stage (defaults to "qualified"). If the tenant renamed/removed
+        # qualified, we still want booking-an-audit to promote the deal
+        # somewhere — the first middle stage is the right target.
         from app.models import Deal
-        from app.routes.deal_routes import STAGE_PROBABILITY, package_monthly_value
+        from app.routes.deal_routes import package_monthly_value
+        from app.services import pipeline_config as _pc
+        target_stage = await _pc.get_default_middle_stage_key(db)
+        target_prob = await _pc.get_stage_probability(db, target_stage)
         deals = (await db.execute(
             select(Deal).where(
                 Deal.company_id == company.id,
-                Deal.stage.in_(("in_sequence", "prospecting", "qualified")),
+                Deal.stage == "in_sequence",
             )
         )).scalars().all()
         for deal in deals:
-            if deal.stage in ("in_sequence", "prospecting"):
-                deal.stage = "qualified"
-                deal.probability = STAGE_PROBABILITY.get("qualified", 25)
-                if deal.value == 0 and deal.package:
-                    deal.value = package_monthly_value(deal.package)
+            deal.stage = target_stage
+            deal.probability = target_prob
+            if deal.value == 0 and deal.package:
+                deal.value = package_monthly_value(deal.package)
         if company.status in ("new", "pursuing", "sequencing", "contacted"):
             company.status = "qualified"
 

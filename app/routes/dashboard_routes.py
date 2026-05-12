@@ -33,8 +33,6 @@ ENGAGEMENT_DECAY_HALFLIFE_DAYS = 14
 ENGAGEMENT_LOOKBACK_DAYS = 30
 HOT_LEAD_THRESHOLD = 3  # min score to qualify as "hot"
 
-OPEN_DEAL_STAGES = ("prospecting", "qualified", "proposal", "negotiation")
-PIPELINE_STAGES = list(OPEN_DEAL_STAGES) + ["closed_won", "closed_lost"]
 STALE_DEAL_DAYS = 14
 
 
@@ -68,18 +66,27 @@ async def get_dashboard(
 
     # ---------- Pipeline-by-stage ----------
     from app.scoping import scope_deals, scope_companies
+    from app.services import pipeline_config as _pc
+    open_stage_keys = await _pc.get_open_stage_keys(db)
+    dashboard_stage_keys = list(open_stage_keys) + ["closed_won", "closed_lost"]
     deal_query = scope_deals(select(Deal).where(Deal.pipeline == "default"), user)
     deals_open_or_done = (await db.execute(deal_query)).scalars().all()
 
-    by_stage: dict[str, dict] = {s: {"count": 0, "value": 0.0} for s in PIPELINE_STAGES}
+    fallback_stage = open_stage_keys[0] if open_stage_keys else "in_sequence"
+    by_stage: dict[str, dict] = {s: {"count": 0, "value": 0.0} for s in dashboard_stage_keys}
     pipeline_value = 0.0
     weighted_forecast = 0.0
     for d in deals_open_or_done:
-        stage = d.stage if d.stage in by_stage else "prospecting"
+        # If a deal is on a stage that's no longer in the config (e.g.
+        # admin renamed/deleted it mid-flight), bucket it into the first
+        # surviving open stage so totals don't lose it.
+        stage = d.stage if d.stage in by_stage else fallback_stage
+        if stage not in by_stage:
+            continue
         v = d.value or 0
         by_stage[stage]["count"] += 1
         by_stage[stage]["value"] += v
-        if stage in OPEN_DEAL_STAGES:
+        if stage in open_stage_keys:
             pipeline_value += v
             weighted_forecast += v * (d.probability or 0) / 100
 
@@ -212,7 +219,7 @@ async def get_dashboard(
         select(Deal, Company.name)
         .join(Company, Deal.company_id == Company.id)
         .where(
-            Deal.stage.in_(OPEN_DEAL_STAGES),
+            Deal.stage.in_(open_stage_keys),
             Deal.updated_at <= cutoff_stale,
         )
         .order_by(Deal.updated_at)
@@ -291,7 +298,7 @@ async def get_dashboard(
         "hot_leads": hot_leads,
         "pipeline_by_stage": [
             {"stage": s, "count": by_stage[s]["count"], "value": round(by_stage[s]["value"], 2)}
-            for s in PIPELINE_STAGES
+            for s in dashboard_stage_keys
         ],
         "activity_feed": activity_feed,
     }

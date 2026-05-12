@@ -597,7 +597,7 @@ async def _execute_batch(campaign_id: int, db: AsyncSession, user: User):
             select(Deal).where(Deal.company_id == company.id)
         )
         if not existing_deal.scalars().first():
-            from app.routes.deal_routes import recommend_package, STAGE_PROBABILITY as DEAL_STAGE_PROB
+            from app.routes.deal_routes import recommend_package
             pkg = recommend_package(company.employee_count)
             deal = Deal(
                 company_id=company.id,

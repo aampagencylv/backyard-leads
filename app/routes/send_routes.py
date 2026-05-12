@@ -557,14 +557,20 @@ async def update_profile(
 # ============================================================
 
 async def _advance_deal_from_sequence(db: AsyncSession, company_id: int) -> None:
-    """When a prospect engages, move their deal from in_sequence to prospecting with package value."""
-    from app.routes.deal_routes import package_monthly_value, STAGE_PROBABILITY
+    """When a prospect engages (open 3+ / click / reply), promote their
+    deal out of in_sequence into the first configured middle stage
+    (defaults to "qualified"). Restores the dollar value from the
+    package since in_sequence deals carry value=0."""
+    from app.routes.deal_routes import package_monthly_value
+    from app.services import pipeline_config as _pc
+    target_stage = await _pc.get_default_middle_stage_key(db)
+    target_prob = await _pc.get_stage_probability(db, target_stage)
     deals = (await db.execute(
         select(Deal).where(Deal.company_id == company_id, Deal.stage == "in_sequence")
     )).scalars().all()
     for deal in deals:
-        deal.stage = "prospecting"
-        deal.probability = STAGE_PROBABILITY.get("prospecting", 10)
+        deal.stage = target_stage
+        deal.probability = target_prob
         if deal.package and deal.value == 0:
             deal.value = package_monthly_value(deal.package)
 

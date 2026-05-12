@@ -1,5 +1,10 @@
 """
 Deal-level routes: CRUD on Deals + kanban-style pipeline view + forecast.
+
+Pipeline stages are tenant-configurable — see app/services/pipeline_config.py.
+The constants STAGE_PROBABILITY / PIPELINE_STAGES that used to live here
+are gone; everywhere we used to look up probability or validate a stage,
+we now ask the service (which reads from runtime_config).
 """
 from __future__ import annotations
 from typing import Optional
@@ -13,22 +18,9 @@ from pydantic import BaseModel
 from app.database import get_db
 from app.models import User, Company, Deal, Activity
 from app.auth import get_current_user
+from app.services import pipeline_config as pipeline_cfg
 
 router = APIRouter(prefix="/api", tags=["deals"])
-
-
-# Stage probability defaults
-STAGE_PROBABILITY = {
-    "in_sequence":  0,   # No value until they engage
-    "prospecting": 10,
-    "qualified":   25,
-    "proposal":    50,
-    "negotiation": 75,
-    "closed_won":  100,
-    "closed_lost": 0,
-}
-
-PIPELINE_STAGES = ["in_sequence", "prospecting", "qualified", "proposal", "negotiation", "closed_won", "closed_lost", "snoozed"]
 
 # BMP Packages
 BMP_PACKAGES = {
@@ -59,7 +51,9 @@ def package_monthly_value(package: str) -> float:
 class CreateDealRequest(BaseModel):
     name: str
     value: Optional[float] = None
-    stage: str = "prospecting"
+    # Default is in_sequence — every deal starts there, then moves into
+    # the configurable middle stages when the prospect engages.
+    stage: str = "in_sequence"
     package: Optional[str] = None  # foundation, essential, growth, scale
     contract_months: int = 6  # 6 or 12
     expected_close_date: Optional[str] = None
@@ -79,15 +73,58 @@ class UpdateDealRequest(BaseModel):
 
 
 @router.get("/packages")
-async def list_packages(user: User = Depends(get_current_user)):
-    """List available BMP packages with pricing."""
+async def list_packages(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """List available BMP packages with pricing + current stage probabilities."""
+    meta = await pipeline_cfg.get_stage_metadata(db)
     return {
         "packages": [
             {"key": k, "name": v["name"], "monthly": v["monthly"],
              "annual": v["monthly"] * 12, "six_month": v["monthly"] * 6}
             for k, v in BMP_PACKAGES.items()
         ],
-        "stage_probabilities": STAGE_PROBABILITY,
+        "stage_probabilities": {k: s["probability"] for k, s in meta.items()},
+    }
+
+
+@router.get("/pipeline/config")
+async def get_pipeline_config_endpoint(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Read the full pipeline config. Available to every signed-in user
+    because the kanban + deal-create form both need to render the
+    current stage list."""
+    return await pipeline_cfg.get_pipeline_config(db)
+
+
+class UpdatePipelineConfigRequest(BaseModel):
+    middle_stages: list[dict]
+
+
+@router.put("/pipeline/config")
+async def update_pipeline_config(
+    req: UpdatePipelineConfigRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Replace the editable middle stages. Admin / super_admin only.
+    When a stage is dropped, existing deals on it are auto-migrated to
+    the first surviving middle stage so nothing strands."""
+    if user.role not in ("admin", "super_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    try:
+        result = await pipeline_cfg.set_middle_stages(
+            db, req.middle_stages, actor_user_id=user.id
+        )
+    except pipeline_cfg.PipelineConfigError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "ok": True,
+        **result,
+        "config": await pipeline_cfg.get_pipeline_config(db),
     }
 
 
@@ -110,8 +147,9 @@ async def create_deal(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    if req.stage not in PIPELINE_STAGES:
-        raise HTTPException(status_code=400, detail=f"stage must be one of {PIPELINE_STAGES}")
+    if not await pipeline_cfg.is_valid_stage(db, req.stage):
+        valid = list((await pipeline_cfg.get_stage_metadata(db)).keys())
+        raise HTTPException(status_code=400, detail=f"stage must be one of {valid}")
     company = (await db.execute(select(Company).where(Company.id == company_id))).scalar_one_or_none()
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
@@ -135,7 +173,7 @@ async def create_deal(
         stage=req.stage,
         package=pkg,
         contract_months=req.contract_months,
-        probability=STAGE_PROBABILITY.get(req.stage, 0),
+        probability=await pipeline_cfg.get_stage_probability(db, req.stage),
         expected_close_date=close_date,
         assigned_to=req.assigned_to or user.id,
     )
@@ -188,11 +226,12 @@ async def update_deal(
     stage_changed_from = None
     stage_changed_to = None
     if req.stage is not None and req.stage != deal.stage:
-        if req.stage not in PIPELINE_STAGES:
-            raise HTTPException(status_code=400, detail=f"stage must be one of {PIPELINE_STAGES}")
+        if not await pipeline_cfg.is_valid_stage(db, req.stage):
+            valid = list((await pipeline_cfg.get_stage_metadata(db)).keys())
+            raise HTTPException(status_code=400, detail=f"stage must be one of {valid}")
         old = deal.stage
         deal.stage = req.stage
-        deal.probability = STAGE_PROBABILITY.get(req.stage, 0)
+        deal.probability = await pipeline_cfg.get_stage_probability(db, req.stage)
         if req.stage in ("closed_won", "closed_lost"):
             deal.closed_at = datetime.now(timezone.utc)
         changes.append(f"stage: {old} → {req.stage}")
@@ -311,8 +350,17 @@ async def pipeline_view(
         c_result = await db.execute(select(Company).where(Company.id.in_(company_ids)))
         companies = {c.id: c for c in c_result.scalars().all()}
 
-    columns = {stage: [] for stage in PIPELINE_STAGES}
+    config = await pipeline_cfg.get_pipeline_config(db)
+    kanban_keys = config["kanban_order"]
+    # snoozed deals never show on the main kanban — they live in
+    # the dedicated Snoozed view.
+    visible_keys = [k for k in kanban_keys if k != "snoozed"]
+    columns = {stage: [] for stage in visible_keys}
     for d in deals:
+        # Skip snoozed in the kanban view, and gracefully handle deals
+        # on a stage that's no longer in the config (e.g. mid-migration).
+        if d.stage == "snoozed" or d.stage not in columns:
+            continue
         c = companies.get(d.company_id)
         columns[d.stage].append({
             "id": d.id,
@@ -340,9 +388,19 @@ async def pipeline_view(
         for stage, items in columns.items()
     }
 
+    # Stage metadata sent so the frontend can render labels + colors
+    # without a second round-trip.
+    stage_meta = [
+        m for m in (
+            config["system_stages_pre"]
+            + config["middle_stages"]
+            + config["system_stages_post"]
+        )
+    ]
     return {
         "pipeline": pipeline,
-        "stages": PIPELINE_STAGES,
+        "stages": visible_keys,
+        "stage_meta": stage_meta,
         "columns": columns,
         "totals": totals,
     }
@@ -356,7 +414,7 @@ async def forecast(
 ):
     """Forecast scoped by user role. Reps see their forecast only."""
     from app.scoping import scope_deals
-    open_stages = ("prospecting", "qualified", "proposal", "negotiation")
+    open_stages = await pipeline_cfg.get_open_stage_keys(db)
     query = scope_deals(
         select(Deal).where(Deal.pipeline == pipeline, Deal.stage.in_(open_stages)),
         user,
@@ -374,14 +432,16 @@ async def forecast(
     total_tcv = sum(((d.value or 0) * (d.contract_months or 6)) for d in deals)
     weighted_tcv = sum(((d.value or 0) * (d.contract_months or 6) * (d.probability or 0) / 100.0) for d in deals)
 
-    # By stage
+    # By stage — uses the configured middle stages, in their display order.
     by_stage = {}
-    for stage in ("prospecting", "qualified", "proposal", "negotiation"):
+    stage_meta = await pipeline_cfg.get_stage_metadata(db)
+    for stage in open_stages:
         stage_deals = [d for d in deals if d.stage == stage]
         by_stage[stage] = {
             "count": len(stage_deals),
             "mrr": sum((d.value or 0) for d in stage_deals),
-            "probability": STAGE_PROBABILITY.get(stage, 0),
+            "probability": stage_meta.get(stage, {}).get("probability", 0),
+            "name": stage_meta.get(stage, {}).get("name", stage),
         }
 
     # By package
@@ -555,9 +615,14 @@ async def wake_deal(
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Deal not found")
 
-    restore_stage = deal.stage_before_snooze or "prospecting"
+    # Restore to the stage they were on before snooze. If that stage
+    # no longer exists (admin deleted it while the deal was sleeping),
+    # fall back to in_sequence.
+    restore_stage = deal.stage_before_snooze or "in_sequence"
+    if not await pipeline_cfg.is_valid_stage(db, restore_stage):
+        restore_stage = "in_sequence"
     deal.stage = restore_stage
-    deal.probability = STAGE_PROBABILITY.get(restore_stage, 10)
+    deal.probability = await pipeline_cfg.get_stage_probability(db, restore_stage)
     deal.snoozed_until = None
     deal.stage_before_snooze = None
 

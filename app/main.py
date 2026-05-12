@@ -109,11 +109,16 @@ async def _wake_snoozed_deals():
             )
         )).scalars().all()
 
+        from app.services import pipeline_config as _pc
+        from app.routes.deal_routes import package_monthly_value
         for deal in deals:
-            restore = deal.stage_before_snooze or "prospecting"
-            from app.routes.deal_routes import STAGE_PROBABILITY, package_monthly_value
+            restore = deal.stage_before_snooze or "in_sequence"
+            # If admin deleted the stage while this deal was asleep,
+            # fall back to in_sequence rather than stranding it.
+            if not await _pc.is_valid_stage(db, restore):
+                restore = "in_sequence"
             deal.stage = restore
-            deal.probability = STAGE_PROBABILITY.get(restore, 10)
+            deal.probability = await _pc.get_stage_probability(db, restore)
             if deal.value == 0 and deal.package:
                 deal.value = package_monthly_value(deal.package)
 

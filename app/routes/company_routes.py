@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from app.database import get_db
 from app.models import User, Company, Contact, Deal, GeneratedEmail, Activity, Task, Tag, company_tags, CustomFieldDefinition
 from app.auth import get_current_user, mint_recording_token
+from app.services import pipeline_config as _pipeline_cfg_pursue
 from app.services.website_intel import analyze_website, analysis_to_dict
 from app.services.email_generator import generate_cold_email, generate_follow_up, generate_linkedin_message
 from app.services.hunter_enrichment import search_domain as hunter_search
@@ -1553,10 +1554,10 @@ async def pursue_companies(
             # Auto-create Deal so it appears on the kanban
             existing_deal = (await db.execute(
                 select(Deal).where(Deal.company_id == company.id,
-                                   Deal.stage.in_(("prospecting", "qualified", "proposal", "negotiation")))
+                                   Deal.stage.in_(await _pipeline_cfg_pursue.get_open_stage_keys(db)))
             )).scalar_one_or_none()
             if not existing_deal:
-                from app.routes.deal_routes import recommend_package, STAGE_PROBABILITY as DEAL_STAGE_PROB
+                from app.routes.deal_routes import recommend_package
                 pkg = recommend_package(company.employee_count)
                 deal = Deal(
                     company_id=company.id,

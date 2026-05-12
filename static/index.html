@@ -946,7 +946,12 @@
             <div id="page-pipeline" class="hidden">
                 <div class="page-header">
                     <h1>Pipeline</h1>
-                    <div id="pipeline-totals" style="font-size:13px;color:#666"></div>
+                    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+                        <div id="pipeline-totals" style="font-size:13px;color:#666"></div>
+                        <select id="pipeline-owner-filter" onchange="loadPipeline()" style="display:none;padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px;background:white">
+                            <option value="">All reps</option>
+                        </select>
+                    </div>
                 </div>
                 <div id="kanban" class="kanban"></div>
             </div>
@@ -2013,6 +2018,27 @@ function verify(secret, rawBody, header) {
                     <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
                         <button class="btn btn-secondary btn-xs" onclick="resetOrgBrand()">Reset to BMP defaults</button>
                         <span id="brand-save-status" style="font-size:11px;color:#888"></span>
+                    </div>
+                </div>
+
+                <!-- Pipeline editor — admin/super_admin only. System stages
+                     (In Sequence / Closed Won / Closed Lost / Snoozed) are
+                     never editable because they have special wiring in the
+                     sequence engine + revenue calc. Everything in between
+                     is yours to rename, reorder, add to, or delete. -->
+                <div id="pipeline-editor-section" class="search-box hidden" style="max-width:760px;margin-top:16px">
+                    <h3>Pipeline Stages</h3>
+                    <p style="font-size:13px;color:#666;margin-bottom:8px">Customize the deal stages between <strong>In Sequence</strong> and <strong>Closed Won/Lost</strong>. Rename, reorder, add, or remove. Deleting a stage moves any deals on it to the first remaining stage.</p>
+                    <p style="font-size:11px;color:#888;margin-bottom:16px">System stages are locked: <em>In Sequence</em> (auto-set when a sequence starts), <em>Closed Won</em> (revenue), <em>Closed Lost</em>, and <em>Snoozed</em> have wiring elsewhere and can't be changed.</p>
+
+                    <div id="pipeline-system-pre" style="margin-bottom:8px"></div>
+                    <div id="pipeline-middle-stages" style="display:flex;flex-direction:column;gap:8px"></div>
+                    <div id="pipeline-system-post" style="margin-top:8px;margin-bottom:12px"></div>
+
+                    <div style="display:flex;gap:8px;margin-top:12px;align-items:center">
+                        <button class="btn btn-secondary btn-sm" onclick="addPipelineStageRow()">+ Add Stage</button>
+                        <button class="btn btn-primary btn-sm" onclick="savePipelineConfig()">Save Pipeline</button>
+                        <span id="pipeline-save-status" style="font-size:12px;color:#888"></span>
                     </div>
                 </div>
 
@@ -5113,20 +5139,66 @@ function verify(secret, rawBody, header) {
         }
 
         // ============ Pipeline kanban ============
-        const PIPELINE_STAGES = ['in_sequence','prospecting','qualified','proposal','negotiation','closed_won','closed_lost'];
+        // Stages are tenant-configurable — the API returns the full list +
+        // metadata (color, name) in data.stage_meta. Columns are built
+        // dynamically. The "open pipeline" total sums the configured
+        // middle stages (everything between in_sequence and closed_*).
+
+        let _pipelineFilterPopulated = false;
+        async function _populatePipelineRepFilter() {
+            if (_pipelineFilterPopulated) return;
+            const sel = document.getElementById('pipeline-owner-filter');
+            if (!sel) return;
+            if (!currentUser || !(currentUser.role === 'admin' || currentUser.role === 'super_admin')) {
+                sel.style.display = 'none';
+                _pipelineFilterPopulated = true;
+                return;
+            }
+            try {
+                const users = await api('/api/auth/users');
+                if (users) {
+                    // Keep existing "All reps" option, then add each user
+                    users.filter(u => u.is_active !== false).forEach(u => {
+                        const opt = document.createElement('option');
+                        opt.value = u.id;
+                        opt.textContent = `${u.name || u.email}${u.id === currentUser.id ? ' (me)' : ''}`;
+                        sel.appendChild(opt);
+                    });
+                    sel.style.display = '';
+                }
+            } catch (e) {
+                console.warn('Failed to load users for pipeline filter', e);
+            }
+            _pipelineFilterPopulated = true;
+        }
+
         async function loadPipeline() {
-            const data = await api('/api/pipeline');
+            await _populatePipelineRepFilter();
+            const ownerSel = document.getElementById('pipeline-owner-filter');
+            const owner = ownerSel ? ownerSel.value : '';
+            const url = owner ? `/api/pipeline?owner=${encodeURIComponent(owner)}` : '/api/pipeline';
+            const data = await api(url);
             if (!data) return;
+            const stageMeta = {};
+            (data.stage_meta || []).forEach(s => { stageMeta[s.key] = s; });
+            const stages = data.stages || [];
             const k = document.getElementById('kanban');
-            k.innerHTML = PIPELINE_STAGES.map(stage => `
+            k.innerHTML = stages.map(stage => {
+                const meta = stageMeta[stage] || { name: stage, color: '#888', system: true };
+                const totalCount = data.totals[stage]?.count || 0;
+                const totalValue = data.totals[stage]?.value || 0;
+                return `
                 <div class="kanban-column" data-stage="${stage}" ondragover="kanbanDragOver(event,this)" ondragleave="kanbanDragLeave(event,this)" ondrop="kanbanDrop(event,this)">
                     <h4>
-                        <span>${stage.replace('_',' ').replace('closed','closed:')}</span>
-                        <span class="col-total">${data.totals[stage]?.count || 0} · ${fmtMoney(data.totals[stage]?.value || 0)}</span>
+                        <span style="display:inline-flex;align-items:center;gap:6px">
+                            <span style="width:10px;height:10px;border-radius:50%;background:${escapeHtml(meta.color)}"></span>
+                            ${escapeHtml(meta.name)}
+                        </span>
+                        <span class="col-total">${totalCount} · ${fmtMoney(totalValue)}</span>
                     </h4>
                     <div class="col-body">
                         ${(data.columns[stage] || []).map(d => `
-                            <div class="kanban-card" draggable="true" ondragstart="kanbanDragStart(event,${d.id})" ondragend="kanbanDragEnd(event)" onclick="openCompanyDetail(${d.company.id})">
+                            <div class="kanban-card" draggable="true" ondragstart="kanbanDragStart(event,${d.id})" ondragend="kanbanDragEnd(event)" onclick="openCompanyDetail(${d.company.id})" style="border-left-color:${escapeHtml(meta.color)}">
                                 <div class="name">${escapeHtml(d.company.name)}</div>
                                 <div class="meta">${escapeHtml(d.name)}</div>
                                 <div class="value">${fmtMoney(d.value)}</div>
@@ -5135,8 +5207,13 @@ function verify(secret, rawBody, header) {
                         `).join('')}
                     </div>
                 </div>
-            `).join('');
-            const grandValue = ['prospecting','qualified','proposal','negotiation'].reduce((s, st) => s + (data.totals[st]?.value || 0), 0);
+                `;
+            }).join('');
+            // Open pipeline = sum of middle stages (everything that's not
+            // a system stage). Defaults to the same set the backend uses
+            // for the forecast endpoint.
+            const middleKeys = (data.stage_meta || []).filter(s => s.system === false).map(s => s.key);
+            const grandValue = middleKeys.reduce((s, st) => s + (data.totals[st]?.value || 0), 0);
             document.getElementById('pipeline-totals').textContent = `Open pipeline: ${fmtMoney(grandValue)}`;
         }
         function kanbanDragStart(e, dealId) { e.dataTransfer.setData('text/plain', dealId); e.target.classList.add('dragging'); }
@@ -8459,6 +8536,9 @@ hmac.compare_digest(expected, header)</pre>
             const orgBrandSection = document.getElementById('org-brand-section');
             if (orgBrandSection) orgBrandSection.classList.toggle('hidden', !isAdminPlus);
 
+            // Pipeline editor — admin/super_admin only
+            if (isAdminPlus) loadPipelineEditor();
+
             const auditBrandingSection = document.getElementById('audit-branding-section');
             if (auditBrandingSection) auditBrandingSection.classList.toggle('hidden', !isAdminPlus);
 
@@ -11592,6 +11672,145 @@ hmac.compare_digest(expected, header)</pre>
             set('brand-website-url',   'https://backyardmarketingpros.com');
             renderBrandPreview();
             saveOrgBrand();
+        }
+
+        // ============================================================
+        // 📋 Pipeline Editor
+        // ============================================================
+        //
+        // Tenant-configurable middle stages. We keep the working state
+        // in _pipelineDraft (array of {key, name, probability, color})
+        // — edits don't hit the server until Save. The kanban column
+        // colors and stage list update everywhere as soon as the new
+        // config is saved.
+
+        let _pipelineDraft = [];
+
+        async function loadPipelineEditor() {
+            const section = document.getElementById('pipeline-editor-section');
+            if (!section) return;
+            if (!currentUser || !(currentUser.role === 'admin' || currentUser.role === 'super_admin')) {
+                section.classList.add('hidden');
+                return;
+            }
+            section.classList.remove('hidden');
+            const cfg = await api('/api/pipeline/config');
+            if (!cfg) return;
+            _pipelineDraft = (cfg.middle_stages || []).map(s => ({
+                key: s.key, name: s.name,
+                probability: s.probability, color: s.color,
+            }));
+            renderPipelineSystemRows(cfg.system_stages_pre, document.getElementById('pipeline-system-pre'));
+            renderPipelineSystemRows(cfg.system_stages_post, document.getElementById('pipeline-system-post'));
+            renderPipelineMiddleRows();
+        }
+
+        function renderPipelineSystemRows(stages, container) {
+            if (!container) return;
+            container.innerHTML = (stages || []).map(s => `
+                <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:#f5f5f5;border-radius:6px;font-size:13px;color:#555;border:1px dashed #ccc">
+                    <span style="width:10px;height:10px;border-radius:50%;background:${escapeHtml(s.color)};flex-shrink:0"></span>
+                    <span style="flex:1;font-weight:500">${escapeHtml(s.name)}</span>
+                    <span style="font-size:11px;color:#888">${s.probability}% · system</span>
+                </div>
+            `).join('');
+        }
+
+        function renderPipelineMiddleRows() {
+            const box = document.getElementById('pipeline-middle-stages');
+            if (!box) return;
+            if (!_pipelineDraft.length) {
+                box.innerHTML = '<p style="font-size:12px;color:#999;padding:8px 0">No middle stages — add at least one.</p>';
+                return;
+            }
+            box.innerHTML = _pipelineDraft.map((s, i) => `
+                <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:white;border:1px solid #ddd;border-radius:6px">
+                    <div style="display:flex;flex-direction:column;gap:2px;flex-shrink:0">
+                        <button class="btn btn-secondary btn-xs" ${i === 0 ? 'disabled' : ''} onclick="movePipelineStage(${i},-1)" title="Move up" style="padding:0 4px;line-height:1">▲</button>
+                        <button class="btn btn-secondary btn-xs" ${i === _pipelineDraft.length - 1 ? 'disabled' : ''} onclick="movePipelineStage(${i},1)" title="Move down" style="padding:0 4px;line-height:1">▼</button>
+                    </div>
+                    <input type="color" value="${escapeHtml(s.color || '#888888')}" onchange="updatePipelineStage(${i},'color',this.value)" style="width:36px;height:32px;padding:1px;border:1px solid #ddd;border-radius:4px;cursor:pointer;flex-shrink:0">
+                    <input type="text" value="${escapeHtml(s.name)}" placeholder="Stage name" oninput="updatePipelineStage(${i},'name',this.value)" style="flex:1;min-width:120px;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+                    <label style="font-size:11px;color:#666;display:flex;align-items:center;gap:4px;flex-shrink:0">
+                        <input type="number" min="0" max="99" value="${s.probability}" onchange="updatePipelineStage(${i},'probability',parseInt(this.value)||0)" style="width:56px;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:13px;text-align:center">%
+                    </label>
+                    <button class="btn btn-danger btn-xs" onclick="removePipelineStage(${i})" title="Remove">✕</button>
+                </div>
+            `).join('');
+        }
+
+        function updatePipelineStage(idx, field, value) {
+            if (!_pipelineDraft[idx]) return;
+            _pipelineDraft[idx][field] = value;
+            // For name changes don't re-render — we'd lose focus mid-typing.
+            // The other fields are click-driven so a re-render is fine.
+            if (field !== 'name') renderPipelineMiddleRows();
+        }
+
+        function movePipelineStage(idx, delta) {
+            const newIdx = idx + delta;
+            if (newIdx < 0 || newIdx >= _pipelineDraft.length) return;
+            const tmp = _pipelineDraft[idx];
+            _pipelineDraft[idx] = _pipelineDraft[newIdx];
+            _pipelineDraft[newIdx] = tmp;
+            renderPipelineMiddleRows();
+        }
+
+        function removePipelineStage(idx) {
+            if (_pipelineDraft.length <= 1) {
+                toast('You need at least one middle stage');
+                return;
+            }
+            if (!confirm(`Remove "${_pipelineDraft[idx].name}"? Any deals on this stage will move to "${_pipelineDraft.filter((_, i) => i !== idx)[0].name}".`)) return;
+            _pipelineDraft.splice(idx, 1);
+            renderPipelineMiddleRows();
+        }
+
+        function addPipelineStageRow() {
+            // Pick a default color from a rotating palette so new stages
+            // are visually distinct without making the user open a color
+            // picker on first add.
+            const palette = ['#26C6DA','#7E57C2','#FF723F','#F4B400','#26A69A','#EC407A','#5C6BC0'];
+            const color = palette[_pipelineDraft.length % palette.length];
+            // Derive a sane probability — slot it between neighbors.
+            const last = _pipelineDraft[_pipelineDraft.length - 1];
+            const prob = last ? Math.min(99, last.probability + 15) : 25;
+            _pipelineDraft.push({ key: '', name: 'New Stage', probability: prob, color });
+            renderPipelineMiddleRows();
+        }
+
+        async function savePipelineConfig() {
+            const statusEl = document.getElementById('pipeline-save-status');
+            if (statusEl) { statusEl.textContent = 'Saving…'; statusEl.style.color = '#888'; }
+            // Validate client-side first
+            const bad = _pipelineDraft.find(s => !s.name || !s.name.trim());
+            if (bad) {
+                if (statusEl) { statusEl.textContent = 'Each stage needs a name'; statusEl.style.color = '#c00'; }
+                return;
+            }
+            try {
+                const result = await api('/api/pipeline/config', {
+                    method: 'PUT',
+                    body: JSON.stringify({ middle_stages: _pipelineDraft }),
+                });
+                if (!result) {
+                    if (statusEl) { statusEl.textContent = 'Save failed'; statusEl.style.color = '#c00'; }
+                    return;
+                }
+                let msg = 'Saved';
+                if (result.migrated_deal_count) {
+                    msg += ` — migrated ${result.migrated_deal_count} deal${result.migrated_deal_count === 1 ? '' : 's'} from removed stage${result.dropped_stages.length === 1 ? '' : 's'}`;
+                }
+                if (statusEl) { statusEl.textContent = msg; statusEl.style.color = 'var(--bmp-green)'; }
+                toast(msg);
+                // Re-render draft from server response so deletions/migrations are reflected
+                _pipelineDraft = (result.config?.middle_stages || []).map(s => ({
+                    key: s.key, name: s.name, probability: s.probability, color: s.color,
+                }));
+                renderPipelineMiddleRows();
+            } catch (e) {
+                if (statusEl) { statusEl.textContent = `Error: ${e.message}`; statusEl.style.color = '#c00'; }
+            }
         }
 
         // ============================================================

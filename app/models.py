@@ -512,6 +512,12 @@ class RuntimeConfig(Base):
     # point this at their own marketing site.
     brand_website_url = Column(Text, nullable=False, default="https://backyardmarketingpros.com")
 
+    # Editable middle pipeline stages — JSON array of
+    # {key, name, probability, color}. NULL means "use defaults". System
+    # stages (in_sequence/closed_won/closed_lost/snoozed) are NEVER stored
+    # here — they're fixed in code because they have special wiring.
+    pipeline_stages_json = Column(Text, nullable=True)
+
     # Audit-report branding — per-surface overrides on top of org brand.
     # Empty → render falls back to brand_logo_url (footer) or no banner
     # (header). Set explicitly when you want an audit-specific image
