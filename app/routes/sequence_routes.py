@@ -263,6 +263,10 @@ async def rework_sequence(
         db.add(ge)
         created += 1
 
+    # Snap to configured send window before committing
+    from app.services.send_window import snap_pending_steps_to_window
+    await snap_pending_steps_to_window(db, contact_id=contact.id)
+
     db.add(Activity(
         company_id=company.id, contact_id=contact.id, user_id=user.id,
         activity_type="sequence_reworked",
@@ -379,6 +383,9 @@ async def trigger_post_call_sequence(
         )
         db.add(ge)
         created += 1
+
+    from app.services.send_window import snap_pending_steps_to_window
+    await snap_pending_steps_to_window(db, contact_id=contact.id)
 
     db.add(Activity(
         company_id=company.id, contact_id=contact.id, user_id=user.id,

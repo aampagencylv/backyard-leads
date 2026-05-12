@@ -681,6 +681,9 @@ async def _execute_batch(campaign_id: int, db: AsyncSession, user: User):
 
                         emails_created += 1
 
+                    from app.services.send_window import snap_pending_steps_to_window
+                    await snap_pending_steps_to_window(db, contact_id=primary_contact.id)
+
                     company.email_generated = True
                     company.status = "sequencing"
                     campaign.total_sequences_created += 1
@@ -943,6 +946,9 @@ async def _process_business_through_pipeline(
                     description=f"{stype.title()}: {email_data['subject']}",
                     due_date=seq_now + timedelta(days=step["delay_days"]),
                 ))
+
+        from app.services.send_window import snap_pending_steps_to_window
+        await snap_pending_steps_to_window(db, contact_id=primary_contact.id)
 
         company.email_generated = True
         company.status = "sequencing"

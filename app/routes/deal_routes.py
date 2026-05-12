@@ -89,6 +89,69 @@ async def list_packages(
     }
 
 
+@router.get("/autopilot/send-window")
+async def get_send_window_endpoint(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Returns the active autopilot send window. Visible to everyone
+    (so the UI can show "Will send between 8am-7pm contact-local"
+    explainers next to sequence-create buttons)."""
+    from app.services.send_window import get_send_window
+    w = await get_send_window(db)
+    return {
+        "start_hour": w.start_hour,
+        "end_hour": w.end_hour,
+        "weekdays": sorted(w.weekdays),
+    }
+
+
+class UpdateSendWindowRequest(BaseModel):
+    start_hour: int
+    end_hour: int
+    weekdays: Optional[list[int]] = None  # 0=Mon..6=Sun; None means every day
+
+
+@router.put("/autopilot/send-window")
+async def update_send_window(
+    req: UpdateSendWindowRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Update the autopilot send window. Admin/super_admin only.
+    Existing scheduled steps are NOT retroactively re-snapped — they'll
+    naturally get deferred by the engine if they fire outside the new
+    window. (A future "Rebalance all sequences" button can do bulk
+    re-snap if needed.)"""
+    if user.role not in ("admin", "super_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    import json as _json
+    from app.models import RuntimeConfig
+    start = max(0, min(23, int(req.start_hour)))
+    end = max(start + 1, min(24, int(req.end_hour)))
+    rc = (await db.execute(select(RuntimeConfig).where(RuntimeConfig.id == 1))).scalar_one_or_none()
+    if rc is None:
+        rc = RuntimeConfig(id=1)
+        db.add(rc)
+        await db.flush()
+    rc.autopilot_send_start_hour = start
+    rc.autopilot_send_end_hour = end
+    if req.weekdays is None or len(req.weekdays) == 7:
+        rc.autopilot_send_days_json = None  # every day
+    else:
+        valid = sorted({int(d) for d in req.weekdays if 0 <= int(d) <= 6})
+        rc.autopilot_send_days_json = _json.dumps(valid) if valid else None
+    await db.commit()
+    from app.services.send_window import get_send_window
+    w = await get_send_window(db)
+    return {
+        "ok": True,
+        "start_hour": w.start_hour,
+        "end_hour": w.end_hour,
+        "weekdays": sorted(w.weekdays),
+    }
+
+
 @router.get("/pipeline/config")
 async def get_pipeline_config_endpoint(
     db: AsyncSession = Depends(get_db),

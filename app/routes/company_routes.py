@@ -503,6 +503,8 @@ async def upload_contacts(
 
                                 company.email_generated = True
                                 company.status = "sequencing"
+                                from app.services.send_window import snap_pending_steps_to_window
+                                await snap_pending_steps_to_window(db, contact_id=primary.id)
                                 await db.commit()
                                 results["sequences"] += 1
                             except Exception:
@@ -1547,6 +1549,10 @@ async def pursue_companies(
                     emails_created += 1
                 except Exception:
                     continue
+
+            # Snap the just-created steps to the configured send window
+            from app.services.send_window import snap_pending_steps_to_window
+            await snap_pending_steps_to_window(db, contact_id=primary.id)
 
             company.email_generated = True
             company.status = "sequencing"

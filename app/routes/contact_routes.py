@@ -501,6 +501,11 @@ async def generate_contact_sequence(
         except Exception:
             continue
 
+    # Snap newly-created steps to the configured send window so the UI
+    # never shows midnight queueings.
+    from app.services.send_window import snap_pending_steps_to_window
+    await snap_pending_steps_to_window(db, contact_id=contact.id)
+
     db.add(Activity(company_id=company.id, contact_id=contact.id, user_id=user.id,
                     activity_type="sequence_created",
                     content=f"Sequence created for {contact.full_name or contact.email or 'contact'} ({created} emails)"))

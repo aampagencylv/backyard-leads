@@ -333,35 +333,43 @@ async def _handle_create_task(db: AsyncSession, step: GeneratedEmail, contact: C
 
 
 # ============================================================
-# TCPA send-window deferral (iMessage only — emails not regulated)
+# Send-window deferral — applies to every auto-channel.
 # ============================================================
+#
+# The window is configured org-wide in runtime_config (defaults 8am-7pm
+# contact-local, every day). iMessage/SMS additionally clamp to TCPA's
+# 8am-9pm legal limit even if admin widened the org window.
+#
+# When a step is outside the window, we don't skip or error — we push
+# scheduled_send_at forward to the next valid window-start. The engine
+# picks it up automatically on a later tick.
 
-def _maybe_defer_for_send_window(step: GeneratedEmail, contact: Contact, now: datetime) -> bool:
-    """If we're outside the contact-local 8am-9pm window, push scheduled_send_at
-    forward to the next 8am local time and return True. The engine will pick the
-    step up automatically on its next tick after that deadline.
-
-    Returns False (proceed with send) if we're inside the window or if we can't
-    infer a timezone (no phone, etc.)."""
-    if not contact.phone:
+async def _maybe_defer_for_send_window(
+    db: AsyncSession,
+    step: GeneratedEmail,
+    contact: Contact,
+    company: Optional[Company],
+    rep: Optional[User],
+    now: datetime,
+    *,
+    channel: str,
+) -> bool:
+    """Returns True (and bumps scheduled_send_at) if we're outside the
+    configured send window. Returns False (proceed) if we're inside."""
+    from app.services import send_window as _sw
+    allowed, reason = await _sw.is_now_sendable(
+        db, contact=contact, company=company, rep=rep, channel=channel, now_utc=now,
+    )
+    if allowed:
         return False
-    from app.services.twilio_sms import check_send_window
-    check = check_send_window(contact.phone, now_utc=now)
-    if check.allowed:
-        return False
-    # Outside window — compute next 8am in the contact's local time
-    local = check.contact_local_now or now
-    # If we're past 9pm: next 8am is tomorrow. If we're before 8am: today's 8am.
-    if local.hour >= 21:
-        target_local = local.replace(hour=8, minute=0, second=0, microsecond=0) + timedelta(days=1)
-    else:
-        target_local = local.replace(hour=8, minute=0, second=0, microsecond=0)
-    # Convert back to UTC for storage
-    target_utc = target_local.astimezone(timezone.utc)
+    window = await _sw.get_send_window(db)
+    contact_tz = _sw.infer_contact_timezone(contact, company, rep)
+    target_utc = _sw.next_window_start(
+        after_utc=now, contact_tz=contact_tz, window=window, channel=channel,
+    )
     step.scheduled_send_at = target_utc
     logger.info(
-        f"[TCPA] iMessage step #{step.id} deferred to {target_utc.isoformat()} "
-        f"(outside contact's 8am-9pm window: {check.reason})"
+        f"[SEND-WINDOW] {channel} step #{step.id} deferred to {target_utc.isoformat()} — {reason}"
     )
     return True
 
@@ -405,6 +413,11 @@ async def process_pending_steps(db: AsyncSession, max_per_tick: int = 50) -> dic
         counters["checked"] += 1
         contact = (await db.execute(select(Contact).where(Contact.id == step.contact_id))).scalar_one_or_none()
         company = (await db.execute(select(Company).where(Company.id == step.company_id))).scalar_one_or_none()
+        # Owner of the company → used as send-window timezone fallback
+        # when neither the phone area code nor the company state tell us.
+        rep = None
+        if company and company.assigned_to:
+            rep = (await db.execute(select(User).where(User.id == company.assigned_to))).scalar_one_or_none()
         if not contact or not company:
             step.skipped_at = now
             step.skip_reason = "missing_contact_or_company"
@@ -432,22 +445,33 @@ async def process_pending_steps(db: AsyncSession, max_per_tick: int = 50) -> dic
         # Dispatch
         try:
             if step.step_type == "email":
-                ok, msg = await _handle_email(db, step, contact, company)
-                if ok:
-                    step.is_sent = True
-                    step.sent_at = now
-                    counters["sent"] += 1
-                elif msg == "DEFER_SEND_CAP":
-                    # Cap hit — step.scheduled_send_at was bumped inside the handler
+                # Org send window applies to email too (not regulated by
+                # TCPA, but we still don't want 11pm sends).
+                deferred = await _maybe_defer_for_send_window(
+                    db, step, contact, company, rep, now, channel="email"
+                )
+                if deferred:
                     counters.setdefault("deferred", 0)
                     counters["deferred"] += 1
                 else:
-                    counters["errors"] += 1
-                    logger.warning(f"Email step #{step.id} failed: {msg}")
+                    ok, msg = await _handle_email(db, step, contact, company)
+                    if ok:
+                        step.is_sent = True
+                        step.sent_at = now
+                        counters["sent"] += 1
+                    elif msg == "DEFER_SEND_CAP":
+                        counters.setdefault("deferred", 0)
+                        counters["deferred"] += 1
+                    else:
+                        counters["errors"] += 1
+                        logger.warning(f"Email step #{step.id} failed: {msg}")
             elif step.step_type == "imessage":
-                # TCPA: don't fire iMessages outside 8am-9pm contact-local time.
-                # Defer to next 8am local instead of skipping or erroring.
-                deferred = _maybe_defer_for_send_window(step, contact, now)
+                # Same window as email, but iMessage is also clamped to
+                # TCPA's 8am-9pm contact-local even if admin widened the
+                # org window. The service handles that internally.
+                deferred = await _maybe_defer_for_send_window(
+                    db, step, contact, company, rep, now, channel="imessage"
+                )
                 if deferred:
                     counters.setdefault("deferred", 0)
                     counters["deferred"] += 1
@@ -822,6 +846,9 @@ async def start_sequence_from_template(
         created += 1
 
     if created > 0:
+        # Snap freshly-generated steps to the org send window
+        from app.services.send_window import snap_pending_steps_to_window
+        await snap_pending_steps_to_window(db, contact_id=contact.id)
         company.status = "sequencing"
         if hasattr(company, "sequence_started_at"):
             company.sequence_started_at = now

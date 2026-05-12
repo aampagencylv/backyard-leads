@@ -518,6 +518,18 @@ class RuntimeConfig(Base):
     # here — they're fixed in code because they have special wiring.
     pipeline_stages_json = Column(Text, nullable=True)
 
+    # Autopilot send window — applies to every auto-channel (email,
+    # iMessage, SMS) when the sequence engine fires. Hours are local to
+    # the *contact's* timezone (inferred from phone area code, falling
+    # back to the company's state, then the rep's timezone). Set to
+    # 8am-7pm by default to avoid midnight sends while still giving the
+    # team a wide enough working day.
+    autopilot_send_start_hour = Column(Integer, nullable=False, default=8)
+    autopilot_send_end_hour   = Column(Integer, nullable=False, default=19)
+    # JSON array of weekday ints (0=Mon..6=Sun) when sending is allowed.
+    # NULL means every day.
+    autopilot_send_days_json  = Column(Text, nullable=True)
+
     # Audit-report branding — per-surface overrides on top of org brand.
     # Empty → render falls back to brand_logo_url (footer) or no banner
     # (header). Set explicitly when you want an audit-specific image

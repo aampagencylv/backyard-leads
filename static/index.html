@@ -2046,6 +2046,45 @@ function verify(secret, rawBody, header) {
                     </div>
                 </div>
 
+                <!-- Autopilot send window — admin/super_admin only.
+                     Constrains when the sequence engine fires email +
+                     iMessage. iMessage stays clamped to TCPA's 8am-9pm
+                     contact-local regardless of what's configured. -->
+                <div id="autopilot-window-section" class="search-box hidden" style="max-width:640px;margin-top:16px">
+                    <h3>Autopilot Send Hours</h3>
+                    <p style="font-size:13px;color:#666;margin-bottom:8px">When sequences are allowed to send (email + iMessage). Hours are in the <strong>contact's local timezone</strong> — a contact in NY won't receive their email until 8am Eastern. New sequence steps are auto-scheduled inside this window.</p>
+                    <p style="font-size:11px;color:#888;margin-bottom:16px">iMessage/SMS is additionally clamped to TCPA's 8am–9pm contact-local even if the window below is wider.</p>
+
+                    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+                        <div class="form-group" style="margin:0">
+                            <label style="font-size:12px">Start (hour)</label>
+                            <select id="autopilot-start-hour" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px">
+                                <!-- populated by JS -->
+                            </select>
+                        </div>
+                        <div style="font-size:13px;color:#888;align-self:end;padding-bottom:8px">to</div>
+                        <div class="form-group" style="margin:0">
+                            <label style="font-size:12px">End (hour)</label>
+                            <select id="autopilot-end-hour" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px">
+                                <!-- populated by JS -->
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-group" style="margin-bottom:12px">
+                        <label style="font-size:12px">Send Days</label>
+                        <div id="autopilot-weekday-toggles" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
+                            <!-- populated by JS -->
+                        </div>
+                        <p style="font-size:11px;color:#888;margin-top:4px">Click to toggle. Selecting all 7 days = sends every day.</p>
+                    </div>
+
+                    <div style="display:flex;gap:8px;align-items:center">
+                        <button class="btn btn-primary btn-sm" onclick="saveAutopilotWindow()">Save Send Hours</button>
+                        <span id="autopilot-save-status" style="font-size:12px;color:#888"></span>
+                    </div>
+                </div>
+
                 <!-- Tenant-tier settings (visible to admin + super_admin).
                      SaaS model: the platform supplies enrichment / carrier /
                      AI / email infrastructure. The ONE customer-supplied
@@ -8543,6 +8582,9 @@ hmac.compare_digest(expected, header)</pre>
             // Pipeline editor — admin/super_admin only
             if (isAdminPlus) loadPipelineEditor();
 
+            // Autopilot send-hours editor — admin/super_admin only
+            if (isAdminPlus) loadAutopilotWindow();
+
             const auditBrandingSection = document.getElementById('audit-branding-section');
             if (auditBrandingSection) auditBrandingSection.classList.toggle('hidden', !isAdminPlus);
 
@@ -11781,6 +11823,103 @@ hmac.compare_digest(expected, header)</pre>
             const prob = last ? Math.min(99, last.probability + 15) : 25;
             _pipelineDraft.push({ key: '', name: 'New Stage', probability: prob, color });
             renderPipelineMiddleRows();
+        }
+
+        // ============================================================
+        // 🕐 Autopilot Send Hours
+        // ============================================================
+
+        let _autopilotWeekdays = new Set();
+
+        async function loadAutopilotWindow() {
+            const section = document.getElementById('autopilot-window-section');
+            if (!section) return;
+            if (!currentUser || !(currentUser.role === 'admin' || currentUser.role === 'super_admin')) {
+                section.classList.add('hidden');
+                return;
+            }
+            section.classList.remove('hidden');
+
+            const startSel = document.getElementById('autopilot-start-hour');
+            const endSel = document.getElementById('autopilot-end-hour');
+            if (startSel && !startSel.dataset.populated) {
+                const fmtHour = (h) => {
+                    if (h === 0) return '12 AM (midnight)';
+                    if (h === 12) return '12 PM (noon)';
+                    if (h === 24) return '12 AM (next day)';
+                    return h > 12 ? `${h - 12} PM` : `${h} AM`;
+                };
+                for (let h = 0; h < 24; h++) {
+                    const o = document.createElement('option');
+                    o.value = h;
+                    o.textContent = fmtHour(h);
+                    startSel.appendChild(o);
+                }
+                for (let h = 1; h <= 24; h++) {
+                    const o = document.createElement('option');
+                    o.value = h;
+                    o.textContent = fmtHour(h);
+                    endSel.appendChild(o);
+                }
+                startSel.dataset.populated = '1';
+                endSel.dataset.populated = '1';
+            }
+
+            const data = await api('/api/autopilot/send-window');
+            if (!data) return;
+            startSel.value = data.start_hour;
+            endSel.value = data.end_hour;
+            _autopilotWeekdays = new Set((data.weekdays || [0,1,2,3,4,5,6]).map(Number));
+            renderAutopilotWeekdays();
+        }
+
+        function renderAutopilotWeekdays() {
+            const box = document.getElementById('autopilot-weekday-toggles');
+            if (!box) return;
+            const days = [
+                {n: 0, label: 'Mon'}, {n: 1, label: 'Tue'}, {n: 2, label: 'Wed'},
+                {n: 3, label: 'Thu'}, {n: 4, label: 'Fri'}, {n: 5, label: 'Sat'}, {n: 6, label: 'Sun'},
+            ];
+            box.innerHTML = days.map(d => {
+                const on = _autopilotWeekdays.has(d.n);
+                return `<button type="button" onclick="toggleAutopilotDay(${d.n})" style="padding:6px 12px;border:1px solid ${on ? 'var(--bmp-green)' : '#ddd'};background:${on ? 'var(--bmp-green)' : 'white'};color:${on ? 'white' : '#555'};border-radius:6px;font-size:12px;font-weight:${on ? '600' : '400'};cursor:pointer;min-width:48px">${d.label}</button>`;
+            }).join('');
+        }
+
+        function toggleAutopilotDay(n) {
+            if (_autopilotWeekdays.has(n)) _autopilotWeekdays.delete(n);
+            else _autopilotWeekdays.add(n);
+            renderAutopilotWeekdays();
+        }
+
+        async function saveAutopilotWindow() {
+            const statusEl = document.getElementById('autopilot-save-status');
+            const start = parseInt(document.getElementById('autopilot-start-hour').value, 10);
+            const end = parseInt(document.getElementById('autopilot-end-hour').value, 10);
+            if (end <= start) {
+                if (statusEl) { statusEl.textContent = 'End hour must be after start'; statusEl.style.color = '#c00'; }
+                return;
+            }
+            if (_autopilotWeekdays.size === 0) {
+                if (statusEl) { statusEl.textContent = 'Pick at least one send day'; statusEl.style.color = '#c00'; }
+                return;
+            }
+            if (statusEl) { statusEl.textContent = 'Saving…'; statusEl.style.color = '#888'; }
+            try {
+                const result = await api('/api/autopilot/send-window', {
+                    method: 'PUT',
+                    body: JSON.stringify({
+                        start_hour: start,
+                        end_hour: end,
+                        weekdays: Array.from(_autopilotWeekdays).sort(),
+                    }),
+                });
+                if (!result) return;
+                if (statusEl) { statusEl.textContent = 'Saved'; statusEl.style.color = 'var(--bmp-green)'; }
+                toast('Autopilot send hours saved');
+            } catch (e) {
+                if (statusEl) { statusEl.textContent = `Error: ${e.message}`; statusEl.style.color = '#c00'; }
+            }
         }
 
         async function savePipelineConfig() {
