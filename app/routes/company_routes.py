@@ -1695,6 +1695,11 @@ _GENERIC_PREFIXES = frozenset({
     "billing", "service", "team", "help", "marketing", "construction",
     "accounting", "hr", "jobs", "careers", "general", "mail", "enquiries",
     "inquiries", "noreply", "no-reply", "notifications", "ops",
+    "processing", "design", "employment", "estimating", "dispatch",
+    "tellmemore", "asktheuglypool", "keywize", "tomgood", "ar", "ap",
+    "orders", "purchasing", "webmaster", "postmaster", "abuse",
+    "reception", "feedback", "media", "press", "events", "booking",
+    "reservations", "payments",
 })
 
 
