@@ -12,44 +12,38 @@ Idempotent. Auto-runs on startup via init_db().
 from __future__ import annotations
 import asyncio
 from sqlalchemy import text
+from app.services.migration_utils import table_exists
 from app.database import engine
 
 
-CREATE_TABLE = """
-CREATE TABLE IF NOT EXISTS site_visitor_sessions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    bvid VARCHAR(64) NOT NULL UNIQUE,
-    ip VARCHAR(64),
-    user_agent VARCHAR(300),
-    resolved_company_id INTEGER REFERENCES companies(id),
-    resolved_company_name VARCHAR(255),
-    resolved_domain VARCHAR(255),
-    resolved_at DATETIME,
-    is_isp_ip INTEGER NOT NULL DEFAULT 0,
-    country VARCHAR(8),
-    region VARCHAR(80),
-    city VARCHAR(120),
-    pageview_count INTEGER NOT NULL DEFAULT 0,
-    first_seen_at DATETIME NOT NULL DEFAULT (datetime('now')),
-    last_seen_at DATETIME NOT NULL DEFAULT (datetime('now'))
-)
-"""
-
-INDEXES = [
-    "CREATE INDEX IF NOT EXISTS ix_site_visitor_sessions_bvid ON site_visitor_sessions(bvid)",
-    "CREATE INDEX IF NOT EXISTS ix_site_visitor_sessions_ip ON site_visitor_sessions(ip)",
-    "CREATE INDEX IF NOT EXISTS ix_site_visitor_sessions_resolved_company_id ON site_visitor_sessions(resolved_company_id)",
-    "CREATE INDEX IF NOT EXISTS ix_site_visitor_sessions_resolved_domain ON site_visitor_sessions(resolved_domain)",
-    "CREATE INDEX IF NOT EXISTS ix_site_visitor_sessions_first_seen_at ON site_visitor_sessions(first_seen_at)",
-    "CREATE INDEX IF NOT EXISTS ix_site_visitor_sessions_last_seen_at ON site_visitor_sessions(last_seen_at)",
-]
-
-
 async def main() -> None:
+    """No-op when the table already exists (created by SQLAlchemy
+    Base.metadata.create_all on first boot). Historical SQLite-style
+    DDL is kept here only for the legacy mid-session bootstrap path —
+    Postgres deployments never hit it because create_all runs first."""
     async with engine.begin() as conn:
-        await conn.execute(text(CREATE_TABLE))
-        for ix in INDEXES:
-            await conn.execute(text(ix))
+        if await table_exists(conn, "site_visitor_sessions"):
+            return  # already created from the SQLAlchemy model
+        # SQLite legacy path — only fires on a half-init'd dev DB.
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS site_visitor_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bvid VARCHAR(64) NOT NULL UNIQUE,
+                ip VARCHAR(64),
+                user_agent VARCHAR(300),
+                resolved_company_id INTEGER REFERENCES companies(id),
+                resolved_company_name VARCHAR(255),
+                resolved_domain VARCHAR(255),
+                resolved_at DATETIME,
+                is_isp_ip INTEGER NOT NULL DEFAULT 0,
+                country VARCHAR(8),
+                region VARCHAR(80),
+                city VARCHAR(120),
+                pageview_count INTEGER NOT NULL DEFAULT 0,
+                first_seen_at DATETIME NOT NULL DEFAULT (datetime('now')),
+                last_seen_at DATETIME NOT NULL DEFAULT (datetime('now'))
+            )
+        """))
     print("Migration complete.")
 
 

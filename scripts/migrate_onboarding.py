@@ -13,13 +13,13 @@ Idempotent.
 from __future__ import annotations
 import asyncio
 from sqlalchemy import text
+from app.services.migration_utils import column_exists
 from app.database import engine
 
 
 async def main() -> None:
     async with engine.begin() as conn:
-        cols = {r[1] for r in (await conn.execute(text("PRAGMA table_info(users)"))).fetchall()}
-        if "onboarding_step" not in cols:
+        if not await column_exists(conn, "users", "onboarding_step"):
             await conn.execute(text("ALTER TABLE users ADD COLUMN onboarding_step INTEGER NOT NULL DEFAULT 0"))
             print("+ added users.onboarding_step")
             # Existing users (BMP team) skip the tour by default — they don't need it.

@@ -11,13 +11,13 @@ Idempotent.
 from __future__ import annotations
 import asyncio
 from sqlalchemy import text
+from app.services.migration_utils import column_exists
 from app.database import engine
 
 
 async def main() -> None:
     async with engine.begin() as conn:
-        cols = {r[1] for r in (await conn.execute(text("PRAGMA table_info(runtime_config)"))).fetchall()}
-        if "apollo_api_key" not in cols:
+        if not await column_exists(conn, "runtime_config", "apollo_api_key"):
             await conn.execute(text("ALTER TABLE runtime_config ADD COLUMN apollo_api_key TEXT"))
             print("+ added runtime_config.apollo_api_key")
     print("Migration complete.")

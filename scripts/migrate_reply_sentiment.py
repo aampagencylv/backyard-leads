@@ -11,17 +11,17 @@ Idempotent.
 from __future__ import annotations
 import asyncio
 from sqlalchemy import text
+from app.services.migration_utils import column_exists
 from app.database import engine
 
 
 async def main() -> None:
     async with engine.begin() as conn:
-        cols = {r[1] for r in (await conn.execute(text("PRAGMA table_info(activities)"))).fetchall()}
-        if "reply_sentiment" not in cols:
+        if not await column_exists(conn, "activities", "reply_sentiment"):
             await conn.execute(text("ALTER TABLE activities ADD COLUMN reply_sentiment VARCHAR(20)"))
             await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_activities_reply_sentiment ON activities(reply_sentiment)"))
             print("+ added activities.reply_sentiment + index")
-        if "reply_sentiment_summary" not in cols:
+        if not await column_exists(conn, "activities", "reply_sentiment_summary"):
             await conn.execute(text("ALTER TABLE activities ADD COLUMN reply_sentiment_summary TEXT"))
             print("+ added activities.reply_sentiment_summary")
     print("Migration complete.")

@@ -3,25 +3,32 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from sqlalchemy.orm import DeclarativeBase
 from app.config import settings
 
-# SQLite concurrency hardening:
-#   - busy_timeout (passed via aiosqlite's `timeout` connect arg, in seconds)
-#     makes writers wait briefly for a lock instead of failing immediately
-#     with "database is locked". 30 seconds is the standard Django/Rails
-#     default; under bursty load it gives the WAL log time to drain.
-#   - check_same_thread=False is required for async access patterns where
-#     a connection might be touched from multiple coroutines.
-# WAL mode itself is set persistently on the file in init_db() via
-# PRAGMA journal_mode=WAL — once set, it sticks across processes.
+# Dialect-aware engine config. SQLite gets concurrency hardening
+# (WAL mode + busy_timeout); Postgres gets connection pooling sized
+# for a typical async FastAPI app (10 base + 5 overflow = 15 max).
 _connect_args = {}
+_engine_kwargs: dict = {"echo": False}
+
 if settings.database_url.startswith("sqlite"):
+    # busy_timeout (in seconds) makes writers wait briefly for a lock
+    # instead of failing with "database is locked". 30s matches the
+    # Django/Rails default; gives WAL log time to drain under burst.
+    # check_same_thread=False is required for async coroutine access.
     _connect_args = {"timeout": 30, "check_same_thread": False}
+elif "postgresql" in settings.database_url:
+    # Postgres pool sizing — modest defaults that work for a single
+    # uvicorn worker. Bump pool_size if we move to multi-worker.
+    # pool_pre_ping=True silently reconnects after a stale connection
+    # (Supabase/pgBouncer occasionally drops idle conns).
+    _engine_kwargs["pool_size"] = 10
+    _engine_kwargs["max_overflow"] = 5
+    _engine_kwargs["pool_pre_ping"] = True
+    _engine_kwargs["pool_recycle"] = 1800  # recycle conns every 30 min
 
 engine = create_async_engine(
-    settings.database_url, echo=False,
+    settings.database_url,
     connect_args=_connect_args,
-    # Note: SQLAlchemy uses NullPool for SQLite by default — pool_size /
-    # max_overflow aren't applicable here. WAL mode + busy_timeout
-    # handle concurrency at the database file level.
+    **_engine_kwargs,
 )
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 

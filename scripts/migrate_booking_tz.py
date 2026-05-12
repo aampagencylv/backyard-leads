@@ -1,4 +1,7 @@
-"""Add prospect_timezone column to bookings table."""
+"""LEGACY (SQLite-only) — add prospect_timezone column to bookings.
+Kept for historical reference; the same column is already in the
+SQLAlchemy model so a fresh Postgres install gets it via create_all.
+Do not run on Postgres."""
 import sqlite3, pathlib
 
 DB = pathlib.Path(__file__).resolve().parent.parent / "leads.db"

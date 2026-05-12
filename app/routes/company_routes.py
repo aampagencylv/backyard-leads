@@ -2153,13 +2153,15 @@ async def merge_companies(
 
     # Union tags via the association table — same IN-clause pattern, but
     # tags from merge-from rows that already exist on the kept company
-    # would violate the (company_id, tag_id) PK. Use INSERT OR IGNORE.
+    # would violate the (company_id, tag_id) PK. ON CONFLICT skips dupes
+    # on Postgres (and the equivalent OR IGNORE on SQLite).
     placeholders = ",".join(f":id{i}" for i in range(len(req.merge_from_ids)))
     params = {"keep": req.keep_id, **{f"id{i}": v for i, v in enumerate(req.merge_from_ids)}}
     await db.execute(
         sql_text(f"""
-            INSERT OR IGNORE INTO company_tags (company_id, tag_id)
+            INSERT INTO company_tags (company_id, tag_id)
             SELECT :keep, tag_id FROM company_tags WHERE company_id IN ({placeholders})
+            ON CONFLICT (company_id, tag_id) DO NOTHING
         """),
         params,
     )
@@ -2291,11 +2293,12 @@ async def bulk_company_action(
     elif req.action == "add_tag":
         if not req.tag_id:
             raise HTTPException(status_code=400, detail="tag_id required")
-        # INSERT OR IGNORE — composite PK (company_id, tag_id) auto-dedupes
+        # ON CONFLICT — composite PK (company_id, tag_id) auto-dedupes
         await db.execute(
             sql_text(f"""
-                INSERT OR IGNORE INTO company_tags (company_id, tag_id)
+                INSERT INTO company_tags (company_id, tag_id)
                 SELECT id, :tid FROM companies WHERE id IN ({placeholders})
+                ON CONFLICT (company_id, tag_id) DO NOTHING
             """),
             {"tid": req.tag_id, **id_params},
         )

@@ -18,6 +18,7 @@ Idempotent. Auto-runs on startup via init_db().
 from __future__ import annotations
 import asyncio
 from sqlalchemy import text
+from app.services.migration_utils import column_exists
 from app.database import engine
 
 
@@ -44,7 +45,6 @@ RETIRE_DEFAULTS = [
 async def main() -> None:
     async with engine.begin() as conn:
         # Add social URL columns to companies if missing
-        cols = {r[1] for r in (await conn.execute(text("PRAGMA table_info(companies)"))).fetchall()}
         for col in SOCIAL_COLUMNS:
             if col not in cols:
                 await conn.execute(text(f"ALTER TABLE companies ADD COLUMN {col} VARCHAR(500)"))

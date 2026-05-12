@@ -8,6 +8,7 @@ Idempotent.
 from __future__ import annotations
 import asyncio
 from sqlalchemy import text
+from app.services.migration_utils import column_exists
 from app.database import engine
 
 
@@ -20,9 +21,8 @@ COLUMNS = [
 
 async def main() -> None:
     async with engine.begin() as conn:
-        cols = {r[1] for r in (await conn.execute(text("PRAGMA table_info(page_views)"))).fetchall()}
         for name, ddl in COLUMNS:
-            if name not in cols:
+            if not await column_exists(conn, "page_views", name):
                 await conn.execute(text(f"ALTER TABLE page_views ADD COLUMN {name} {ddl}"))
                 print(f"+ added page_views.{name}")
     print("Migration complete.")

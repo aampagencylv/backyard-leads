@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 import asyncio
 from sqlalchemy import text
+from app.services.migration_utils import column_exists
 
 from app.database import engine
 
@@ -36,7 +37,7 @@ async def main() -> None:
 
         # Add new columns (skip ones that already exist)
         for name, ddl in NEW_COLUMNS:
-            if name not in cols:
+            if not await column_exists(conn, "users", name):
                 await conn.execute(text(f"ALTER TABLE users ADD COLUMN {name} {ddl}"))
                 print(f"+ added users.{name}")
 

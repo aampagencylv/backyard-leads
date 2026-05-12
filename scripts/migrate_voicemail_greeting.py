@@ -1,4 +1,6 @@
-"""Add voicemail_greeting_url column to users table."""
+"""LEGACY (SQLite-only) — add voicemail_greeting_url column to users.
+Kept for historical reference; column lives in the SQLAlchemy model so
+a fresh Postgres install gets it via create_all. Do not run on Postgres."""
 import sqlite3, pathlib
 
 DB = pathlib.Path(__file__).resolve().parent.parent / "leads.db"

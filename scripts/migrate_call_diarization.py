@@ -14,6 +14,7 @@ Idempotent. Auto-runs on startup via init_db().
 from __future__ import annotations
 import asyncio
 from sqlalchemy import text
+from app.services.migration_utils import column_exists
 from app.database import engine
 
 
@@ -25,9 +26,8 @@ COLUMNS = [
 
 async def main() -> None:
     async with engine.begin() as conn:
-        cols = {r[1] for r in (await conn.execute(text("PRAGMA table_info(activities)"))).fetchall()}
         for name, ddl in COLUMNS:
-            if name not in cols:
+            if not await column_exists(conn, "activities", name):
                 await conn.execute(text(f"ALTER TABLE activities ADD COLUMN {name} {ddl}"))
                 print(f"+ added activities.{name}")
     print("Migration complete.")

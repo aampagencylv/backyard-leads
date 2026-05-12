@@ -7,13 +7,13 @@ Idempotent.
 from __future__ import annotations
 import asyncio
 from sqlalchemy import text
+from app.services.migration_utils import column_exists
 from app.database import engine
 
 
 async def main() -> None:
     async with engine.begin() as conn:
-        cols = {r[1] for r in (await conn.execute(text("PRAGMA table_info(runtime_config)"))).fetchall()}
-        if "messaging_direction" not in cols:
+        if not await column_exists(conn, "runtime_config", "messaging_direction"):
             await conn.execute(text("ALTER TABLE runtime_config ADD COLUMN messaging_direction TEXT"))
             print("+ added runtime_config.messaging_direction")
     print("Migration complete.")

@@ -9,13 +9,13 @@ Idempotent.
 from __future__ import annotations
 import asyncio
 from sqlalchemy import text
+from app.services.migration_utils import column_exists
 from app.database import engine
 
 
 async def main() -> None:
     async with engine.begin() as conn:
-        cols = {r[1] for r in (await conn.execute(text("PRAGMA table_info(runtime_config)"))).fetchall()}
-        if "resend_webhook_secret" not in cols:
+        if not await column_exists(conn, "runtime_config", "resend_webhook_secret"):
             await conn.execute(text("ALTER TABLE runtime_config ADD COLUMN resend_webhook_secret TEXT"))
             print("+ added runtime_config.resend_webhook_secret")
     print("Migration complete.")

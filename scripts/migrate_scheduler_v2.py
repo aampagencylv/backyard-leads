@@ -15,6 +15,7 @@ Idempotent. Auto-runs on startup via init_db().
 from __future__ import annotations
 import asyncio
 from sqlalchemy import text
+from app.services.migration_utils import column_exists
 from app.database import engine
 
 
@@ -32,15 +33,12 @@ BOOKINGS_COLUMNS = [
 
 async def main() -> None:
     async with engine.begin() as conn:
-        sched = {r[1] for r in (await conn.execute(text("PRAGMA table_info(scheduling_configs)"))).fetchall()}
         for name, ddl in SCHEDULING_COLUMNS:
-            if name not in sched:
+            if not await column_exists(conn, "scheduling_configs", name):
                 await conn.execute(text(f"ALTER TABLE scheduling_configs ADD COLUMN {name} {ddl}"))
                 print(f"+ added scheduling_configs.{name}")
-
-        bookings = {r[1] for r in (await conn.execute(text("PRAGMA table_info(bookings)"))).fetchall()}
         for name, ddl in BOOKINGS_COLUMNS:
-            if name not in bookings:
+            if not await column_exists(conn, "bookings", name):
                 await conn.execute(text(f"ALTER TABLE bookings ADD COLUMN {name} {ddl}"))
                 print(f"+ added bookings.{name}")
     print("Migration complete.")

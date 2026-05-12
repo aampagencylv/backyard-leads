@@ -1,6 +1,7 @@
 """Add call rating fields to activities. Idempotent."""
 import asyncio
 from sqlalchemy import text
+from app.services.migration_utils import column_exists
 from app.database import engine
 
 

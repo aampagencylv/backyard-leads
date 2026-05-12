@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import secrets
 from sqlalchemy import text
+from app.services.migration_utils import column_exists
 
 from app.database import engine
 
@@ -29,17 +30,24 @@ from app.database import engine
 # ============================================================
 
 async def _table_exists(conn, table: str) -> bool:
-    rows = (await conn.execute(text(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name=:t"
-    ), {"t": table})).fetchall()
-    return len(rows) > 0
+    """Cross-dialect — works on SQLite + Postgres."""
+    from app.services.migration_utils import table_exists as _te
+    return await _te(conn, table)
 
 
 async def _columns(conn, table: str) -> set[str]:
     if not await _table_exists(conn, table):
         return set()
-    rows = (await conn.execute(text(f"PRAGMA table_info({table})"))).fetchall()
-    return {row[1] for row in rows}
+    # Cross-dialect column inspection
+    dialect = conn.engine.url.get_backend_name() if hasattr(conn, "engine") else conn.dialect.name
+    if dialect == "sqlite":
+        rows = (await conn.execute(text(f"PRAGMA table_info({table})"))).fetchall()
+        return {row[1] for row in rows}
+    rows = (await conn.execute(
+        text("SELECT column_name FROM information_schema.columns WHERE table_name = :t"),
+        {"t": table},
+    )).fetchall()
+    return {row[0] for row in rows}
 
 
 # ============================================================
@@ -331,7 +339,7 @@ async def main() -> None:
 
 async def _rebuild_activities(conn) -> None:
     cols = await _columns(conn, "activities")
-    if "lead_id" not in cols:
+    if not await column_exists(conn, "{table}", "lead_id"):
         return  # already rebuilt
     await conn.execute(text("""
         CREATE TABLE activities_new (
@@ -359,7 +367,7 @@ async def _rebuild_activities(conn) -> None:
 
 async def _rebuild_tasks(conn) -> None:
     cols = await _columns(conn, "tasks")
-    if "lead_id" not in cols:
+    if not await column_exists(conn, "{table}", "lead_id"):
         return
     await conn.execute(text("""
         CREATE TABLE tasks_new (
@@ -388,7 +396,7 @@ async def _rebuild_tasks(conn) -> None:
 
 async def _rebuild_generated_emails(conn) -> None:
     cols = await _columns(conn, "generated_emails")
-    if "lead_id" not in cols:
+    if not await column_exists(conn, "{table}", "lead_id"):
         return
     await conn.execute(text("""
         CREATE TABLE generated_emails_new (

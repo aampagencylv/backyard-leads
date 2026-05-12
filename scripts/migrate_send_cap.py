@@ -9,13 +9,13 @@ Idempotent.
 from __future__ import annotations
 import asyncio
 from sqlalchemy import text
+from app.services.migration_utils import column_exists
 from app.database import engine
 
 
 async def main() -> None:
     async with engine.begin() as conn:
-        cols = {r[1] for r in (await conn.execute(text("PRAGMA table_info(generated_emails)"))).fetchall()}
-        if "sent_by_user_id" not in cols:
+        if not await column_exists(conn, "generated_emails", "sent_by_user_id"):
             await conn.execute(text("ALTER TABLE generated_emails ADD COLUMN sent_by_user_id INTEGER"))
             print("+ added generated_emails.sent_by_user_id")
         # Index for the daily-count query

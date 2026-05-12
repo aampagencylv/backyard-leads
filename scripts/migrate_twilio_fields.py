@@ -10,6 +10,7 @@ Idempotent: safe to run on every restart.
 from __future__ import annotations
 import asyncio
 from sqlalchemy import text
+from app.services.migration_utils import column_exists
 from app.database import engine
 
 
@@ -33,7 +34,7 @@ async def main() -> None:
     async with engine.begin() as conn:
         for table, name, ddl in COLUMNS:
             cols = await _columns(conn, table)
-            if name not in cols:
+            if not await column_exists(conn, "{table}", name):
                 await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
                 print(f"+ added {table}.{name}")
 

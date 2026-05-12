@@ -10,14 +10,14 @@ Idempotent.
 from __future__ import annotations
 import asyncio
 from sqlalchemy import text
+from app.services.migration_utils import column_exists
 from app.database import engine
 from app.services.domain_utils import normalize_domain
 
 
 async def main() -> None:
     async with engine.begin() as conn:
-        cols = {r[1] for r in (await conn.execute(text("PRAGMA table_info(companies)"))).fetchall()}
-        if "domain" not in cols:
+        if not await column_exists(conn, "companies", "domain"):
             await conn.execute(text("ALTER TABLE companies ADD COLUMN domain VARCHAR(255)"))
             print("+ added companies.domain")
         # Index for fast dedupe lookup (idempotent — IF NOT EXISTS)
