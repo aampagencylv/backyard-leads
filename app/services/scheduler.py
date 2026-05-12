@@ -183,10 +183,13 @@ async def fetch_user_busy(
     *,
     time_min: datetime,
     time_max: datetime,
+    config: Optional[SchedulingConfig] = None,
 ) -> tuple[list[tuple[datetime, datetime]], Optional[str]]:
     """Pull free-busy from the user's PRIMARY calendar + their
-    BMP Discovery Calls calendar (so already-booked discovery calls
-    block new bookings even if they were created outside our flow).
+    BMP Discovery Calls calendar + any extra conflict calendars they
+    configured in Calendar Settings. So a 2pm doctor appt on their
+    personal calendar will hide the 2pm-3pm slot even if the discovery
+    calendar is empty.
 
     Returns (busy_ranges, error_message). `error_message` is a
     user-facing string when we couldn't reach Google — caller decides
@@ -202,6 +205,17 @@ async def fetch_user_busy(
     cal_ids = ["primary"]
     if user.google_calendar_id and user.google_calendar_id != "primary":
         cal_ids.append(user.google_calendar_id)
+    # Layer in any extra conflict calendars the user picked in Settings.
+    if config and getattr(config, "conflict_calendar_ids_json", None):
+        try:
+            import json as _json
+            extra = _json.loads(config.conflict_calendar_ids_json)
+            if isinstance(extra, list):
+                for cid in extra:
+                    if isinstance(cid, str) and cid and cid not in cal_ids:
+                        cal_ids.append(cid)
+        except (ValueError, TypeError):
+            pass
     try:
         busy = await free_busy(tokens.access_token, cal_ids, time_min=time_min, time_max=time_max)
         return busy, None

@@ -62,6 +62,14 @@ class User(Base):
     # to a kebab-case form of the user's first+last name on connect.
     booking_slug = Column(String(80), nullable=True, unique=True, index=True)
 
+    # Booking-host routing — when a BDR's outbound assets (audit reports,
+    # email signatures, sidebar "Schedule a meeting" button) need a
+    # booking URL, we substitute this user's calendar slug instead of
+    # the BDR's own. Lets an admin centralize "Discovery Call" bookings
+    # on their calendar without making every BDR a calendar owner.
+    # NULL = use the BDR's own calendar (default).
+    default_booking_host_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+
     # Per-rep dial preferences
     # 'browser' = WebRTC via Twilio.Device (default; needs headset + good internet)
     # 'bridge'  = CallRail-style: Twilio rings personal_phone_number first, bridges to prospect
@@ -1144,6 +1152,13 @@ class SchedulingConfig(Base):
     # The built-in name/email/phone fields are always present and not in
     # this array. Answers persist on Booking.answers_json.
     booking_questions_json = Column(Text, nullable=True)
+
+    # Extra Google calendar IDs to UNION into the free-busy check when
+    # generating available slots. The user's primary + their write-target
+    # calendar are always checked; this adds personal/family/work
+    # calendars on top so a 2pm doctor appt blocks the 2pm-3pm slot.
+    # Stored as a JSON array of calendar IDs.
+    conflict_calendar_ids_json = Column(Text, nullable=True)
 
     # Public-booking-page brand customization. Hex strings (#RRGGBB).
     # `brand_color`        → buttons, slot-button selected/hover, radio

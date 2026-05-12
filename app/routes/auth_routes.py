@@ -220,6 +220,10 @@ async def list_users(
             # True when the requesting user does NOT have privilege to
             # modify this row. UI should show a lock icon + disable buttons.
             "locked": not can_modify_user(user, u)[0],
+            # Booking routing — when set, the BDR's outbound links book
+            # on the host's calendar rather than their own.
+            "default_booking_host_id": u.default_booking_host_id,
+            "has_google_calendar": bool(u.google_refresh_token and u.booking_slug),
         }
         for u in users
     ]
@@ -396,6 +400,9 @@ class UpdateUserRequest(BaseModel):
     role: Optional[str] = None
     sending_enabled: Optional[bool] = None
     is_active: Optional[bool] = None
+    # default_booking_host_id explicit None vs missing — to clear the
+    # routing the client sends 0 (sentinel "own calendar").
+    default_booking_host_id: Optional[int] = None
 
 
 @router.patch("/users/{user_id}")
@@ -448,10 +455,23 @@ async def update_user(
             if remaining == 0:
                 raise HTTPException(status_code=400, detail="Cannot deactivate the last active super admin")
         target.is_active = req.is_active
+    if req.default_booking_host_id is not None:
+        # 0 = sentinel for "use their own calendar" (clears the field)
+        if req.default_booking_host_id == 0 or req.default_booking_host_id == target.id:
+            target.default_booking_host_id = None
+        else:
+            host_check = (await db.execute(
+                select(User).where(User.id == req.default_booking_host_id, User.is_active == True)
+            )).scalar_one_or_none()
+            if not host_check:
+                raise HTTPException(status_code=400, detail="Booking host not found or inactive")
+            if not host_check.google_refresh_token:
+                raise HTTPException(status_code=400, detail="Booking host hasn't connected Google Calendar yet")
+            target.default_booking_host_id = host_check.id
 
     # Audit summary — only logs the fields the request actually touched
     changed = {}
-    for field_name in ("first_name", "last_name", "nickname", "role", "sending_enabled", "is_active"):
+    for field_name in ("first_name", "last_name", "nickname", "role", "sending_enabled", "is_active", "default_booking_host_id"):
         val = getattr(req, field_name)
         if val is not None:
             changed[field_name] = val

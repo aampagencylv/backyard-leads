@@ -104,6 +104,7 @@ def _config_payload(c: SchedulingConfig) -> dict:
         "brand_color": _normalize_hex(c.brand_color, _DEFAULT_BRAND),
         "accent_bg_color": _normalize_hex(c.accent_bg_color, _DEFAULT_ACCENT_BG),
         "logo_url": c.logo_url or "",
+        "conflict_calendar_ids": json.loads(c.conflict_calendar_ids_json) if c.conflict_calendar_ids_json else [],
     }
 
 
@@ -135,6 +136,7 @@ class SchedulingConfigPatch(BaseModel):
     brand_color: Optional[str] = None
     accent_bg_color: Optional[str] = None
     logo_url: Optional[str] = None
+    conflict_calendar_ids: Optional[list[str]] = None
 
 
 def _validate_questions(raw: list) -> list:
@@ -257,6 +259,15 @@ async def patch_my_scheduling_config(
         if url and not url.startswith("https://"):
             raise HTTPException(status_code=400, detail="Logo URL must start with https://")
         c.logo_url = url or None
+    if body.conflict_calendar_ids is not None:
+        # Drop empties + dedupe + cap at 10 (sanity)
+        clean: list[str] = []
+        for cid in body.conflict_calendar_ids:
+            cid = (cid or "").strip()
+            if cid and cid not in clean:
+                clean.append(cid)
+        clean = clean[:10]
+        c.conflict_calendar_ids_json = json.dumps(clean) if clean else None
     await db.commit()
     await db.refresh(c)
     return _config_payload(c)
@@ -319,31 +330,84 @@ async def upcoming_bookings(
     }
 
 
+@host_router.get("/my-google-calendars")
+async def list_my_google_calendars(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List the user's Google calendars — used by the Calendar Settings
+    UI to populate the "conflict calendars" multi-select. Returns id +
+    summary + primary flag. Empty list if Calendar isn't connected."""
+    if not user.google_refresh_token:
+        return {"connected": False, "calendars": []}
+    try:
+        tokens = await refresh_access_token(user.google_refresh_token)
+    except GoogleAPIError as e:
+        log.warning(f"my-google-calendars refresh failed for user {user.id}: {e}")
+        return {"connected": False, "calendars": [], "error": "google_refresh_failed"}
+    try:
+        from app.services.google_oauth import list_calendars
+        cals = await list_calendars(tokens.access_token)
+    except GoogleAPIError as e:
+        log.warning(f"my-google-calendars list failed for user {user.id}: {e}")
+        return {"connected": True, "calendars": [], "error": "google_list_failed"}
+    out = []
+    for c in cals:
+        cid = c.get("id")
+        if not cid:
+            continue
+        out.append({
+            "id": cid,
+            "summary": c.get("summary") or cid,
+            "primary": bool(c.get("primary")),
+            "is_write_target": cid == user.google_calendar_id,
+            "access_role": c.get("accessRole"),
+        })
+    return {"connected": True, "calendars": out}
+
+
 @host_router.get("/preview")
 async def preview_my_slots(
     days: int = 7,
+    effective: bool = False,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Server-side preview of the next N days of bookable slots.
-    Used by the Settings UI to give the host immediate feedback when
-    they change rules. Hits Google free-busy + DB."""
-    c = await _get_or_create_config(db, user.id)
+
+    Two modes:
+      - effective=false (default) — preview the user's OWN calendar.
+        Used by Settings → Calendar so the host sees what *their*
+        public booking page looks like.
+      - effective=true — preview the calendar this user *books on*
+        (their own, or the configured default_booking_host). Used by
+        the in-app "Schedule a meeting" modal so a BDR routed to the
+        admin sees the admin's slots.
+    """
+    if effective:
+        from app.services.booking_host import resolve_booking_host
+        target = await resolve_booking_host(db, user)
+    else:
+        target = user
+    c = await _get_or_create_config(db, target.id)
     days = max(1, min(c.max_advance_days, days))
     now = datetime.now(timezone.utc)
     window_end = now + timedelta(days=days)
-    busy, err = await fetch_user_busy(user, time_min=now, time_max=window_end)
-    db_busy = await db_busy_ranges(db, user.id, time_min=now, time_max=window_end)
+    busy, err = await fetch_user_busy(target, time_min=now, time_max=window_end, config=c)
+    db_busy = await db_busy_ranges(db, target.id, time_min=now, time_max=window_end)
     slots = generate_slots(
-        c, user.timezone or "America/Phoenix",
+        c, target.timezone or "America/Phoenix",
         window_start_utc=now, window_end_utc=window_end,
         busy_ranges=busy, booked_in_db=db_busy, now_utc=now,
     )
     return {
         "google_error": err,
-        "host_timezone": user.timezone,
+        "host_timezone": target.timezone,
+        "host_user_id": target.id,
+        "host_name": target.full_name,
+        "is_routed": target.id != user.id,
         "days": days,
-        "slots": [s.to_payload(user.timezone or "America/Phoenix") for s in slots[:200]],
+        "slots": [s.to_payload(target.timezone or "America/Phoenix") for s in slots[:200]],
     }
 
 
@@ -385,14 +449,19 @@ async def book_for_contact(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Rep-initiated booking. Validates the slot against the rep's
-    own calendar (same gates as the public booking flow), creates
-    the Google event with both rep + prospect as attendees, and
-    logs an Activity on the matched company timeline."""
-    if not user.google_refresh_token:
+    """Rep-initiated booking. If the rep has a default_booking_host
+    configured (e.g. BDR routed to admin's "Discovery Call" calendar),
+    we book on the HOST's calendar with the host as the organizer; the
+    rep stays on the Activity audit as the booker. Otherwise it's the
+    rep's own calendar like before."""
+    from app.services.booking_host import resolve_booking_host
+    host = await resolve_booking_host(db, user)
+    if not host.google_refresh_token:
+        if host.id == user.id:
+            raise HTTPException(status_code=400, detail="Connect Google Calendar in Calendar Settings first.")
         raise HTTPException(
             status_code=400,
-            detail="Connect Google Calendar in Calendar Settings first.",
+            detail=f"The booking host ({host.full_name}) hasn't connected their calendar yet.",
         )
 
     # Resolve contact + scope: a sales_rep can only schedule with
@@ -424,7 +493,9 @@ async def book_for_contact(
     if not contact.email:
         raise HTTPException(status_code=400, detail="Contact has no email — Google requires an attendee email")
 
-    c = await _get_or_create_config(db, user.id)
+    # Validate against the HOST's calendar + scheduling config — the
+    # rep is just acting on behalf of the host.
+    c = await _get_or_create_config(db, host.id)
     starts_at = _parse_iso_utc(body.starts_at_utc)
     ends_at = starts_at + timedelta(minutes=c.slot_minutes)
     now = datetime.now(timezone.utc)
@@ -437,13 +508,13 @@ async def book_for_contact(
         raise HTTPException(status_code=400, detail="Slot is past the booking window")
 
     busy, err = await fetch_user_busy(
-        user, time_min=now, time_max=starts_at + timedelta(hours=2),
+        host, time_min=now, time_max=starts_at + timedelta(hours=2), config=c,
     )
     if err:
         raise HTTPException(status_code=503, detail="Calendar temporarily unavailable. Please try again.")
-    db_busy = await db_busy_ranges(db, user.id, time_min=now, time_max=starts_at + timedelta(hours=2))
+    db_busy = await db_busy_ranges(db, host.id, time_min=now, time_max=starts_at + timedelta(hours=2))
     slots = generate_slots(
-        c, user.timezone or "America/Phoenix",
+        c, host.timezone or "America/Phoenix",
         window_start_utc=now,
         window_end_utc=starts_at + timedelta(hours=2),
         busy_ranges=busy, booked_in_db=db_busy, now_utc=now,
@@ -491,25 +562,36 @@ async def book_for_contact(
             desc_parts.append(f"\n🔗 Meeting link: {link}")
 
     try:
-        tokens = await refresh_access_token(user.google_refresh_token)
+        tokens = await refresh_access_token(host.google_refresh_token)
     except GoogleAPIError:
-        raise HTTPException(status_code=503, detail="Could not refresh your Google token. Reconnect Calendar.")
+        raise HTTPException(status_code=503, detail="Could not refresh host's Google token. Reconnect Calendar.")
+
+    # Build attendee list: prospect + host (as organizer). When the BDR
+    # is a different person from the host, also include the BDR so they
+    # get the calendar invite on their own Google account.
+    attendees = [
+        {"email": prospect_email, "displayName": prospect_name, "responseStatus": "needsAction"},
+        {"email": host.google_email or host.email, "displayName": host.full_name,
+         "responseStatus": "accepted", "organizer": True},
+    ]
+    if user.id != host.id and (user.email or "").strip():
+        attendees.append({
+            "email": user.email,
+            "displayName": user.full_name,
+            "responseStatus": "accepted",
+        })
 
     event = {
         "summary": f"{meeting_title} — {prospect_name}",
         "description": "\n".join(desc_parts).strip(),
         "start": {"dateTime": starts_at.isoformat(), "timeZone": "UTC"},
         "end":   {"dateTime": ends_at.isoformat(),   "timeZone": "UTC"},
-        "attendees": [
-            {"email": prospect_email, "displayName": prospect_name, "responseStatus": "needsAction"},
-            {"email": user.google_email or user.email, "displayName": user.full_name,
-             "responseStatus": "accepted", "organizer": True},
-        ],
+        "attendees": attendees,
         "reminders": {"useDefault": True},
     }
     if location_field:
         event["location"] = location_field
-    cal_id = user.google_calendar_id or "primary"
+    cal_id = host.google_calendar_id or "primary"
     try:
         gevent = await create_event(
             tokens.access_token, cal_id, event,
@@ -529,7 +611,7 @@ async def book_for_contact(
                     break
 
     booking = Booking(
-        host_user_id=user.id,
+        host_user_id=host.id,
         starts_at=starts_at,
         ends_at=ends_at,
         prospect_name=prospect_name[:160],
@@ -545,6 +627,7 @@ async def book_for_contact(
     )
     db.add(booking)
 
+    booker_suffix = "" if user.id == host.id else f" (booked by {user.full_name})"
     db.add(Activity(
         company_id=company.id,
         contact_id=contact.id,
@@ -552,11 +635,12 @@ async def book_for_contact(
         activity_type="meeting_booked",
         content=(
             f"Scheduled {meeting_title} with {prospect_name} for "
-            f"{starts_at.astimezone(timezone.utc).isoformat()}"
+            f"{starts_at.astimezone(timezone.utc).isoformat()}{booker_suffix}"
         ),
         metadata_json=json.dumps({
             "source": "rep_initiated",
-            "host_user_id": user.id,
+            "host_user_id": host.id,
+            "booked_by_user_id": user.id,
             "google_event_id": gevent.get("id"),
             "google_event_link": gevent.get("htmlLink"),
             "google_meet_link": meet_link,
@@ -621,7 +705,7 @@ async def get_booking_info(
     days = max(1, min(c.max_advance_days, days))
     now = datetime.now(timezone.utc)
     window_end = now + timedelta(days=days)
-    busy, err = await fetch_user_busy(user, time_min=now, time_max=window_end)
+    busy, err = await fetch_user_busy(user, time_min=now, time_max=window_end, config=c)
     db_busy = await db_busy_ranges(db, user.id, time_min=now, time_max=window_end)
     questions = json.loads(c.booking_questions_json) if c.booking_questions_json else []
     base = {
@@ -753,7 +837,7 @@ async def confirm_booking(
         raise HTTPException(status_code=400, detail="Slot is past the booking window")
 
     busy, err = await fetch_user_busy(
-        user, time_min=now, time_max=starts_at + timedelta(hours=2),
+        user, time_min=now, time_max=starts_at + timedelta(hours=2), config=c,
     )
     if err:
         raise HTTPException(status_code=503, detail="Calendar temporarily unavailable. Please try again.")

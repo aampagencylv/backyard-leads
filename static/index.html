@@ -1531,6 +1531,19 @@ function verify(secret, rawBody, header) {
                                 </div>
                             </div>
                             <div style="margin-top:10px;font-size:11px;color:#888">Tip: create a "Discovery Calls" calendar in Google Calendar and pick it here for clean separation from your personal events.</div>
+
+                            <!-- Conflict calendars — additional calendars to UNION into
+                                 the free-busy check. Personal/family/team calendars
+                                 here block slots even though we don't write to them. -->
+                            <div style="margin-top:18px;padding-top:14px;border-top:1px solid #f0f0f0">
+                                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                                    <strong style="font-size:13px">Block off conflicts from other calendars</strong>
+                                    <span id="conflict-cal-status" style="font-size:11px;color:#888"></span>
+                                </div>
+                                <p style="font-size:11px;color:#888;margin:0 0 8px">Check any calendars you want treated as "busy" when generating slots. A 2pm doctor appointment on your personal calendar will hide the 2pm slot, even though we never write to it.</p>
+                                <div id="conflict-cal-list" style="display:flex;flex-direction:column;gap:4px"></div>
+                            </div>
+
                             <div style="margin-top:14px;padding-top:12px;border-top:1px solid #f0f0f0">
                                 <button class="btn btn-secondary btn-sm" onclick="disconnectGoogleCalendar()">Disconnect Google</button>
                             </div>
@@ -9135,11 +9148,67 @@ hmac.compare_digest(expected, header)</pre>
             _renderBookingQuestions();
             _schedRules = (data.rules || []).map(r => ({ weekday: r.weekday, start_time: r.start_time, end_time: r.end_time }));
             _renderRulesGrid(_schedRules);
+            _schedConflictIds = new Set((data.conflict_calendar_ids || []).map(String));
+            loadConflictCalendars();
             // Show the host's timezone next to "Weekly hours" — pulled from
             // currentUser since the Calendar page no longer co-exists with
             // the Morning Brief panel where brief-tz lives.
             const tzEl = document.getElementById('sched-host-tz');
             if (tzEl) tzEl.textContent = (currentUser && currentUser.timezone) || 'America/Phoenix';
+        }
+
+        // -----------------------
+        // Conflict calendars multi-select
+        // -----------------------
+        let _schedConflictIds = new Set();
+        async function loadConflictCalendars() {
+            const box = document.getElementById('conflict-cal-list');
+            const statusEl = document.getElementById('conflict-cal-status');
+            if (!box) return;
+            box.innerHTML = '<div style="font-size:11px;color:#888">Loading your calendars…</div>';
+            try {
+                const data = await api('/api/me/scheduling/my-google-calendars');
+                if (!data || !data.connected) {
+                    box.innerHTML = '<div style="font-size:11px;color:#888">Connect Google Calendar above to pick conflict calendars.</div>';
+                    return;
+                }
+                const cals = data.calendars || [];
+                if (!cals.length) {
+                    box.innerHTML = '<div style="font-size:11px;color:#888">No calendars found.</div>';
+                    return;
+                }
+                box.innerHTML = cals.map(c => {
+                    const id = String(c.id);
+                    const isAlways = c.primary || c.is_write_target;
+                    const checked = isAlways || _schedConflictIds.has(id);
+                    const sub = c.primary ? ' (primary · always checked)'
+                              : c.is_write_target ? ' (booking calendar · always checked)' : '';
+                    return `<label style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#fafafa;border-radius:4px;font-size:13px;cursor:${isAlways ? 'not-allowed' : 'pointer'};opacity:${isAlways ? 0.65 : 1}">
+                        <input type="checkbox" ${checked ? 'checked' : ''} ${isAlways ? 'disabled' : ''} onchange="toggleConflictCal('${id.replace(/'/g, "\\'")}', this.checked)">
+                        <span style="flex:1">${escapeHtml(c.summary || id)}</span>
+                        <span style="font-size:10px;color:#888">${sub}</span>
+                    </label>`;
+                }).join('');
+                if (statusEl) statusEl.textContent = '';
+            } catch (e) {
+                box.innerHTML = `<div style="font-size:11px;color:#c00">Could not load calendars: ${escapeHtml(e.message)}</div>`;
+            }
+        }
+
+        async function toggleConflictCal(calId, on) {
+            if (on) _schedConflictIds.add(calId);
+            else _schedConflictIds.delete(calId);
+            const statusEl = document.getElementById('conflict-cal-status');
+            if (statusEl) { statusEl.textContent = 'Saving…'; statusEl.style.color = '#888'; }
+            try {
+                await api('/api/me/scheduling/config', {
+                    method: 'PATCH',
+                    body: JSON.stringify({ conflict_calendar_ids: Array.from(_schedConflictIds) }),
+                });
+                if (statusEl) { statusEl.textContent = 'Saved ✓'; statusEl.style.color = 'var(--bmp-green)'; }
+            } catch (e) {
+                if (statusEl) { statusEl.textContent = 'Save failed'; statusEl.style.color = '#c00'; }
+            }
         }
 
         let _schedSaveTimer = null;
@@ -9363,7 +9432,7 @@ hmac.compare_digest(expected, header)</pre>
             // Fetch the contact + the rep's slots in parallel
             const [contact, preview] = await Promise.all([
                 api(`/api/contacts/${contactId}`),
-                api('/api/me/scheduling/preview?days=14'),
+                api('/api/me/scheduling/preview?days=14&effective=true'),
             ]);
             if (!contact) {
                 toast('Could not load contact');
@@ -9850,12 +9919,25 @@ hmac.compare_digest(expected, header)</pre>
                 : ['admin', 'senior_rep', 'sales_rep', 'read_only'];
             const roleLabels = { super_admin: 'Super Admin', admin: 'Admin', senior_rep: 'BDR+', sales_rep: 'BDR', read_only: 'Read Only' };
 
+            // Eligible booking hosts — anyone with a connected Google
+            // Calendar. The "Own" sentinel (value=0) clears the routing.
+            const hostCandidates = users.filter(u => u.has_google_calendar);
+            const hostOptions = (currentUserId) => {
+                const opts = [`<option value="0">Own calendar</option>`];
+                hostCandidates.forEach(h => {
+                    if (h.id === currentUserId) return;  // can't route to yourself
+                    opts.push(`<option value="${h.id}">${escapeHtml(h.name || h.email)}</option>`);
+                });
+                return opts.join('');
+            };
+
             panel.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
                 <thead>
                     <tr style="text-align:left;border-bottom:1px solid #e0e0e0">
                         <th style="padding:8px">Name</th>
                         <th style="padding:8px">Email</th>
                         <th style="padding:8px">Role</th>
+                        <th style="padding:8px">Books on</th>
                         <th style="padding:8px">Sending</th>
                         <th style="padding:8px">Actions</th>
                     </tr>
@@ -9881,6 +9963,15 @@ hmac.compare_digest(expected, header)</pre>
                         const sendCell = locked
                             ? `<span style="color:#888;font-size:12px">${u.sending_enabled ? '✓' : '—'}</span>`
                             : `<input type="checkbox" ${u.sending_enabled ? 'checked' : ''} onchange="updateUserSending(${u.id}, this.checked)">`;
+                        // Books-on dropdown — for each BDR pick "Own calendar"
+                        // or another connected host. Booking links + slots in
+                        // their outbound assets route to that calendar.
+                        const currentHost = u.default_booking_host_id || 0;
+                        const bookingCell = locked
+                            ? `<span style="color:#888;font-size:12px">${currentHost ? (hostCandidates.find(h => h.id === currentHost)?.name || `#${currentHost}`) : 'Own'}</span>`
+                            : `<select onchange="updateUserBookingHost(${u.id}, parseInt(this.value, 10))" style="padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px;min-width:140px">
+                                ${hostOptions(u.id).replace(`value="${currentHost}"`, `value="${currentHost}" selected`)}
+                              </select>`;
                         const actionsCell = locked
                             ? `<span style="color:#888;font-size:11px">no actions</span>`
                             : `<button class="btn btn-secondary btn-xs" onclick="resetUserPassword(${u.id}, '${escapeHtml(u.email)}')">Reset PW</button>
@@ -9890,6 +9981,7 @@ hmac.compare_digest(expected, header)</pre>
                                 <td style="padding:8px">${escapeHtml(u.name)}${!u.is_active ? ' <span style="font-size:9px;color:#c0392b">INACTIVE</span>' : ''}${lockBadge}</td>
                                 <td style="padding:8px">${escapeHtml(u.email)}</td>
                                 <td style="padding:8px">${roleCell}</td>
+                                <td style="padding:8px">${bookingCell}</td>
                                 <td style="padding:8px">${sendCell}</td>
                                 <td style="padding:8px">${actionsCell}</td>
                             </tr>
@@ -9897,6 +9989,14 @@ hmac.compare_digest(expected, header)</pre>
                     }).join('')}
                 </tbody>
             </table>`;
+        }
+
+        async function updateUserBookingHost(userId, hostId) {
+            await api(`/api/auth/users/${userId}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ default_booking_host_id: hostId }),
+            });
+            toast(hostId ? 'Booking host updated' : 'Booking host cleared');
         }
 
         async function updateUserRole(userId, role) {

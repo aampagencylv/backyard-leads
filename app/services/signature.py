@@ -74,6 +74,14 @@ async def render_signature(db: AsyncSession, user: User) -> str:
         # so the email still goes out instead of failing.
         pass
 
+    # Resolve which calendar this user's "Schedule a discovery call" link
+    # should target. If admin pointed them at a team calendar, use that.
+    try:
+        from app.services.booking_host import resolve_booking_url
+        scheduling_url = await resolve_booking_url(db, user)
+    except Exception:
+        scheduling_url = effective_scheduling_url(user)
+
     template = _env.get_template("email_signature.html")
     return template.render(
         user={
@@ -82,7 +90,7 @@ async def render_signature(db: AsyncSession, user: User) -> str:
             "nickname": user.nickname or "",
             "phone_number": user.phone_number or "",
             "email": user.email or "",
-            "scheduling_url": effective_scheduling_url(user),
+            "scheduling_url": scheduling_url,
         },
         brand={
             "primary_color":   brand["primary_color"],
