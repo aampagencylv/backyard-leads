@@ -5796,6 +5796,46 @@ function verify(secret, rawBody, header) {
             const emails = contact.emails || [];
             const sentCount = emails.filter(e => e.is_sent).length;
             const hasUnsent = emails.some(e => !e.is_sent);
+            const isPaused = emails.some(e => e.paused_at);
+            const nowMs = Date.now();
+            const isStalled = !isPaused && emails.some(e =>
+                !e.is_sent && !e.paused_at && !e.skipped_at &&
+                e.scheduled_send_at && new Date(e.scheduled_send_at).getTime() < nowMs
+            );
+
+            // Header banner that mirrors the company-detail view: paused →
+            // orange + Resume Now; stalled → cream + Restart from today;
+            // healthy → standard cream summary.
+            const banner = isPaused ? `
+                <div style="background:#fff3e0;border:2px solid #ff9800;border-radius:8px;padding:14px;margin-bottom:10px">
+                    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+                        <div>
+                            <strong style="font-size:14px;color:#e65100">⏸ Sequence Paused</strong>
+                            <div style="font-size:11px;color:#888;margin-top:2px">${sentCount}/${emails.length} steps completed</div>
+                        </div>
+                        <div style="display:flex;gap:6px;flex-wrap:wrap">
+                            <button class="btn btn-success btn-sm" onclick="resumeSequence(${contact.id})" style="font-size:13px;padding:8px 16px">▶ Resume Now</button>
+                            <button class="btn btn-secondary btn-sm" onclick="rescheduleSequence(${contact.id})">📅 Reschedule</button>
+                            <button class="btn btn-secondary btn-sm" onclick="addStepToSequence(${contact.id})">+ Add Step</button>
+                        </div>
+                    </div>
+                </div>
+            ` : `
+                <div style="background:var(--bmp-cream);border:1px solid #e8d5c4;border-radius:8px;padding:12px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+                    <div>
+                        <strong style="font-size:13px">${sentCount === 0 ? 'Ready to start' : (isStalled ? '⚠️ Stalled' : (hasUnsent ? 'In progress' : 'Sequence complete'))}</strong>
+                        <div style="font-size:11px;color:#888">${sentCount}/${emails.length} steps completed${contact.email ? ' · ' + escapeHtml(contact.email) : ''}${isStalled ? ' · Earliest unsent step is overdue' : ''}</div>
+                    </div>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap">
+                        ${hasUnsent && contact.email ? `<button class="btn btn-success btn-sm" onclick="sendNextInSequence(${contact.id})" style="padding:8px 16px">${sentCount === 0 ? 'Start Sequence' : 'Send Next'}</button>` : ''}
+                        ${isStalled ? `<button class="btn btn-sm" onclick="resumeSequence(${contact.id})" style="background:var(--bmp-orange);color:white">▶ Restart from today</button>` : ''}
+                        <button class="btn btn-secondary btn-xs" onclick="addStepToSequence(${contact.id})">+ Add Step</button>
+                        ${hasUnsent ? `<button class="btn btn-secondary btn-xs" onclick="pauseSequence(${contact.id})">Pause</button>` : ''}
+                        <button class="btn btn-secondary btn-xs" onclick="deleteSequence(${contact.id})">Delete</button>
+                        <button class="btn btn-secondary btn-xs" onclick="regenerateSequence(${contact.id})">Regen</button>
+                    </div>
+                </div>
+            `;
 
             return `
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -5819,25 +5859,21 @@ function verify(secret, rawBody, header) {
                         `}
                     </div>
                 ` : `
-                    <!-- Sequence controls -->
-                    <div style="background:var(--bmp-cream);border:1px solid #e8d5c4;border-radius:8px;padding:12px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center">
-                        <div>
-                            <strong style="font-size:13px">${sentCount === 0 ? 'Ready to start' : hasUnsent ? 'In progress' : 'Sequence complete'}</strong>
-                            <div style="font-size:11px;color:#888">${sentCount}/${emails.length} steps completed${contact.email ? ' · ' + escapeHtml(contact.email) : ''}</div>
-                        </div>
-                        <div style="display:flex;gap:6px">
-                            ${hasUnsent && contact.email ? `<button class="btn btn-success btn-sm" onclick="sendNextInSequence(${contact.id})" style="padding:8px 16px">${sentCount === 0 ? 'Start Sequence' : 'Send Next'}</button>` : ''}
-                            ${hasUnsent ? `<button class="btn btn-secondary btn-xs" onclick="pauseSequence(${contact.id})">Pause</button>` : ''}
-                            <button class="btn btn-secondary btn-xs" onclick="deleteSequence(${contact.id})">Delete</button>
-                            <button class="btn btn-secondary btn-xs" onclick="regenerateSequence(${contact.id})">Regen</button>
-                        </div>
-                    </div>
+                    ${banner}
 
-                    <!-- Steps list -->
-                    ${emails.map(e => renderEmailCard(e, contact.id)).join('')}
+                    <!-- Steps list — each non-sent step gets an inline
+                         "+ Add Step" pill below so you can insert in the
+                         middle of the sequence. -->
+                    ${emails.map(e => {
+                        const card = renderEmailCard(e, contact.id);
+                        const insertBtn = (!e.is_sent && !e.skipped_at)
+                            ? `<div style="text-align:center;margin:2px 0"><button class="btn btn-xs" onclick="addStepToSequence(${contact.id}, ${e.sequence_order})" style="background:transparent;color:#aab;border:1px dashed #ccc;font-size:11px;padding:2px 12px;border-radius:12px" title="Insert a step after this one">+ Add Step</button></div>`
+                            : '';
+                        return card + insertBtn;
+                    }).join('')}
 
                     <div style="margin-top:8px;text-align:center">
-                        <button class="btn btn-secondary btn-xs" onclick="addStepToSequence(${contact.id})">+ Add Step</button>
+                        <button class="btn btn-secondary btn-xs" onclick="addStepToSequence(${contact.id})">+ Add Step to End</button>
                     </div>
                 `}
             `;
