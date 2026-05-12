@@ -27,8 +27,15 @@ OLD_COLUMNS = ["name", "title", "phone", "signature"]
 
 
 async def _existing_columns(conn) -> set[str]:
-    rows = (await conn.execute(text("PRAGMA table_info(users)"))).fetchall()
-    return {row[1] for row in rows}
+    """Cross-dialect — works on SQLite + Postgres."""
+    dialect = conn.engine.url.get_backend_name() if hasattr(conn, "engine") else conn.dialect.name
+    if dialect == "sqlite":
+        rows = (await conn.execute(text("PRAGMA table_info(users)"))).fetchall()
+        return {row[1] for row in rows}
+    rows = (await conn.execute(
+        text("SELECT column_name FROM information_schema.columns WHERE table_name='users'")
+    )).fetchall()
+    return {row[0] for row in rows}
 
 
 async def main() -> None:
