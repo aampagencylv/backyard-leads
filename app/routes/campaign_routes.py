@@ -775,6 +775,14 @@ async def _execute_batch(campaign_id: int, db: AsyncSession, user: User):
             )
             if not existing_emails.scalars().first():
                 try:
+                    # Generate AI Findability Audit so emails can reference it
+                    audit_url = None
+                    try:
+                        from app.services.audit_report import ensure_audit_for_company
+                        audit_url = await ensure_audit_for_company(db, company)
+                    except Exception:
+                        pass  # audit failure shouldn't block the sequence
+
                     first_subject = None
                     emails_created = 0
                     seq_now = datetime.now(timezone.utc)
@@ -809,6 +817,7 @@ async def _execute_batch(campaign_id: int, db: AsyncSession, user: User):
                                 previous_email_subject=first_subject or company.name,
                                 follow_up_number=step["order"] - 1,
                                 contact_name=primary_contact.full_name,
+                                audit_url=audit_url,
                             )
 
                         gen_step = GeneratedEmail(
@@ -1070,6 +1079,14 @@ async def _process_business_through_pipeline(
         return "enrolled"  # already enrolled; treat as success without re-genning
 
     try:
+        # Generate AI Findability Audit so emails can reference it
+        audit_url = None
+        try:
+            from app.services.audit_report import ensure_audit_for_company
+            audit_url = await ensure_audit_for_company(db, company)
+        except Exception:
+            pass
+
         first_subject = None
         seq_now = datetime.now(timezone.utc)
         for step in SEQUENCE_SCHEDULE:
@@ -1095,6 +1112,7 @@ async def _process_business_through_pipeline(
                     problems=problems, previous_email_subject=first_subject or company.name,
                     follow_up_number=step["order"] - 1,
                     contact_name=primary_contact.full_name,
+                    audit_url=audit_url,
                 )
             gen_step = GeneratedEmail(
                 company_id=company.id, contact_id=primary_contact.id,
