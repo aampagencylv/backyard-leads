@@ -76,15 +76,17 @@ async def _sequence_engine_loop():
 
         tick_count += 1
 
-        # Campaign auto-advance — every 5 min. Runs ONE batch per
-        # running full_auto campaign. The batch handler itself respects
-        # daily caps, advances the location/business-type cursor, and
-        # marks the campaign completed when all combos are searched.
-        if tick_count % 5 == 0:
-            try:
-                await _advance_full_auto_campaigns()
-            except Exception as e:
-                log.exception(f"campaign auto-advance failed: {e}")
+        # Campaign auto-advance — every tick (60s). Each batch takes
+        # 1-2 min internally (Google Maps + enrichment + Claude email
+        # generation), so back-to-back firing produces continuous
+        # throughput rather than artificially throttled spacing. The
+        # batch handler self-exits on daily cap / completion, and runs
+        # are guarded by status='running' + mode='full_auto' so paused
+        # campaigns aren't touched.
+        try:
+            await _advance_full_auto_campaigns()
+        except Exception as e:
+            log.exception(f"campaign auto-advance failed: {e}")
 
         # Snoozed-deal wake check every 10 ticks (10 min)
         if tick_count % 10 == 0:
