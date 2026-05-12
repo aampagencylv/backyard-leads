@@ -6417,57 +6417,64 @@ function verify(secret, rawBody, header) {
             }
         }
 
-        // Render a CallRail-style waveform player for a call recording.
-        // Uses wavesurfer.js (loaded defer'd in the head). If the library
-        // hasn't finished loading yet, we wait briefly and retry — by the
-        // time a user clicks Play the script is virtually always loaded.
+        // Render a voice-note-style waveform player (iMessage / WhatsApp
+        // look — round red play button, discrete vertical bars mirrored
+        // top+bottom, time on the right). Uses wavesurfer.js when it's
+        // loaded, falls back to a native <audio> element if the CDN never
+        // resolves so the player is never completely absent.
         //
         // recordingUrl is a pre-signed URL from the API (already includes
         // ?t=<token>) — we can't construct it client-side because the
         // bearer token can't be embedded in <audio src>.
         function renderCallWaveform(activityId, panel, recordingUrl, attempt = 0) {
             if (!recordingUrl) {
-                panel.innerHTML = '<p style="font-size:12px;color:#888;padding:10px">No recording.</p>';
+                panel.innerHTML = '<p style="font-size:12px;color:#888;padding:6px 10px">No recording.</p>';
                 return;
             }
-            if (typeof WaveSurfer === 'undefined') {
-                if (attempt < 20) {
-                    panel.innerHTML = '<p style="font-size:12px;color:#888;padding:10px">Loading audio player…</p>';
-                    setTimeout(() => renderCallWaveform(activityId, panel, recordingUrl, attempt + 1), 100);
-                    return;
-                }
-                // Fall back to native audio element if the CDN never loads
-                panel.innerHTML = `<audio controls preload="none" style="width:100%" src="${recordingUrl}"></audio>`;
-                return;
-            }
+            // Build the player chrome FIRST so something is always visible
+            // even while wavesurfer is loading. If WaveSurfer isn't ready
+            // we retry; if it never loads, the native <audio> takes over.
             const playBtnId = `ws-play-${activityId}`;
             const waveId = `ws-wave-${activityId}`;
             const timeId = `ws-time-${activityId}`;
+            const audioFallbackId = `ws-audio-${activityId}`;
             panel.innerHTML = `
-                <div style="display:flex;align-items:center;gap:10px;background:#fff;border:1px solid #e8e8e8;border-radius:8px;padding:10px 12px;margin-top:4px">
-                    <button id="${playBtnId}" type="button" style="flex-shrink:0;width:36px;height:36px;border:none;border-radius:50%;background:var(--bmp-green,#1B5E20);color:white;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;line-height:1">▶</button>
-                    <div id="${waveId}" style="flex:1;min-width:0;height:64px"></div>
-                    <div id="${timeId}" style="flex-shrink:0;font-size:11px;color:#666;font-variant-numeric:tabular-nums;min-width:80px;text-align:right">--:-- / --:--</div>
+                <div style="display:flex;align-items:center;gap:12px;background:#fff;border:1px solid #e8e8e8;border-radius:24px;padding:6px 14px 6px 6px;margin-top:4px">
+                    <button id="${playBtnId}" type="button" aria-label="Play recording" style="flex-shrink:0;width:36px;height:36px;border:none;border-radius:50%;background:#ff5252;color:white;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;line-height:1;padding-left:2px">▶</button>
+                    <div id="${waveId}" style="flex:1;min-width:0;height:36px"></div>
+                    <div id="${timeId}" style="flex-shrink:0;font-size:11px;color:#666;font-variant-numeric:tabular-nums;min-width:42px;text-align:right">--:--</div>
                 </div>
+                <audio id="${audioFallbackId}" preload="none" src="${recordingUrl}" style="display:none"></audio>
             `;
+            if (typeof WaveSurfer === 'undefined') {
+                if (attempt < 30) {
+                    setTimeout(() => renderCallWaveform(activityId, panel, recordingUrl, attempt + 1), 100);
+                    return;
+                }
+                // Library never loaded — fall back to a plain audio control
+                panel.innerHTML = `<audio controls preload="none" style="width:100%;margin-top:4px" src="${recordingUrl}"></audio>`;
+                return;
+            }
             const fmtTime = (s) => {
                 if (!isFinite(s) || s < 0) return '0:00';
                 const m = Math.floor(s / 60);
                 const sec = Math.floor(s % 60);
                 return `${m}:${String(sec).padStart(2, '0')}`;
             };
-            // Continuous filled curve mirrored top+bottom — shows real
-            // amplitude envelope so speech vs silence is obvious at a
-            // glance (CallRail / Gong style). normalize=true scales the
-            // whole clip to its peak so quiet recordings still read
-            // clearly.
+            // Discrete vertical bars — iMessage voice-note look. Each bar
+            // = peak amplitude over a small time window. normalize=true
+            // scales the whole clip to its loudest moment so quiet calls
+            // still read clearly. Played portion turns orange.
             const ws = WaveSurfer.create({
                 container: '#' + waveId,
-                waveColor: '#1B5E20',
-                progressColor: '#FF723F',
-                cursorColor: 'rgba(0,0,0,0.4)',
+                waveColor: '#555555',
+                progressColor: 'var(--bmp-orange, #FF723F)',
+                cursorColor: 'rgba(0,0,0,0.25)',
                 cursorWidth: 1,
-                height: 64,
+                height: 36,
+                barWidth: 2,
+                barGap: 2,
+                barRadius: 1,
                 normalize: true,
                 url: recordingUrl,
             });
@@ -6475,7 +6482,7 @@ function verify(secret, rawBody, header) {
             const playBtn = document.getElementById(playBtnId);
             const timeEl = document.getElementById(timeId);
             ws.on('ready', () => {
-                if (timeEl) timeEl.textContent = `0:00 / ${fmtTime(ws.getDuration())}`;
+                if (timeEl) timeEl.textContent = fmtTime(ws.getDuration());
             });
             ws.on('timeupdate', (t) => {
                 if (timeEl) timeEl.textContent = `${fmtTime(t)} / ${fmtTime(ws.getDuration())}`;
@@ -6485,7 +6492,7 @@ function verify(secret, rawBody, header) {
             ws.on('finish', () => { if (playBtn) playBtn.textContent = '▶'; });
             ws.on('error', (e) => {
                 console.error('wavesurfer error', e);
-                panel.innerHTML = `<audio controls preload="none" style="width:100%" src="${recordingUrl}"></audio>`;
+                panel.innerHTML = `<audio controls preload="none" style="width:100%;margin-top:4px" src="${recordingUrl}"></audio>`;
             });
             playBtn.onclick = () => ws.playPause();
         }
@@ -6500,27 +6507,20 @@ function verify(secret, rawBody, header) {
             return `<div class="inline-waveform" data-activity-id="${activityId}" data-recording-url="${escapeHtml(recordingUrl)}" style="margin-top:6px"></div>`;
         }
 
-        // Shared IntersectionObserver — initialize wavesurfer when the
-        // placeholder scrolls within 200px of viewport. Once mounted, the
-        // observer disconnects that node.
-        const _waveformObserver = new IntersectionObserver((entries) => {
-            entries.forEach(entry => {
-                if (!entry.isIntersecting) return;
-                const node = entry.target;
-                _waveformObserver.unobserve(node);
-                const activityId = parseInt(node.dataset.activityId, 10);
-                const recordingUrl = node.dataset.recordingUrl;
-                if (!activityId || !recordingUrl) return;
-                renderCallWaveform(activityId, node, recordingUrl);
-            });
-        }, { rootMargin: '200px' });
-
+        // Walk newly-rendered DOM and init wavesurfer in every placeholder
+        // immediately. Previously did lazy IntersectionObserver init, but
+        // with at most ~20 calls on screen the perf cost is negligible
+        // and lazy init was sometimes silently never firing for users
+        // whose dashboard widget was rendered while off-screen.
         function mountInlineWaveforms(rootEl) {
             const scope = rootEl || document;
             scope.querySelectorAll('.inline-waveform').forEach(node => {
                 if (node.dataset.mounted) return;
                 node.dataset.mounted = '1';
-                _waveformObserver.observe(node);
+                const activityId = parseInt(node.dataset.activityId, 10);
+                const recordingUrl = node.dataset.recordingUrl;
+                if (!activityId || !recordingUrl) return;
+                renderCallWaveform(activityId, node, recordingUrl);
             });
         }
 
