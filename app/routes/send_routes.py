@@ -712,9 +712,11 @@ async def resend_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     log.info(f"WEBHOOK type={event_type} from={from_addr[:60]} tags={data.get('tags', [])}")
 
     tags = {t["name"]: t["value"] for t in data.get("tags", []) if "name" in t}
-    company_id = tags.get("company_id")
-    contact_id = tags.get("contact_id")
-    email_id = tags.get("email_id")
+    # Resend also puts our custom IDs in headers (X-Company-ID, X-Contact-ID, X-Email-ID)
+    headers = {h["name"]: h["value"] for h in data.get("headers", []) if "name" in h and "value" in h}
+    company_id = tags.get("company_id") or headers.get("X-Company-ID")
+    contact_id = tags.get("contact_id") or headers.get("X-Contact-ID")
+    email_id = tags.get("email_id") or headers.get("X-Email-ID")
 
     # Backwards compat: old emails have lead_id tag (now equals company_id since IDs were preserved)
     if not company_id:
