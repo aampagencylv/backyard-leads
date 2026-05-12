@@ -79,14 +79,11 @@ async def _sync_campaign_targets(db: AsyncSession, campaign: Campaign) -> None:
     await db.commit()
 
 
-SEQUENCE_SCHEDULE = [
-    {"order": 1, "type": "cold", "step_type": "email", "delay_days": 0},
-    {"order": 2, "type": "linkedin_connect", "step_type": "linkedin", "delay_days": 1},
-    {"order": 3, "type": "follow_up_1", "step_type": "email", "delay_days": 3},
-    {"order": 4, "type": "linkedin_message", "step_type": "linkedin", "delay_days": 5},
-    {"order": 5, "type": "follow_up_2", "step_type": "email", "delay_days": 7},
-    {"order": 6, "type": "breakup", "step_type": "email", "delay_days": 14},
-]
+# Use the same 13-step multi-channel template as the manual sequence.
+# Calls use "no_phone_at_all" which checks both contact AND company phone.
+# iMessage/SMS use "no_mobile" which only skips when there's no cell number.
+from app.services.sequence_engine import DEFAULT_30DAY_TEMPLATE
+SEQUENCE_SCHEDULE = DEFAULT_30DAY_TEMPLATE
 
 
 # ============================================================
@@ -787,58 +784,26 @@ async def _execute_batch(campaign_id: int, db: AsyncSession, user: User):
                     emails_created = 0
                     seq_now = datetime.now(timezone.utc)
 
-                    for step in SEQUENCE_SCHEDULE:
-                        stype = step.get("step_type", "email")
-
-                        if stype == "linkedin":
-                            msg_type = "connect" if "connect" in step["type"] else "message"
-                            email_data = await generate_linkedin_message(
-                                business_name=company.name,
-                                business_type=business_type,
-                                problems=problems,
-                                contact_name=primary_contact.full_name,
-                                message_type=msg_type,
+                    # Use the full sequence engine to create steps — handles
+                    # call talk tracks with phone numbers, audit URL injection,
+                    # skip-if evaluation, iMessage pre-generation, etc.
+                    from app.services.sequence_engine import start_sequence_from_template
+                    emails_created = await start_sequence_from_template(
+                        db, primary_contact,
+                        template=SEQUENCE_SCHEDULE,
+                        sequence_label="main",
+                        pre_generate_emails=True,
+                    )
+                    # Override auto_execute based on campaign mode
+                    if campaign.mode == "moderate":
+                        pending = (await db.execute(
+                            select(GeneratedEmail).where(
+                                GeneratedEmail.contact_id == primary_contact.id,
+                                GeneratedEmail.is_sent == False,
                             )
-                        elif step["type"] == "cold":
-                            email_data = await generate_cold_email(
-                                business_name=company.name,
-                                business_type=business_type,
-                                website=company.website or "",
-                                problems=problems,
-                                contact_name=primary_contact.full_name,
-                                location=f"{company.city}, {company.state}" if company.city else None,
-                            )
-                            first_subject = email_data["subject"]
-                        else:
-                            email_data = await generate_follow_up(
-                                business_name=company.name,
-                                business_type=business_type,
-                                problems=problems,
-                                previous_email_subject=first_subject or company.name,
-                                follow_up_number=step["order"] - 1,
-                                contact_name=primary_contact.full_name,
-                                audit_url=audit_url,
-                            )
-
-                        gen_step = GeneratedEmail(
-                            company_id=company.id,
-                            contact_id=primary_contact.id,
-                            step_type=stype,
-                            subject=email_data["subject"],
-                            body=email_data["body"],
-                            email_type=step["type"],
-                            sequence_order=step["order"],
-                            send_delay_days=step["delay_days"],
-                            scheduled_send_at=seq_now + timedelta(days=step["delay_days"]),
-                            problems_referenced=json.dumps(problems[:2]),
-                            # Engine fires email + iMessage automatically when
-                            # the campaign is in full_auto mode. Calls + LinkedIn
-                            # always become Tasks for the BDR (auto_execute=False
-                            # by default on those step types).
-                            auto_execute=(stype in ("email", "imessage") and campaign.mode == "full_auto"),
-                        )
-                        db.add(gen_step)
-                        await db.flush()
+                        )).scalars().all()
+                        for ge in pending:
+                            ge.auto_execute = False
 
                         # Auto-create BDR task for non-email steps
                         if stype != "email":
@@ -1087,53 +1052,22 @@ async def _process_business_through_pipeline(
         except Exception:
             pass
 
-        first_subject = None
-        seq_now = datetime.now(timezone.utc)
-        for step in SEQUENCE_SCHEDULE:
-            stype = step.get("step_type", "email")
-            if stype == "linkedin":
-                msg_type = "connect" if "connect" in step["type"] else "message"
-                email_data = await generate_linkedin_message(
-                    business_name=company.name, business_type=business_type,
-                    problems=problems, contact_name=primary_contact.full_name,
-                    message_type=msg_type,
+        from app.services.sequence_engine import start_sequence_from_template
+        emails_created = await start_sequence_from_template(
+            db, primary_contact,
+            template=SEQUENCE_SCHEDULE,
+            sequence_label="main",
+            pre_generate_emails=True,
+        )
+        if campaign.mode == "moderate":
+            pending = (await db.execute(
+                select(GeneratedEmail).where(
+                    GeneratedEmail.contact_id == primary_contact.id,
+                    GeneratedEmail.is_sent == False,
                 )
-            elif step["type"] == "cold":
-                email_data = await generate_cold_email(
-                    business_name=company.name, business_type=business_type,
-                    website=company.website or "", problems=problems,
-                    contact_name=primary_contact.full_name,
-                    location=f"{company.city}, {company.state}" if company.city else None,
-                )
-                first_subject = email_data["subject"]
-            else:
-                email_data = await generate_follow_up(
-                    business_name=company.name, business_type=business_type,
-                    problems=problems, previous_email_subject=first_subject or company.name,
-                    follow_up_number=step["order"] - 1,
-                    contact_name=primary_contact.full_name,
-                    audit_url=audit_url,
-                )
-            gen_step = GeneratedEmail(
-                company_id=company.id, contact_id=primary_contact.id,
-                step_type=stype, subject=email_data["subject"], body=email_data["body"],
-                email_type=step["type"], sequence_order=step["order"],
-                send_delay_days=step["delay_days"],
-                scheduled_send_at=seq_now + timedelta(days=step["delay_days"]),
-                problems_referenced=json.dumps(problems[:2]),
-                # Engine fires email + iMessage automatically in full_auto
-                # campaigns; calls/linkedin always become Tasks for the BDR.
-                auto_execute=(stype in ("email", "imessage") and campaign.mode == "full_auto"),
-            )
-            db.add(gen_step)
-            await db.flush()
-            if stype != "email":
-                db.add(Task(
-                    company_id=company.id, contact_id=primary_contact.id,
-                    user_id=assigned_user.id,
-                    description=f"{stype.title()}: {email_data['subject']}",
-                    due_date=seq_now + timedelta(days=step["delay_days"]),
-                ))
+            )).scalars().all()
+            for ge in pending:
+                ge.auto_execute = False
 
         from app.services.send_window import snap_pending_steps_to_window
         await snap_pending_steps_to_window(db, contact_id=primary_contact.id)

@@ -56,17 +56,17 @@ DAILY_SEND_CAP_PER_USER = int(_os.environ.get("DAILY_SEND_CAP", "50"))
 DEFAULT_30DAY_TEMPLATE: list[dict] = [
     {"day": 0,  "step_type": "email",     "label": "cold",            "skip_if": ["no_email", "opted_out"], "auto": True},
     {"day": 3,  "step_type": "linkedin",  "label": "linkedin_connect","skip_if": ["no_linkedin"],            "auto": False},
-    {"day": 5,  "step_type": "call",      "label": "call_1",          "skip_if": ["no_phone"],               "auto": False},
+    {"day": 5,  "step_type": "call",      "label": "call_1",          "skip_if": [],                         "auto": False},
     {"day": 7,  "step_type": "email",     "label": "follow_up_1",     "skip_if": ["no_email", "opted_out"], "auto": True},
     {"day": 9,  "step_type": "imessage",  "label": "imessage_1",      "skip_if": ["no_phone", "opted_out", "landline"], "auto": True},
-    {"day": 12, "step_type": "call",      "label": "call_2",          "skip_if": ["no_phone"],               "auto": False},
+    {"day": 12, "step_type": "call",      "label": "call_2",          "skip_if": [],                         "auto": False},
     {"day": 15, "step_type": "email",     "label": "follow_up_2",     "skip_if": ["no_email", "opted_out"], "auto": True},
     {"day": 18, "step_type": "imessage",  "label": "imessage_2",      "skip_if": ["no_phone", "opted_out", "landline"], "auto": True},
     {"day": 20, "step_type": "linkedin",  "label": "linkedin_message","skip_if": ["no_linkedin"],            "auto": False},
-    {"day": 23, "step_type": "call",      "label": "call_3",          "skip_if": ["no_phone"],               "auto": False},
+    {"day": 23, "step_type": "call",      "label": "call_3",          "skip_if": [],                         "auto": False},
     {"day": 26, "step_type": "imessage",  "label": "imessage_3",      "skip_if": ["no_phone", "opted_out", "landline"], "auto": True},
     {"day": 28, "step_type": "email",     "label": "breakup",         "skip_if": ["no_email", "opted_out"], "auto": True},
-    {"day": 30, "step_type": "call",      "label": "call_final",      "skip_if": ["no_phone"],               "auto": False},
+    {"day": 30, "step_type": "call",      "label": "call_final",      "skip_if": [],                         "auto": False},
 ]
 
 
@@ -850,10 +850,21 @@ async def start_sequence_from_template(
             d = imessage_drafts.get(tstep["label"], {})
             body = d.get("body") or "AUTO:"  # falls back to send-time generation if pre-gen failed
         elif tstep["step_type"] == "call":
+            # Show both contact phone and company main line so the BDR has options
+            contact_phone = (contact.phone or "").strip()
+            company_phone = (company.phone or "").strip()
+            phone_line = ""
+            if contact_phone and company_phone and contact_phone != company_phone:
+                phone_line = f"📞 Direct: {contact_phone} | Main: {company_phone}\n\n"
+            elif contact_phone:
+                phone_line = f"📞 {contact_phone}\n\n"
+            elif company_phone:
+                phone_line = f"📞 Company main line: {company_phone}\n\n"
             subject = f"Call {idx}"
             body = (
+                f"{phone_line}"
                 f"Call talk track:\n\n"
-                f"- Hi {contact.first_name or 'there'} — Steve from Backyard Marketing Pros.\n"
+                f"- Hi {contact.first_name or 'there'} — from Backyard Marketing Pros.\n"
                 f"- I sent you a note about {company.name} earlier; wanted to catch you live.\n"
                 f"- Quick reason for the call: [reference a specific problem from the audit].\n"
                 f"- Got 5 min later this week to dig in?\n\n"
