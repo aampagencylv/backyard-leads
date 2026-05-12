@@ -708,6 +708,13 @@ async def resend_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     event_type = payload.get("type", "")
     data = payload.get("data", {})
 
+    # Domain filter — ignore events from other domains sharing this Resend account.
+    # Only process emails sent from our configured send domain.
+    from_addr = data.get("from", "") or ""
+    allowed_domains = (settings.send_domain or "go.backyardmarketingpros.com",)
+    if from_addr and not any(d in from_addr for d in allowed_domains):
+        return {"status": "ok", "note": "ignored — different domain"}
+
     tags = {t["name"]: t["value"] for t in data.get("tags", []) if "name" in t}
     company_id = tags.get("company_id")
     contact_id = tags.get("contact_id")
