@@ -682,3 +682,455 @@ async def rate_call(
         "call_feedback": activity.call_feedback,
         "rated_by": user.id,
     }
+
+
+# ============================================================
+# Team / Manager Dashboard
+# ============================================================
+#
+# One big aggregation endpoint that powers the admin's "Team Overview"
+# tab. All zones are computed server-side because:
+#   1. Avoids 6+ round trips on first load
+#   2. The activity-table scan only happens once
+#   3. The client doesn't need to know our schema or denormalization
+#
+# Auth: admin / super_admin only. Returns everything role-scoped — a
+# manager sees the whole org, no per-rep filter.
+
+@router.get("/dashboard/team")
+async def team_dashboard(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if user.role not in ("admin", "super_admin"):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    from app.auth import mint_recording_token
+
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = today_start - timedelta(days=today_start.weekday())  # Mon = 0
+    last_week_start = week_start - timedelta(days=7)
+    last_week_end = week_start
+    month_start = today_start.replace(day=1)
+    sevenday_ago = now - timedelta(days=7)
+    fourteenday_ago = now - timedelta(days=14)
+    thirtyday_ago = now - timedelta(days=30)
+    stale_cutoff = now - timedelta(days=STALE_DEAL_DAYS)
+
+    # ----- Users in scope (active reps + admins) -----
+    users = (await db.execute(
+        select(User).where(User.is_active == True)
+    )).scalars().all()
+    bdr_ids = {u.id for u in users if u.role in ("sales_rep", "senior_rep", "admin", "super_admin")}
+    user_map = {u.id: u for u in users}
+
+    # ----- Pull every Activity in the last 30 days once -----
+    activities_30d = (await db.execute(
+        select(Activity).where(Activity.created_at >= thirtyday_ago)
+    )).scalars().all()
+
+    # ----- Pull every GeneratedEmail in the last 30 days too -----
+    emails_30d = (await db.execute(
+        select(GeneratedEmail).where(
+            GeneratedEmail.is_sent == True,
+            GeneratedEmail.sent_at >= thirtyday_ago,
+        )
+    )).scalars().all()
+
+    # ----- Bookings (meetings) in the last 30 days -----
+    from app.models import Booking, Task as _Task
+    bookings_30d = (await db.execute(
+        select(Booking).where(Booking.created_at >= thirtyday_ago)
+    )).scalars().all()
+
+    # ----- Deals -----
+    all_deals = (await db.execute(
+        select(Deal).where(Deal.pipeline == "default")
+    )).scalars().all()
+
+    # ----- Tasks (open / overdue) -----
+    open_tasks = (await db.execute(
+        select(_Task).where(_Task.completed_at.is_(None))
+    )).scalars().all()
+
+    # ============================================================
+    # Zone 1: Team KPI strip (with WoW deltas)
+    # ============================================================
+
+    def _count_acts(items, pred):
+        return sum(1 for x in items if pred(x))
+
+    calls_today = _count_acts(activities_30d, lambda a: a.activity_type == "call" and _aware(a.created_at) >= today_start)
+    calls_this_week = _count_acts(activities_30d, lambda a: a.activity_type == "call" and _aware(a.created_at) >= week_start)
+    calls_last_week = _count_acts(activities_30d, lambda a: a.activity_type == "call" and last_week_start <= _aware(a.created_at) < last_week_end)
+    emails_today = _count_acts(emails_30d, lambda e: e.sent_at and _aware(e.sent_at) >= today_start)
+    emails_this_week = _count_acts(emails_30d, lambda e: e.sent_at and _aware(e.sent_at) >= week_start)
+    emails_last_week = _count_acts(emails_30d, lambda e: e.sent_at and last_week_start <= _aware(e.sent_at) < last_week_end)
+    meetings_this_week = _count_acts(bookings_30d, lambda b: _aware(b.created_at) >= week_start and b.status == "confirmed")
+    meetings_last_week = _count_acts(bookings_30d, lambda b: last_week_start <= _aware(b.created_at) < last_week_end and b.status == "confirmed")
+    deals_won_mtd = sum((d.value or 0) for d in all_deals if d.stage == "closed_won" and d.closed_at and _aware(d.closed_at) >= month_start)
+    deals_won_mtd_count = sum(1 for d in all_deals if d.stage == "closed_won" and d.closed_at and _aware(d.closed_at) >= month_start)
+
+    def _wow(curr: int, prev: int) -> dict:
+        if prev == 0:
+            return {"pct": None, "direction": "flat" if curr == 0 else "up"}
+        delta = (curr - prev) * 100 / prev
+        return {
+            "pct": round(delta, 0),
+            "direction": "up" if delta > 1 else ("down" if delta < -1 else "flat"),
+        }
+
+    kpis = {
+        "calls_today": calls_today,
+        "calls_this_week": calls_this_week,
+        "calls_wow": _wow(calls_this_week, calls_last_week),
+        "emails_today": emails_today,
+        "emails_this_week": emails_this_week,
+        "emails_wow": _wow(emails_this_week, emails_last_week),
+        "meetings_this_week": meetings_this_week,
+        "meetings_wow": _wow(meetings_this_week, meetings_last_week),
+        "deals_won_mtd_value": round(deals_won_mtd, 2),
+        "deals_won_mtd_count": deals_won_mtd_count,
+    }
+
+    # ============================================================
+    # Zone 2: BDR leaderboard (one row per active rep)
+    # ============================================================
+
+    per_bdr: dict[int, dict] = {
+        uid: {
+            "user_id": uid,
+            "name": user_map[uid].full_name or user_map[uid].email,
+            "email": user_map[uid].email,
+            "role": user_map[uid].role,
+            "calls_today": 0,
+            "emails_today": 0,
+            "imessages_today": 0,
+            "calls_this_week": 0,
+            "emails_this_week": 0,
+            "meetings_this_week": 0,
+            "open_pipeline_value": 0.0,
+            "open_deal_count": 0,
+            "stalled_deal_count": 0,
+            "overdue_task_count": 0,
+            "over_talked_calls_7d": 0,
+            "last_activity_at": None,
+        }
+        for uid in bdr_ids
+    }
+
+    # Activities → calls_today / imessages / last_activity
+    for a in activities_30d:
+        if a.user_id not in per_bdr:
+            continue
+        row = per_bdr[a.user_id]
+        created = _aware(a.created_at)
+        # Track most-recent activity timestamp
+        if row["last_activity_at"] is None or created > row["last_activity_at"]:
+            row["last_activity_at"] = created
+        if a.activity_type == "call":
+            if created >= today_start: row["calls_today"] += 1
+            if created >= week_start: row["calls_this_week"] += 1
+            # Over-talked calls (7d)
+            if a.recording_url and a.talk_ratio_json and created >= sevenday_ago:
+                try:
+                    import json as _json
+                    tr = _json.loads(a.talk_ratio_json)
+                    if (tr.get("rep_pct") or 0) > 60:
+                        row["over_talked_calls_7d"] += 1
+                except (ValueError, TypeError):
+                    pass
+        elif a.activity_type == "imessage_sent":
+            if created >= today_start: row["imessages_today"] += 1
+
+    # Emails → emails_today / emails_this_week (per sender_user_id if set,
+    # else attribute to the company's assigned rep)
+    company_owner_cache: dict[int, int] = {}
+    for e in emails_30d:
+        sent = _aware(e.sent_at) if e.sent_at else None
+        if not sent:
+            continue
+        # Attribute to whoever owns the email's contact's company
+        sender_uid = None
+        if e.company_id:
+            if e.company_id not in company_owner_cache:
+                co = (await db.execute(
+                    select(Company.assigned_to).where(Company.id == e.company_id)
+                )).scalar_one_or_none()
+                company_owner_cache[e.company_id] = co or 0
+            sender_uid = company_owner_cache[e.company_id] or None
+        if not sender_uid or sender_uid not in per_bdr:
+            continue
+        if sent >= today_start: per_bdr[sender_uid]["emails_today"] += 1
+        if sent >= week_start: per_bdr[sender_uid]["emails_this_week"] += 1
+
+    # Bookings → meetings_this_week per host
+    for b in bookings_30d:
+        if b.host_user_id not in per_bdr:
+            continue
+        if _aware(b.created_at) >= week_start and b.status == "confirmed":
+            per_bdr[b.host_user_id]["meetings_this_week"] += 1
+
+    # Deal aggregates
+    closed_stages = {"closed_won", "closed_lost", "snoozed"}
+    for d in all_deals:
+        if d.assigned_to not in per_bdr:
+            continue
+        if d.stage in closed_stages:
+            continue
+        per_bdr[d.assigned_to]["open_pipeline_value"] += (d.value or 0)
+        per_bdr[d.assigned_to]["open_deal_count"] += 1
+        if d.updated_at and _aware(d.updated_at) < stale_cutoff:
+            per_bdr[d.assigned_to]["stalled_deal_count"] += 1
+
+    # Tasks (overdue)
+    for t in open_tasks:
+        if t.user_id not in per_bdr:
+            continue
+        if t.due_date and _aware(t.due_date) < today_start:
+            per_bdr[t.user_id]["overdue_task_count"] += 1
+
+    # Sort: BDRs first by activity volume, admins go at the bottom
+    def _sort_key(row):
+        role_rank = {"sales_rep": 0, "senior_rep": 1, "admin": 2, "super_admin": 3}.get(row["role"], 4)
+        return (role_rank, -(row["calls_this_week"] + row["emails_this_week"]))
+
+    leaderboard = sorted(per_bdr.values(), key=_sort_key)
+    for row in leaderboard:
+        row["last_activity_at"] = row["last_activity_at"].isoformat() if row["last_activity_at"] else None
+        row["open_pipeline_value"] = round(row["open_pipeline_value"], 2)
+
+    # ============================================================
+    # Zone 3: Coaching watchlist — over-talked + unrated calls (7d)
+    # ============================================================
+
+    watchlist: list[dict] = []
+    for a in activities_30d:
+        if a.activity_type != "call" or not a.recording_url:
+            continue
+        created = _aware(a.created_at)
+        if created < sevenday_ago:
+            continue
+        # Parse talk_ratio if present
+        rep_pct = None
+        if a.talk_ratio_json:
+            try:
+                import json as _json
+                rep_pct = float(_json.loads(a.talk_ratio_json).get("rep_pct") or 0)
+            except (ValueError, TypeError):
+                rep_pct = None
+        over_talked = rep_pct is not None and rep_pct > 60
+        needs_review = a.call_rating is None
+        if not (over_talked or needs_review):
+            continue
+        rep = user_map.get(a.user_id)
+        # Pull company name (cheap — already in our activity but we
+        # don't have it here; do a small lookup)
+        co_name = None
+        if a.company_id:
+            co = (await db.execute(select(Company.name).where(Company.id == a.company_id))).scalar_one_or_none()
+            co_name = co
+        watchlist.append({
+            "activity_id": a.id,
+            "company_id": a.company_id,
+            "company_name": co_name,
+            "rep_name": rep.full_name if rep else None,
+            "rep_id": a.user_id,
+            "duration_seconds": a.call_duration_seconds,
+            "rep_pct": rep_pct,
+            "call_rating": a.call_rating,
+            "over_talked": over_talked,
+            "needs_review": needs_review,
+            "recording_url": (
+                f"/api/twilio/recording/{a.id}?t={mint_recording_token(a.id, user.id)}"
+                if a.recording_url else None
+            ),
+            "created_at": created.isoformat(),
+        })
+    # Most-recent first; cap so we don't flood the page
+    watchlist.sort(key=lambda x: x["created_at"], reverse=True)
+    watchlist = watchlist[:20]
+
+    # ============================================================
+    # Zone 4: Stuck deals grouped by BDR (open, no movement in 14d)
+    # ============================================================
+
+    stuck_by_bdr: dict[int, list] = {uid: [] for uid in bdr_ids}
+    for d in all_deals:
+        if d.assigned_to not in stuck_by_bdr:
+            continue
+        if d.stage in closed_stages:
+            continue
+        if not d.updated_at or _aware(d.updated_at) >= stale_cutoff:
+            continue
+        co = (await db.execute(select(Company).where(Company.id == d.company_id))).scalar_one_or_none()
+        stuck_by_bdr[d.assigned_to].append({
+            "deal_id": d.id,
+            "company_id": d.company_id,
+            "company_name": co.name if co else None,
+            "stage": d.stage,
+            "value": d.value or 0,
+            "days_stale": (now - _aware(d.updated_at)).days,
+            "updated_at": _aware(d.updated_at).isoformat(),
+        })
+    # Sort each rep's pile by days_stale desc, cap at 8 per rep
+    stuck_groups = []
+    for uid, items in stuck_by_bdr.items():
+        if not items:
+            continue
+        items.sort(key=lambda x: -x["days_stale"])
+        stuck_groups.append({
+            "user_id": uid,
+            "name": user_map[uid].full_name,
+            "total_count": len(items),
+            "deals": items[:8],
+        })
+    stuck_groups.sort(key=lambda g: -g["total_count"])
+
+    # ============================================================
+    # Zone 5: Reply sentiment breakdown per BDR (30d)
+    # ============================================================
+    #
+    # email_replied activities don't carry user_id (the activity is
+    # logged by the inbound webhook). Attribute to the company's
+    # assigned rep instead.
+
+    sentiment_buckets = ["interested", "objection", "out_of_office", "wrong_person", "unsubscribe", "other"]
+    sentiment_by_bdr: dict[int, dict] = {
+        uid: {s: 0 for s in sentiment_buckets} | {"total": 0, "name": user_map[uid].full_name}
+        for uid in bdr_ids
+    }
+    for a in activities_30d:
+        if a.activity_type != "email_replied":
+            continue
+        if not a.reply_sentiment:
+            continue
+        # Attribute via company owner
+        if not a.company_id:
+            continue
+        if a.company_id not in company_owner_cache:
+            co = (await db.execute(select(Company.assigned_to).where(Company.id == a.company_id))).scalar_one_or_none()
+            company_owner_cache[a.company_id] = co or 0
+        uid = company_owner_cache[a.company_id]
+        if uid not in sentiment_by_bdr:
+            continue
+        s = a.reply_sentiment.strip().lower()
+        if s in sentiment_buckets:
+            sentiment_by_bdr[uid][s] += 1
+            sentiment_by_bdr[uid]["total"] += 1
+        else:
+            sentiment_by_bdr[uid]["other"] += 1
+            sentiment_by_bdr[uid]["total"] += 1
+    sentiment_rows = [v | {"user_id": uid} for uid, v in sentiment_by_bdr.items() if v["total"] > 0]
+    sentiment_rows.sort(key=lambda x: -x["total"])
+
+    # ============================================================
+    # Zone 6: 14-day activity heatmap
+    # ============================================================
+    #
+    # Rows = each BDR, cols = each day in the last 14. Values = count
+    # of countable activities (calls + emails sent + imessages sent +
+    # notes added). Frontend renders the matrix as colored cells.
+
+    countable_types = {"call", "voicemail", "email_sent", "imessage_sent", "note"}
+    days_axis = [(today_start - timedelta(days=i)).date().isoformat() for i in range(13, -1, -1)]
+    heatmap_by_bdr: dict[int, dict[str, int]] = {uid: {d: 0 for d in days_axis} for uid in bdr_ids}
+    for a in activities_30d:
+        if a.user_id not in heatmap_by_bdr:
+            continue
+        if a.activity_type not in countable_types:
+            continue
+        d = _aware(a.created_at).date().isoformat()
+        if d in heatmap_by_bdr[a.user_id]:
+            heatmap_by_bdr[a.user_id][d] += 1
+    # Also fold in sent emails (which live on GeneratedEmail, not Activity)
+    for e in emails_30d:
+        if not e.sent_at: continue
+        sent = _aware(e.sent_at)
+        if sent < fourteenday_ago: continue
+        if e.company_id not in company_owner_cache:
+            co = (await db.execute(select(Company.assigned_to).where(Company.id == e.company_id))).scalar_one_or_none()
+            company_owner_cache[e.company_id] = co or 0
+        uid = company_owner_cache[e.company_id]
+        if uid not in heatmap_by_bdr: continue
+        d = sent.date().isoformat()
+        if d in heatmap_by_bdr[uid]:
+            heatmap_by_bdr[uid][d] += 1
+
+    heatmap_rows = []
+    max_cell = 0
+    for uid, by_day in heatmap_by_bdr.items():
+        cells = [by_day[d] for d in days_axis]
+        cell_total = sum(cells)
+        if cell_total == 0:
+            continue
+        max_cell = max(max_cell, max(cells))
+        heatmap_rows.append({
+            "user_id": uid,
+            "name": user_map[uid].full_name,
+            "total": cell_total,
+            "cells": cells,
+        })
+    heatmap_rows.sort(key=lambda r: -r["total"])
+    heatmap = {
+        "days": days_axis,
+        "rows": heatmap_rows,
+        "max_cell": max_cell or 1,
+    }
+
+    # ============================================================
+    # Zone 7: Conversion funnel per BDR (30d)
+    # ============================================================
+
+    funnel_by_bdr: dict[int, dict] = {
+        uid: {
+            "user_id": uid,
+            "name": user_map[uid].full_name,
+            "sequences_started": 0,
+            "opens": 0,
+            "replies": 0,
+            "meetings": 0,
+            "won": 0,
+        }
+        for uid in bdr_ids
+    }
+    for a in activities_30d:
+        if a.activity_type == "sequence_created" and a.user_id in funnel_by_bdr:
+            funnel_by_bdr[a.user_id]["sequences_started"] += 1
+        elif a.activity_type == "email_opened" and a.company_id:
+            if a.company_id not in company_owner_cache:
+                co = (await db.execute(select(Company.assigned_to).where(Company.id == a.company_id))).scalar_one_or_none()
+                company_owner_cache[a.company_id] = co or 0
+            uid = company_owner_cache[a.company_id]
+            if uid in funnel_by_bdr:
+                funnel_by_bdr[uid]["opens"] += 1
+        elif a.activity_type == "email_replied" and a.company_id:
+            if a.company_id not in company_owner_cache:
+                co = (await db.execute(select(Company.assigned_to).where(Company.id == a.company_id))).scalar_one_or_none()
+                company_owner_cache[a.company_id] = co or 0
+            uid = company_owner_cache[a.company_id]
+            if uid in funnel_by_bdr:
+                funnel_by_bdr[uid]["replies"] += 1
+    for b in bookings_30d:
+        if b.host_user_id in funnel_by_bdr and b.status == "confirmed":
+            funnel_by_bdr[b.host_user_id]["meetings"] += 1
+    for d in all_deals:
+        if d.assigned_to in funnel_by_bdr and d.stage == "closed_won" and d.closed_at and _aware(d.closed_at) >= thirtyday_ago:
+            funnel_by_bdr[d.assigned_to]["won"] += 1
+
+    funnel_rows = [row for row in funnel_by_bdr.values() if row["sequences_started"] or row["opens"] or row["meetings"]]
+    funnel_rows.sort(key=lambda r: -(r["meetings"] * 10 + r["won"] * 100 + r["sequences_started"]))
+
+    return {
+        "generated_at": now.isoformat(),
+        "window_days": 30,
+        "kpis": kpis,
+        "leaderboard": leaderboard,
+        "coaching_watchlist": watchlist,
+        "stuck_deals_by_bdr": stuck_groups,
+        "reply_sentiment_by_bdr": sentiment_rows,
+        "activity_heatmap": heatmap,
+        "conversion_funnel": funnel_rows,
+    }

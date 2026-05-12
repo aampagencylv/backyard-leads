@@ -697,7 +697,62 @@
 
             <!-- Dashboard -->
             <div id="page-dashboard">
-                <div class="page-header"><h1>Dashboard</h1></div>
+                <div class="page-header">
+                    <h1>Dashboard</h1>
+                </div>
+
+                <!-- Tab strip — visible to admin/super_admin only. Defaults
+                     to Team Overview for managers; reps never see this row. -->
+                <div id="dashboard-tabs" style="display:none;border-bottom:1px solid #e6e6e6;margin-bottom:18px;gap:6px">
+                    <button class="dash-tab active" data-tab="team" onclick="switchDashboardTab('team')" style="background:transparent;border:0;padding:10px 16px;font-size:13px;cursor:pointer;color:var(--bmp-orange);border-bottom:3px solid var(--bmp-orange);font-weight:600">Team Overview</button>
+                    <button class="dash-tab" data-tab="mine" onclick="switchDashboardTab('mine')" style="background:transparent;border:0;padding:10px 16px;font-size:13px;cursor:pointer;color:#666;border-bottom:3px solid transparent;font-weight:500">My Activity</button>
+                </div>
+
+                <!-- =========== TEAM OVERVIEW (admin only) =========== -->
+                <div id="dashboard-team-view" style="display:none">
+                    <div id="team-kpi-strip" class="kpi-strip" style="margin-bottom:18px"></div>
+
+                    <div class="panel">
+                        <h3>BDR Leaderboard</h3>
+                        <p style="font-size:12px;color:#888;margin-bottom:8px">Sortable by any column. Click a row to drill into that rep's activity.</p>
+                        <div id="team-leaderboard"></div>
+                    </div>
+
+                    <div class="dashboard-2col">
+                        <div>
+                            <div class="panel">
+                                <h3>🎙️ Coaching Watchlist <span id="team-coaching-count" style="color:#888;font-size:12px;font-weight:400"></span></h3>
+                                <p style="font-size:12px;color:#888;margin-bottom:8px">Over-talked calls (rep &gt; 60%) and unrated calls from the last 7 days.</p>
+                                <div id="team-coaching-watchlist"></div>
+                            </div>
+                            <div class="panel">
+                                <h3>💬 Reply Sentiment <span style="color:#888;font-size:12px;font-weight:400">last 30 days</span></h3>
+                                <p style="font-size:12px;color:#888;margin-bottom:8px">Too many objections = targeting issue. Too many "wrong person" = enrichment data issue.</p>
+                                <div id="team-reply-sentiment"></div>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="panel">
+                                <h3>⚠️ Stuck Pipeline by BDR <span style="color:#888;font-size:12px;font-weight:400">no movement in 14 days</span></h3>
+                                <div id="team-stuck-deals"></div>
+                            </div>
+                            <div class="panel">
+                                <h3>🔥 Conversion Funnel <span style="color:#888;font-size:12px;font-weight:400">last 30 days</span></h3>
+                                <p style="font-size:12px;color:#888;margin-bottom:8px">Sequences → Opens → Replies → Meetings → Won, per BDR.</p>
+                                <div id="team-funnel"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="panel">
+                        <h3>📅 14-Day Activity Heatmap</h3>
+                        <p style="font-size:12px;color:#888;margin-bottom:8px">Calls + emails + iMessages + notes per BDR per day. Darker = more activity.</p>
+                        <div id="team-heatmap" style="overflow-x:auto"></div>
+                    </div>
+                </div>
+
+                <!-- =========== MY ACTIVITY (default — what was here before) =========== -->
+                <div id="dashboard-mine-view">
 
                 <!-- Zone 1: KPI strip -->
                 <div class="kpi-strip" id="kpi-strip">
@@ -804,6 +859,7 @@
                 <div class="panel">
                     <h3>Activity Feed</h3>
                     <div id="dashboard-activity-feed"></div>
+                </div>
                 </div>
             </div>
 
@@ -4163,7 +4219,326 @@ function verify(secret, rawBody, header) {
             return days === 1 ? 'yesterday' : `${days}d ago`;
         }
 
+        // ============================================================
+        // Dashboard tab handling — admins get a "Team Overview" / "My
+        // Activity" split. The team view fetches /api/dashboard/team
+        // (one big aggregation) on entry; the personal view falls back
+        // to the original /api/dashboard endpoint.
+        // ============================================================
+
+        let _dashboardTab = 'team';  // default for admins; reps don't see the tabs at all
+
+        function setupDashboardTabsForRole() {
+            const tabs = document.getElementById('dashboard-tabs');
+            if (!tabs) return;
+            const isAdmin = !!(currentUser && (currentUser.role === 'admin' || currentUser.role === 'super_admin'));
+            if (isAdmin) {
+                tabs.style.display = 'flex';
+                document.getElementById('dashboard-team-view').style.display = _dashboardTab === 'team' ? '' : 'none';
+                document.getElementById('dashboard-mine-view').style.display = _dashboardTab === 'mine' ? '' : 'none';
+            } else {
+                _dashboardTab = 'mine';
+                tabs.style.display = 'none';
+                document.getElementById('dashboard-team-view').style.display = 'none';
+                document.getElementById('dashboard-mine-view').style.display = '';
+            }
+        }
+
+        function switchDashboardTab(tab) {
+            _dashboardTab = tab;
+            document.querySelectorAll('.dash-tab').forEach(b => {
+                const active = b.dataset.tab === tab;
+                b.style.color = active ? 'var(--bmp-orange)' : '#666';
+                b.style.borderBottomColor = active ? 'var(--bmp-orange)' : 'transparent';
+                b.style.fontWeight = active ? '600' : '500';
+            });
+            document.getElementById('dashboard-team-view').style.display = tab === 'team' ? '' : 'none';
+            document.getElementById('dashboard-mine-view').style.display = tab === 'mine' ? '' : 'none';
+            if (tab === 'team') loadTeamDashboard();
+            else loadDashboard();
+        }
+
+        async function loadTeamDashboard() {
+            const data = await api('/api/dashboard/team');
+            if (!data) return;
+            renderTeamKpis(data.kpis);
+            renderLeaderboard(data.leaderboard);
+            renderCoachingWatchlist(data.coaching_watchlist);
+            renderStuckByBdr(data.stuck_deals_by_bdr);
+            renderReplySentiment(data.reply_sentiment_by_bdr);
+            renderActivityHeatmap(data.activity_heatmap);
+            renderConversionFunnel(data.conversion_funnel);
+        }
+
+        function _wowChip(wow) {
+            if (!wow || wow.pct == null) return '';
+            const dir = wow.direction;
+            const color = dir === 'up' ? '#1B5E20' : dir === 'down' ? '#c0392b' : '#888';
+            const arrow = dir === 'up' ? '▲' : dir === 'down' ? '▼' : '—';
+            const sign = wow.pct > 0 ? '+' : '';
+            return `<span style="font-size:10px;color:${color};font-weight:600">${arrow} ${sign}${Math.round(wow.pct)}% wow</span>`;
+        }
+
+        function renderTeamKpis(k) {
+            const el = document.getElementById('team-kpi-strip');
+            if (!el || !k) return;
+            el.innerHTML = `
+                <div class="kpi-tile">
+                    <div class="kpi-value" style="color:var(--bmp-green)">${k.calls_today}</div>
+                    <div class="kpi-label">Calls Today</div>
+                    <div style="margin-top:4px">${_wowChip(k.calls_wow)}</div>
+                </div>
+                <div class="kpi-tile">
+                    <div class="kpi-value">${k.calls_this_week}</div>
+                    <div class="kpi-label">Calls This Week</div>
+                </div>
+                <div class="kpi-tile">
+                    <div class="kpi-value orange">${k.emails_today}</div>
+                    <div class="kpi-label">Emails Today</div>
+                    <div style="margin-top:4px">${_wowChip(k.emails_wow)}</div>
+                </div>
+                <div class="kpi-tile">
+                    <div class="kpi-value">${k.emails_this_week}</div>
+                    <div class="kpi-label">Emails This Week</div>
+                </div>
+                <div class="kpi-tile">
+                    <div class="kpi-value" style="color:#1565c0">${k.meetings_this_week}</div>
+                    <div class="kpi-label">Meetings This Week</div>
+                    <div style="margin-top:4px">${_wowChip(k.meetings_wow)}</div>
+                </div>
+                <div class="kpi-tile">
+                    <div class="kpi-value" style="color:var(--bmp-green)">${fmtMoney(k.deals_won_mtd_value)}</div>
+                    <div class="kpi-label">Won This Month (${k.deals_won_mtd_count})</div>
+                </div>
+            `;
+        }
+
+        function renderLeaderboard(rows) {
+            const el = document.getElementById('team-leaderboard');
+            if (!el) return;
+            if (!rows || !rows.length) {
+                el.innerHTML = '<p style="font-size:12px;color:#888">No active reps yet.</p>';
+                return;
+            }
+            const fmtAgo = (iso) => {
+                if (!iso) return '<span style="color:#c0392b">never</span>';
+                return fmtRelative(iso);
+            };
+            const roleLabels = { sales_rep: 'BDR', senior_rep: 'BDR+', admin: 'Admin', super_admin: 'Super' };
+            el.innerHTML = `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+                <thead>
+                    <tr style="text-align:left;border-bottom:1px solid #e0e0e0">
+                        <th style="padding:8px 6px">Rep</th>
+                        <th style="padding:8px 6px;text-align:right">Calls Today</th>
+                        <th style="padding:8px 6px;text-align:right">Emails Today</th>
+                        <th style="padding:8px 6px;text-align:right">📱 Today</th>
+                        <th style="padding:8px 6px;text-align:right">Meetings Wk</th>
+                        <th style="padding:8px 6px;text-align:right">Open Pipeline</th>
+                        <th style="padding:8px 6px;text-align:right">Open Deals</th>
+                        <th style="padding:8px 6px;text-align:right">Flags</th>
+                        <th style="padding:8px 6px">Last Active</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${rows.map(r => {
+                        const flags = [];
+                        if (r.overdue_task_count) flags.push(`<span title="Overdue tasks" style="background:#fee;color:#c0392b;padding:1px 6px;border-radius:8px">⏰${r.overdue_task_count}</span>`);
+                        if (r.stalled_deal_count) flags.push(`<span title="Stalled deals" style="background:#fff3cd;color:#856404;padding:1px 6px;border-radius:8px">🐢${r.stalled_deal_count}</span>`);
+                        if (r.over_talked_calls_7d) flags.push(`<span title="Over-talked calls (7d)" style="background:#FFE0B2;color:#E65100;padding:1px 6px;border-radius:8px">🎙️${r.over_talked_calls_7d}</span>`);
+                        return `
+                        <tr style="border-bottom:1px solid #f5f5f5">
+                            <td style="padding:8px 6px"><strong>${escapeHtml(r.name)}</strong><span style="color:#888;font-size:10px;margin-left:4px">${roleLabels[r.role] || r.role}</span></td>
+                            <td style="padding:8px 6px;text-align:right">${r.calls_today}</td>
+                            <td style="padding:8px 6px;text-align:right">${r.emails_today}</td>
+                            <td style="padding:8px 6px;text-align:right">${r.imessages_today}</td>
+                            <td style="padding:8px 6px;text-align:right">${r.meetings_this_week}</td>
+                            <td style="padding:8px 6px;text-align:right">${fmtMoney(r.open_pipeline_value)}</td>
+                            <td style="padding:8px 6px;text-align:right">${r.open_deal_count}</td>
+                            <td style="padding:8px 6px;text-align:right">${flags.join(' ') || '<span style="color:#1B5E20">✓</span>'}</td>
+                            <td style="padding:8px 6px;color:#666">${fmtAgo(r.last_activity_at)}</td>
+                        </tr>
+                        `;
+                    }).join('')}
+                </tbody>
+            </table></div>`;
+        }
+
+        function renderCoachingWatchlist(items) {
+            const el = document.getElementById('team-coaching-watchlist');
+            const countEl = document.getElementById('team-coaching-count');
+            if (countEl) countEl.textContent = items && items.length ? `(${items.length})` : '';
+            if (!el) return;
+            if (!items || !items.length) {
+                el.innerHTML = '<p style="font-size:12px;color:#888">No coaching items — nice. 👍</p>';
+                return;
+            }
+            el.innerHTML = items.map(c => {
+                const badges = [];
+                if (c.over_talked) badges.push(`<span style="background:#FFE0B2;color:#E65100;padding:1px 6px;border-radius:8px;font-size:10px">🎙️ ${Math.round(c.rep_pct)}% rep</span>`);
+                if (c.needs_review) badges.push(`<span style="background:#e3f2fd;color:#1565c0;padding:1px 6px;border-radius:8px;font-size:10px">unrated</span>`);
+                const dur = c.duration_seconds ? `${Math.floor(c.duration_seconds/60)}:${String(c.duration_seconds%60).padStart(2,'0')}` : '';
+                return `
+                <div style="padding:8px 10px;margin-bottom:6px;background:#fafafa;border-radius:6px;border-left:3px solid ${c.over_talked ? 'var(--bmp-orange)' : '#bbdefb'};cursor:pointer" onclick="openCompanyDetail(${c.company_id})">
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:6px">
+                        <div style="flex:1;min-width:0">
+                            <div style="font-size:12px;font-weight:600">${escapeHtml(c.rep_name || 'Unknown')} → ${escapeHtml(c.company_name || 'Company')}</div>
+                            <div style="font-size:11px;color:#888">${dur} · ${fmtRelative(c.created_at)} ${badges.join(' ')}</div>
+                        </div>
+                    </div>
+                </div>
+                `;
+            }).join('');
+        }
+
+        function renderStuckByBdr(groups) {
+            const el = document.getElementById('team-stuck-deals');
+            if (!el) return;
+            if (!groups || !groups.length) {
+                el.innerHTML = '<p style="font-size:12px;color:#888">No stalled deals across the team. 🎉</p>';
+                return;
+            }
+            el.innerHTML = groups.map(g => `
+                <div style="margin-bottom:10px">
+                    <div style="font-size:12px;font-weight:600;margin-bottom:4px">${escapeHtml(g.name)} <span style="color:#888;font-weight:400">(${g.total_count} deal${g.total_count === 1 ? '' : 's'} stuck)</span></div>
+                    ${g.deals.map(d => `
+                        <div style="padding:6px 8px;margin-bottom:4px;background:#fafafa;border-radius:4px;font-size:11px;display:flex;justify-content:space-between;cursor:pointer" onclick="openCompanyDetail(${d.company_id})">
+                            <span>${escapeHtml(d.company_name || 'Company')} <span style="color:#888">· ${escapeHtml(d.stage)}</span></span>
+                            <span style="color:#c0392b">${d.days_stale}d stale</span>
+                        </div>
+                    `).join('')}
+                </div>
+            `).join('');
+        }
+
+        function renderReplySentiment(rows) {
+            const el = document.getElementById('team-reply-sentiment');
+            if (!el) return;
+            if (!rows || !rows.length) {
+                el.innerHTML = '<p style="font-size:12px;color:#888">No classified replies yet.</p>';
+                return;
+            }
+            const colors = {
+                interested: '#1B5E20',
+                objection: '#E65100',
+                out_of_office: '#888',
+                wrong_person: '#c0392b',
+                unsubscribe: '#999',
+                other: '#aaa',
+            };
+            el.innerHTML = rows.map(r => {
+                const total = r.total || 1;
+                const segments = ['interested','objection','out_of_office','wrong_person','unsubscribe','other'].map(s => {
+                    const n = r[s] || 0;
+                    if (!n) return '';
+                    const pct = (n * 100 / total).toFixed(0);
+                    return `<div style="flex:${n};background:${colors[s]};color:white;padding:2px 4px;font-size:10px;text-align:center" title="${s.replace('_',' ')}: ${n}">${pct}%</div>`;
+                }).join('');
+                return `
+                <div style="margin-bottom:8px">
+                    <div style="font-size:11px;display:flex;justify-content:space-between;margin-bottom:2px">
+                        <strong>${escapeHtml(r.name)}</strong>
+                        <span style="color:#888">${r.total} repl${r.total === 1 ? 'y' : 'ies'}</span>
+                    </div>
+                    <div style="display:flex;height:18px;border-radius:4px;overflow:hidden;background:#eee">${segments}</div>
+                </div>
+                `;
+            }).join('') + `
+                <div style="margin-top:10px;padding-top:8px;border-top:1px solid #eee;display:flex;flex-wrap:wrap;gap:8px;font-size:10px;color:#666">
+                    <span><span style="display:inline-block;width:8px;height:8px;background:${colors.interested};border-radius:2px"></span> Interested</span>
+                    <span><span style="display:inline-block;width:8px;height:8px;background:${colors.objection};border-radius:2px"></span> Objection</span>
+                    <span><span style="display:inline-block;width:8px;height:8px;background:${colors.out_of_office};border-radius:2px"></span> OOO</span>
+                    <span><span style="display:inline-block;width:8px;height:8px;background:${colors.wrong_person};border-radius:2px"></span> Wrong person</span>
+                    <span><span style="display:inline-block;width:8px;height:8px;background:${colors.unsubscribe};border-radius:2px"></span> Unsub</span>
+                    <span><span style="display:inline-block;width:8px;height:8px;background:${colors.other};border-radius:2px"></span> Other</span>
+                </div>
+            `;
+        }
+
+        function renderActivityHeatmap(hm) {
+            const el = document.getElementById('team-heatmap');
+            if (!el) return;
+            if (!hm || !hm.rows || !hm.rows.length) {
+                el.innerHTML = '<p style="font-size:12px;color:#888">No activity in the last 14 days.</p>';
+                return;
+            }
+            const max = Math.max(1, hm.max_cell);
+            // Color scale: light → dark green
+            const cellColor = (n) => {
+                if (!n) return '#f4f4f4';
+                const intensity = Math.min(1, n / max);
+                // BMP green tint scaled to intensity
+                const r = Math.round(255 + (27 - 255) * intensity);
+                const g = Math.round(245 + (94 - 245) * intensity);
+                const b = Math.round(240 + (32 - 240) * intensity);
+                return `rgb(${r},${g},${b})`;
+            };
+            const dayHeader = hm.days.map(d => {
+                const dt = new Date(d + 'T00:00:00');
+                const dow = ['S','M','T','W','T','F','S'][dt.getDay()];
+                const dm = dt.getDate();
+                return `<th style="width:30px;text-align:center;font-weight:400;font-size:10px;color:#888;padding:2px"><div>${dow}</div><div style="color:#bbb">${dm}</div></th>`;
+            }).join('');
+            el.innerHTML = `<table style="border-collapse:separate;border-spacing:3px;min-width:600px">
+                <thead><tr><th style="width:140px"></th>${dayHeader}<th style="width:60px;font-size:10px;color:#888;text-align:right;padding-left:8px">Total</th></tr></thead>
+                <tbody>
+                    ${hm.rows.map(r => `
+                        <tr>
+                            <td style="font-size:12px;font-weight:500;padding-right:8px">${escapeHtml(r.name)}</td>
+                            ${r.cells.map(n => `<td style="width:30px;height:24px;background:${cellColor(n)};border-radius:3px;text-align:center;font-size:10px;color:${n > max/2 ? 'white' : '#555'}" title="${n} activit${n === 1 ? 'y' : 'ies'}">${n || ''}</td>`).join('')}
+                            <td style="text-align:right;font-size:11px;color:#666;padding-left:8px"><strong>${r.total}</strong></td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>`;
+        }
+
+        function renderConversionFunnel(rows) {
+            const el = document.getElementById('team-funnel');
+            if (!el) return;
+            if (!rows || !rows.length) {
+                el.innerHTML = '<p style="font-size:12px;color:#888">No funnel data yet.</p>';
+                return;
+            }
+            el.innerHTML = `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">
+                <thead>
+                    <tr style="text-align:left;border-bottom:1px solid #e0e0e0;font-size:10px;color:#888;text-transform:uppercase">
+                        <th style="padding:6px 4px">Rep</th>
+                        <th style="padding:6px 4px;text-align:right">Sequences</th>
+                        <th style="padding:6px 4px;text-align:right">Opens</th>
+                        <th style="padding:6px 4px;text-align:right">Replies</th>
+                        <th style="padding:6px 4px;text-align:right">Meetings</th>
+                        <th style="padding:6px 4px;text-align:right;color:var(--bmp-green)">Won</th>
+                        <th style="padding:6px 4px;text-align:right">Reply→Meeting</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${rows.map(r => {
+                        const replyToMeeting = r.replies > 0 ? (r.meetings * 100 / r.replies).toFixed(0) + '%' : '—';
+                        return `
+                        <tr style="border-bottom:1px solid #f5f5f5">
+                            <td style="padding:6px 4px"><strong>${escapeHtml(r.name)}</strong></td>
+                            <td style="padding:6px 4px;text-align:right">${r.sequences_started}</td>
+                            <td style="padding:6px 4px;text-align:right">${r.opens}</td>
+                            <td style="padding:6px 4px;text-align:right">${r.replies}</td>
+                            <td style="padding:6px 4px;text-align:right;color:#1565c0;font-weight:600">${r.meetings}</td>
+                            <td style="padding:6px 4px;text-align:right;color:var(--bmp-green);font-weight:600">${r.won}</td>
+                            <td style="padding:6px 4px;text-align:right">${replyToMeeting}</td>
+                        </tr>
+                        `;
+                    }).join('')}
+                </tbody>
+            </table></div>`;
+        }
+
         async function loadDashboard() {
+            // Admin sees Team view by default. Reps fall through to the
+            // personal view as before.
+            setupDashboardTabsForRole();
+            if (_dashboardTab === 'team') {
+                await loadTeamDashboard();
+                return;
+            }
+
             const data = await api('/api/dashboard');
             if (!data) return;
 
