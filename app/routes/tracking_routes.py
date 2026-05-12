@@ -9,7 +9,9 @@ Public route — no auth. Performance-sensitive: every email click hits this.
 Keep it under ~30ms by avoiding any unnecessary DB joins.
 """
 from __future__ import annotations
+import asyncio
 import json
+import logging
 import time
 from collections import deque
 from datetime import datetime, timezone, timedelta
@@ -20,6 +22,7 @@ from sqlalchemy import select, func
 from pydantic import BaseModel
 
 from app.database import async_session
+log = logging.getLogger("bmp.tracking")
 from app.models import TrackingLink, PageView, Activity, Contact, Company
 from app.config import settings
 
@@ -150,10 +153,28 @@ function getToken(){
   var m=document.cookie.match(/(?:^|;\\s*)bmp_visitor=([^;]+)/);
   return m?m[1]:null;
 }
+function makeUuid(){
+  // RFC4122 v4 — good enough for visitor identification, no crypto need
+  try{
+    if(crypto && crypto.randomUUID) return crypto.randomUUID();
+  }catch(_){}
+  var d=Date.now();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,function(c){
+    var r=(d+Math.random()*16)%16|0;d=Math.floor(d/16);
+    return (c==='x'?r:(r&0x3|0x8)).toString(16);
+  });
+}
+function ensureToken(){
+  var t=getToken();
+  if(!t){
+    t='anon-'+makeUuid();
+    document.cookie='bmp_visitor='+t+';path=/;max-age=31536000;SameSite=Lax';
+  }
+  return t;
+}
 function send(eventType,label,value){
   try{
-    var t=getToken();
-    if(!t) return;
+    var t=ensureToken();
     var payload=JSON.stringify({
       visitor_token:t,
       url:location.href,
@@ -171,7 +192,8 @@ function send(eventType,label,value){
   }catch(e){/* swallow */}
 }
 try{
-  // 1. First-touch from a tracked email click — drop cookie + scrub bmp_id
+  // 1. First-touch from a tracked email click — drop the *known* token
+  // from the URL (replaces whatever anonymous UUID we may have stashed).
   var p=new URLSearchParams(location.search);
   var id=p.get('bmp_id');
   if(id){
@@ -181,7 +203,10 @@ try{
       history.replaceState({},'',u.toString());
     }
   }
-  // 2. Pageview on load
+  // 2. Pageview on load — always fires; ensureToken() will mint an
+  //    anonymous UUID if no bmp_visitor cookie exists yet. That UUID
+  //    is how we recognize the same anonymous visitor across pageviews
+  //    and how we attribute the IP-reveal company match.
   send('pageview','','');
 
   // 3. Form submissions — capture phase so we don't block the form
@@ -302,6 +327,41 @@ async def track_pageview(req: Request):
         contact_id = link.contact_id if link else None
         company_id = link.company_id if link else None
 
+        # Anonymous visitor path — no TrackingLink, but the cookie has
+        # a UUID we use to recognize them across pageviews. Look up (or
+        # create) a SiteVisitorSession row. If we don't have an IP→
+        # company resolution yet, queue one async (no blocking the beacon).
+        if not link:
+            from app.models import SiteVisitorSession
+            session = (await db.execute(
+                select(SiteVisitorSession).where(SiteVisitorSession.bvid == visitor_token)
+            )).scalar_one_or_none()
+            now = datetime.now(timezone.utc)
+            if not session:
+                session = SiteVisitorSession(
+                    bvid=visitor_token, ip=ip, user_agent=ua,
+                    pageview_count=0,
+                    first_seen_at=now, last_seen_at=now,
+                )
+                db.add(session)
+                await db.flush()
+                # Fire-and-forget IP reveal; results land on session row.
+                if ip:
+                    asyncio.create_task(_resolve_session_async(session.id, ip))
+            else:
+                session.last_seen_at = now
+                # If IP changed (mobile hop), don't blow away the prior
+                # resolved company — keep it sticky to the bvid cookie.
+                if ip and not session.ip:
+                    session.ip = ip
+                # If we still don't have a resolution and have an IP,
+                # try again (rate-limited at the resolver level).
+                if not session.resolved_at and ip:
+                    asyncio.create_task(_resolve_session_async(session.id, ip))
+            session.pageview_count = (session.pageview_count or 0) + 1
+            # Attribute the pageview to the resolved company if we have one.
+            company_id = session.resolved_company_id or None
+
         pv = PageView(
             visitor_token=visitor_token,
             contact_id=contact_id,
@@ -389,3 +449,53 @@ async def track_pageview_options():
             "Access-Control-Max-Age": "86400",
         },
     )
+
+
+# ============================================================
+# Async IP → company resolution. Fire-and-forget from the beacon
+# handler — never blocks the beacon. Opens its own DB session.
+# ============================================================
+
+async def _resolve_session_async(session_id: int, ip: str) -> None:
+    """Look up the IP via the resolver service, then backfill the
+    site_visitor_session row + match-or-create a Company record if the
+    domain looks viable. Safe to call multiple times for the same
+    session — short-circuits if already resolved."""
+    try:
+        from app.services.visitor_resolver import resolve_ip
+        from app.models import SiteVisitorSession, Company
+
+        reveal = await resolve_ip(ip)
+        if reveal is None:
+            return
+
+        async with async_session() as db:
+            session = (await db.execute(
+                select(SiteVisitorSession).where(SiteVisitorSession.id == session_id)
+            )).scalar_one_or_none()
+            if not session:
+                return
+            session.resolved_at = datetime.now(timezone.utc)
+            session.is_isp_ip = bool(reveal.get("is_isp_ip"))
+            session.country = reveal.get("country")
+            session.region = reveal.get("region")
+            session.city = reveal.get("city")
+            session.resolved_company_name = reveal.get("company_name")
+            session.resolved_domain = reveal.get("domain")
+
+            # Try to match to an existing Company by domain. We DO NOT
+            # auto-create companies for ISP IPs (residential noise).
+            if reveal.get("domain") and not reveal.get("is_isp_ip"):
+                existing = (await db.execute(
+                    select(Company).where(Company.domain == reveal["domain"]).limit(1)
+                )).scalar_one_or_none()
+                if existing:
+                    session.resolved_company_id = existing.id
+                # Don't auto-create here — surface in the Site Visitors
+                # UI with a "Add as Company" button so the user picks
+                # which visits matter (avoids polluting the CRM with
+                # one-off bot / partner / vendor visits).
+
+            await db.commit()
+    except Exception as e:
+        log.warning(f"visitor resolve failed for session {session_id} ip {ip}: {e}")

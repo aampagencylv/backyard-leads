@@ -672,6 +672,49 @@ class PageView(Base):
     event_value = Column(Text, nullable=True)         # destination URL, form action, etc.
 
 
+class SiteVisitorSession(Base):
+    """An anonymous (or to-be-resolved) website visitor.
+
+    Created when /api/track/pageview receives a beacon from a browser
+    that doesn't match an existing TrackingLink (= the visitor didn't
+    come from a tracked email link). The `bvid` is a UUID we drop in a
+    cookie so we can recognize the visitor across pageviews + sessions.
+
+    IP resolution happens async via app/services/visitor_resolver.py —
+    when an IP lookup succeeds we backfill resolved_company_id +
+    resolved_company_name + resolved_domain on the session row, then
+    every future pageview from this bvid auto-attributes to that company.
+    """
+    __tablename__ = "site_visitor_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    bvid = Column(String(64), unique=True, nullable=False, index=True)
+
+    # The first IP we saw for this bvid (mostly stable for office IPs;
+    # mobile users hop IPs but the cookie is stable).
+    ip = Column(String(64), nullable=True, index=True)
+    user_agent = Column(String(300), nullable=True)
+
+    # Reveal output — populated by the resolver service.
+    resolved_company_id = Column(Integer, ForeignKey("companies.id"), nullable=True, index=True)
+    resolved_company_name = Column(String(255), nullable=True)
+    resolved_domain = Column(String(255), nullable=True, index=True)
+    resolved_at = Column(DateTime, nullable=True)
+    # Heuristic — when True, this IP looks like a residential ISP and
+    # the org name is the ISP not the company. Filter these out of the
+    # Site Visitors list since they're noise.
+    is_isp_ip = Column(Boolean, nullable=False, default=False)
+
+    # Geo (best-effort)
+    country = Column(String(8), nullable=True)
+    region = Column(String(80), nullable=True)
+    city = Column(String(120), nullable=True)
+
+    pageview_count = Column(Integer, nullable=False, default=0)
+    first_seen_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    last_seen_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+
+
 class Tag(Base):
     __tablename__ = "tags"
 

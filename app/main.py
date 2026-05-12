@@ -49,6 +49,7 @@ from app.routes import (
     embed_sidebar_routes,
     extension_download_routes,
     feedback_routes,
+    site_visitors_routes,
 )
 
 
@@ -248,6 +249,7 @@ app.include_router(integrations_context_routes.router)
 app.include_router(missive_routes.router)
 app.include_router(embed_sidebar_routes.router)
 app.include_router(extension_download_routes.router)
+app.include_router(site_visitors_routes.router)
 app.include_router(feedback_routes.router)
 
 # Serve static frontend + user-uploaded files (logos, etc.).
