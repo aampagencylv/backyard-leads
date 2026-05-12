@@ -154,6 +154,11 @@ async def resume(
         except (ValueError, TypeError):
             pass
     n = await resume_sequence(db, contact_id, sequence_label=label, resume_at=resume_at_dt)
+    # Snap newly-anchored steps into the configured autopilot window so
+    # we don't accidentally restart a sequence onto a Saturday or 11pm.
+    if n:
+        from app.services.send_window import snap_pending_steps_to_window
+        await snap_pending_steps_to_window(db, contact_id=contact_id)
     await db.commit()
     return {"resumed": n, "resume_at": resume_at_dt.isoformat() if resume_at_dt else "now"}
 

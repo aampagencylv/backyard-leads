@@ -620,9 +620,19 @@ async def pause_sequence(db: AsyncSession, contact_id: int, reason: str, sequenc
 
 async def resume_sequence(db: AsyncSession, contact_id: int, sequence_label: str = "main", resume_at: datetime = None) -> int:
     """Un-pause and re-anchor scheduling so the sequence picks up from where
-    it left off. If resume_at is given, anchor to that future date instead of now."""
+    it left off. If resume_at is given, anchor to that future date instead of now.
+
+    Two cases handled:
+      (1) At least one unsent step has paused_at set — the canonical "Resume"
+          case. Clear paused_at + re-anchor relative to the earliest step.
+      (2) No paused steps but the sequence is stalled (earliest unsent step
+          has scheduled_send_at in the past) — re-anchor unsent steps to
+          today so the engine picks them back up. Surfaces as "Restart from
+          today" in the UI.
+
+    Returns the number of steps rewired (0 = nothing to do)."""
     now = resume_at or datetime.now(timezone.utc)
-    rows = (await db.execute(
+    paused_rows = (await db.execute(
         select(GeneratedEmail).where(
             GeneratedEmail.contact_id == contact_id,
             GeneratedEmail.sequence_label == sequence_label,
@@ -631,21 +641,50 @@ async def resume_sequence(db: AsyncSession, contact_id: int, sequence_label: str
             GeneratedEmail.skipped_at.is_(None),
         ).order_by(GeneratedEmail.sequence_order)
     )).scalars().all()
-    if not rows:
-        return 0
-    # Find the earliest scheduled step's original delay, anchor to "now"
-    base_day = rows[0].send_delay_days or 0
+
+    target_rows = paused_rows
+    was_paused = bool(paused_rows)
+
+    if not target_rows:
+        # Stalled case — pick up unsent non-paused steps if the earliest
+        # one is in the past.
+        unsent_rows = (await db.execute(
+            select(GeneratedEmail).where(
+                GeneratedEmail.contact_id == contact_id,
+                GeneratedEmail.sequence_label == sequence_label,
+                GeneratedEmail.is_sent == False,
+                GeneratedEmail.paused_at.is_(None),
+                GeneratedEmail.skipped_at.is_(None),
+            ).order_by(GeneratedEmail.sequence_order)
+        )).scalars().all()
+        if not unsent_rows:
+            return 0
+        # Only re-anchor if the earliest unsent step is in the past (or
+        # explicit resume_at was passed — caller wants to force restart).
+        earliest = unsent_rows[0].scheduled_send_at
+        if earliest and earliest.tzinfo is None:
+            earliest = earliest.replace(tzinfo=timezone.utc)
+        is_stalled = (not earliest) or (earliest < datetime.now(timezone.utc))
+        if not is_stalled and resume_at is None:
+            return 0  # sequence is healthy and scheduled for the future — leave alone
+        target_rows = unsent_rows
+
+    base_day = target_rows[0].send_delay_days or 0
     base_time = now
-    for r in rows:
+    for r in target_rows:
         offset_days = (r.send_delay_days or 0) - base_day
         r.scheduled_send_at = base_time + timedelta(days=max(offset_days, 0))
         r.paused_at = None
     db.add(Activity(
-        company_id=rows[0].company_id, contact_id=contact_id,
+        company_id=target_rows[0].company_id, contact_id=contact_id,
         activity_type="sequence_resumed",
-        content=f"[Auto] Sequence resumed — {len(rows)} steps re-scheduled from now",
+        content=(
+            f"[Auto] Sequence resumed — {len(target_rows)} steps re-scheduled from now"
+            if was_paused
+            else f"[Auto] Sequence restarted — {len(target_rows)} stalled steps re-anchored to today"
+        ),
     ))
-    return len(rows)
+    return len(target_rows)
 
 
 async def start_sequence_from_template(

@@ -5949,7 +5949,7 @@ function verify(secret, rawBody, header) {
                     <div style="margin-top:12px;padding-top:10px;border-top:1px dashed #d8e0d8">
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
                             <strong style="font-size:12px;color:var(--bmp-green);text-transform:uppercase;letter-spacing:0.5px">Outreach Sequence (${c.emails.length} steps)</strong>
-                            <span class="sequence-toggle" onclick="toggleSequence('${cardId}')" style="margin-top:0">Expand ▼</span>
+                            <span class="sequence-toggle" onclick="toggleSequence('${cardId}')" style="margin-top:0">Collapse ▲</span>
                         </div>
                         ${c.emails.some(e => !e.is_sent) ? (() => {
                             const isPaused = c.emails.some(e => e.paused_at);
@@ -5971,20 +5971,29 @@ function verify(secret, rawBody, header) {
                                     </div>
                                 </div>`;
                             }
-                            return `<div style="background:var(--bmp-cream);border:1px solid #e8d5c4;border-radius:8px;padding:12px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center">
+                            // Detect "stalled" — at least one unsent step's
+                            // scheduled_send_at is in the past, but nothing is
+                            // formally paused. Surfaces a "Restart" button so
+                            // Steve can re-anchor without having to find the
+                            // Pause-then-Resume dance.
+                            const nowMs = Date.now();
+                            const stalled = c.emails.some(e => !e.is_sent && !e.paused_at && !e.skipped_at && e.scheduled_send_at && new Date(e.scheduled_send_at).getTime() < nowMs);
+                            return `<div style="background:var(--bmp-cream);border:1px solid #e8d5c4;border-radius:8px;padding:12px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
                                 <div>
-                                    <strong style="font-size:13px">${allUnsent ? 'Ready to start' : 'Sequence in progress'}</strong>
-                                    <div style="font-size:11px;color:#888">${sent}/${total} steps completed${c.email ? ' · Sending to ' + escapeHtml(c.email) : ''}</div>
+                                    <strong style="font-size:13px">${allUnsent ? 'Ready to start' : (stalled ? '⚠️ Stalled' : 'Sequence in progress')}</strong>
+                                    <div style="font-size:11px;color:#888">${sent}/${total} steps completed${c.email ? ' · Sending to ' + escapeHtml(c.email) : ''}${stalled ? ' · Earliest unsent step is overdue' : ''}</div>
                                 </div>
-                                <div style="display:flex;gap:6px">
+                                <div style="display:flex;gap:6px;flex-wrap:wrap">
                                     ${c.email && !c.unsubscribed_at ? `<button class="btn btn-success btn-sm" onclick="sendNextInSequence(${c.id})" style="font-size:13px;padding:8px 16px">
                                         ${allUnsent ? 'Start Sequence' : 'Send Next Step'}
                                     </button>` : ''}
+                                    ${stalled ? `<button class="btn btn-sm" onclick="resumeSequence(${c.id})" style="background:var(--bmp-orange);color:white">▶ Restart from today</button>` : ''}
+                                    <button class="btn btn-secondary btn-sm" onclick="addStepToSequence(${c.id})">+ Add Step</button>
                                     <button class="btn btn-secondary btn-sm" onclick="pauseSequence(${c.id})">Pause</button>
                                 </div>
                             </div>`;
                         })() : ''}
-                        <div class="sequence-body" id="${cardId}-seq" style="display:none">
+                        <div class="sequence-body" id="${cardId}-seq" style="display:block">
                             ${c.emails.map((e, i) => {
                                 const card = renderEmailCard(e, c.id, c.linkedin_url);
                                 const insertBtn = (!e.is_sent && !e.skipped_at) ? `<div style="text-align:center;margin:2px 0"><button class="btn btn-xs" onclick="addStepToSequence(${c.id}, ${e.sequence_order})" style="background:transparent;color:#aab;border:1px dashed #ccc;font-size:11px;padding:2px 12px;border-radius:12px" title="Insert a step after this one">+ Add Step</button></div>` : '';
