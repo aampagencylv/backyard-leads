@@ -665,6 +665,11 @@ async def _execute_batch(campaign_id: int, db: AsyncSession, user: User):
                             send_delay_days=step["delay_days"],
                             scheduled_send_at=seq_now + timedelta(days=step["delay_days"]),
                             problems_referenced=json.dumps(problems[:2]),
+                            # Engine fires email + iMessage automatically when
+                            # the campaign is in full_auto mode. Calls + LinkedIn
+                            # always become Tasks for the BDR (auto_execute=False
+                            # by default on those step types).
+                            auto_execute=(stype in ("email", "imessage") and campaign.mode == "full_auto"),
                         )
                         db.add(gen_step)
                         await db.flush()
@@ -936,6 +941,9 @@ async def _process_business_through_pipeline(
                 send_delay_days=step["delay_days"],
                 scheduled_send_at=seq_now + timedelta(days=step["delay_days"]),
                 problems_referenced=json.dumps(problems[:2]),
+                # Engine fires email + iMessage automatically in full_auto
+                # campaigns; calls/linkedin always become Tasks for the BDR.
+                auto_execute=(stype in ("email", "imessage") and campaign.mode == "full_auto"),
             )
             db.add(gen_step)
             await db.flush()
