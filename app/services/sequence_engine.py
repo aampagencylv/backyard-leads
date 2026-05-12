@@ -362,10 +362,12 @@ async def _maybe_defer_for_send_window(
     )
     if allowed:
         return False
-    window = await _sw.get_send_window(db)
+    cfg = await _sw.get_autopilot_config(db)
     contact_tz = _sw.infer_contact_timezone(contact, company, rep)
+    rep_tz = _sw.infer_rep_timezone(rep)
     target_utc = _sw.next_window_start(
-        after_utc=now, contact_tz=contact_tz, window=window, channel=channel,
+        after_utc=now, contact_tz=contact_tz, rep_tz=rep_tz,
+        cfg=cfg, channel=channel,
     )
     step.scheduled_send_at = target_utc
     logger.info(

@@ -518,17 +518,38 @@ class RuntimeConfig(Base):
     # here — they're fixed in code because they have special wiring.
     pipeline_stages_json = Column(Text, nullable=True)
 
-    # Autopilot send window — applies to every auto-channel (email,
-    # iMessage, SMS) when the sequence engine fires. Hours are local to
-    # the *contact's* timezone (inferred from phone area code, falling
-    # back to the company's state, then the rep's timezone). Set to
-    # 8am-7pm by default to avoid midnight sends while still giving the
-    # team a wide enough working day.
+    # Autopilot send window — per-channel hours, basis radio, optional
+    # rep-presence gate. The legacy autopilot_send_start_hour /
+    # _end_hour / _days_json columns are kept around for backwards
+    # compatibility but only read on a tenant that hasn't touched the
+    # newer config yet (the migration copies them into the email +
+    # imessage rows on first read).
     autopilot_send_start_hour = Column(Integer, nullable=False, default=8)
     autopilot_send_end_hour   = Column(Integer, nullable=False, default=19)
-    # JSON array of weekday ints (0=Mon..6=Sun) when sending is allowed.
-    # NULL means every day.
     autopilot_send_days_json  = Column(Text, nullable=True)
+
+    # Window basis — which clock the hours apply to:
+    #   "contact"   — contact's local timezone (default; right for cold outreach)
+    #   "rep"       — assigned rep's saved timezone (only fire during the rep's workday)
+    #   "strictest" — only fire when *both* contact-local AND rep-local
+    #                 are inside their respective windows. The right choice
+    #                 when you want a human available to reply.
+    autopilot_basis = Column(String(20), nullable=False, default="contact")
+
+    # Per-channel hours. iMessage defaults narrower (8am-5pm) than email
+    # because someone needs to be online to reply.
+    autopilot_email_start_hour    = Column(Integer, nullable=False, default=8)
+    autopilot_email_end_hour      = Column(Integer, nullable=False, default=19)
+    autopilot_email_days_json     = Column(Text, nullable=True)  # null = every day
+    autopilot_imessage_start_hour = Column(Integer, nullable=False, default=8)
+    autopilot_imessage_end_hour   = Column(Integer, nullable=False, default=17)
+    autopilot_imessage_days_json  = Column(Text, nullable=True)
+
+    # Rep-presence gating — when enabled, the engine only fires a step
+    # if the assigned rep was active in the app within the past 15min.
+    # Requires PWA push / heartbeat work that hasn't shipped yet, so
+    # the checkbox is disabled in the UI for now.
+    autopilot_respect_rep_presence = Column(Boolean, nullable=False, default=False)
 
     # Audit-report branding — per-surface overrides on top of org brand.
     # Empty → render falls back to brand_logo_url (footer) or no banner

@@ -2046,42 +2046,103 @@ function verify(secret, rawBody, header) {
                     </div>
                 </div>
 
-                <!-- Autopilot send window — admin/super_admin only.
-                     Constrains when the sequence engine fires email +
-                     iMessage. iMessage stays clamped to TCPA's 8am-9pm
-                     contact-local regardless of what's configured. -->
-                <div id="autopilot-window-section" class="search-box hidden" style="max-width:640px;margin-top:16px">
-                    <h3>Autopilot Send Hours</h3>
-                    <p style="font-size:13px;color:#666;margin-bottom:8px">When sequences are allowed to send (email + iMessage). Hours are in the <strong>contact's local timezone</strong> — a contact in NY won't receive their email until 8am Eastern. New sequence steps are auto-scheduled inside this window.</p>
-                    <p style="font-size:11px;color:#888;margin-bottom:16px">iMessage/SMS is additionally clamped to TCPA's 8am–9pm contact-local even if the window below is wider.</p>
+                <!-- Sequence Autopilot — admin/super_admin only.
+                     Per-channel windows (email separate from iMessage),
+                     basis radio (which clock applies), and a live
+                     preview against a sample contact. iMessage/SMS stays
+                     clamped to TCPA's 8am-9pm contact-local regardless. -->
+                <div id="autopilot-window-section" class="search-box hidden" style="max-width:760px;margin-top:16px">
+                    <h3>Sequence Autopilot</h3>
+                    <p style="font-size:13px;color:#666;margin-bottom:14px">Decide when sequences are allowed to send. Email and iMessage have separate hours because someone usually needs to be at a keyboard to handle replies to messages, but emails can land any time.</p>
 
-                    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
-                        <div class="form-group" style="margin:0">
-                            <label style="font-size:12px">Start (hour)</label>
-                            <select id="autopilot-start-hour" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px">
-                                <!-- populated by JS -->
-                            </select>
-                        </div>
-                        <div style="font-size:13px;color:#888;align-self:end;padding-bottom:8px">to</div>
-                        <div class="form-group" style="margin:0">
-                            <label style="font-size:12px">End (hour)</label>
-                            <select id="autopilot-end-hour" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px">
-                                <!-- populated by JS -->
-                            </select>
+                    <!-- Basis radio -->
+                    <div class="form-group" style="margin-bottom:18px;padding:12px;background:#f8f9fa;border-radius:8px">
+                        <label style="font-weight:600;font-size:13px;margin-bottom:8px;display:block">Whose clock?</label>
+                        <div style="display:flex;flex-direction:column;gap:8px">
+                            <label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;cursor:pointer">
+                                <input type="radio" name="autopilot-basis" value="contact" onchange="onAutopilotBasisChange(this.value)" style="margin-top:3px">
+                                <span><strong>Contact's timezone</strong><br><span style="font-size:11px;color:#888">A contact in NY won't get their email until 8am Eastern, even if you're sending from California.</span></span>
+                            </label>
+                            <label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;cursor:pointer">
+                                <input type="radio" name="autopilot-basis" value="rep" onchange="onAutopilotBasisChange(this.value)" style="margin-top:3px">
+                                <span><strong>Your team's timezone</strong><br><span style="font-size:11px;color:#888">Only fire during the assigned rep's workday. East-coast contact gets a 5pm-PT email = 8pm ET.</span></span>
+                            </label>
+                            <label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;cursor:pointer">
+                                <input type="radio" name="autopilot-basis" value="strictest" onchange="onAutopilotBasisChange(this.value)" style="margin-top:3px">
+                                <span><strong>Strictest of both</strong> <span style="font-size:10px;background:var(--bmp-green);color:white;padding:1px 6px;border-radius:8px;margin-left:4px">recommended</span><br><span style="font-size:11px;color:#888">Only fire when it's inside the window for both the contact AND the rep — best when you want a human ready to reply.</span></span>
+                            </label>
                         </div>
                     </div>
 
-                    <div class="form-group" style="margin-bottom:12px">
-                        <label style="font-size:12px">Send Days</label>
-                        <div id="autopilot-weekday-toggles" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
-                            <!-- populated by JS -->
+                    <!-- Per-channel hours -->
+                    <div style="display:flex;flex-direction:column;gap:14px;margin-bottom:18px">
+                        <div style="padding:12px;background:white;border:1px solid #e0e0e0;border-radius:8px" data-channel="email">
+                            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+                                <strong style="font-size:14px">📧 Email</strong>
+                                <span style="font-size:11px;color:#888">Replies arrive whenever — wider window is fine</span>
+                            </div>
+                            <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin-bottom:8px">
+                                <div class="form-group" style="margin:0">
+                                    <label style="font-size:11px;color:#666">Start</label>
+                                    <select id="autopilot-email-start" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px"></select>
+                                </div>
+                                <div style="font-size:13px;color:#888;padding-bottom:8px">to</div>
+                                <div class="form-group" style="margin:0">
+                                    <label style="font-size:11px;color:#666">End</label>
+                                    <select id="autopilot-email-end" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px"></select>
+                                </div>
+                            </div>
+                            <div id="autopilot-email-days" style="display:flex;gap:6px;flex-wrap:wrap"></div>
                         </div>
-                        <p style="font-size:11px;color:#888;margin-top:4px">Click to toggle. Selecting all 7 days = sends every day.</p>
+
+                        <div style="padding:12px;background:white;border:1px solid #e0e0e0;border-radius:8px" data-channel="imessage">
+                            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+                                <strong style="font-size:14px">💬 iMessage / SMS</strong>
+                                <span style="font-size:11px;color:#888">Always clamped to 8am–9pm contact-local (TCPA)</span>
+                            </div>
+                            <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin-bottom:8px">
+                                <div class="form-group" style="margin:0">
+                                    <label style="font-size:11px;color:#666">Start</label>
+                                    <select id="autopilot-imessage-start" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px"></select>
+                                </div>
+                                <div style="font-size:13px;color:#888;padding-bottom:8px">to</div>
+                                <div class="form-group" style="margin:0">
+                                    <label style="font-size:11px;color:#666">End</label>
+                                    <select id="autopilot-imessage-end" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px"></select>
+                                </div>
+                            </div>
+                            <div id="autopilot-imessage-days" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+                        </div>
                     </div>
 
-                    <div style="display:flex;gap:8px;align-items:center">
-                        <button class="btn btn-primary btn-sm" onclick="saveAutopilotWindow()">Save Send Hours</button>
+                    <!-- Rep presence -->
+                    <div style="padding:10px 12px;background:#f8f9fa;border:1px dashed #ccc;border-radius:8px;margin-bottom:18px">
+                        <label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;color:#888;cursor:not-allowed">
+                            <input type="checkbox" id="autopilot-presence" disabled style="margin-top:3px">
+                            <span><strong style="color:#555">Only fire when the rep is online</strong> <span style="font-size:10px;background:#f0c060;color:#724a00;padding:1px 6px;border-radius:8px">coming soon</span><br><span style="font-size:11px">Requires the PWA installed with push enabled — the rep's app pings every couple minutes so we know they're available. Stub now; will enable when push lands.</span></span>
+                        </label>
+                    </div>
+
+                    <!-- Save -->
+                    <div style="display:flex;gap:8px;align-items:center;margin-bottom:18px">
+                        <button class="btn btn-primary btn-sm" onclick="saveAutopilotWindow()">Save Autopilot Config</button>
                         <span id="autopilot-save-status" style="font-size:12px;color:#888"></span>
+                    </div>
+
+                    <!-- Preview -->
+                    <div style="padding:12px;background:#FFF8F0;border:1px solid #ffd9b3;border-radius:8px">
+                        <strong style="font-size:13px">🔍 Try it on a real contact</strong>
+                        <p style="font-size:11px;color:#888;margin:4px 0 10px">Pick any contact + channel — we'll tell you whether right now is inside the window, and if not, when the next valid send slot would be.</p>
+                        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+                            <input type="text" id="autopilot-preview-search" placeholder="Search a contact by name or company..." oninput="onAutopilotPreviewSearch(this.value)" style="flex:1;min-width:200px;padding:7px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px">
+                            <select id="autopilot-preview-channel" style="padding:7px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px">
+                                <option value="email">Email</option>
+                                <option value="imessage">iMessage</option>
+                            </select>
+                            <button class="btn btn-secondary btn-sm" onclick="runAutopilotPreview()">Check</button>
+                        </div>
+                        <div id="autopilot-preview-suggestions" style="display:none;background:white;border:1px solid #e0e0e0;border-radius:6px;max-height:180px;overflow-y:auto;margin-bottom:8px"></div>
+                        <div id="autopilot-preview-result" style="font-size:13px"></div>
                     </div>
                 </div>
 
@@ -11826,10 +11887,38 @@ hmac.compare_digest(expected, header)</pre>
         }
 
         // ============================================================
-        // 🕐 Autopilot Send Hours
+        // 🕐 Sequence Autopilot (per-channel windows + basis + preview)
         // ============================================================
 
-        let _autopilotWeekdays = new Set();
+        const _autopilotState = {
+            basis: 'contact',
+            channels: {
+                email: { weekdays: new Set([0,1,2,3,4,5,6]) },
+                imessage: { weekdays: new Set([0,1,2,3,4,5,6]) },
+            },
+            presenceAvailable: false,
+            previewContact: null,
+        };
+
+        function _fmtAutopilotHour(h) {
+            if (h === 0) return '12 AM (midnight)';
+            if (h === 12) return '12 PM (noon)';
+            if (h === 24) return '12 AM (next day)';
+            return h > 12 ? `${h - 12} PM` : `${h} AM`;
+        }
+
+        function _populateHourSelect(sel, includeEnd) {
+            if (sel.dataset.populated) return;
+            const max = includeEnd ? 24 : 23;
+            const min = includeEnd ? 1 : 0;
+            for (let h = min; h <= max; h++) {
+                const o = document.createElement('option');
+                o.value = h;
+                o.textContent = _fmtAutopilotHour(h);
+                sel.appendChild(o);
+            }
+            sel.dataset.populated = '1';
+        }
 
         async function loadAutopilotWindow() {
             const section = document.getElementById('autopilot-window-section');
@@ -11840,85 +11929,188 @@ hmac.compare_digest(expected, header)</pre>
             }
             section.classList.remove('hidden');
 
-            const startSel = document.getElementById('autopilot-start-hour');
-            const endSel = document.getElementById('autopilot-end-hour');
-            if (startSel && !startSel.dataset.populated) {
-                const fmtHour = (h) => {
-                    if (h === 0) return '12 AM (midnight)';
-                    if (h === 12) return '12 PM (noon)';
-                    if (h === 24) return '12 AM (next day)';
-                    return h > 12 ? `${h - 12} PM` : `${h} AM`;
-                };
-                for (let h = 0; h < 24; h++) {
-                    const o = document.createElement('option');
-                    o.value = h;
-                    o.textContent = fmtHour(h);
-                    startSel.appendChild(o);
-                }
-                for (let h = 1; h <= 24; h++) {
-                    const o = document.createElement('option');
-                    o.value = h;
-                    o.textContent = fmtHour(h);
-                    endSel.appendChild(o);
-                }
-                startSel.dataset.populated = '1';
-                endSel.dataset.populated = '1';
-            }
+            // Populate the four hour pickers once
+            _populateHourSelect(document.getElementById('autopilot-email-start'), false);
+            _populateHourSelect(document.getElementById('autopilot-email-end'), true);
+            _populateHourSelect(document.getElementById('autopilot-imessage-start'), false);
+            _populateHourSelect(document.getElementById('autopilot-imessage-end'), true);
 
             const data = await api('/api/autopilot/send-window');
             if (!data) return;
-            startSel.value = data.start_hour;
-            endSel.value = data.end_hour;
-            _autopilotWeekdays = new Set((data.weekdays || [0,1,2,3,4,5,6]).map(Number));
-            renderAutopilotWeekdays();
+
+            _autopilotState.basis = data.basis || 'contact';
+            const basisRadio = document.querySelector(`input[name="autopilot-basis"][value="${_autopilotState.basis}"]`);
+            if (basisRadio) basisRadio.checked = true;
+
+            ['email', 'imessage'].forEach(ch => {
+                const cfg = data[ch] || { start_hour: 8, end_hour: 19, weekdays: [0,1,2,3,4,5,6] };
+                document.getElementById(`autopilot-${ch}-start`).value = cfg.start_hour;
+                document.getElementById(`autopilot-${ch}-end`).value = cfg.end_hour;
+                _autopilotState.channels[ch].weekdays = new Set((cfg.weekdays || [0,1,2,3,4,5,6]).map(Number));
+                renderAutopilotDays(ch);
+            });
+
+            _autopilotState.presenceAvailable = !!data.rep_presence_available;
+            const presenceEl = document.getElementById('autopilot-presence');
+            if (presenceEl) {
+                presenceEl.checked = !!data.respect_rep_presence;
+                presenceEl.disabled = !_autopilotState.presenceAvailable;
+            }
         }
 
-        function renderAutopilotWeekdays() {
-            const box = document.getElementById('autopilot-weekday-toggles');
+        function onAutopilotBasisChange(value) {
+            _autopilotState.basis = value;
+        }
+
+        function renderAutopilotDays(channel) {
+            const box = document.getElementById(`autopilot-${channel}-days`);
             if (!box) return;
             const days = [
                 {n: 0, label: 'Mon'}, {n: 1, label: 'Tue'}, {n: 2, label: 'Wed'},
                 {n: 3, label: 'Thu'}, {n: 4, label: 'Fri'}, {n: 5, label: 'Sat'}, {n: 6, label: 'Sun'},
             ];
+            const set = _autopilotState.channels[channel].weekdays;
             box.innerHTML = days.map(d => {
-                const on = _autopilotWeekdays.has(d.n);
-                return `<button type="button" onclick="toggleAutopilotDay(${d.n})" style="padding:6px 12px;border:1px solid ${on ? 'var(--bmp-green)' : '#ddd'};background:${on ? 'var(--bmp-green)' : 'white'};color:${on ? 'white' : '#555'};border-radius:6px;font-size:12px;font-weight:${on ? '600' : '400'};cursor:pointer;min-width:48px">${d.label}</button>`;
+                const on = set.has(d.n);
+                return `<button type="button" onclick="toggleAutopilotDay('${channel}',${d.n})" style="padding:5px 10px;border:1px solid ${on ? 'var(--bmp-green)' : '#ddd'};background:${on ? 'var(--bmp-green)' : 'white'};color:${on ? 'white' : '#555'};border-radius:6px;font-size:11px;font-weight:${on ? '600' : '400'};cursor:pointer;min-width:42px">${d.label}</button>`;
             }).join('');
         }
 
-        function toggleAutopilotDay(n) {
-            if (_autopilotWeekdays.has(n)) _autopilotWeekdays.delete(n);
-            else _autopilotWeekdays.add(n);
-            renderAutopilotWeekdays();
+        function toggleAutopilotDay(channel, n) {
+            const set = _autopilotState.channels[channel].weekdays;
+            if (set.has(n)) set.delete(n);
+            else set.add(n);
+            renderAutopilotDays(channel);
         }
 
         async function saveAutopilotWindow() {
             const statusEl = document.getElementById('autopilot-save-status');
-            const start = parseInt(document.getElementById('autopilot-start-hour').value, 10);
-            const end = parseInt(document.getElementById('autopilot-end-hour').value, 10);
-            if (end <= start) {
-                if (statusEl) { statusEl.textContent = 'End hour must be after start'; statusEl.style.color = '#c00'; }
-                return;
-            }
-            if (_autopilotWeekdays.size === 0) {
-                if (statusEl) { statusEl.textContent = 'Pick at least one send day'; statusEl.style.color = '#c00'; }
-                return;
+            const payload = {
+                basis: _autopilotState.basis,
+                respect_rep_presence: false,
+                email: {
+                    start_hour: parseInt(document.getElementById('autopilot-email-start').value, 10),
+                    end_hour:   parseInt(document.getElementById('autopilot-email-end').value, 10),
+                    weekdays: Array.from(_autopilotState.channels.email.weekdays).sort(),
+                },
+                imessage: {
+                    start_hour: parseInt(document.getElementById('autopilot-imessage-start').value, 10),
+                    end_hour:   parseInt(document.getElementById('autopilot-imessage-end').value, 10),
+                    weekdays: Array.from(_autopilotState.channels.imessage.weekdays).sort(),
+                },
+            };
+            // Client-side validation
+            for (const ch of ['email', 'imessage']) {
+                if (payload[ch].end_hour <= payload[ch].start_hour) {
+                    if (statusEl) { statusEl.textContent = `${ch} end hour must be after start`; statusEl.style.color = '#c00'; }
+                    return;
+                }
+                if (payload[ch].weekdays.length === 0) {
+                    if (statusEl) { statusEl.textContent = `Pick at least one send day for ${ch}`; statusEl.style.color = '#c00'; }
+                    return;
+                }
             }
             if (statusEl) { statusEl.textContent = 'Saving…'; statusEl.style.color = '#888'; }
             try {
                 const result = await api('/api/autopilot/send-window', {
-                    method: 'PUT',
-                    body: JSON.stringify({
-                        start_hour: start,
-                        end_hour: end,
-                        weekdays: Array.from(_autopilotWeekdays).sort(),
-                    }),
+                    method: 'PUT', body: JSON.stringify(payload),
                 });
                 if (!result) return;
                 if (statusEl) { statusEl.textContent = 'Saved'; statusEl.style.color = 'var(--bmp-green)'; }
-                toast('Autopilot send hours saved');
+                toast('Autopilot config saved');
             } catch (e) {
                 if (statusEl) { statusEl.textContent = `Error: ${e.message}`; statusEl.style.color = '#c00'; }
+            }
+        }
+
+        // -----------------------
+        // Preview widget
+        // -----------------------
+        let _autopilotPreviewTimer = null;
+        async function onAutopilotPreviewSearch(q) {
+            clearTimeout(_autopilotPreviewTimer);
+            const drop = document.getElementById('autopilot-preview-suggestions');
+            if (!q || q.trim().length < 2) {
+                if (drop) { drop.style.display = 'none'; drop.innerHTML = ''; }
+                return;
+            }
+            _autopilotPreviewTimer = setTimeout(async () => {
+                try {
+                    const data = await api(`/api/crm/search?q=${encodeURIComponent(q.trim())}`);
+                    const contacts = (data && (data.contacts || [])).slice(0, 10);
+                    if (!drop) return;
+                    if (!contacts.length) {
+                        drop.innerHTML = '<div style="padding:8px 12px;color:#888;font-size:12px">No contacts match.</div>';
+                        drop.style.display = 'block';
+                        return;
+                    }
+                    drop.innerHTML = contacts.map(c => {
+                        const label = c.name || c.email || ('Contact #' + c.id);
+                        const labelAttr = label.replace(/'/g, "\\'");
+                        return `
+                        <div style="padding:8px 12px;border-bottom:1px solid #f0f0f0;cursor:pointer;font-size:12px" onclick="pickAutopilotPreviewContact(${c.id}, '${labelAttr}')">
+                            <strong>${escapeHtml(label)}</strong>
+                            <span style="color:#888">${c.company_name ? '— ' + escapeHtml(c.company_name) : ''}</span>
+                        </div>
+                        `;
+                    }).join('');
+                    drop.style.display = 'block';
+                } catch (e) { /* swallow */ }
+            }, 250);
+        }
+
+        function pickAutopilotPreviewContact(id, label) {
+            _autopilotState.previewContact = id;
+            document.getElementById('autopilot-preview-search').value = label;
+            const drop = document.getElementById('autopilot-preview-suggestions');
+            if (drop) { drop.style.display = 'none'; }
+        }
+
+        async function runAutopilotPreview() {
+            const resultEl = document.getElementById('autopilot-preview-result');
+            const id = _autopilotState.previewContact;
+            if (!id) {
+                if (resultEl) { resultEl.innerHTML = '<span style="color:#c00">Pick a contact from the search dropdown first.</span>'; }
+                return;
+            }
+            const channel = document.getElementById('autopilot-preview-channel').value;
+            resultEl.innerHTML = '<span style="color:#888">Checking…</span>';
+            try {
+                const r = await api(`/api/autopilot/preview?contact_id=${id}&channel=${channel}`);
+                if (!r) return;
+                const localFmt = (iso) => {
+                    if (!iso) return '—';
+                    try {
+                        const d = new Date(iso);
+                        return d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+                    } catch { return iso; }
+                };
+                if (r.allowed) {
+                    resultEl.innerHTML = `
+                        <div style="padding:10px;background:#e8f5e9;border-radius:6px;border-left:3px solid var(--bmp-green)">
+                            <strong style="color:var(--bmp-green)">✓ Would fire right now</strong>
+                            <div style="font-size:11px;color:#555;margin-top:6px">
+                                ${escapeHtml(r.contact_name)} ${r.company_name ? '· ' + escapeHtml(r.company_name) : ''}<br>
+                                Contact local: ${localFmt(r.contact_local_now)} (${escapeHtml(r.contact_tz)})<br>
+                                ${r.rep_local_now ? `Rep local: ${localFmt(r.rep_local_now)} (${escapeHtml(r.rep_tz)})` : ''}<br>
+                                Basis: <em>${escapeHtml(r.basis)}</em>
+                            </div>
+                        </div>`;
+                } else {
+                    resultEl.innerHTML = `
+                        <div style="padding:10px;background:#fff8e1;border-radius:6px;border-left:3px solid var(--bmp-orange)">
+                            <strong style="color:var(--bmp-orange)">⏸ Deferred</strong>
+                            <div style="font-size:11px;color:#555;margin-top:6px">
+                                ${escapeHtml(r.contact_name)} ${r.company_name ? '· ' + escapeHtml(r.company_name) : ''}<br>
+                                ${escapeHtml(r.reason)}<br>
+                                Contact local: ${localFmt(r.contact_local_now)} (${escapeHtml(r.contact_tz)})<br>
+                                ${r.rep_local_now ? `Rep local: ${localFmt(r.rep_local_now)} (${escapeHtml(r.rep_tz)})<br>` : ''}
+                                <strong>Next valid send:</strong> ${localFmt(r.next_send_contact_local)} (${escapeHtml(r.contact_tz)})
+                            </div>
+                        </div>`;
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span style="color:#c00">Preview failed: ${escapeHtml(e.message)}</span>`;
             }
         }
 

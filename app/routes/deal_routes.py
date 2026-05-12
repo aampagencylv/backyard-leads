@@ -94,22 +94,41 @@ async def get_send_window_endpoint(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Returns the active autopilot send window. Visible to everyone
-    (so the UI can show "Will send between 8am-7pm contact-local"
-    explainers next to sequence-create buttons)."""
-    from app.services.send_window import get_send_window
-    w = await get_send_window(db)
+    """Returns the full autopilot config — per-channel windows, basis,
+    and the rep-presence flag. Visible to every signed-in user so the
+    sequence-create UI can explain when steps will fire."""
+    from app.services.send_window import get_autopilot_config
+    cfg = await get_autopilot_config(db)
     return {
-        "start_hour": w.start_hour,
-        "end_hour": w.end_hour,
-        "weekdays": sorted(w.weekdays),
+        "basis": cfg.basis,
+        "email": {
+            "start_hour": cfg.email.start_hour,
+            "end_hour": cfg.email.end_hour,
+            "weekdays": sorted(cfg.email.weekdays),
+        },
+        "imessage": {
+            "start_hour": cfg.imessage.start_hour,
+            "end_hour": cfg.imessage.end_hour,
+            "weekdays": sorted(cfg.imessage.weekdays),
+        },
+        "respect_rep_presence": cfg.respect_rep_presence,
+        # Static flag — surfaces in the UI to dim the presence checkbox
+        # until the PWA heartbeat work lands.
+        "rep_presence_available": False,
     }
 
 
-class UpdateSendWindowRequest(BaseModel):
+class ChannelWindowPayload(BaseModel):
     start_hour: int
     end_hour: int
-    weekdays: Optional[list[int]] = None  # 0=Mon..6=Sun; None means every day
+    weekdays: Optional[list[int]] = None
+
+
+class UpdateSendWindowRequest(BaseModel):
+    basis: Optional[str] = None  # contact | rep | strictest
+    email: Optional[ChannelWindowPayload] = None
+    imessage: Optional[ChannelWindowPayload] = None
+    respect_rep_presence: Optional[bool] = None
 
 
 @router.put("/autopilot/send-window")
@@ -118,38 +137,77 @@ async def update_send_window(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Update the autopilot send window. Admin/super_admin only.
-    Existing scheduled steps are NOT retroactively re-snapped — they'll
-    naturally get deferred by the engine if they fire outside the new
-    window. (A future "Rebalance all sequences" button can do bulk
-    re-snap if needed.)"""
+    """Update the autopilot config. Admin/super_admin only.
+    Existing scheduled steps are not retroactively re-snapped — the
+    engine will defer any step that fires outside the new window on
+    its next tick."""
     if user.role not in ("admin", "super_admin"):
         raise HTTPException(status_code=403, detail="Admin access required")
     import json as _json
     from app.models import RuntimeConfig
-    start = max(0, min(23, int(req.start_hour)))
-    end = max(start + 1, min(24, int(req.end_hour)))
     rc = (await db.execute(select(RuntimeConfig).where(RuntimeConfig.id == 1))).scalar_one_or_none()
     if rc is None:
         rc = RuntimeConfig(id=1)
         db.add(rc)
         await db.flush()
-    rc.autopilot_send_start_hour = start
-    rc.autopilot_send_end_hour = end
-    if req.weekdays is None or len(req.weekdays) == 7:
-        rc.autopilot_send_days_json = None  # every day
-    else:
-        valid = sorted({int(d) for d in req.weekdays if 0 <= int(d) <= 6})
-        rc.autopilot_send_days_json = _json.dumps(valid) if valid else None
+
+    if req.basis is not None:
+        basis = req.basis.strip().lower()
+        if basis not in ("contact", "rep", "strictest"):
+            raise HTTPException(status_code=400, detail="basis must be contact|rep|strictest")
+        rc.autopilot_basis = basis
+
+    def _store_channel(payload: ChannelWindowPayload, start_col: str, end_col: str, days_col: str) -> None:
+        s = max(0, min(23, int(payload.start_hour)))
+        e = max(s + 1, min(24, int(payload.end_hour)))
+        setattr(rc, start_col, s)
+        setattr(rc, end_col, e)
+        if payload.weekdays is None or len(payload.weekdays) == 7:
+            setattr(rc, days_col, None)
+        else:
+            valid = sorted({int(d) for d in payload.weekdays if 0 <= int(d) <= 6})
+            setattr(rc, days_col, _json.dumps(valid) if valid else None)
+
+    if req.email is not None:
+        _store_channel(req.email, "autopilot_email_start_hour", "autopilot_email_end_hour", "autopilot_email_days_json")
+    if req.imessage is not None:
+        _store_channel(req.imessage, "autopilot_imessage_start_hour", "autopilot_imessage_end_hour", "autopilot_imessage_days_json")
+    if req.respect_rep_presence is not None:
+        rc.autopilot_respect_rep_presence = bool(req.respect_rep_presence)
+
     await db.commit()
-    from app.services.send_window import get_send_window
-    w = await get_send_window(db)
+    # Echo back the saved config so the UI doesn't need a follow-up GET.
+    from app.services.send_window import get_autopilot_config
+    cfg = await get_autopilot_config(db)
     return {
         "ok": True,
-        "start_hour": w.start_hour,
-        "end_hour": w.end_hour,
-        "weekdays": sorted(w.weekdays),
+        "basis": cfg.basis,
+        "email": {"start_hour": cfg.email.start_hour, "end_hour": cfg.email.end_hour, "weekdays": sorted(cfg.email.weekdays)},
+        "imessage": {"start_hour": cfg.imessage.start_hour, "end_hour": cfg.imessage.end_hour, "weekdays": sorted(cfg.imessage.weekdays)},
+        "respect_rep_presence": cfg.respect_rep_presence,
+        "rep_presence_available": False,
     }
+
+
+@router.get("/autopilot/preview")
+async def autopilot_preview(
+    contact_id: int,
+    channel: str = "email",
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Live preview for the Settings page — given a sample contact +
+    channel, returns whether *right now* would fire and (if not) when
+    the next valid send slot is, in the contact's local time. Used by
+    the 'Try a contact' widget so admins can sanity-check their config
+    before saving."""
+    if channel not in ("email", "imessage"):
+        raise HTTPException(status_code=400, detail="channel must be email|imessage")
+    from app.services.send_window import preview_for_contact
+    result = await preview_for_contact(db, contact_id=contact_id, channel=channel)
+    if not result.get("found"):
+        raise HTTPException(status_code=404, detail="Contact not found")
+    return result
 
 
 @router.get("/pipeline/config")

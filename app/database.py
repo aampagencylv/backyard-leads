@@ -91,6 +91,7 @@ async def init_db():
         "scripts.migrate_missive_link",
         "scripts.migrate_pipeline_stages",
         "scripts.migrate_autopilot_window",
+        "scripts.migrate_autopilot_per_channel",
     ):
         try:
             mod = __import__(_migration_module, fromlist=["main"])
