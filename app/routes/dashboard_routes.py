@@ -755,6 +755,27 @@ async def team_dashboard(
         select(_Task).where(_Task.completed_at.is_(None))
     )).scalars().all()
 
+    # ----- Company → owner prefetch -----
+    # Previously each pass through activities/emails did N+1 lookups
+    # against companies. With even a few hundred activities that becomes
+    # noticeable. One single prefetch covers every company we'll see.
+    needed_company_ids = set()
+    for a in activities_30d:
+        if a.company_id: needed_company_ids.add(a.company_id)
+    for e in emails_30d:
+        if e.company_id: needed_company_ids.add(e.company_id)
+    for d in all_deals:
+        if d.company_id: needed_company_ids.add(d.company_id)
+    company_owner_cache: dict[int, int] = {}
+    company_name_cache: dict[int, str] = {}
+    if needed_company_ids:
+        co_rows = (await db.execute(
+            select(Company.id, Company.assigned_to, Company.name).where(Company.id.in_(needed_company_ids))
+        )).all()
+        for cid, owner, name in co_rows:
+            company_owner_cache[cid] = owner or 0
+            company_name_cache[cid] = name
+
     # ============================================================
     # Zone 1: Team KPI strip (with WoW deltas)
     # ============================================================
@@ -833,34 +854,25 @@ async def team_dashboard(
         if a.activity_type == "call":
             if created >= today_start: row["calls_today"] += 1
             if created >= week_start: row["calls_this_week"] += 1
-            # Over-talked calls (7d)
+            # Over-talked calls (7d) — skip single-speaker recordings
             if a.recording_url and a.talk_ratio_json and created >= sevenday_ago:
                 try:
                     import json as _json
                     tr = _json.loads(a.talk_ratio_json)
-                    if (tr.get("rep_pct") or 0) > 60:
+                    if not tr.get("single_speaker") and (tr.get("rep_pct") or 0) > 60:
                         row["over_talked_calls_7d"] += 1
                 except (ValueError, TypeError):
                     pass
         elif a.activity_type == "imessage_sent":
             if created >= today_start: row["imessages_today"] += 1
 
-    # Emails → emails_today / emails_this_week (per sender_user_id if set,
-    # else attribute to the company's assigned rep)
-    company_owner_cache: dict[int, int] = {}
+    # Emails → emails_today / emails_this_week (attribute to the
+    # company's assigned rep via prefetched cache)
     for e in emails_30d:
         sent = _aware(e.sent_at) if e.sent_at else None
         if not sent:
             continue
-        # Attribute to whoever owns the email's contact's company
-        sender_uid = None
-        if e.company_id:
-            if e.company_id not in company_owner_cache:
-                co = (await db.execute(
-                    select(Company.assigned_to).where(Company.id == e.company_id)
-                )).scalar_one_or_none()
-                company_owner_cache[e.company_id] = co or 0
-            sender_uid = company_owner_cache[e.company_id] or None
+        sender_uid = company_owner_cache.get(e.company_id) if e.company_id else None
         if not sender_uid or sender_uid not in per_bdr:
             continue
         if sent >= today_start: per_bdr[sender_uid]["emails_today"] += 1
@@ -913,25 +925,24 @@ async def team_dashboard(
         created = _aware(a.created_at)
         if created < sevenday_ago:
             continue
-        # Parse talk_ratio if present
+        # Parse talk_ratio if present — skip single-speaker recordings
+        # for over-talking flag, but still surface for review
         rep_pct = None
+        is_single_speaker = False
         if a.talk_ratio_json:
             try:
                 import json as _json
-                rep_pct = float(_json.loads(a.talk_ratio_json).get("rep_pct") or 0)
+                tr = _json.loads(a.talk_ratio_json)
+                rep_pct = float(tr.get("rep_pct") or 0)
+                is_single_speaker = bool(tr.get("single_speaker"))
             except (ValueError, TypeError):
                 rep_pct = None
-        over_talked = rep_pct is not None and rep_pct > 60
+        over_talked = (not is_single_speaker) and rep_pct is not None and rep_pct > 60
         needs_review = a.call_rating is None
         if not (over_talked or needs_review):
             continue
         rep = user_map.get(a.user_id)
-        # Pull company name (cheap — already in our activity but we
-        # don't have it here; do a small lookup)
-        co_name = None
-        if a.company_id:
-            co = (await db.execute(select(Company.name).where(Company.id == a.company_id))).scalar_one_or_none()
-            co_name = co
+        co_name = company_name_cache.get(a.company_id) if a.company_id else None
         watchlist.append({
             "activity_id": a.id,
             "company_id": a.company_id,
@@ -965,11 +976,10 @@ async def team_dashboard(
             continue
         if not d.updated_at or _aware(d.updated_at) >= stale_cutoff:
             continue
-        co = (await db.execute(select(Company).where(Company.id == d.company_id))).scalar_one_or_none()
         stuck_by_bdr[d.assigned_to].append({
             "deal_id": d.id,
             "company_id": d.company_id,
-            "company_name": co.name if co else None,
+            "company_name": company_name_cache.get(d.company_id),
             "stage": d.stage,
             "value": d.value or 0,
             "days_stale": (now - _aware(d.updated_at)).days,
@@ -1007,14 +1017,11 @@ async def team_dashboard(
             continue
         if not a.reply_sentiment:
             continue
-        # Attribute via company owner
+        # Attribute via company owner (prefetched cache)
         if not a.company_id:
             continue
-        if a.company_id not in company_owner_cache:
-            co = (await db.execute(select(Company.assigned_to).where(Company.id == a.company_id))).scalar_one_or_none()
-            company_owner_cache[a.company_id] = co or 0
-        uid = company_owner_cache[a.company_id]
-        if uid not in sentiment_by_bdr:
+        uid = company_owner_cache.get(a.company_id)
+        if not uid or uid not in sentiment_by_bdr:
             continue
         s = a.reply_sentiment.strip().lower()
         if s in sentiment_buckets:
@@ -1050,11 +1057,8 @@ async def team_dashboard(
         if not e.sent_at: continue
         sent = _aware(e.sent_at)
         if sent < fourteenday_ago: continue
-        if e.company_id not in company_owner_cache:
-            co = (await db.execute(select(Company.assigned_to).where(Company.id == e.company_id))).scalar_one_or_none()
-            company_owner_cache[e.company_id] = co or 0
-        uid = company_owner_cache[e.company_id]
-        if uid not in heatmap_by_bdr: continue
+        uid = company_owner_cache.get(e.company_id)
+        if not uid or uid not in heatmap_by_bdr: continue
         d = sent.date().isoformat()
         if d in heatmap_by_bdr[uid]:
             heatmap_by_bdr[uid][d] += 1
@@ -1100,18 +1104,12 @@ async def team_dashboard(
         if a.activity_type == "sequence_created" and a.user_id in funnel_by_bdr:
             funnel_by_bdr[a.user_id]["sequences_started"] += 1
         elif a.activity_type == "email_opened" and a.company_id:
-            if a.company_id not in company_owner_cache:
-                co = (await db.execute(select(Company.assigned_to).where(Company.id == a.company_id))).scalar_one_or_none()
-                company_owner_cache[a.company_id] = co or 0
-            uid = company_owner_cache[a.company_id]
-            if uid in funnel_by_bdr:
+            uid = company_owner_cache.get(a.company_id)
+            if uid and uid in funnel_by_bdr:
                 funnel_by_bdr[uid]["opens"] += 1
         elif a.activity_type == "email_replied" and a.company_id:
-            if a.company_id not in company_owner_cache:
-                co = (await db.execute(select(Company.assigned_to).where(Company.id == a.company_id))).scalar_one_or_none()
-                company_owner_cache[a.company_id] = co or 0
-            uid = company_owner_cache[a.company_id]
-            if uid in funnel_by_bdr:
+            uid = company_owner_cache.get(a.company_id)
+            if uid and uid in funnel_by_bdr:
                 funnel_by_bdr[uid]["replies"] += 1
     for b in bookings_30d:
         if b.host_user_id in funnel_by_bdr and b.status == "confirmed":

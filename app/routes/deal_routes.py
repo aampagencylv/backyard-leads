@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Optional
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
@@ -134,6 +134,7 @@ class UpdateSendWindowRequest(BaseModel):
 @router.put("/autopilot/send-window")
 async def update_send_window(
     req: UpdateSendWindowRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -175,6 +176,21 @@ async def update_send_window(
     if req.respect_rep_presence is not None:
         rc.autopilot_respect_rep_presence = bool(req.respect_rep_presence)
 
+    # Audit log: org-wide setting change, who/when/what.
+    try:
+        from app.services.audit_log import record_audit
+        change_meta = {}
+        if req.basis is not None: change_meta["basis"] = req.basis
+        if req.email is not None: change_meta["email"] = req.email.dict()
+        if req.imessage is not None: change_meta["imessage"] = req.imessage.dict()
+        if req.respect_rep_presence is not None: change_meta["respect_rep_presence"] = req.respect_rep_presence
+        await record_audit(
+            db, actor=user, action="autopilot_send_window.updated",
+            target_type="runtime_config", target_id=1, target_label="send_window",
+            metadata=change_meta, request=request,
+        )
+    except Exception:
+        pass
     await db.commit()
     # Echo back the saved config so the UI doesn't need a follow-up GET.
     from app.services.send_window import get_autopilot_config
@@ -200,9 +216,23 @@ async def autopilot_preview(
     channel, returns whether *right now* would fire and (if not) when
     the next valid send slot is, in the contact's local time. Used by
     the 'Try a contact' widget so admins can sanity-check their config
-    before saving."""
+    before saving. Scoped: sales_reps can only preview against their
+    own assigned contacts."""
     if channel not in ("email", "imessage"):
         raise HTTPException(status_code=400, detail="channel must be email|imessage")
+    # Scope check — prevent reps from probing other reps' contacts.
+    from app.models import Contact as _Contact, Company as _Company
+    contact = (await db.execute(
+        select(_Contact).where(_Contact.id == contact_id)
+    )).scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    if user.role not in ("admin", "super_admin"):
+        owner = (await db.execute(
+            select(_Company.assigned_to).where(_Company.id == contact.company_id)
+        )).scalar_one_or_none()
+        if owner and owner != user.id:
+            raise HTTPException(status_code=404, detail="Contact not found")
     from app.services.send_window import preview_for_contact
     result = await preview_for_contact(db, contact_id=contact_id, channel=channel)
     if not result.get("found"):
@@ -228,6 +258,7 @@ class UpdatePipelineConfigRequest(BaseModel):
 @router.put("/pipeline/config")
 async def update_pipeline_config(
     req: UpdatePipelineConfigRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -242,6 +273,22 @@ async def update_pipeline_config(
         )
     except pipeline_cfg.PipelineConfigError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    # Audit log: org-wide setting change.
+    try:
+        from app.services.audit_log import record_audit
+        await record_audit(
+            db, actor=user, action="pipeline_stages.updated",
+            target_type="runtime_config", target_id=1, target_label="pipeline_stages",
+            metadata={
+                "middle_stages": result.get("middle_stages"),
+                "dropped": result.get("dropped_stages"),
+                "migrated_deal_count": result.get("migrated_deal_count"),
+            },
+            request=request,
+        )
+        await db.commit()
+    except Exception:
+        pass
     return {
         "ok": True,
         **result,

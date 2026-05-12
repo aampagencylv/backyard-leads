@@ -18,6 +18,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 
 
 async def main() -> None:
+    # We bypass the _run_pipeline early-exit on already-transcribed
+    # activities by null-ing the transcript before re-running. Cleaner
+    # than passing a force flag through the whole pipeline.
+    import json
     from app.services.call_transcription import _run_pipeline as transcribe_activity
 
     async with async_session() as db:
@@ -28,15 +32,19 @@ async def main() -> None:
                 Activity.diarized_segments_json.is_(None),
             ).order_by(Activity.id.desc())
         )).scalars().all()
+        ids = [a.id for a in rows]
+        # Null transcripts so the pipeline re-runs for these activities
+        for a in rows:
+            a.transcript = None
+        await db.commit()
 
-    log.info(f"Found {len(rows)} call activities with recordings but no diarization persisted")
-    for a in rows:
+    log.info(f"Found {len(ids)} call activities with recordings but no diarization persisted")
+    for aid in ids:
         try:
-            log.info(f"  → re-transcribing activity {a.id} (recording {a.recording_url[-30:]}…)")
-            # transcribe_activity opens its own session
-            await transcribe_activity(a.id)
+            log.info(f"  → re-transcribing activity {aid}…")
+            await transcribe_activity(aid)
         except Exception as e:
-            log.exception(f"    backfill failed for activity {a.id}: {e}")
+            log.exception(f"    backfill failed for activity {aid}: {e}")
 
     log.info("Done.")
 

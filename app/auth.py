@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status, Request
@@ -57,17 +58,22 @@ def mint_recording_token(activity_id: int, user_id: int) -> str:
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
-def verify_recording_token(token: str, activity_id: int) -> bool:
-    """Verify a recording token is valid + matches the requested activity."""
+def verify_recording_token(token: str, activity_id: int) -> Optional[int]:
+    """Verify a recording token is valid + matches the requested activity.
+    Returns the user_id from the token (`sub`) on success so the caller
+    can enforce ownership; None on failure."""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except JWTError:
-        return False
+        return None
     if payload.get("scope") != "recording":
-        return False
+        return None
     if int(payload.get("act") or 0) != activity_id:
-        return False
-    return True
+        return None
+    try:
+        return int(payload.get("sub") or 0) or None
+    except (TypeError, ValueError):
+        return None
 
 
 async def get_current_user(

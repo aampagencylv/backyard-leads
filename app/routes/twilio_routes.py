@@ -705,10 +705,14 @@ async def proxy_recording(
     custom headers. Tokens are minted server-side and scoped to a
     specific activity_id.
     """
-    # 1. Try query-token auth first — this is the path <audio> uses.
-    if t and verify_recording_token(t, activity_id):
-        pass
-    else:
+    # Resolve the requesting user id from either auth path.
+    requesting_user_id: Optional[int] = None
+    if t:
+        # 1. Query-token auth — used by <audio src> elements.
+        token_user_id = verify_recording_token(t, activity_id)
+        if token_user_id:
+            requesting_user_id = token_user_id
+    if requesting_user_id is None:
         # 2. Fall back to bearer auth so api()-style callers still work.
         auth_header = request.headers.get("authorization") or ""
         token = auth_header.removeprefix("Bearer ").strip() if auth_header.lower().startswith("bearer ") else ""
@@ -717,13 +721,38 @@ async def proxy_recording(
         try:
             from jose import jwt as _jwt
             from app.auth import SECRET_KEY as _SK, ALGORITHM as _ALG
-            _jwt.decode(token, _SK, algorithms=[_ALG])
+            payload = _jwt.decode(token, _SK, algorithms=[_ALG])
+            requesting_user_id = int(payload.get("sub") or 0) or None
         except Exception:
             raise HTTPException(status_code=401, detail="Invalid recording token")
+    if not requesting_user_id:
+        raise HTTPException(status_code=401, detail="Could not identify user")
+
+    # Look up the requesting user + the activity, then enforce that the
+    # user has access. Admins see everything; reps only their own
+    # company's activity.
+    requesting_user = (await db.execute(
+        select(User).where(User.id == requesting_user_id, User.is_active == True)
+    )).scalar_one_or_none()
+    if not requesting_user:
+        raise HTTPException(status_code=401, detail="User not found or inactive")
 
     act = (await db.execute(select(Activity).where(Activity.id == activity_id))).scalar_one_or_none()
     if not act or not act.recording_url:
         raise HTTPException(status_code=404, detail="No recording on this activity")
+
+    if requesting_user.role not in ("admin", "super_admin"):
+        # Sales reps may only stream a recording on a company they own.
+        # Fall back to user_id match on the activity itself (their own
+        # outbound calls) when company is missing.
+        if act.company_id:
+            owner = (await db.execute(
+                select(Company.assigned_to).where(Company.id == act.company_id)
+            )).scalar_one_or_none()
+            if owner != requesting_user.id and act.user_id != requesting_user.id:
+                raise HTTPException(status_code=403, detail="Not your call recording")
+        elif act.user_id and act.user_id != requesting_user.id:
+            raise HTTPException(status_code=403, detail="Not your call recording")
 
     creds = await get_twilio_credentials(db)
     if not creds.is_minimally_configured:

@@ -252,6 +252,14 @@ async def _transcribe_with_deepgram(
     for w in all_words:
         sp = int(w["speaker"])
         word_counts[sp] = word_counts.get(sp, 0) + 1
+
+    # Detect "single-speaker" recordings — voicemail, dropped call, one
+    # side muted, etc. When only one channel produced any words, label
+    # the recording as such so the UI can render an accurate hint
+    # rather than implying the other party did all (or none) of the
+    # talking. We still surface the word counts; just add a flag.
+    speakers_with_words = [sp for sp, c in word_counts.items() if c > 0]
+    single_speaker = len(speakers_with_words) <= 1
     rep_words = word_counts.get(0, 0)
     prospect_words = sum(c for sp, c in word_counts.items() if sp != 0)
     total = max(rep_words + prospect_words, 1)
@@ -259,6 +267,7 @@ async def _transcribe_with_deepgram(
         "rep_words": rep_words,
         "prospect_words": prospect_words,
         "rep_pct": round(rep_words * 100 / total, 1),
+        "single_speaker": single_speaker,
     }
 
     return pretty, segments, talk_ratio

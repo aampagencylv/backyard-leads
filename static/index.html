@@ -520,6 +520,24 @@
 
             /* --- Dashboard --- */
             .dashboard-2col .panel { margin-bottom: 12px; }
+
+            /* --- Team Overview tab on the dashboard --- */
+            /* The leaderboard + funnel tables are 8+ columns wide; on a
+               narrow viewport they need horizontal scroll instead of
+               trying to fit. The wrapping div has overflow-x:auto, so
+               just stop the tables from collapsing. */
+            #team-leaderboard table,
+            #team-funnel table { font-size: 11px; min-width: 720px; }
+            #team-heatmap { font-size: 10px; }
+            #team-heatmap table { min-width: 540px; }
+            /* Stack the inner 2-col grid into a single column on phone */
+            #dashboard-team-view .dashboard-2col {
+                grid-template-columns: 1fr;
+            }
+            #team-kpi-strip { grid-template-columns: repeat(2, 1fr); }
+            /* Dashboard tab strip — keep within viewport, allow wrap */
+            #dashboard-tabs { flex-wrap: wrap; }
+            #dashboard-tabs .dash-tab { padding: 8px 10px; font-size: 12px; }
         }
 
         /* Pipeline bars */
@@ -6941,11 +6959,16 @@ function verify(secret, rawBody, header) {
             const prospectPct = (talkRatio && talkRatio.prospect_pct != null)
                 ? Number(talkRatio.prospect_pct)
                 : (repPct != null ? Math.max(0, 100 - repPct) : null);
+            // Single-speaker recordings — voicemail, dropped call, muted
+            // side. Skip the over-talking flag because the % is misleading
+            // (the other side produced zero words by construction, not by
+            // dominance). Show a neutral hint instead.
+            const singleSpeaker = !!(talkRatio && talkRatio.single_speaker);
             // Industry-standard discovery-call guideline: rep should listen
             // ~55%, talk ~45%. Anything > 60% rep is over-talking — flag for
             // coaching. The wrapper border tints orange and the agent chip
             // turns orange so the row pops in the dashboard list.
-            const overTalking = repPct != null && repPct > 60;
+            const overTalking = !singleSpeaker && repPct != null && repPct > 60;
             const wrapBorder = overTalking ? '2px solid var(--bmp-orange, #FF723F)' : '1px solid #e8e8e8';
             const agentColor = overTalking ? 'var(--bmp-orange, #FF723F)' : '#1a4d8c';
             const agentTextColor = overTalking ? '#FF723F' : '#555';
@@ -6955,9 +6978,12 @@ function verify(secret, rawBody, header) {
                     <canvas id="${canvasId}" style="display:block;width:100%;height:90px;cursor:pointer"></canvas>
                     <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px;flex-wrap:wrap;gap:8px">
                         <div style="display:flex;align-items:center;gap:14px;font-size:11px;color:#555;flex-wrap:wrap">
-                            ${repPct != null ? `<div style="display:flex;align-items:center;gap:6px;${overTalking ? 'color:' + agentTextColor + ';font-weight:600' : ''}"><span style="width:9px;height:9px;background:${agentColor};border-radius:2px"></span><strong>Agent:</strong> ${repPct.toFixed(0)}%</div>` : ''}
-                            ${prospectPct != null ? `<div style="display:flex;align-items:center;gap:6px"><span style="width:9px;height:9px;background:#7fb1e8;border-radius:2px"></span><strong>Customer:</strong> ${prospectPct.toFixed(0)}%</div>` : ''}
-                            ${overTalking ? `<div style="display:inline-flex;align-items:center;gap:4px;background:#FFF3E0;color:#E65100;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600">⚠️ Over-talking — coach to listen more</div>` : ''}
+                            ${singleSpeaker
+                                ? `<div style="display:inline-flex;align-items:center;gap:4px;background:#f0f0f0;color:#666;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600">🎙️ Single-speaker recording — voicemail, dropped call, or one-sided audio</div>`
+                                : `${repPct != null ? `<div style="display:flex;align-items:center;gap:6px;${overTalking ? 'color:' + agentTextColor + ';font-weight:600' : ''}"><span style="width:9px;height:9px;background:${agentColor};border-radius:2px"></span><strong>Agent:</strong> ${repPct.toFixed(0)}%</div>` : ''}
+                                ${prospectPct != null ? `<div style="display:flex;align-items:center;gap:6px"><span style="width:9px;height:9px;background:#7fb1e8;border-radius:2px"></span><strong>Customer:</strong> ${prospectPct.toFixed(0)}%</div>` : ''}
+                                ${overTalking ? `<div style="display:inline-flex;align-items:center;gap:4px;background:#FFF3E0;color:#E65100;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600">⚠️ Over-talking — coach to listen more</div>` : ''}`
+                            }
                         </div>
                         <div style="display:flex;align-items:center;gap:10px">
                             <button id="${playBtnId}" type="button" aria-label="Play" style="width:36px;height:36px;border:none;border-radius:50%;background:${agentColor};color:white;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;padding-left:2px">▶</button>

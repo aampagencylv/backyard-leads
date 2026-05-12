@@ -1165,6 +1165,83 @@ this add-on becomes the second SKU after the base seat price.
 
 ---
 
+## ✅ Shipped 2026-05-11 — 2026-05-12 (Call coaching, autopilot, team dashboard, polish)
+
+Long multi-zone session. Order shipped (~16 commits, `bb0404a..` to `99ceb0d..`):
+
+### Call recording & coaching
+1. **Inline waveform on every call row** — replaced the `▶️ Play` toggle button with an always-visible player on the dashboard recent-calls widget + company timeline. Solved the silent-failure bug where the proxy required Bearer auth but `<audio>` elements can't attach headers — now we mint a short-lived signed token (30-min TTL, scoped to activity_id) appended as `?t=…`.
+2. **Tokenized recording proxy** — `/api/twilio/recording/{id}?t=<jwt>` plus the helper `mint_recording_token` / `verify_recording_token` in `app/auth.py`. The dashboard + company timeline serializers bake the URL into the API response so the canvas / `<audio>` just uses it.
+3. **Recording proxy ownership check** — security audit found that bearer-auth path accepted any valid JWT regardless of role/ownership. Now enforces: admin = all access; sales_rep = only activities on their assigned companies (falls back to `user_id` match on the activity).
+4. **Transcript auto-poll for fresh calls** — for calls < 5min old with a recording but no transcript yet, the page polls every 20s for up to 3 min so Deepgram's output lands without a manual refresh.
+5. **Multichannel transcription** — Deepgram switched from `diarize=true` (voice-based) to `multichannel=true`. Twilio already records `record-from-answer-dual` (channel 0 = rep, channel 1 = prospect), so per-channel decoding is now near-perfect instead of voice-fingerprint guesswork.
+6. **Diarization persistence** — new columns `activities.diarized_segments_json` (`[{speaker, start, end, text}, …]`) + `talk_ratio_json` (`{rep_words, prospect_words, rep_pct, prospect_pct, single_speaker}`). Both used to be transient. Backfill script `scripts/backfill_diarization.py` (null transcripts, re-run pipeline).
+7. **CallRail-style dual-channel canvas waveform** — custom canvas renderer drawing agent bars (dark blue) above center, customer bars (light blue) below, with played portion in darker shades. Web Audio API decodes the bytes client-side into ~220 amplitude buckets, speaker resolved per-column from diarized segments. Click anywhere to scrub. Native `<audio>` drives playback. Falls back to the iMessage-style single-track wavesurfer for legacy un-diarized calls.
+8. **Over-talking coaching indicator** — when `rep_pct > 60%` (industry guideline: rep should listen ~55%), player border turns orange, agent chip turns orange + bold, "⚠️ Over-talking — coach to listen more" pill appears.
+9. **Single-speaker recordings handled** — voicemails / dropped calls / muted sides come back as 100/0 from Deepgram. We now flag `single_speaker: true` on the talk_ratio JSON and the UI renders "🎙️ Single-speaker recording" instead of the misleading 0% / 100% chips. Over-talking flag suppressed for these.
+
+### Pipeline editor (tenant-configurable middle stages)
+10. **`/api/pipeline/config` GET + PUT** — stages stored as JSON blob on `runtime_config.pipeline_stages_json`. System stages (`in_sequence` / `closed_won` / `closed_lost` / `snoozed`) stay fixed in code; only middle stages (default: `qualified` → `proposal` → `negotiation`) are editable.
+11. **Settings → Pipeline Stages editor** (admin only) — system stages shown locked, middle stages get drag-handle ▲/▼ + color picker + name + probability % + delete. Adding a stage rotates default colors. Save migrates any deals on dropped stages to the first surviving middle stage so nothing strands.
+12. **Pipeline kanban renders dynamically** — `data.stage_meta` from `/api/pipeline` includes color + name + system flag; cards inherit the column color on the left border. Existing 15 deals on "prospecting" migrated to "qualified" via one-shot SQL.
+13. **Snooze-wake / engagement promotion rewired** — when a sequence engagement signal (3+ opens, click, audit booking) fires, deal moves from `in_sequence` to the *first configured middle stage* instead of the old hardcoded "prospecting". Snooze restore falls back to `in_sequence` if the stage was deleted while asleep.
+14. **Pipeline rep-filter dropdown** — admins get a dropdown ("All reps" / per-user) on the pipeline view; reps see only their own deals automatically via existing `scope_deals`.
+15. **Audit log** for pipeline + autopilot config writes — both fire `record_audit` so we have history of org-wide setting changes.
+
+### Autopilot send window v2 (per-channel + basis radio)
+16. **`/api/autopilot/send-window` GET + PUT** — RuntimeConfig grew `autopilot_basis` (contact / rep / strictest) + per-channel hours (email + iMessage) + per-channel weekday JSON + `respect_rep_presence` (stub flag).
+17. **`app/services/send_window.py`** — owns config read, contact-TZ inference (phone area code → company state → rep TZ → LA), per-channel window check, strictest-of-both math (hour-by-hour walk, 192 max iterations), `snap_to_window`, `snap_pending_steps_to_window`.
+18. **Settings → Sequence Autopilot panel** — basis radio with explainers ("Strictest of both" recommended), per-channel cards with hour pickers + weekday pills, dimmed "Respect rep online presence" checkbox (coming soon), live "🔍 Try it on a real contact" preview widget.
+19. **Sequence engine + every generation site uses the window** — engine `_maybe_defer_for_send_window` now takes `channel`, runs through the service, defers steps outside window. Major creation sites (contact pursue, company pursue v2, campaign batch, post-call sequence, manual rework, 30-day) all call `snap_pending_steps_to_window` so the UI never shows midnight queueings.
+
+### Booking routing (BDR → host calendar)
+20. **`User.default_booking_host_id`** + **`SchedulingConfig.conflict_calendar_ids_json`** — schema columns + migration.
+21. **`app/services/booking_host.py`** — `resolve_booking_host(db, user)` returns the user who should own this user's bookings (defaults to themselves; falls back to themselves if host is inactive / hasn't connected Google). `resolve_booking_url(db, user)` returns the `/book/<slug>` URL.
+22. **Email signature uses resolver** — render_signature now substitutes the host's slug, so BDR signatures route discovery-call bookings to the admin's calendar.
+23. **`/api/me/scheduling/book-for-contact` validates + writes to host's calendar** — slot validation, free-busy, Google event create, Booking row all use the host. BDR added as co-attendee. Activity log says "booked by <BDR>".
+24. **`/api/me/scheduling/preview?effective=true`** — in-app Schedule Meeting modal calls with `effective=true` so BDRs see the host's available slots (not their empty own calendar).
+25. **Multi-calendar conflict check** — `fetch_user_busy` unions primary + write-target + any IDs in `conflict_calendar_ids_json`. Personal/family calendars now block slots even though we never write to them.
+26. **`/api/me/scheduling/my-google-calendars`** — lists user's Google calendars for the multi-select picker. Calendar Settings UI gains a "Block off conflicts from other calendars" section with checkboxes (primary + write-target always on, others togglable).
+27. **Admin → Users → "Books on" column** — dropdown: Own calendar / any team member with Google connected. PATCH `default_booking_host_id` on the user.
+
+### Sequence panel polish (the "I don't see the + sign" / "I don't see resume" round)
+28. **Sequence body expanded by default** on the company-detail view — per-step "+ Add Step" pills between cards are now visible without clicking Expand.
+29. **Summary-row "+ Add Step"** alongside Pause + Restart — also surfaces on the dedicated `renderSequencePanel` editor view (Steve's screenshot showed this was missing).
+30. **"⚠️ Stalled" badge + "▶ Restart from today" button** when unsent steps have `scheduled_send_at` in the past but no `paused_at`. `resume_sequence` extended to handle the stalled case — re-anchors unsent steps to today + snaps them into the autopilot window.
+
+### Team Overview dashboard (manager view)
+31. **`/api/dashboard/team`** — one aggregation endpoint behind admin gate. Returns 7 zones: KPI strip (calls/emails/meetings today + this-week + WoW deltas, won-MTD), BDR leaderboard (per-rep table with calls/emails/iMessages today, meetings this week, open pipeline $, open deal count, health flag badges ⏰🐢🎙️, last-active timestamp), coaching watchlist (last-7d calls with rep_pct > 60 OR unrated), stuck-pipeline-by-BDR (deals untouched >14d grouped by owner), reply-sentiment-per-BDR (stacked horizontal bars by sentiment bucket), 14-day activity heatmap (rows = BDRs, cols = days, color tint = volume), conversion funnel per BDR (sequences → opens → replies → meetings → won + reply→meeting %).
+32. **Tab strip on dashboard** — "Team Overview" / "My Activity". Admin defaults to Team. Reps don't see the tabs at all.
+33. **Single-prefetch of company → owner mapping** — was N+1 lookups, now one query before the aggregation loops run.
+
+### Other UI polish
+34. **Voice-note style inline waveform** for legacy un-diarized calls — red circular play button, dark bars centered on midline, time on the right.
+35. **Sidebar logo block white background** — the dark green logo against the dark green nav looked muddy. Now sits on a clean white field while the nav stays green underneath.
+36. **Kanban scroll fix** — `.main-content` needed `min-width: 0` so the wide kanban scrolled within its container instead of expanding past the viewport and dragging the top-bar over the sidebar.
+37. **Mobile pass for Team Overview** — leaderboard + funnel + heatmap tables horizontal-scroll with `min-width` floors; inner 2-col grid collapses to single column at <900px; KPI strip goes to 2 columns.
+
+### Security audit fixes
+- Recording proxy ownership check (see #3 above)
+- Autopilot preview scope check — `/api/autopilot/preview?contact_id=X` rejects requests for contacts the requesting rep doesn't own (admins still see all)
+- Audit log entries for `pipeline_stages.updated` + `autopilot_send_window.updated` (see #15)
+
+### Migrations chained on startup this session
+- `migrate_pipeline_stages.py` — runtime_config.pipeline_stages_json
+- `migrate_autopilot_window.py` — runtime_config.autopilot_send_start_hour / end_hour / days_json
+- `migrate_autopilot_per_channel.py` — basis + per-channel hours + days + presence flag (with backfill of legacy autopilot_send_* into the email row)
+- `migrate_booking_routing.py` — users.default_booking_host_id + scheduling_configs.conflict_calendar_ids_json
+- `migrate_call_diarization.py` — activities.diarized_segments_json + talk_ratio_json
+
+### Deferred to next time
+- **Smoke tests** for `pipeline_config`, `send_window`, `booking_host` — services have nontrivial math (strictest-of-both, snap-to-window edge cases) and zero tests. ~1 hr.
+- **Rep-presence heartbeat** — `respect_rep_presence` field is wired but the actual heartbeat needs PWA push notifications + a `/api/me/heartbeat` endpoint that the installed PWA pings every 2 min. Then engine reads the timestamp and gates sends accordingly. Probably 2-3 hrs once we want to ship presence-based gating.
+
+### Action items waiting on Steve
+- **Pick a "Books on" host for each BDR** in Settings → Team Members once you onboard reps (currently 1 active rep with Google connected — yourself)
+- **Visual smoke test** on a real connected call (the two existing test calls came back 100% one-speaker because they were one-sided audio; need a real two-way call to confirm the dual-channel viz looks like CallRail's screenshot)
+
+---
+
 ## ✅ Shipped 2026-05-10 — 2026-05-11 (Missive sidebar + Chrome extension + PWA)
 
 Massive late-evening session. Order shipped:
