@@ -151,9 +151,15 @@ async def _transcribe_with_deepgram(
     Returns:
       (joined_transcript_with_speaker_labels, raw_segments, talk_ratio_dict)
     """
+    # multichannel=true is the gold standard for Twilio call recordings:
+    # Twilio is set to record-from-answer-dual, so each leg lands on its
+    # own channel (channel 0 = the rep/caller, channel 1 = the prospect/
+    # callee). Deepgram returns a separate transcript per channel, which
+    # is far more accurate than single-channel diarize=true (no risk of
+    # mislabeling speakers based on voice similarity).
     params = {
         "model": "nova-2",
-        "diarize": "true",
+        "multichannel": "true",
         "smart_format": "true",
         "punctuate": "true",
         "language": "en",
@@ -186,59 +192,65 @@ async def _transcribe_with_deepgram(
         raise RuntimeError(f"Deepgram {r.status_code}: {r.text[:300]}")
 
     data = r.json()
-    # Drill into the result shape
+    # Drill into the result shape. With multichannel=true, results.channels
+    # is a list — channel 0 = rep (caller leg), channel 1 = prospect (callee
+    # leg). Each channel has its own alternatives[].words[] with absolute
+    # timestamps, so we can interleave by time to build a unified transcript.
     channels = (data.get("results", {}).get("channels", []) or [])
     if not channels:
-        return "", [], {"rep": 0, "prospect": 0, "rep_pct": 0}
+        return "", [], {"rep": 0, "prospect": 0, "rep_pct": 0, "prospect_pct": 0}
 
-    alt = (channels[0].get("alternatives", []) or [])
-    if not alt:
-        return "", [], {"rep": 0, "prospect": 0, "rep_pct": 0}
-
-    paragraph_block = alt[0].get("paragraphs", {}).get("transcript", "")
-    raw_words = alt[0].get("words", []) or []
-
-    # Build speaker-labeled segments by walking utterances if present, else words
-    utterances = data.get("results", {}).get("utterances", []) or []
-    segments: list[dict] = []
-    if utterances:
-        for u in utterances:
-            segments.append({
-                "speaker": int(u.get("speaker", 0)),
-                "start": float(u.get("start", 0.0)),
-                "end": float(u.get("end", 0.0)),
-                "text": u.get("transcript", ""),
+    # Collect words from every channel, tagging each with its channel index
+    # (= speaker). Sort by start time so the interleaved transcript reads
+    # in conversation order.
+    all_words: list[dict] = []
+    for ch_idx, ch in enumerate(channels):
+        alt = (ch.get("alternatives", []) or [])
+        if not alt:
+            continue
+        for w in (alt[0].get("words", []) or []):
+            all_words.append({
+                "speaker": ch_idx,  # channel index doubles as speaker label
+                "start": float(w.get("start", 0.0)),
+                "end": float(w.get("end", 0.0)),
+                "text": w.get("punctuated_word") or w.get("word", ""),
             })
-    elif raw_words:
-        # Fallback — group consecutive words by speaker
-        current = None
-        for w in raw_words:
-            sp = int(w.get("speaker", 0))
-            if current is None or current["speaker"] != sp:
-                if current:
-                    segments.append(current)
-                current = {"speaker": sp, "start": float(w.get("start", 0)),
-                           "end": float(w.get("end", 0)), "text": w.get("punctuated_word") or w.get("word", "")}
-            else:
-                current["end"] = float(w.get("end", current["end"]))
-                current["text"] += " " + (w.get("punctuated_word") or w.get("word", ""))
-        if current:
-            segments.append(current)
+    all_words.sort(key=lambda w: w["start"])
 
-    # Map speaker 0 → "Rep" (whoever spoke first on outbound dial),
-    # speaker 1+ → "Prospect"
+    # If we somehow got nothing (silent recording), bail with empties.
+    if not all_words:
+        return "", [], {"rep": 0, "prospect": 0, "rep_pct": 0, "prospect_pct": 0}
+
+    # Group consecutive same-speaker words into utterances. A gap of
+    # >0.8s within the same speaker also starts a new segment so we
+    # don't merge two separate sentences.
+    segments: list[dict] = []
+    current = None
+    GAP_BREAK = 0.8
+    for w in all_words:
+        if current is None or current["speaker"] != w["speaker"] or (w["start"] - current["end"]) > GAP_BREAK:
+            if current:
+                segments.append(current)
+            current = {"speaker": w["speaker"], "start": w["start"], "end": w["end"], "text": w["text"]}
+        else:
+            current["end"] = w["end"]
+            current["text"] += " " + w["text"]
+    if current:
+        segments.append(current)
+
+    # Build a pretty transcript with speaker labels.
     def speaker_label(sp: int) -> str:
         return "Rep" if sp == 0 else "Prospect"
 
     pretty = "\n\n".join(
         f"**{speaker_label(s['speaker'])}:** {s['text'].strip()}"
         for s in segments if s.get("text", "").strip()
-    ) or paragraph_block
+    )
 
-    # Talk ratio (rough word-count ratio per speaker)
+    # Talk ratio — count words per channel.
     word_counts: dict[int, int] = {}
-    for w in raw_words:
-        sp = int(w.get("speaker", 0))
+    for w in all_words:
+        sp = int(w["speaker"])
         word_counts[sp] = word_counts.get(sp, 0) + 1
     rep_words = word_counts.get(0, 0)
     prospect_words = sum(c for sp, c in word_counts.items() if sp != 0)
