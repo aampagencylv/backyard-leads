@@ -6205,9 +6205,9 @@ function verify(secret, rawBody, header) {
             const waveId = `ws-wave-${activityId}`;
             const timeId = `ws-time-${activityId}`;
             panel.innerHTML = `
-                <div style="display:flex;align-items:center;gap:10px;background:#fff;border:1px solid #e8e8e8;border-radius:8px;padding:8px 12px;margin-top:4px">
-                    <button id="${playBtnId}" type="button" style="flex-shrink:0;width:34px;height:34px;border:none;border-radius:50%;background:var(--bmp-green,#1B5E20);color:white;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;line-height:1">▶</button>
-                    <div id="${waveId}" style="flex:1;min-width:0;height:50px"></div>
+                <div style="display:flex;align-items:center;gap:10px;background:#fff;border:1px solid #e8e8e8;border-radius:8px;padding:10px 12px;margin-top:4px">
+                    <button id="${playBtnId}" type="button" style="flex-shrink:0;width:36px;height:36px;border:none;border-radius:50%;background:var(--bmp-green,#1B5E20);color:white;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;line-height:1">▶</button>
+                    <div id="${waveId}" style="flex:1;min-width:0;height:64px"></div>
                     <div id="${timeId}" style="flex-shrink:0;font-size:11px;color:#666;font-variant-numeric:tabular-nums;min-width:80px;text-align:right">--:-- / --:--</div>
                 </div>
             `;
@@ -6217,16 +6217,18 @@ function verify(secret, rawBody, header) {
                 const sec = Math.floor(s % 60);
                 return `${m}:${String(sec).padStart(2, '0')}`;
             };
+            // Continuous filled curve mirrored top+bottom — shows real
+            // amplitude envelope so speech vs silence is obvious at a
+            // glance (CallRail / Gong style). normalize=true scales the
+            // whole clip to its peak so quiet recordings still read
+            // clearly.
             const ws = WaveSurfer.create({
                 container: '#' + waveId,
-                waveColor: 'rgba(27,94,32,0.45)',
+                waveColor: '#1B5E20',
                 progressColor: '#FF723F',
                 cursorColor: 'rgba(0,0,0,0.4)',
                 cursorWidth: 1,
-                height: 50,
-                barWidth: 2,
-                barGap: 1,
-                barRadius: 1,
+                height: 64,
                 normalize: true,
                 url: recordingUrl,
             });
