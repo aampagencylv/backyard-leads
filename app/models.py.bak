@@ -42,7 +42,7 @@ class User(Base):
     brief_enabled = Column(Boolean, default=True, nullable=False)
     brief_hour = Column(Integer, default=7, nullable=False)
     timezone = Column(String(80), default="America/Phoenix", nullable=False)
-    last_brief_sent_at = Column(DateTime(timezone=True), nullable=True)
+    last_brief_sent_at = Column(DateTime, nullable=True)
 
     # Twilio Voice — per-rep phone number + SDK identity
     twilio_phone_number = Column(String(40), nullable=True)  # E.164 format, e.g. +17025551234
@@ -57,7 +57,7 @@ class User(Base):
     google_email = Column(String(255), nullable=True)
     google_refresh_token = Column(Text, nullable=True)
     google_calendar_id = Column(String(255), nullable=True)
-    google_connected_at = Column(DateTime(timezone=True), nullable=True)
+    google_connected_at = Column(DateTime, nullable=True)
     # Public booking slug — appears in booking URL /book/{slug}. Defaults
     # to a kebab-case form of the user's first+last name on connect.
     booking_slug = Column(String(80), nullable=True, unique=True, index=True)
@@ -80,7 +80,7 @@ class User(Base):
     # Stored as a relative URL served by the app (e.g. /uploads/voicemail/3/greeting.mp3)
     voicemail_greeting_url = Column(String(500), nullable=True)
 
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     searches = relationship("Search", back_populates="user")
     activities = relationship("Activity", back_populates="user", foreign_keys="[Activity.user_id]")
@@ -99,7 +99,7 @@ class Search(Base):
     keyword = Column(String(255), nullable=False)
     location = Column(String(255), nullable=False)
     results_count = Column(Integer, default=0)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     user = relationship("User", back_populates="searches")
     companies = relationship("Company", back_populates="search")
@@ -147,7 +147,7 @@ class Company(Base):
     email_generated = Column(Boolean, default=False)
     email_sent = Column(Boolean, default=False)
     pushed_to_hubspot = Column(Boolean, default=False)
-    sequence_started_at = Column(DateTime(timezone=True), nullable=True)
+    sequence_started_at = Column(DateTime, nullable=True)
 
     # Company intel (from Netrows LinkedIn enrichment)
     employee_count = Column(Integer, nullable=True)
@@ -175,31 +175,31 @@ class Company(Base):
     # whenever Netrows adds a field. TTL: 30 days (firmographics) /
     # 7 days (Instagram posts — these turn over faster).
     company_insights_json = Column(Text, nullable=True)
-    insights_fetched_at = Column(DateTime(timezone=True), nullable=True)
+    insights_fetched_at = Column(DateTime, nullable=True)
     instagram_posts_json = Column(Text, nullable=True)
-    instagram_posts_fetched_at = Column(DateTime(timezone=True), nullable=True)
+    instagram_posts_fetched_at = Column(DateTime, nullable=True)
 
     # Tier 2 Netrows caches.
     # SimilarWeb traffic — `monthly_visits` is denormalized for filtering /
     # lead-scoring without parsing the JSON blob. <100 visits/mo signals a
     # parked / abandoned site → drop from cold-outreach cadences.
     similarweb_json = Column(Text, nullable=True)
-    similarweb_fetched_at = Column(DateTime(timezone=True), nullable=True)
+    similarweb_fetched_at = Column(DateTime, nullable=True)
     monthly_visits = Column(Integer, nullable=True)
     # Tech-stack detection (BuiltWith-equivalent).
     tech_stack_json = Column(Text, nullable=True)
-    tech_stack_fetched_at = Column(DateTime(timezone=True), nullable=True)
+    tech_stack_fetched_at = Column(DateTime, nullable=True)
     # Yelp profile cache — populated on-demand via "Yelp" button.
     yelp_json = Column(Text, nullable=True)
-    yelp_fetched_at = Column(DateTime(timezone=True), nullable=True)
+    yelp_fetched_at = Column(DateTime, nullable=True)
     # Indeed hiring activity — populated on-demand.
     indeed_jobs_json = Column(Text, nullable=True)
-    indeed_jobs_fetched_at = Column(DateTime(timezone=True), nullable=True)
+    indeed_jobs_fetched_at = Column(DateTime, nullable=True)
 
     # Google Maps reviews cache (Netrows /google-maps/reviews)
     google_place_id = Column(String(80), nullable=True)
     reviews_json = Column(Text, nullable=True)  # JSON array of reviews with owner_reply parsed out
-    reviews_fetched_at = Column(DateTime(timezone=True), nullable=True)
+    reviews_fetched_at = Column(DateTime, nullable=True)
 
     # Lead score v2 (fit × intent). Lazy-computed by lead_scorer.py — recomputed
     # on read when the cached value is older than _STALE_AFTER (default 1h).
@@ -214,7 +214,7 @@ class Company(Base):
     lead_score_intent = Column(Integer, default=0, nullable=False)
     lead_score_tier = Column(String(20), default="cold", nullable=False, index=True)
     lead_score_components = Column(Text, nullable=True)
-    lead_score_updated_at = Column(DateTime(timezone=True), nullable=True)
+    lead_score_updated_at = Column(DateTime, nullable=True)
 
     # User-defined custom fields. JSON dict {definition_key: value}. Field
     # definitions live in custom_field_definitions; this column just holds
@@ -222,8 +222,8 @@ class Company(Base):
     # annual_revenue) and tenant-defined fields share this storage.
     custom_fields_json = Column(Text, nullable=True)
 
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     search = relationship("Search", back_populates="companies")
     contacts = relationship("Contact", back_populates="company", cascade="all, delete-orphan", order_by="Contact.is_primary.desc(), Contact.id")
@@ -253,19 +253,19 @@ class Contact(Base):
 
     # Email validation / suppression
     email_status = Column(String(20), default="unknown")  # unknown, valid, invalid, bounced
-    unsubscribed_at = Column(DateTime(timezone=True), nullable=True)
+    unsubscribed_at = Column(DateTime, nullable=True)
     unsubscribe_token = Column(String(64), index=True, nullable=True)
 
     # SMS opt-out — TCPA compliance: when a contact replies STOP/UNSUBSCRIBE
     # to one of our texts, we set do_not_text=True and refuse all future SMS.
     do_not_text = Column(Boolean, default=False, nullable=False)
-    do_not_text_at = Column(DateTime(timezone=True), nullable=True)
+    do_not_text_at = Column(DateTime, nullable=True)
 
     # Phone-type cache from Twilio Lookup v2 — populated lazily on first send attempt.
     # Values: 'mobile' (iMessage/SMS works), 'landline' (refuse send), 'voip',
     # 'unknown' (lookup not yet attempted), 'error' (lookup failed; treat as unknown).
     phone_type = Column(String(20), nullable=True)
-    phone_type_checked_at = Column(DateTime(timezone=True), nullable=True)
+    phone_type_checked_at = Column(DateTime, nullable=True)
     phone_carrier = Column(String(80), nullable=True)  # e.g. "Verizon Wireless"
 
     # Missive conversation linkage — populated the first time a BDR
@@ -273,11 +273,11 @@ class Contact(Base):
     # to us). Lets status-change hooks fire write-back actions like
     # 'apply Replied label' or 'add comment' against the right thread.
     missive_conversation_id = Column(String(64), nullable=True, index=True)
-    missive_conversation_seen_at = Column(DateTime(timezone=True), nullable=True)
+    missive_conversation_seen_at = Column(DateTime, nullable=True)
 
     # Personalization context cache (Netrows /people/posts)
     recent_posts_json = Column(Text, nullable=True)  # JSON array of {text, posted_at, url, likes}
-    posts_fetched_at = Column(DateTime(timezone=True), nullable=True)
+    posts_fetched_at = Column(DateTime, nullable=True)
 
     # Tenant-defined custom fields. JSON dict {definition_key: value}.
     # Definitions live in custom_field_definitions where entity_type='contact'.
@@ -288,10 +288,10 @@ class Contact(Base):
     # first/last name when those are empty; full payload kept here for
     # future "view profile" UI without a fresh API hit.
     linkedin_profile_json = Column(Text, nullable=True)
-    linkedin_profile_fetched_at = Column(DateTime(timezone=True), nullable=True)
+    linkedin_profile_fetched_at = Column(DateTime, nullable=True)
 
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     company = relationship("Company", back_populates="contacts")
     emails = relationship("GeneratedEmail", back_populates="contact", cascade="all, delete-orphan", order_by="GeneratedEmail.sequence_order")
@@ -313,12 +313,12 @@ class Deal(Base):
     stage = Column(String(50), default="prospecting")
     pipeline = Column(String(50), default="default")
     probability = Column(Integer, default=0)  # 0-100
-    expected_close_date = Column(DateTime(timezone=True), nullable=True)
-    closed_at = Column(DateTime(timezone=True), nullable=True)
+    expected_close_date = Column(DateTime, nullable=True)
+    closed_at = Column(DateTime, nullable=True)
     lost_reason = Column(String(255), nullable=True)
 
     # Snooze / reactivation
-    snoozed_until = Column(DateTime(timezone=True), nullable=True)
+    snoozed_until = Column(DateTime, nullable=True)
     snooze_reason = Column(Text, nullable=True)
     stage_before_snooze = Column(String(50), nullable=True)  # restore to this stage on wake
 
@@ -328,8 +328,8 @@ class Deal(Base):
 
     assigned_to = Column(Integer, ForeignKey("users.id"), nullable=True)
 
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     company = relationship("Company", back_populates="deals")
     assigned_user = relationship("User", foreign_keys=[assigned_to])
@@ -353,10 +353,10 @@ class GeneratedEmail(Base):
     email_type = Column(String(50), default="cold")  # cold, follow_up_1, follow_up_2, breakup, linkedin_connect, linkedin_message, call, text, imessage
     sequence_order = Column(Integer, default=1)
     send_delay_days = Column(Integer, default=0)
-    scheduled_send_at = Column(DateTime(timezone=True), nullable=True)
-    sent_at = Column(DateTime(timezone=True), nullable=True)  # when email was sent or task was completed
+    scheduled_send_at = Column(DateTime, nullable=True)
+    sent_at = Column(DateTime, nullable=True)  # when email was sent or task was completed
     is_sent = Column(Boolean, default=False)  # for emails: actually sent. For tasks: completed by BDR.
-    paused_at = Column(DateTime(timezone=True), nullable=True)
+    paused_at = Column(DateTime, nullable=True)
     problems_referenced = Column(Text)
 
     # Sequence engine v1 (auto-execution)
@@ -364,7 +364,7 @@ class GeneratedEmail(Base):
     # 'no_linkedin', 'opted_out', 'landline'. When any condition matches, the step is skipped
     # (skipped_at set + Activity logged) and the next step continues normally.
     skip_if_json = Column(Text, nullable=True)
-    skipped_at = Column(DateTime(timezone=True), nullable=True)
+    skipped_at = Column(DateTime, nullable=True)
     skip_reason = Column(String(80), nullable=True)
     # auto_execute=True: engine fires the step automatically (email, imessage)
     # auto_execute=False: engine creates a Task on the BDR (call, linkedin)
@@ -392,13 +392,13 @@ class GeneratedEmail(Base):
     # as events arrive. opened_at is the FIRST open; open_count increments
     # on each subsequent open. bounced_at/complained_at being set is what
     # the engine uses to skip a contact's remaining steps.
-    delivered_at = Column(DateTime(timezone=True), nullable=True)
-    opened_at = Column(DateTime(timezone=True), nullable=True)
+    delivered_at = Column(DateTime, nullable=True)
+    opened_at = Column(DateTime, nullable=True)
     open_count = Column(Integer, default=0, nullable=False)
-    bounced_at = Column(DateTime(timezone=True), nullable=True)
-    complained_at = Column(DateTime(timezone=True), nullable=True)
+    bounced_at = Column(DateTime, nullable=True)
+    complained_at = Column(DateTime, nullable=True)
 
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     contact = relationship("Contact", back_populates="emails")
     company = relationship("Company")
@@ -442,7 +442,7 @@ class Activity(Base):
     call_rating = Column(Integer, nullable=True)  # 1-5 stars
     call_feedback = Column(Text, nullable=True)  # Admin written feedback
     rated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
-    rated_at = Column(DateTime(timezone=True), nullable=True)
+    rated_at = Column(DateTime, nullable=True)
 
     # AI-classified sentiment for email_replied activities. One of:
     # 'interested', 'objection', 'out_of_office', 'wrong_person',
@@ -452,7 +452,7 @@ class Activity(Base):
     reply_sentiment = Column(String(20), nullable=True, index=True)
     reply_sentiment_summary = Column(Text, nullable=True)  # one-line AI gist
 
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     company = relationship("Company", back_populates="activities")
     user = relationship("User", back_populates="activities", foreign_keys=[user_id])
@@ -613,9 +613,9 @@ class RuntimeConfig(Base):
     zoominfo_client_id = Column(Text, nullable=True)
     zoominfo_private_key = Column(Text, nullable=True)      # PEM-format RSA key
     zoominfo_access_token = Column(Text, nullable=True)     # cached JWT, refreshed on expiry
-    zoominfo_token_expires_at = Column(DateTime(timezone=True), nullable=True)
+    zoominfo_token_expires_at = Column(DateTime, nullable=True)
 
-    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
 
 
@@ -633,9 +633,9 @@ class TrackingLink(Base):
     email_id = Column(Integer, ForeignKey("generated_emails.id"), nullable=True)
     destination_url = Column(Text, nullable=False)
     label = Column(String(40), nullable=True)  # 'signature_website', 'signature_calendar', 'body_link', etc.
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
-    first_clicked_at = Column(DateTime(timezone=True), nullable=True)
-    last_clicked_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    first_clicked_at = Column(DateTime, nullable=True)
+    last_clicked_at = Column(DateTime, nullable=True)
     click_count = Column(Integer, default=0, nullable=False)
 
 
@@ -658,7 +658,7 @@ class PageView(Base):
     referrer = Column(Text, nullable=True)
     user_agent = Column(String(300), nullable=True)
     ip = Column(String(64), nullable=True)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
 
     # Event type:
     #   'pageview'        — default; just loaded a page
@@ -699,7 +699,7 @@ class SiteVisitorSession(Base):
     resolved_company_id = Column(Integer, ForeignKey("companies.id"), nullable=True, index=True)
     resolved_company_name = Column(String(255), nullable=True)
     resolved_domain = Column(String(255), nullable=True, index=True)
-    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    resolved_at = Column(DateTime, nullable=True)
     # Heuristic — when True, this IP looks like a residential ISP and
     # the org name is the ISP not the company. Filter these out of the
     # Site Visitors list since they're noise.
@@ -711,8 +711,8 @@ class SiteVisitorSession(Base):
     city = Column(String(120), nullable=True)
 
     pageview_count = Column(Integer, nullable=False, default=0)
-    first_seen_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
-    last_seen_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    first_seen_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    last_seen_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
 
 
 class Tag(Base):
@@ -735,10 +735,10 @@ class Task(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
 
     description = Column(String(500), nullable=False)
-    due_date = Column(DateTime(timezone=True), nullable=True)
+    due_date = Column(DateTime, nullable=True)
     completed = Column(Boolean, default=False)
-    completed_at = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     company = relationship("Company", back_populates="tasks")
     user = relationship("User", back_populates="tasks")
@@ -753,7 +753,7 @@ class SavedView(Base):
     page = Column(String(30), nullable=False)
     name = Column(String(100), nullable=False)
     filters_json = Column(Text, nullable=False)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 # Many-to-many: campaigns <-> users (round-robin team)
@@ -814,16 +814,11 @@ class Campaign(Base):
     current_location_index = Column(Integer, default=0)  # Which location we're processing
     current_business_type_index = Column(Integer, default=0)  # Which business type within that location
     prospects_today = Column(Integer, default=0)  # Reset daily
-    last_run_at = Column(DateTime(timezone=True), nullable=True)
-    last_daily_reset = Column(DateTime(timezone=True), nullable=True)
-    # When set, the campaign is archived — hidden from the main Auto
-    # Pilot list. Used after a campaign has completed so the page stays
-    # focused on what's actively running. Setting archived_at also
-    # implies the campaign is no longer running.
-    archived_at = Column(DateTime(timezone=True), nullable=True)
+    last_run_at = Column(DateTime, nullable=True)
+    last_daily_reset = Column(DateTime, nullable=True)
 
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     creator = relationship("User", foreign_keys=[created_by])
     members = relationship("User", secondary=campaign_members)
@@ -839,7 +834,7 @@ class CampaignLog(Base):
     detail = Column(Text, default="")
     company_id = Column(Integer, nullable=True)
     contact_id = Column(Integer, nullable=True)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class SoSLookup(Base):
@@ -860,8 +855,8 @@ class SoSLookup(Base):
     company_name = Column(String(255), nullable=False, index=True)  # normalized form
     found = Column(Boolean, default=False, nullable=False)
     result_json = Column(Text, nullable=True)  # SoSResult dict serialized
-    fetched_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
-    expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    fetched_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    expires_at = Column(DateTime, nullable=True, index=True)
 
 
 class CustomFieldDefinition(Base):
@@ -901,8 +896,8 @@ class CustomFieldDefinition(Base):
     # "platform-provided" vs. tenant-created
     is_default = Column(Boolean, default=False, nullable=False)
 
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
-    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
 
@@ -941,20 +936,20 @@ class CampaignTarget(Base):
 
     # Today's counters — reset at UTC midnight via the runner's daily-reset check
     enrolled_today = Column(Integer, default=0, nullable=False)
-    last_daily_reset = Column(DateTime(timezone=True), nullable=True)
+    last_daily_reset = Column(DateTime, nullable=True)
 
     # Cursor: how far into Google Maps results we've scrolled. Each tick
     # advances; we never re-scrape the same offset on the same target.
     scrape_cursor = Column(Integer, default=0, nullable=False)
 
     # Pacing + exhaustion detection
-    last_run_at = Column(DateTime(timezone=True), nullable=True)
+    last_run_at = Column(DateTime, nullable=True)
     consecutive_empty_runs = Column(Integer, default=0, nullable=False)
 
     paused_reason = Column(String(255), nullable=True)
 
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
-    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
 
@@ -967,8 +962,8 @@ class CampaignRun(Base):
     id = Column(Integer, primary_key=True, index=True)
     campaign_id = Column(Integer, ForeignKey("campaigns.id"), nullable=False, index=True)
 
-    started_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
-    finished_at = Column(DateTime(timezone=True), nullable=True)
+    started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    finished_at = Column(DateTime, nullable=True)
 
     targets_processed = Column(Integer, default=0, nullable=False)
     contacts_enrolled = Column(Integer, default=0, nullable=False)
@@ -1001,8 +996,8 @@ class ApiKey(Base):
     # the full secret.
     key_prefix = Column(String(20), nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
-    last_used_at = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    last_used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
     # Permission scope. v1 keys default to 'read' (search, get, summarize).
     # 'write' keys can additionally invoke MCP write tools (add note,
@@ -1034,11 +1029,11 @@ class Webhook(Base):
     # JSON list of subscribed event names. Empty = all events.
     events_json = Column(Text, nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
-    last_delivery_at = Column(DateTime(timezone=True), nullable=True)
+    last_delivery_at = Column(DateTime, nullable=True)
     last_delivery_status = Column(Integer, nullable=True)  # HTTP status code
     last_delivery_error = Column(String(300), nullable=True)
     failure_count = Column(Integer, default=0, nullable=False)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
 class AuditLogEntry(Base):
@@ -1087,7 +1082,7 @@ class AuditLogEntry(Base):
     ip_address = Column(String(64), nullable=True)
     user_agent = Column(String(300), nullable=True)
 
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
 
 
 class CreditLedger(Base):
@@ -1123,7 +1118,7 @@ class CreditLedger(Base):
     # steps, webhook redeliveries, etc.) not double-charge.
     idempotency_key = Column(String(120), unique=True, index=True, nullable=False)
     metadata_json = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
 
 
 class AuditReportModel(Base):
@@ -1144,17 +1139,17 @@ class AuditReportModel(Base):
 
     # Competitor comparison
     competitor_html = Column(Text, nullable=True)
-    competitor_generated_at = Column(DateTime(timezone=True), nullable=True)
+    competitor_generated_at = Column(DateTime, nullable=True)
 
     # Tracking
     view_count = Column(Integer, default=0)
-    last_viewed_at = Column(DateTime(timezone=True), nullable=True)
-    generated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    last_viewed_at = Column(DateTime, nullable=True)
+    generated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Set when prospect schedules via the iClosed widget on the gate page.
     # Source priority: iClosed webhook > prospect self-confirm via the
     # "I've Scheduled" button. nullable means: not booked yet.
-    booked_at = Column(DateTime(timezone=True), nullable=True)
+    booked_at = Column(DateTime, nullable=True)
     booked_email = Column(String(255), nullable=True)
 
 
@@ -1232,8 +1227,8 @@ class SchedulingConfig(Base):
     # Public visibility — admin can deactivate without disconnecting Google
     is_active = Column(Boolean, default=True, nullable=False)
 
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
 
 
@@ -1253,8 +1248,8 @@ class Booking(Base):
     host_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
 
     # Time window (UTC)
-    starts_at = Column(DateTime(timezone=True), nullable=False, index=True)
-    ends_at = Column(DateTime(timezone=True), nullable=False)
+    starts_at = Column(DateTime, nullable=False, index=True)
+    ends_at = Column(DateTime, nullable=False)
 
     # Prospect-supplied
     prospect_name = Column(String(160), nullable=False)
@@ -1277,10 +1272,10 @@ class Booking(Base):
 
     # Lifecycle
     status = Column(String(20), nullable=False, default="confirmed")  # confirmed/cancelled
-    cancelled_at = Column(DateTime(timezone=True), nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
     cancelled_reason = Column(Text, nullable=True)
 
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
 
 
 class Feedback(Base):
@@ -1294,7 +1289,7 @@ class Feedback(Base):
     page = Column(String(80), nullable=True)  # which page they were on
     resolved = Column(Boolean, default=False)
     admin_notes = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
 
 
 class PendingDeletion(Base):
@@ -1309,5 +1304,5 @@ class PendingDeletion(Base):
     reason = Column(String(255), nullable=True)
     status = Column(String(20), nullable=False, default="pending")  # pending, approved, rejected
     reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
-    reviewed_at = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)

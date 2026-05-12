@@ -5529,6 +5529,10 @@ function verify(secret, rawBody, header) {
                             <h3><a href="#" onclick="openCompanyDetail(${c.id});return false" style="color:inherit;text-decoration:none;border-bottom:1px dashed #ccc">${escapeHtml(c.name)}</a></h3>
                             <span class="status-badge status-${c.status}">${c.status}</span>
                             ${c.problem_count > 0 ? `<span style="background:#fde8e8;color:#c0392b;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;margin-left:6px">${c.problem_count} issues found</span>` : ''}
+                            ${c.assigned_name
+                                ? `<span style="background:#e8f5e9;color:var(--bmp-green);padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;margin-left:6px" title="Assigned BDR">👤 ${escapeHtml(c.assigned_name)}</span>`
+                                : `<span style="background:#fff3cd;color:#856404;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;margin-left:6px" title="Not assigned to a BDR">👤 Unassigned</span>`
+                            }
                         </div>
                         <div style="text-align:right">
                             ${c.review_count ? `<div style="font-size:18px;font-weight:700;color:${c.review_count >= 50 ? '#27ae60' : c.review_count >= 20 ? '#f39c12' : '#999'}">${c.review_count}</div><div style="font-size:10px;color:#666">reviews</div>` : '<div style="font-size:11px;color:#999">No reviews</div>'}
@@ -9119,6 +9123,10 @@ hmac.compare_digest(expected, header)</pre>
                         ${c.status === 'running' ? `<button class="btn btn-secondary btn-sm" onclick="pauseCampaign(${c.id})">Pause</button>` : ''}
                         <button class="btn btn-secondary btn-sm" onclick="viewCampaignTargets(${c.id})">📊 Portfolio</button>
                         <button class="btn btn-secondary btn-sm" onclick="viewCampaignLogs(${c.id})">View Logs</button>
+                        ${c.status === 'draft' && (c.total_prospects_found || 0) === 0 && (c.total_sequences_created || 0) === 0
+                            ? `<button class="btn btn-danger btn-xs" onclick="deleteCampaign(${c.id}, '${escapeHtml((c.name||'').replace(/'/g, "\\'"))}')">Delete</button>` : ''}
+                        ${c.status !== 'running' && c.status !== 'draft'
+                            ? `<button class="btn btn-secondary btn-xs" onclick="archiveCampaign(${c.id})">Archive</button>` : ''}
                     </div>
                     <div id="campaign-targets-${c.id}" style="margin-top:8px"></div>
                     <div id="campaign-logs-${c.id}" style="margin-top:8px"></div>
@@ -9313,6 +9321,18 @@ hmac.compare_digest(expected, header)</pre>
             await api(`/api/campaigns/${id}/pause`, { method: 'POST' });
             toast('Campaign paused.');
             loadCampaigns();
+        }
+
+        async function archiveCampaign(id) {
+            if (!confirm('Archive this campaign? It will be hidden from the active list. Its data + activity history are preserved and you can unarchive later.')) return;
+            const r = await api(`/api/campaigns/${id}/archive`, { method: 'POST' });
+            if (r) { toast('Campaign archived.'); loadCampaigns(); }
+        }
+
+        async function deleteCampaign(id, name) {
+            if (!confirm(`Permanently delete the campaign "${name}"? This can't be undone. (Only available for draft campaigns that never launched.)`)) return;
+            const r = await api(`/api/campaigns/${id}`, { method: 'DELETE' });
+            if (r) { toast('Campaign deleted.'); loadCampaigns(); }
         }
 
         async function runCampaignBatch(id) {

@@ -88,7 +88,18 @@ async def list_companies(
 
     result = await db.execute(query)
     companies = result.scalars().all()
-    return [_company_summary(c) for c in companies]
+    # Prefetch BDR names for the assigned_name field on each card.
+    # Single query instead of N+1 lookups inside the serializer.
+    assigned_ids = {c.assigned_to for c in companies if c.assigned_to}
+    user_name_map: dict[int, str] = {}
+    if assigned_ids:
+        rows = (await db.execute(
+            select(User.id, User.first_name, User.last_name, User.email)
+            .where(User.id.in_(assigned_ids))
+        )).all()
+        for uid, fn, ln, email in rows:
+            user_name_map[uid] = (f"{fn or ''} {ln or ''}".strip() or email)
+    return [_company_summary(c, assigned_name=user_name_map.get(c.assigned_to)) for c in companies]
 
 
 # ============================================================
@@ -1668,11 +1679,13 @@ def _split_name(full: str | None) -> tuple[str, str]:
     return (parts[0], "") if len(parts) == 1 else (parts[0], parts[1])
 
 
-def _company_summary(c: Company) -> dict:
+def _company_summary(c: Company, assigned_name: Optional[str] = None) -> dict:
     problems = json.loads(c.problems_found) if c.problems_found else []
     return {
         "id": c.id,
         "search_id": c.search_id,
+        "assigned_to": c.assigned_to,
+        "assigned_name": assigned_name,
         "name": c.name,
         "phone": c.phone,
         "website": c.website,

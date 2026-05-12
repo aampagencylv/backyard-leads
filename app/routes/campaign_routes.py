@@ -9,7 +9,7 @@ from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, text
 from pydantic import BaseModel
 
 from app.database import get_db
@@ -110,10 +110,17 @@ class CreateCampaignRequest(BaseModel):
 
 @router.get("/")
 async def list_campaigns(
+    include_archived: bool = False,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    result = await db.execute(select(Campaign).order_by(Campaign.created_at.desc()))
+    """List campaigns. Archived campaigns are hidden by default; pass
+    `?include_archived=true` to see them (useful for an admin-only
+    Archive view)."""
+    q = select(Campaign).order_by(Campaign.created_at.desc())
+    if not include_archived:
+        q = q.where(Campaign.archived_at.is_(None))
+    result = await db.execute(q)
     campaigns = result.scalars().all()
     out = []
     for c in campaigns:
@@ -147,6 +154,7 @@ async def list_campaigns(
             "prospects_today": c.prospects_today,
             "last_run_at": c.last_run_at.isoformat() if c.last_run_at else None,
             "created_at": c.created_at.isoformat() if c.created_at else None,
+            "archived_at": c.archived_at.isoformat() if c.archived_at else None,
         })
     return out
 
@@ -235,6 +243,76 @@ async def stop_campaign(
     campaign.status = "paused"
     await db.commit()
     return {"id": campaign.id, "status": "paused"}
+
+
+@router.post("/{campaign_id}/archive")
+async def archive_campaign(
+    campaign_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Archive a campaign — removes it from the active Auto Pilot list
+    but preserves all its data + activity history. Reversible via the
+    /unarchive endpoint."""
+    campaign = (await db.execute(select(Campaign).where(Campaign.id == campaign_id))).scalar_one_or_none()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if campaign.status == "running":
+        raise HTTPException(status_code=400, detail="Pause or stop the campaign before archiving")
+    campaign.archived_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"id": campaign.id, "status": campaign.status, "archived": True}
+
+
+@router.post("/{campaign_id}/unarchive")
+async def unarchive_campaign(
+    campaign_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Bring a previously-archived campaign back to the active list."""
+    campaign = (await db.execute(select(Campaign).where(Campaign.id == campaign_id))).scalar_one_or_none()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    campaign.archived_at = None
+    await db.commit()
+    return {"id": campaign.id, "status": campaign.status, "archived": False}
+
+
+@router.delete("/{campaign_id}")
+async def delete_campaign(
+    campaign_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Permanently delete a campaign. Only allowed for campaigns that
+    NEVER LAUNCHED — i.e. status='draft' with no sequences/prospects
+    attributed. Running, paused, or completed campaigns with any
+    activity history must be archived instead so audit trail is
+    preserved."""
+    campaign = (await db.execute(select(Campaign).where(Campaign.id == campaign_id))).scalar_one_or_none()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if campaign.status != "draft":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Can only delete draft campaigns. This one is '{campaign.status}' — archive it instead.",
+        )
+    if (campaign.total_prospects_found or 0) > 0 or (campaign.total_sequences_created or 0) > 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Campaign already has prospects/sequences attributed — archive instead of delete.",
+        )
+    # Clean up the join + log tables first (no cascading FKs)
+    from app.models import CampaignLog, CampaignTarget, CampaignRun
+    await db.execute(text("DELETE FROM campaign_members WHERE campaign_id = :c"), {"c": campaign_id})
+    await db.execute(select(CampaignLog).where(CampaignLog.campaign_id == campaign_id))
+    await db.execute(text("DELETE FROM campaign_logs WHERE campaign_id = :c"), {"c": campaign_id})
+    await db.execute(text("DELETE FROM campaign_targets WHERE campaign_id = :c"), {"c": campaign_id})
+    await db.execute(text("DELETE FROM campaign_runs WHERE campaign_id = :c"), {"c": campaign_id})
+    await db.delete(campaign)
+    await db.commit()
+    return {"deleted": True, "id": campaign_id}
 
 
 @router.get("/{campaign_id}/targets")
