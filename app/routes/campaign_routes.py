@@ -659,6 +659,16 @@ async def _execute_batch(campaign_id: int, db: AsyncSession, user: User):
             _log(db, campaign.id, "skipped", f"No contact email: {company.name}", company_id=company.id)
             continue
 
+        # Dedupe across business_type searches — a "pool builder" often
+        # shows up again as a "landscaping company" and "deck builder"
+        # in Google Maps. Without this check total_qualified would over-
+        # count because each search re-passes the criteria gate.
+        if company.email_generated:
+            batch_results.setdefault("skipped_already_sequenced", 0)
+            batch_results["skipped_already_sequenced"] += 1
+            _log(db, campaign.id, "skipped", f"Already sequenced (cross-vertical dupe): {company.name}", company_id=company.id)
+            continue
+
         # Qualified!
         campaign.total_qualified += 1
         batch_results["qualified"] += 1
@@ -952,6 +962,11 @@ async def _process_business_through_pipeline(
     if campaign.contact_required and not primary_contact:
         _log(db, campaign.id, "skipped", f"No contact email: {company.name}", company_id=company.id)
         return "skipped_no_contact"
+
+    # Cross-vertical dedupe — same fix as in _execute_batch above.
+    if company.email_generated:
+        _log(db, campaign.id, "skipped", f"Already sequenced (cross-vertical dupe): {company.name}", company_id=company.id)
+        return "skipped_already_sequenced"
 
     # Round-robin assign
     assign_idx = campaign.last_assigned_index % len(team)
