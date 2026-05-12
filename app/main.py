@@ -57,8 +57,12 @@ log = logging.getLogger("bmp")
 
 
 async def _sequence_engine_loop():
-    """Background tick: run the sequence engine every 60s + check snoozed
-    deals every 10 min + run the morning-brief tick every 15 min."""
+    """Background tick. Every 60s:
+       - sequence engine (fire ready email/iMessage steps)
+       - every 5 min: advance any running full_auto campaigns by one batch
+       - every 10 min: wake snoozed deals
+       - every 15 min: morning brief check
+    """
     from app.services.sequence_engine import process_pending_steps
     tick_count = 0
     while True:
@@ -70,8 +74,19 @@ async def _sequence_engine_loop():
         except Exception as e:
             log.exception(f"sequence_engine tick failed: {e}")
 
-        # Snoozed-deal wake check every 10 ticks (10 min)
         tick_count += 1
+
+        # Campaign auto-advance — every 5 min. Runs ONE batch per
+        # running full_auto campaign. The batch handler itself respects
+        # daily caps, advances the location/business-type cursor, and
+        # marks the campaign completed when all combos are searched.
+        if tick_count % 5 == 0:
+            try:
+                await _advance_full_auto_campaigns()
+            except Exception as e:
+                log.exception(f"campaign auto-advance failed: {e}")
+
+        # Snoozed-deal wake check every 10 ticks (10 min)
         if tick_count % 10 == 0:
             try:
                 await _wake_snoozed_deals()
@@ -92,6 +107,64 @@ async def _sequence_engine_loop():
                 log.exception(f"morning_brief tick failed: {e}")
 
         await asyncio.sleep(60)
+
+
+async def _advance_full_auto_campaigns():
+    """Run one batch per active full_auto campaign. Each batch advances
+    the cursor by one (business_type, location) pair, hits Netrows/Maps
+    to discover prospects in that slice, qualifies + creates sequences
+    for the ones that pass criteria, and updates the campaign's daily
+    counters. The handler stops itself when:
+      - daily cap reached (prospects_today >= max_prospects_per_day)
+      - all combos searched (current_location_index >= len(locations))
+        → status flips to 'completed'
+
+    Runs every 5 min while campaigns are active. With ~12 business
+    types × 3 locations = 36 batches per campaign, this means a
+    typical campaign finishes its discovery in ~3 hours."""
+    from sqlalchemy import select as _select
+    from app.models import Campaign as _Campaign
+    from app.routes.campaign_routes import _execute_batch
+
+    async with async_session() as db:
+        rows = (await db.execute(
+            _select(_Campaign).where(
+                _Campaign.status == "running",
+                _Campaign.mode == "full_auto",
+            )
+        )).scalars().all()
+
+    if not rows:
+        return
+
+    # Need a "system user" actor for activity logging. Pick the
+    # campaign's creator — they're the one running it conceptually.
+    from app.models import User as _User
+    for camp in rows:
+        try:
+            async with async_session() as db:
+                actor = (await db.execute(
+                    _select(_User).where(_User.id == camp.created_by)
+                )).scalar_one_or_none()
+                if not actor:
+                    log.warning(f"campaign {camp.id} has no creator — skipping batch")
+                    continue
+                result = await _execute_batch(camp.id, db, actor)
+                status = (result or {}).get("status", "ok")
+                # Log meaningful results only; "daily_cap_reached" /
+                # "completed" are normal terminal states.
+                if status in ("ok", "no_results"):
+                    log.info(f"campaign #{camp.id} auto-batch: {status} · "
+                             f"new={result.get('new_companies', 0)} "
+                             f"qualified={result.get('qualified', 0)} "
+                             f"sequences={result.get('sequences_created', 0)}")
+                elif status == "completed":
+                    log.info(f"campaign #{camp.id} auto-batch: COMPLETED")
+                elif status == "daily_cap_reached":
+                    log.info(f"campaign #{camp.id} auto-batch: daily cap reached "
+                             f"({result.get('prospects_today')} of cap)")
+        except Exception as e:
+            log.exception(f"campaign #{camp.id} batch failed: {e}")
 
 
 async def _wake_snoozed_deals():
