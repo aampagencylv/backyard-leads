@@ -701,6 +701,7 @@
                 <a data-page="reputation" id="nav-reputation" onclick="showPage('reputation')" class="hidden">Deliverability</a>
                 <a data-page="settings" onclick="showPage('settings')">Settings</a>
                 <a data-page="platform" id="nav-platform" onclick="showPage('platform')" class="hidden">Platform</a>
+                <a data-page="whats-new" onclick="showPage('whats-new')" style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.1);padding-top:8px">What's New <span id="whats-new-badge" class="hidden" style="background:#c0392b;color:white;font-size:9px;padding:1px 5px;border-radius:8px;margin-left:4px">NEW</span></a>
             </nav>
             <div class="sidebar-user">
                 <div id="user-name"></div>
@@ -2817,6 +2818,12 @@ function verify(secret, rawBody, header) {
             <!-- Platform page (super_admin only) — API keys, Twilio numbers,
                  custom fields, audit branding, credits, audit log. Keeps the
                  main Settings page clean for everyday use. -->
+            <div id="page-whats-new" class="hidden">
+                <div class="page-header"><h1>What's New</h1></div>
+                <p style="font-size:13px;color:#666;margin-bottom:16px">Platform updates, new features, and improvements. Check back after each update to see what changed.</p>
+                <div id="changelog-content"></div>
+            </div>
+
             <div id="page-platform" class="hidden">
                 <div class="page-header"><h1>🔧 Platform Settings</h1></div>
                 <p style="font-size:13px;color:#666;margin-bottom:16px">API keys, integrations, Twilio numbers, custom fields, and other platform-level configuration. Only visible to super admins.</p>
@@ -3333,6 +3340,7 @@ function verify(secret, rawBody, header) {
                     if (feedbackBtn) feedbackBtn.classList.remove('hidden');
                     loadDashboard();
                     _handleHashRoute(); // deep link support (e.g. /#company/123)
+                    loadChangelog(); // check for new updates
                     refreshNavBadges();
                     startNotificationPoller();
                     if (user.role === 'admin' || user.role === 'super_admin') initAdminRepFilters();
@@ -4069,6 +4077,7 @@ function verify(secret, rawBody, header) {
             if (page === 'settings') loadSettings();
             if (page === 'calendar') loadCalendarPage();
             if (page === 'audit-reports') loadAuditReportsPage();
+            if (page === 'whats-new') { loadChangelog(); dismissWhatsNew(); }
             if (page === 'site-visitors') {
                 if (!currentUser || !(currentUser.role === 'admin' || currentUser.role === 'super_admin')) {
                     target.classList.add('hidden');
@@ -13851,6 +13860,82 @@ hmac.compare_digest(expected, header)</pre>
             await api('/api/feedback/' + id + '?resolved=true', { method: 'PATCH' });
             toast('Marked as resolved');
             loadFeedbackList();
+        }
+
+        // ============ What's New / Changelog ============
+        async function loadChangelog() {
+            try {
+                const resp = await fetch('/static/CHANGELOG.json');
+                if (!resp.ok) return;
+                const entries = await resp.json();
+                const el = document.getElementById('changelog-content');
+                if (!el) return;
+                el.innerHTML = entries.map(e => `
+                    <div class="search-box" style="max-width:700px;margin-bottom:16px">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                            <h3 style="margin:0">${escapeHtml(e.title)}</h3>
+                            <span style="font-size:12px;color:#888">${escapeHtml(e.version)} · ${escapeHtml(e.date)}</span>
+                        </div>
+                        <ul style="margin:0;padding-left:20px;font-size:13px;color:#444;line-height:1.8">
+                            ${e.items.map(i => `<li>${escapeHtml(i)}</li>`).join('')}
+                        </ul>
+                    </div>
+                `).join('');
+
+                // Check if user has seen the latest version
+                const latestVersion = entries[0]?.version;
+                const seenVersion = localStorage.getItem('changelog_seen');
+                if (latestVersion && seenVersion !== latestVersion) {
+                    // Show badge
+                    const badge = document.getElementById('whats-new-badge');
+                    if (badge) badge.classList.remove('hidden');
+                    // Show popup on first visit with new updates
+                    if (seenVersion) {
+                        const newEntries = entries.filter(e => e.version > seenVersion);
+                        if (newEntries.length > 0) {
+                            _showWhatsNewPopup(newEntries);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.warn('Changelog load failed:', e);
+            }
+        }
+
+        function _showWhatsNewPopup(entries) {
+            const root = document.getElementById('modal-root');
+            const items = entries.flatMap(e => e.items.map(i => ({text: i, version: e.title})));
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="dismissWhatsNew()">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:520px">
+                        <h2>What's New</h2>
+                        <p style="font-size:13px;color:#666;margin-bottom:12px">Updates since your last visit:</p>
+                        ${entries.map(e => `
+                            <div style="margin-bottom:12px">
+                                <div style="font-size:13px;font-weight:600;color:var(--bmp-green);margin-bottom:4px">${escapeHtml(e.title)} <span style="font-weight:400;color:#888;font-size:11px">${escapeHtml(e.date)}</span></div>
+                                <ul style="margin:0;padding-left:18px;font-size:12px;color:#444;line-height:1.6">
+                                    ${e.items.slice(0, 4).map(i => `<li>${escapeHtml(i)}</li>`).join('')}
+                                    ${e.items.length > 4 ? `<li style="color:#888">+${e.items.length - 4} more...</li>` : ''}
+                                </ul>
+                            </div>
+                        `).join('')}
+                        <div class="modal-actions" style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">
+                            <button class="btn btn-secondary" onclick="dismissWhatsNew()">Got it</button>
+                            <button class="btn btn-primary" onclick="dismissWhatsNew();showPage('whats-new')">See All Updates</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function dismissWhatsNew() {
+            document.getElementById('modal-root').innerHTML = '';
+            const badge = document.getElementById('whats-new-badge');
+            if (badge) badge.classList.add('hidden');
+            // Mark as seen
+            fetch('/static/CHANGELOG.json').then(r => r.json()).then(entries => {
+                if (entries[0]?.version) localStorage.setItem('changelog_seen', entries[0].version);
+            }).catch(() => {});
         }
 
         let _platformReparented = false;

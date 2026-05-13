@@ -1,0 +1,100 @@
+[
+  {
+    "version": "2.13.0",
+    "date": "2026-05-13",
+    "title": "Browser Navigation + Deep Links",
+    "items": [
+      "Back button now works — go back to where you were instead of leaving the app",
+      "Company pages have shareable URLs — right-click to open in a new tab",
+      "Call log on Team Overview with full waveform playback and inline rating",
+      "Hot Leads by BDR section on Team Overview",
+      "BDR filter on My Activity — admins can view any rep's dashboard",
+      "Fixed: Dial a Number now actually connects the call"
+    ]
+  },
+  {
+    "version": "2.12.0",
+    "date": "2026-05-13",
+    "title": "Phone Numbers + Sequence Dates + Performance",
+    "items": [
+      "All contacts now have phone numbers (company main line as fallback)",
+      "Sequence steps show calendar dates (e.g. 'Day 5 · May 18')",
+      "LinkedIn/call tasks no longer falsely show sequences as 'Stalled'",
+      "22 database indexes added — company detail loads 3x faster",
+      "Fixed: sequence engine type mismatch that was crashing Postgres every 60 seconds"
+    ]
+  },
+  {
+    "version": "2.11.0",
+    "date": "2026-05-12",
+    "title": "Full 13-Step Sequences + Campaign Editing",
+    "items": [
+      "Autopilot campaigns now create the full 13-step multi-channel sequence (email + call + LinkedIn + iMessage)",
+      "Call steps always included — uses company main line when no direct number available",
+      "Edit button on campaigns — change daily cap, review filters, locations while running",
+      "Completed campaigns auto-restart when edited with new criteria",
+      "AI Findability Audit auto-generated for every autopilot prospect",
+      "Contact names inferred from email addresses (jake.wozniak@domain → Jake Wozniak)",
+      "UTM parameters stripped from website URLs on import"
+    ]
+  },
+  {
+    "version": "2.10.0",
+    "date": "2026-05-12",
+    "title": "Resend Webhook + Deliverability Tracking",
+    "items": [
+      "Email delivery events (delivered, opened, bounced) now tracked from Resend",
+      "Domain filter on webhooks — ignores events from other Resend domains",
+      "Credit metering fixed for autopilot enrichment"
+    ]
+  },
+  {
+    "version": "2.9.0",
+    "date": "2026-05-11",
+    "title": "Call Recording + Waveforms + Transcription",
+    "items": [
+      "Calls are now recorded with dual-channel audio (rep + prospect separate)",
+      "Waveform playback on company timeline and dashboard",
+      "Deepgram transcription with speaker labels (Rep vs Prospect)",
+      "AI coaching summaries — talk ratio, objections, action items",
+      "Call steps auto-complete when a call is logged from the dialer",
+      "Star rating and feedback on calls for coaching"
+    ]
+  },
+  {
+    "version": "2.8.0",
+    "date": "2026-05-11",
+    "title": "Sequence Improvements",
+    "items": [
+      "'+ Add Step' buttons between each step in the sequence",
+      "Reschedule paused sequences to a future date",
+      "'Rework After Call' — AI rewrites follow-ups based on actual conversation",
+      "LinkedIn profile link shown directly on LinkedIn sequence steps",
+      "Full address shown under company name in detail view"
+    ]
+  },
+  {
+    "version": "2.7.0",
+    "date": "2026-05-11",
+    "title": "Platform Organization + Security",
+    "items": [
+      "Platform settings (API keys, Twilio, custom fields) moved to dedicated Platform page",
+      "BDR+ role — can Find Leads, basic BDR cannot",
+      "Soft delete — BDR deletions go to admin approval queue instead of deleting",
+      "Feedback button — team can submit bugs and feature requests",
+      "Timezone picker on profile and user invite",
+      "Custom voicemail greeting — upload or record in Settings"
+    ]
+  },
+  {
+    "version": "2.6.0",
+    "date": "2026-05-11",
+    "title": "Hardening + Multi-Tenant Security",
+    "items": [
+      "All direct-ID endpoints scoped to BDR's own data",
+      "Sequence engine sends emails as the assigned BDR (not admin)",
+      "Dashboard scoped to BDR's companies — hot leads, activity feed, KPIs",
+      "Batch selection on Contacts page — bulk delete and power dialer"
+    ]
+  }
+]
