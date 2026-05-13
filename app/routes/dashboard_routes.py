@@ -150,13 +150,15 @@ async def get_dashboard(
                 except Exception:
                     pass  # don't let one bad company break the dashboard
 
-    # Now query the top hot leads by cached score
-    hot_rows = (await db.execute(
+    # Now query the top hot leads by cached score — scoped to this user's companies
+    hot_q = (
         select(Company)
         .where(Company.lead_score >= 40)  # warm+; the UI labels by tier
         .order_by(Company.lead_score.desc())
         .limit(10)
-    )).scalars().all()
+    )
+    hot_q = scope_companies(hot_q, user)
+    hot_rows = (await db.execute(hot_q)).scalars().all()
 
     hot_leads = [
         {
@@ -200,7 +202,7 @@ async def get_dashboard(
     )).scalar() or 0
 
     # ---------- Sequences ready to send (scheduled <= now, not yet sent, not paused) ----------
-    queued_rows = (await db.execute(
+    queued_q = (
         select(GeneratedEmail, Contact, Company.name)
         .join(Contact, GeneratedEmail.contact_id == Contact.id)
         .join(Company, GeneratedEmail.company_id == Company.id)
@@ -212,7 +214,9 @@ async def get_dashboard(
         )
         .order_by(GeneratedEmail.scheduled_send_at)
         .limit(10)
-    )).all()
+    )
+    queued_q = scope_companies(queued_q, user)
+    queued_rows = (await db.execute(queued_q)).all()
     queued_emails = [
         {
             "email_id": e.id,
@@ -227,7 +231,7 @@ async def get_dashboard(
     ]
 
     # ---------- Stuck deals ----------
-    stuck_rows = (await db.execute(
+    stuck_q = (
         select(Deal, Company.name)
         .join(Company, Deal.company_id == Company.id)
         .where(
@@ -236,7 +240,9 @@ async def get_dashboard(
         )
         .order_by(Deal.updated_at)
         .limit(10)
-    )).all()
+    )
+    stuck_q = scope_deals(stuck_q, user)
+    stuck_rows = (await db.execute(stuck_q)).all()
     stuck_deals = [
         {
             "id": d.id,
@@ -252,19 +258,24 @@ async def get_dashboard(
     ]
 
     # ---------- Sent-this-week count ----------
-    sent_this_week = (await db.execute(
+    sent_q = (
         select(func.count()).select_from(GeneratedEmail)
+        .join(Company, GeneratedEmail.company_id == Company.id)
         .where(GeneratedEmail.is_sent == True, GeneratedEmail.sent_at >= week_start)
-    )).scalar() or 0
+    )
+    sent_q = scope_companies(sent_q, user)
+    sent_this_week = (await db.execute(sent_q)).scalar() or 0
 
-    # ---------- Activity feed (last 20, cross-company) ----------
-    feed_rows = (await db.execute(
+    # ---------- Activity feed (last 20, scoped to user's companies) ----------
+    feed_q = (
         select(Activity, Company.name, User.first_name, User.last_name)
         .join(Company, Activity.company_id == Company.id)
         .outerjoin(User, Activity.user_id == User.id)
         .order_by(Activity.created_at.desc())
         .limit(20)
-    )).all()
+    )
+    feed_q = scope_companies(feed_q, user)
+    feed_rows = (await db.execute(feed_q)).all()
     activity_feed = [
         {
             "id": a.id,

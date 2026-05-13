@@ -68,7 +68,11 @@ async def _sequence_engine_loop():
     while True:
         try:
             async with async_session() as db:
-                counters = await process_pending_steps(db)
+                try:
+                    counters = await process_pending_steps(db)
+                except Exception:
+                    await db.rollback()
+                    raise
             if any(counters[k] for k in ("sent", "skipped", "tasks_created", "errors")):
                 log.info(f"sequence_engine tick: {counters}")
         except Exception as e:
