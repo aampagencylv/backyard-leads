@@ -283,6 +283,15 @@ async def update_campaign(
     if req.locations is not None and len(req.locations) > 0:
         campaign.locations = json.dumps(req.locations)
 
+    # If a completed campaign is edited, reset it to running so the engine
+    # re-scans with the new criteria (wider review range, new locations, etc).
+    # Also reset the cursor so it starts from the beginning of each market.
+    if campaign.status == "completed":
+        campaign.status = "running"
+        campaign.current_location_index = 0
+        campaign.current_business_type_index = 0
+        campaign.prospects_today = 0
+
     await db.commit()
     await db.refresh(campaign)
     return {
