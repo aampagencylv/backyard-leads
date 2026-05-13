@@ -12485,8 +12485,8 @@ hmac.compare_digest(expected, header)</pre>
             const number = document.getElementById('standalone-dial-number').value.trim();
             if (!number) { toast('Enter a phone number'); return; }
             document.getElementById('modal-root').innerHTML = '';
-            const stub = { id: null, company_id: null, full_name: number, phone: number, title: '', email: '' };
-            openDialerModal(stub, number, 'browser');
+            const stub = { id: null, company_id: null, first_name: '', last_name: '', full_name: number, name: number, phone: number, title: '', email: '' };
+            startCall(stub);
         }
 
         function openDialerModal(contact, toNumber, mode) {
