@@ -11743,16 +11743,12 @@ hmac.compare_digest(expected, header)</pre>
             }
             const toNumber = contact.phone || contact.company_phone;
 
-            // Branch on the rep's preferred dial mode (set in Settings → Calling)
-            const profile = currentUser || await api('/api/auth/me');
-            // /api/auth/me doesn't return dial_mode, so refresh profile if needed
-            const fullProfile = await api('/api/send/profile');
-            const dialMode = (fullProfile && fullProfile.dial_mode) || 'browser';
+            // Use cached dial_mode if available, otherwise default to browser
+            const dialMode = (currentUser && currentUser.dial_mode) || 'browser';
 
             if (dialMode === 'bridge') {
                 return await startBridgeCall(contact, toNumber);
             }
-            // Default: browser mode
             return await startBrowserCall(contact, toNumber);
         }
 

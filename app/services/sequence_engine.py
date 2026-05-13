@@ -294,12 +294,13 @@ async def _handle_create_task(db: AsyncSession, step: GeneratedEmail, contact: C
     """Create a Task on the assigned BDR for non-auto steps (call, linkedin).
     Sequence advances when the BDR marks the task complete (or, for call steps,
     when an activity_type='call' is logged for the contact)."""
-    assignee_email = company.assigned_to
     assignee_user: Optional[User] = None
-    if assignee_email:
-        assignee_user = (await db.execute(select(User).where(User.email == assignee_email))).scalar_one_or_none()
+    if company.assigned_to:
+        assignee_user = (await db.execute(select(User).where(User.id == company.assigned_to))).scalar_one_or_none()
     if not assignee_user:
-        assignee_user = (await db.execute(select(User).where(User.role == "admin"))).scalars().first()
+        assignee_user = (await db.execute(
+            select(User).where(User.role.in_(("admin", "super_admin")))
+        )).scalars().first()
     if not assignee_user:
         return False, "No user to assign task to"
 
