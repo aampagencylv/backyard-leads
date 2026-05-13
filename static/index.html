@@ -6581,7 +6581,10 @@ function verify(secret, rawBody, header) {
                             // Steve can re-anchor without having to find the
                             // Pause-then-Resume dance.
                             const nowMs = Date.now();
-                            const stalled = c.emails.some(e => !e.is_sent && !e.paused_at && !e.skipped_at && e.scheduled_send_at && new Date(e.scheduled_send_at).getTime() < nowMs);
+                            // Only auto-execute steps (email/iMessage) can be truly stalled.
+                            // LinkedIn/call tasks are manual — the BDR does them on their own
+                            // time and they don't block the rest of the sequence.
+                            const stalled = c.emails.some(e => e.auto_execute && !e.is_sent && !e.paused_at && !e.skipped_at && e.scheduled_send_at && new Date(e.scheduled_send_at).getTime() < nowMs);
                             return `<div style="background:var(--bmp-cream);border:1px solid #e8d5c4;border-radius:8px;padding:12px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
                                 <div>
                                     <strong style="font-size:13px">${allUnsent ? 'Ready to start' : (stalled ? '⚠️ Stalled' : 'Sequence in progress')}</strong>
@@ -6626,7 +6629,7 @@ function verify(secret, rawBody, header) {
             const auto = e.auto_execute === false ? '· BDR Task' : (stype === 'imessage' ? '· Auto-send' : '');
             const stateLabel = e.is_sent ? ''
                               : isSkipped ? `· SKIPPED (${escapeHtml(e.skip_reason || 'unknown')})`
-                              : (e.paused_at ? '· PAUSED' : `· Day ${e.send_delay_days||0}`);
+                              : (e.paused_at ? '· PAUSED' : `· Day ${e.send_delay_days||0}${e.scheduled_send_at ? ' · ' + new Date(e.scheduled_send_at).toLocaleDateString('en-US', {month:'short', day:'numeric'}) : ''}`);
             const skipBadges = (e.skip_if || []).length > 0
                 ? ` <span style="font-size:9px;color:#999;font-weight:400;text-transform:none;letter-spacing:0">[skip-if: ${(e.skip_if||[]).map(escapeHtml).join(', ')}]</span>`
                 : '';
