@@ -694,7 +694,7 @@ async def _execute_batch(campaign_id: int, db: AsyncSession, user: User):
                     try:
                         nr = await netrows_find_decision_makers(company.website, nr_key)
                         for dm in nr.decision_makers:
-                            await _ensure_contact(db, company.id, dm.full_name, dm.email, dm.job_title, None, dm.linkedin_url)
+                            await _ensure_contact(db, company.id, dm.full_name, dm.email, dm.job_title, company.phone, dm.linkedin_url)
                     except Exception:
                         pass
 
@@ -704,9 +704,19 @@ async def _execute_batch(campaign_id: int, db: AsyncSession, user: User):
                         for hc in hunter.contacts:
                             if hc.email:
                                 full = f"{hc.first_name or ''} {hc.last_name or ''}".strip()
-                                await _ensure_contact(db, company.id, full, hc.email, hc.position, None, None)
+                                await _ensure_contact(db, company.id, full, hc.email, hc.position, company.phone, None)
                     except Exception:
                         pass
+
+                # Meter the enrichment
+                try:
+                    from app.services.credit_meter import meter, make_idem_key
+                    await meter(db, action_type="enrich_netrows",
+                                idempotency_key=make_idem_key("enrich_netrows", company.id, "campaign"),
+                                user_id=campaign.created_by, action_ref=f"company:{company.id}",
+                                metadata={"via": "campaign", "campaign_id": campaign.id})
+                except Exception:
+                    pass
 
                 await db.commit()
                 batch_results["enriched"] += 1
@@ -978,7 +988,7 @@ async def _process_business_through_pipeline(
                 try:
                     nr = await netrows_find_decision_makers(company.website, nr_key)
                     for dm in nr.decision_makers:
-                        await _ensure_contact(db, company.id, dm.full_name, dm.email, dm.job_title, None, dm.linkedin_url)
+                        await _ensure_contact(db, company.id, dm.full_name, dm.email, dm.job_title, company.phone, dm.linkedin_url)
                 except Exception:
                     pass
 
@@ -988,9 +998,19 @@ async def _process_business_through_pipeline(
                     for hc in hunter.contacts:
                         if hc.email:
                             full = f"{hc.first_name or ''} {hc.last_name or ''}".strip()
-                            await _ensure_contact(db, company.id, full, hc.email, hc.position, None, None)
+                            await _ensure_contact(db, company.id, full, hc.email, hc.position, company.phone, None)
                 except Exception:
                     pass
+
+            # Meter the enrichment
+            try:
+                from app.services.credit_meter import meter, make_idem_key
+                await meter(db, action_type="enrich_netrows",
+                            idempotency_key=make_idem_key("enrich_netrows", company.id, "godmode"),
+                            user_id=campaign.created_by, action_ref=f"company:{company.id}",
+                            metadata={"via": "campaign_godmode", "campaign_id": campaign.id})
+            except Exception:
+                pass
 
             await db.flush()
         except Exception as e:

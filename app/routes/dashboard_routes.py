@@ -65,9 +65,21 @@ def _aware(dt):
 
 @router.get("/dashboard")
 async def get_dashboard(
+    rep_id: Optional[int] = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    # Admin/super_admin can view any BDR's dashboard by passing rep_id.
+    # When set, we impersonate that user for scoping purposes so the
+    # dashboard shows THEIR data, not the admin's.
+    effective_user = user
+    if rep_id and user.role in ("admin", "super_admin") and rep_id != user.id:
+        from app.models import User as _U
+        target = (await db.execute(select(_U).where(_U.id == rep_id))).scalar_one_or_none()
+        if target:
+            effective_user = target
+    # Use effective_user for all scoping below
+    user = effective_user
     now = datetime.now(timezone.utc)
     today = now.replace(hour=0, minute=0, second=0, microsecond=0)
     tomorrow = today + timedelta(days=1)
@@ -1185,6 +1197,29 @@ async def team_dashboard(
         })
     all_calls.sort(key=lambda x: x["created_at"], reverse=True)
 
+    # ============================================================
+    # Zone 8: Hot leads by BDR
+    # ============================================================
+
+    hot_by_bdr: list[dict] = []
+    hot_companies = (await db.execute(
+        select(Company)
+        .where(Company.lead_score >= 40, Company.assigned_to.isnot(None))
+        .order_by(Company.lead_score.desc())
+        .limit(30)
+    )).scalars().all()
+    for c in hot_companies:
+        rep = user_map.get(c.assigned_to)
+        hot_by_bdr.append({
+            "id": c.id,
+            "name": c.name,
+            "status": c.status,
+            "lead_score": c.lead_score,
+            "lead_score_tier": c.lead_score_tier,
+            "rep_name": rep.full_name if rep else "Unassigned",
+            "rep_id": c.assigned_to,
+        })
+
     return {
         "generated_at": now.isoformat(),
         "window_days": 30,
@@ -1196,4 +1231,5 @@ async def team_dashboard(
         "activity_heatmap": heatmap,
         "conversion_funnel": funnel_rows,
         "call_log": all_calls,
+        "hot_leads_by_bdr": hot_by_bdr,
     }

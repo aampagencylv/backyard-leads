@@ -917,8 +917,9 @@ async def enrich_company(
     for c in waterfall_result.contacts:
         if not c.email:
             continue
-        # Apollo / Netrows often have the cleaner mobile number; fall back to phone.
-        contact_phone = c.mobile_phone or c.phone or None
+        # Apollo / Netrows often have the cleaner mobile number; fall back to
+        # the company's main line so every contact has SOME number to call.
+        contact_phone = c.mobile_phone or c.phone or (company.phone or None)
         created = await _ensure_contact(
             db, company_id,
             c.full_name, c.email, c.job_title, contact_phone, c.linkedin_url,

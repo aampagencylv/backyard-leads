@@ -774,6 +774,12 @@
                         <div id="team-heatmap" style="overflow-x:auto"></div>
                     </div>
 
+                    <!-- Hot Leads by BDR -->
+                    <div class="search-box" style="margin-top:16px">
+                        <h3>Hot Leads by BDR</h3>
+                        <div id="team-hot-leads"></div>
+                    </div>
+
                     <!-- Call Log — all calls for grading -->
                     <div class="search-box" style="margin-top:16px">
                         <h3>Call Log</h3>
@@ -784,6 +790,14 @@
 
                 <!-- =========== MY ACTIVITY (default — what was here before) =========== -->
                 <div id="dashboard-mine-view">
+
+                <!-- BDR filter (admin only) -->
+                <div id="dashboard-bdr-filter" class="hidden" style="margin-bottom:12px;display:flex;align-items:center;gap:8px">
+                    <label style="font-size:13px;color:#666;font-weight:500">Viewing as:</label>
+                    <select id="dashboard-rep-select" onchange="loadDashboardForRep()" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px">
+                        <option value="">My Dashboard</option>
+                    </select>
+                </div>
 
                 <!-- Zone 1: KPI strip -->
                 <div class="kpi-strip" id="kpi-strip">
@@ -4452,6 +4466,7 @@ function verify(secret, rawBody, header) {
             renderActivityHeatmap(data.activity_heatmap);
             renderConversionFunnel(data.conversion_funnel);
             renderCallLog(data.call_log);
+            renderHotLeadsByBdr(data.hot_leads_by_bdr);
         }
 
         function _wowChip(wow) {
@@ -4714,6 +4729,42 @@ function verify(secret, rawBody, header) {
             </table></div>`;
         }
 
+        function renderHotLeadsByBdr(leads) {
+            const el = document.getElementById('team-hot-leads');
+            if (!el) return;
+            if (!leads || leads.length === 0) {
+                el.innerHTML = '<p style="color:#888;font-size:13px">No hot leads right now.</p>';
+                return;
+            }
+            el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
+                <thead><tr style="border-bottom:1px solid #e0e0e0;font-size:12px;color:#888">
+                    <th style="padding:8px;text-align:left">Company</th>
+                    <th style="padding:8px;text-align:left">BDR</th>
+                    <th style="padding:8px;text-align:center">Score</th>
+                    <th style="padding:8px;text-align:left">Tier</th>
+                    <th style="padding:8px;text-align:left">Status</th>
+                </tr></thead>
+                <tbody>${leads.map(l => {
+                    const tierColors = {burning:'#c0392b',hot:'#e74c3c',warm:'#f39c12',cool:'#3498db',cold:'#95a5a6'};
+                    return '<tr style="border-bottom:1px solid #f5f5f5">' +
+                        '<td style="padding:8px"><a href="#" onclick="openCompanyDetail(' + l.id + ');return false" style="color:var(--bmp-green);text-decoration:none;font-weight:500">' + escapeHtml(l.name) + '</a></td>' +
+                        '<td style="padding:8px">' + escapeHtml(l.rep_name) + '</td>' +
+                        '<td style="padding:8px;text-align:center;font-weight:700">' + l.lead_score + '</td>' +
+                        '<td style="padding:8px"><span style="color:' + (tierColors[l.lead_score_tier] || '#888') + ';font-weight:600;text-transform:uppercase;font-size:11px">' + escapeHtml(l.lead_score_tier || '—') + '</span></td>' +
+                        '<td style="padding:8px"><span class="status-badge status-' + l.status + '">' + l.status + '</span></td>' +
+                    '</tr>';
+                }).join('')}</tbody>
+            </table>`;
+        }
+
+        async function loadDashboardForRep() {
+            const repId = document.getElementById('dashboard-rep-select')?.value;
+            const url = repId ? '/api/dashboard?rep_id=' + repId : '/api/dashboard';
+            const data = await api(url);
+            if (!data) return;
+            _renderDashboardData(data);
+        }
+
         function renderCallLog(calls) {
             const el = document.getElementById('team-call-log');
             if (!el) return;
@@ -4770,7 +4821,26 @@ function verify(secret, rawBody, header) {
                 return;
             }
 
-            const data = await api('/api/dashboard');
+            // Show BDR filter for admin/super_admin
+            const bdrFilter = document.getElementById('dashboard-bdr-filter');
+            if (bdrFilter && currentUser && (currentUser.role === 'admin' || currentUser.role === 'super_admin')) {
+                bdrFilter.classList.remove('hidden');
+                bdrFilter.style.display = 'flex';
+                const sel = document.getElementById('dashboard-rep-select');
+                if (sel && sel.options.length <= 1) {
+                    const users = await api('/api/auth/users') || [];
+                    users.filter(u => u.is_active).forEach(u => {
+                        const opt = document.createElement('option');
+                        opt.value = u.id;
+                        opt.textContent = u.name + ' (' + u.role + ')';
+                        sel.appendChild(opt);
+                    });
+                }
+            }
+
+            const repId = document.getElementById('dashboard-rep-select')?.value;
+            const url = repId ? '/api/dashboard?rep_id=' + repId : '/api/dashboard';
+            const data = await api(url);
             if (!data) return;
 
             // KPIs
