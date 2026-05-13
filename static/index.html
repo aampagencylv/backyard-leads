@@ -3332,6 +3332,7 @@ function verify(secret, rawBody, header) {
                     const feedbackBtn = document.getElementById('feedback-btn');
                     if (feedbackBtn) feedbackBtn.classList.remove('hidden');
                     loadDashboard();
+                    _handleHashRoute(); // deep link support (e.g. /#company/123)
                     refreshNavBadges();
                     startNotificationPoller();
                     if (user.role === 'admin' || user.role === 'super_admin') initAdminRepFilters();
@@ -4011,10 +4012,42 @@ function verify(secret, rawBody, header) {
             if (bd) bd.classList.remove('show');
         }
 
-        function showPage(page) {
+        let _skipPushState = false;
+        function showPage(page, opts) {
             // Auto-close the mobile drawer on every nav click
             closeSidebar();
+            // Push browser history so back/forward buttons work
+            if (!_skipPushState) {
+                const url = page === 'dashboard' ? '/#' : '/#' + page;
+                history.pushState({ page }, '', url);
+            }
             return _showPageInner(page);
+        }
+
+        // Back/forward button handler
+        window.addEventListener('popstate', (e) => {
+            if (e.state && e.state.companyId) {
+                openCompanyDetail(e.state.companyId);
+            } else if (e.state && e.state.page) {
+                _skipPushState = true;
+                showPage(e.state.page);
+                _skipPushState = false;
+            }
+        });
+
+        // Handle deep links on page load (e.g. /#company/123)
+        function _handleHashRoute() {
+            const hash = window.location.hash.replace('#', '');
+            if (!hash || hash === '/') return;
+            const companyMatch = hash.match(/^company\/(\d+)$/);
+            if (companyMatch) {
+                setTimeout(() => openCompanyDetail(parseInt(companyMatch[1])), 500);
+                return;
+            }
+            const pageEl = document.getElementById('page-' + hash);
+            if (pageEl) {
+                setTimeout(() => { _skipPushState = true; showPage(hash); _skipPushState = false; }, 500);
+            }
         }
 
         function _showPageInner(page) {
@@ -6131,7 +6164,10 @@ function verify(secret, rawBody, header) {
             if (!data) return;
             data._customFieldDefs = customFieldDefs || [];
             try {
+                _skipPushState = true;
                 showPage('company-detail');
+                _skipPushState = false;
+                history.pushState({ page: 'company-detail', companyId: id }, '', '/#company/' + id);
                 renderCompanyDetail(data);
             } catch (err) {
                 console.error('renderCompanyDetail failed', err, data);
