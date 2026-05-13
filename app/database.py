@@ -18,11 +18,13 @@ if settings.database_url.startswith("sqlite"):
 elif "postgresql" in settings.database_url:
     # Postgres pool sizing — modest defaults that work for a single
     # uvicorn worker. Bump pool_size if we move to multi-worker.
-    # pool_pre_ping=True silently reconnects after a stale connection
-    # (Supabase/pgBouncer occasionally drops idle conns).
+    # pool_pre_ping is intentionally OFF: it fires a SELECT 1 on every
+    # checkout, which doubled per-query latency against Supabase direct
+    # (measured ~240ms overhead on 2026-05-12). pool_recycle keeps
+    # connections fresh enough that stale-conn errors are rare; when one
+    # slips through, SQLAlchemy reconnects on next request.
     _engine_kwargs["pool_size"] = 10
     _engine_kwargs["max_overflow"] = 5
-    _engine_kwargs["pool_pre_ping"] = True
     _engine_kwargs["pool_recycle"] = 1800  # recycle conns every 30 min
 
 engine = create_async_engine(
