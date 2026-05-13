@@ -773,6 +773,13 @@
                         <p style="font-size:12px;color:#888;margin-bottom:8px">Calls + emails + iMessages + notes per BDR per day. Darker = more activity.</p>
                         <div id="team-heatmap" style="overflow-x:auto"></div>
                     </div>
+
+                    <!-- Call Log — all calls for grading -->
+                    <div class="search-box" style="margin-top:16px">
+                        <h3>Call Log</h3>
+                        <p style="font-size:12px;color:#888;margin-bottom:12px">All BDR calls from the last 30 days. Click play to listen and rate.</p>
+                        <div id="team-call-log"></div>
+                    </div>
                 </div>
 
                 <!-- =========== MY ACTIVITY (default — what was here before) =========== -->
@@ -4444,6 +4451,7 @@ function verify(secret, rawBody, header) {
             renderReplySentiment(data.reply_sentiment_by_bdr);
             renderActivityHeatmap(data.activity_heatmap);
             renderConversionFunnel(data.conversion_funnel);
+            renderCallLog(data.call_log);
         }
 
         function _wowChip(wow) {
@@ -4704,6 +4712,53 @@ function verify(secret, rawBody, header) {
                     }).join('')}
                 </tbody>
             </table></div>`;
+        }
+
+        function renderCallLog(calls) {
+            const el = document.getElementById('team-call-log');
+            if (!el) return;
+            if (!calls || calls.length === 0) {
+                el.innerHTML = '<p style="color:#888;font-size:13px">No calls recorded yet.</p>';
+                return;
+            }
+            el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
+                <thead>
+                    <tr style="text-align:left;border-bottom:1px solid #e0e0e0;font-size:12px;color:#888">
+                        <th style="padding:8px">BDR</th>
+                        <th style="padding:8px">Company</th>
+                        <th style="padding:8px">Outcome</th>
+                        <th style="padding:8px">Duration</th>
+                        <th style="padding:8px">Talk Ratio</th>
+                        <th style="padding:8px">Rating</th>
+                        <th style="padding:8px">Date</th>
+                        <th style="padding:8px">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${calls.map(c => {
+                        const dur = c.duration_seconds ? Math.floor(c.duration_seconds / 60) + ':' + String(c.duration_seconds % 60).padStart(2, '0') : '—';
+                        const ratio = c.rep_pct != null && !c.single_speaker ? c.rep_pct.toFixed(0) + '% rep / ' + (c.prospect_pct || 0).toFixed(0) + '% prospect' : (c.single_speaker ? 'single speaker' : '—');
+                        const ratioColor = c.rep_pct != null && c.rep_pct > 60 && !c.single_speaker ? '#c0392b' : '#666';
+                        const rating = c.call_rating ? '★'.repeat(c.call_rating) + '☆'.repeat(5 - c.call_rating) : '<span style="color:#bbb">unrated</span>';
+                        const outcomeColors = { connected: 'var(--bmp-green)', voicemail: '#f39c12', no_answer: '#888', gatekeeper: '#3498db', busy: '#888' };
+                        const outcomeColor = outcomeColors[c.call_outcome] || '#888';
+                        const dt = c.created_at ? new Date(c.created_at) : null;
+                        const dateStr = dt ? dt.toLocaleDateString('en-US', {month:'short', day:'numeric'}) + ' ' + dt.toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit'}) : '—';
+                        return '<tr style="border-bottom:1px solid #f5f5f5">' +
+                            '<td style="padding:8px;font-weight:500">' + escapeHtml(c.rep_name || '—') + '</td>' +
+                            '<td style="padding:8px">' + (c.company_id ? '<a href="#" onclick="openCompanyDetail(' + c.company_id + ');return false" style="color:var(--bmp-green);text-decoration:none">' + escapeHtml(c.company_name || '—') + '</a>' : escapeHtml(c.company_name || '—')) + '</td>' +
+                            '<td style="padding:8px;color:' + outcomeColor + ';font-weight:500">' + escapeHtml(c.call_outcome || '—') + '</td>' +
+                            '<td style="padding:8px">' + dur + '</td>' +
+                            '<td style="padding:8px;color:' + ratioColor + ';font-size:11px">' + ratio + '</td>' +
+                            '<td style="padding:8px;color:#f39c12">' + rating + '</td>' +
+                            '<td style="padding:8px;font-size:11px;color:#888">' + dateStr + '</td>' +
+                            '<td style="padding:8px">' +
+                                (c.has_recording ? '<audio controls preload="none" src="' + c.recording_url + '" style="height:28px;max-width:200px"></audio>' : '<span style="font-size:11px;color:#bbb">no recording</span>') +
+                            '</td>' +
+                        '</tr>';
+                    }).join('')}
+                </tbody>
+            </table>`;
         }
 
         async function loadDashboard() {

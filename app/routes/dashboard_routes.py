@@ -1132,6 +1132,59 @@ async def team_dashboard(
     funnel_rows = [row for row in funnel_by_bdr.values() if row["sequences_started"] or row["opens"] or row["meetings"]]
     funnel_rows.sort(key=lambda r: -(r["meetings"] * 10 + r["won"] * 100 + r["sequences_started"]))
 
+    # ============================================================
+    # Zone 7: Full call log — every call with a recording, for grading
+    # ============================================================
+
+    all_calls: list[dict] = []
+    for a in activities_30d:
+        if a.activity_type != "call":
+            continue
+        created = _aware(a.created_at)
+        rep = user_map.get(a.user_id)
+        co_name = company_name_cache.get(a.company_id) if a.company_id else None
+
+        # Parse talk ratio
+        rep_pct = None
+        prospect_pct = None
+        is_single_speaker = False
+        if a.talk_ratio_json:
+            try:
+                import json as _json
+                tr = _json.loads(a.talk_ratio_json)
+                rep_pct = float(tr.get("rep_pct") or 0)
+                prospect_pct = float(tr.get("prospect_pct") or 0)
+                is_single_speaker = bool(tr.get("single_speaker"))
+            except (ValueError, TypeError):
+                pass
+
+        all_calls.append({
+            "activity_id": a.id,
+            "company_id": a.company_id,
+            "company_name": co_name,
+            "contact_id": a.contact_id,
+            "rep_name": rep.full_name if rep else None,
+            "rep_id": a.user_id,
+            "duration_seconds": a.call_duration_seconds,
+            "call_outcome": a.call_outcome,
+            "call_direction": a.call_direction,
+            "has_recording": bool(a.recording_url),
+            "has_transcript": bool(a.transcript),
+            "has_summary": bool(a.call_summary),
+            "rep_pct": rep_pct,
+            "prospect_pct": prospect_pct,
+            "single_speaker": is_single_speaker,
+            "call_rating": a.call_rating,
+            "call_feedback": a.call_feedback,
+            "rated_by": a.rated_by,
+            "recording_url": (
+                f"/api/twilio/recording/{a.id}?t={mint_recording_token(a.id, user.id)}"
+                if a.recording_url else None
+            ),
+            "created_at": created.isoformat(),
+        })
+    all_calls.sort(key=lambda x: x["created_at"], reverse=True)
+
     return {
         "generated_at": now.isoformat(),
         "window_days": 30,
@@ -1142,4 +1195,5 @@ async def team_dashboard(
         "reply_sentiment_by_bdr": sentiment_rows,
         "activity_heatmap": heatmap,
         "conversion_funnel": funnel_rows,
+        "call_log": all_calls,
     }
