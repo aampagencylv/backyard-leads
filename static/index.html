@@ -11643,8 +11643,10 @@ hmac.compare_digest(expected, header)</pre>
             }
 
             const data = await api('/api/twilio/voice/token', { method: 'POST' });
-            if (!data) return null;
+            if (!data) { toast('Voice token failed — check Settings → Calling', 'error'); return null; }
+            if (!data.token) { toast('No token in response: ' + JSON.stringify(data).slice(0, 100), 'error'); return null; }
             const token = data.token;
+            console.log('Voice token OK, identity=' + data.identity + ', expires_in=' + data.expires_in);
 
             try {
                 // Request browser-notification permission on first init so
@@ -11762,10 +11764,16 @@ hmac.compare_digest(expected, header)</pre>
             openDialerModal(contact, toNumber, 'browser');
 
             try {
+                console.log('Connecting to', toNumber, '...');
                 const call = await device.connect({ params: { To: toNumber } });
+                console.log('device.connect() returned, call state:', call.status());
                 dialerState.call = call;
                 dialerState.ctx = { contact, sid: null, started: false, mode: 'browser' };
 
+                call.on('ringing', () => {
+                    console.log('Call ringing...');
+                    setDialerStatus('ringing', 'Ringing...');
+                });
                 call.on('accept', (c) => {
                     dialerState.ctx.sid = c.parameters.CallSid;
                     dialerState.startedAt = Date.now();
