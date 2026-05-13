@@ -1170,24 +1170,43 @@ async def team_dashboard(
             except (ValueError, TypeError):
                 pass
 
+        # Parse diarized segments for waveform rendering
+        diarized = None
+        if a.diarized_segments_json:
+            try:
+                diarized = json.loads(a.diarized_segments_json)
+            except Exception:
+                pass
+        talk_ratio_parsed = None
+        if a.talk_ratio_json:
+            try:
+                talk_ratio_parsed = json.loads(a.talk_ratio_json)
+            except Exception:
+                pass
+
         all_calls.append({
+            "id": a.id,
             "activity_id": a.id,
             "company_id": a.company_id,
             "company_name": co_name,
             "contact_id": a.contact_id,
+            "content": a.content,
             "rep_name": rep.full_name if rep else None,
             "rep_id": a.user_id,
-            "duration_seconds": a.call_duration_seconds,
+            "call_duration_seconds": a.call_duration_seconds,
             "call_outcome": a.call_outcome,
             "call_direction": a.call_direction,
             "has_recording": bool(a.recording_url),
             "has_transcript": bool(a.transcript),
             "has_summary": bool(a.call_summary),
+            "call_summary": a.call_summary,
+            "call_rating": a.call_rating,
+            "call_feedback": a.call_feedback,
+            "diarized_segments": diarized,
+            "talk_ratio": talk_ratio_parsed,
             "rep_pct": rep_pct,
             "prospect_pct": prospect_pct,
             "single_speaker": is_single_speaker,
-            "call_rating": a.call_rating,
-            "call_feedback": a.call_feedback,
             "rated_by": a.rated_by,
             "recording_url": (
                 f"/api/twilio/recording/{a.id}?t={mint_recording_token(a.id, user.id)}"
