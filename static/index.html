@@ -3341,6 +3341,21 @@ function verify(secret, rawBody, header) {
                     loadDashboard();
                     _handleHashRoute(); // deep link support (e.g. /#company/123)
                     loadChangelog(); // check for new updates
+                    // Register Twilio Device immediately so inbound calls ring
+                    // even if the BDR hasn't made an outbound call yet.
+                    if (user.twilio_phone_number) {
+                        setTimeout(() => {
+                            ensureTwilioDevice().then(dev => {
+                                if (dev) {
+                                    console.log('Twilio Device registered for inbound calls');
+                                    // Auto-refresh token every 50 min (tokens expire in 60 min)
+                                    setInterval(() => {
+                                        ensureTwilioDevice().catch(() => {});
+                                    }, 50 * 60 * 1000);
+                                }
+                            }).catch(() => {});
+                        }, 2000);
+                    }
                     refreshNavBadges();
                     startNotificationPoller();
                     if (user.role === 'admin' || user.role === 'super_admin') initAdminRepFilters();
@@ -11893,6 +11908,40 @@ hmac.compare_digest(expected, header)</pre>
                             inboundContact.company_id = companyId;
                             inboundContact.company_name = companyName;
                         }
+
+                        // Play ringtone — works in background tabs because the
+                        // user already granted audio permission for the dialer.
+                        // Uses the Web Audio API oscillator as a fallback ringtone.
+                        let _ringAudio = null;
+                        try {
+                            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                            const osc = audioCtx.createOscillator();
+                            const gain = audioCtx.createGain();
+                            osc.connect(gain);
+                            gain.connect(audioCtx.destination);
+                            osc.frequency.value = 440;
+                            gain.gain.value = 0.3;
+                            osc.start();
+                            // Ring pattern: 1s on, 2s off
+                            const ringInterval = setInterval(() => {
+                                gain.gain.value = gain.gain.value > 0 ? 0 : 0.3;
+                            }, 1000);
+                            _ringAudio = { stop: () => { clearInterval(ringInterval); osc.stop(); audioCtx.close(); } };
+                            call.on('accept', () => { if (_ringAudio) _ringAudio.stop(); });
+                            call.on('reject', () => { if (_ringAudio) _ringAudio.stop(); });
+                            call.on('cancel', () => { if (_ringAudio) _ringAudio.stop(); });
+                            call.on('disconnect', () => { if (_ringAudio) _ringAudio.stop(); });
+                        } catch (e) { console.warn('Ringtone failed:', e); }
+
+                        // Flash the browser tab title
+                        const _origTitle = document.title;
+                        let _titleFlash = setInterval(() => {
+                            document.title = document.title === _origTitle ? '📞 INCOMING CALL' : _origTitle;
+                        }, 1000);
+                        call.on('accept', () => { clearInterval(_titleFlash); document.title = _origTitle; });
+                        call.on('reject', () => { clearInterval(_titleFlash); document.title = _origTitle; });
+                        call.on('cancel', () => { clearInterval(_titleFlash); document.title = _origTitle; });
+                        call.on('disconnect', () => { clearInterval(_titleFlash); document.title = _origTitle; });
 
                         openInboundModal(inboundContact, fromNumber, call);
                         // Background-tab desktop notification — fires
