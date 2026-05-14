@@ -94,6 +94,7 @@ class CreateCampaignRequest(BaseModel):
     name: str
     business_types: list
     locations: list
+    expand_metros: bool = False  # Auto-expand cities into metro area suburbs
     min_reviews: int = 20
     max_reviews: int = 300
     min_rating: float = 3.5
@@ -156,17 +157,55 @@ async def list_campaigns(
     return out
 
 
+@router.get("/metro-areas")
+async def list_metro_areas(user: User = Depends(get_current_user)):
+    """Return available metro area presets for the campaign location picker."""
+    from app.services.metro_areas import get_available_metros
+    return get_available_metros()
+
+
+@router.post("/expand-locations")
+async def expand_locations(
+    locations: list[str],
+    user: User = Depends(get_current_user),
+):
+    """Expand location names into suburb lists using metro area mappings.
+    Used by the campaign creation UI to show what cities will be searched."""
+    from app.services.metro_areas import expand_metro
+    expanded = []
+    for loc in locations:
+        expanded.extend(expand_metro(loc))
+    # Dedupe while preserving order
+    seen = set()
+    unique = []
+    for city in expanded:
+        if city.lower() not in seen:
+            seen.add(city.lower())
+            unique.append(city)
+    return {"locations": unique, "count": len(unique)}
+
+
 @router.post("/")
 async def create_campaign(
     req: CreateCampaignRequest,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    # Expand metro areas if requested
+    locations = req.locations
+    if req.expand_metros:
+        from app.services.metro_areas import expand_metro
+        expanded = []
+        for loc in locations:
+            expanded.extend(expand_metro(loc))
+        seen = set()
+        locations = [c for c in expanded if c.lower() not in seen and not seen.add(c.lower())]
+
     campaign = Campaign(
         name=req.name,
         created_by=user.id,
         business_types=json.dumps(req.business_types),
-        locations=json.dumps(req.locations),
+        locations=json.dumps(locations),
         min_reviews=req.min_reviews,
         max_reviews=req.max_reviews,
         min_rating=req.min_rating,

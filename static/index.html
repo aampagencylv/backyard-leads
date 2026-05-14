@@ -9440,7 +9440,11 @@ hmac.compare_digest(expected, header)</pre>
                         </div>
                         <div class="form-group">
                             <label>Locations (one per line)</label>
-                            <textarea id="camp-locations" rows="3" placeholder="Phoenix, AZ\nScottsdale, AZ\nLas Vegas, NV" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px"></textarea>
+                            <textarea id="camp-locations" rows="3" placeholder="Phoenix, AZ\nLas Vegas, NV\nDallas, TX" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px"></textarea>
+                            <label style="display:flex;align-items:center;gap:6px;margin-top:6px;cursor:pointer;font-size:13px">
+                                <input type="checkbox" id="camp-expand-metros" checked>
+                                Include surrounding suburbs (auto-expands major cities into metro area — e.g. Phoenix → Phoenix + Scottsdale + Mesa + 15 more)
+                            </label>
                         </div>
                         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
                             <div class="form-group"><label>Min Reviews</label><input type="number" id="camp-min-rev" value="20"></div>
@@ -9494,6 +9498,7 @@ hmac.compare_digest(expected, header)</pre>
                     max_prospects_per_day: parseInt(document.getElementById('camp-max-day').value) || 10,
                     contact_cooldown_days: parseInt(document.getElementById('camp-cooldown').value) || 90,
                     mode: document.getElementById('camp-mode').value,
+                    expand_metros: document.getElementById('camp-expand-metros').checked,
                     member_ids: memberIds,
                 }),
             });
@@ -12661,8 +12666,23 @@ hmac.compare_digest(expected, header)</pre>
                             <input type="tel" id="standalone-dial-number" placeholder="(555) 123-4567" style="font-size:20px;text-align:center;padding:12px;letter-spacing:1px">
                         </div>
                         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0">
-                            ${[1,2,3,4,5,6,7,8,9,'*',0,'#'].map(n => `
-                                <button onclick="document.getElementById('standalone-dial-number').value += '${n}'" style="padding:14px;font-size:18px;border:1px solid #ddd;border-radius:8px;background:white;cursor:pointer">${n}</button>
+                            ${[
+                                {n:'1',l:''},
+                                {n:'2',l:'ABC'},
+                                {n:'3',l:'DEF'},
+                                {n:'4',l:'GHI'},
+                                {n:'5',l:'JKL'},
+                                {n:'6',l:'MNO'},
+                                {n:'7',l:'PQRS'},
+                                {n:'8',l:'TUV'},
+                                {n:'9',l:'WXYZ'},
+                                {n:'*',l:''},
+                                {n:'0',l:'+'},
+                                {n:'#',l:''},
+                            ].map(k => `
+                                <button onclick="document.getElementById('standalone-dial-number').value += '${k.n}'" style="padding:8px;font-size:18px;border:1px solid #ddd;border-radius:8px;background:white;cursor:pointer;line-height:1.2">
+                                    ${k.n}<br><span style="font-size:9px;color:#999;letter-spacing:2px">${k.l}</span>
+                                </button>
                             `).join('')}
                         </div>
                         <button class="btn btn-success" style="width:100%;padding:14px;font-size:16px" onclick="dialStandaloneNumber()">Call</button>
@@ -12692,8 +12712,8 @@ hmac.compare_digest(expected, header)</pre>
                     <button class="dialer-btn keypad" id="dialer-keypad-toggle" onclick="toggleKeypad()" title="Keypad">⌨️</button>
                 </div>
                 <div class="dialer-keypad hidden" id="dialer-keypad">
-                    ${['1','2','3','4','5','6','7','8','9','*','0','#'].map(d =>
-                        `<button onclick="sendDtmf('${d}')">${d}</button>`).join('')}
+                    ${[{n:'1',l:''},{n:'2',l:'ABC'},{n:'3',l:'DEF'},{n:'4',l:'GHI'},{n:'5',l:'JKL'},{n:'6',l:'MNO'},{n:'7',l:'PQRS'},{n:'8',l:'TUV'},{n:'9',l:'WXYZ'},{n:'*',l:''},{n:'0',l:'+'},{n:'#',l:''}].map(k =>
+                        `<button onclick="sendDtmf('${k.n}')" style="line-height:1.1">${k.n}<br><span style="font-size:8px;color:#999;letter-spacing:1px">${k.l}</span></button>`).join('')}
                 </div>
             `;
             const bridgeNote = `
