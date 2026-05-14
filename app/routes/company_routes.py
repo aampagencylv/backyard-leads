@@ -554,7 +554,7 @@ async def get_company_full(
 
     # Contacts with their emails
     contacts_result = await db.execute(
-        select(Contact).where(Contact.company_id == company_id).order_by(Contact.is_primary.desc(), Contact.id)
+        select(Contact).where(Contact.company_id == company_id, Contact.is_archived == False).order_by(Contact.is_primary.desc(), Contact.id)
     )
     contacts = contacts_result.scalars().all()
 

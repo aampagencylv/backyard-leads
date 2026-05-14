@@ -296,6 +296,7 @@ class UpdateContactRequest(BaseModel):
     phone: Optional[str] = None
     linkedin_url: Optional[str] = None
     is_primary: Optional[bool] = None
+    is_archived: Optional[bool] = None
 
 
 @router.get("/contacts/{contact_id}")
@@ -334,15 +335,15 @@ async def update_contact(
 
     if req.is_primary is True and not contact.is_primary:
         # Demote any other primary at the same company
-        await db.execute(
-            select(Contact).where(Contact.company_id == contact.company_id, Contact.is_primary == True)
-        )
         prev_primary = (await db.execute(
             select(Contact).where(Contact.company_id == contact.company_id, Contact.is_primary == True)
         )).scalar_one_or_none()
         if prev_primary:
             prev_primary.is_primary = False
         contact.is_primary = True
+
+    if req.is_archived is not None:
+        contact.is_archived = bool(req.is_archived)
 
     await db.commit()
     await db.refresh(contact)
@@ -567,6 +568,7 @@ def _contact_summary(c: Contact) -> dict:
         "phone": c.phone,
         "linkedin_url": c.linkedin_url,
         "is_primary": c.is_primary,
+        "is_archived": bool(getattr(c, 'is_archived', False)),
         "email_status": c.email_status,
         "unsubscribed_at": c.unsubscribed_at.isoformat() if c.unsubscribed_at else None,
         "do_not_text": bool(c.do_not_text),

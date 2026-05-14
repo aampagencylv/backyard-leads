@@ -6717,7 +6717,8 @@ function verify(secret, rawBody, header) {
                             <h4 style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
                                 ${escapeHtml(c.name) || '(no name)'}
                                 ${c.linkedin_url ? `<a href="${escapeHtml(c.linkedin_url)}" target="_blank" rel="noreferrer" style="color:#0077B5;font-size:12px;text-decoration:none" title="View LinkedIn Profile">LinkedIn</a>` : ''}
-                                ${c.is_primary ? '<span style="font-size:10px;background:var(--bmp-green);color:white;padding:1px 6px;border-radius:3px">PRIMARY</span>' : ''}
+                                ${c.is_primary ? '<span style="font-size:10px;background:var(--bmp-green);color:white;padding:1px 6px;border-radius:3px">PRIMARY</span>' : `<span onclick="makePrimaryContact(${c.id})" style="font-size:10px;background:#fff8e1;color:#f57f17;border:1px solid #ffe082;padding:1px 6px;border-radius:3px;cursor:pointer" title="Make this the primary contact">★ Make Primary</span>`}
+                                <span onclick="archiveContact(${c.id}, '${escapeHtml((c.name || c.email || '').replace(/'/g, "\\'"))}')" style="font-size:10px;color:#999;cursor:pointer;margin-left:2px" title="Archive this contact">✕</span>
                             </h4>
                             <div class="contact-card-meta">
                                 ${c.title ? escapeHtml(c.title) + ' · ' : ''}
@@ -7719,6 +7720,18 @@ function verify(secret, rawBody, header) {
                 method: 'PATCH',
                 body: JSON.stringify({ values: { [key]: value } }),
             });
+        }
+
+        async function archiveContact(contactId, contactName) {
+            if (!confirm('Archive ' + contactName + '? They will be hidden from this company but not deleted.')) return;
+            const data = await api('/api/contacts/' + contactId, {
+                method: 'PATCH',
+                body: JSON.stringify({ is_archived: true }),
+            });
+            if (data) {
+                toast('Contact archived');
+                _refreshCurrentCompany();
+            }
         }
 
         async function makePrimaryContact(contactId) {

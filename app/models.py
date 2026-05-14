@@ -249,6 +249,7 @@ class Contact(Base):
     linkedin_url = Column(String(500))
 
     is_primary = Column(Boolean, default=False)
+    is_archived = Column(Boolean, default=False, nullable=False)
     notes = Column(Text)
 
     # Email validation / suppression
