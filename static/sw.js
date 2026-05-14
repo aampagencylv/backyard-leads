@@ -20,7 +20,7 @@
 // activates the new worker on the next page load (or immediately if
 // `skipWaiting()` is called — which we do here).
 
-const SW_VERSION = "v1.15.0";
+const SW_VERSION = "v2.0.0";
 const SHELL_CACHE = `prospector-shell-${SW_VERSION}`;
 const STATIC_CACHE = `prospector-static-${SW_VERSION}`;
 
@@ -83,8 +83,9 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Shell (root + HTML): stale-while-revalidate
-  event.respondWith(staleWhileRevalidate(req, SHELL_CACHE));
+  // Shell (root + HTML): network-first so code changes take effect immediately.
+  // Falls back to cache only when offline.
+  event.respondWith(networkFirst(req, SHELL_CACHE));
 });
 
 async function cacheFirst(req, cacheName) {
@@ -100,12 +101,14 @@ async function cacheFirst(req, cacheName) {
   }
 }
 
-async function staleWhileRevalidate(req, cacheName) {
+async function networkFirst(req, cacheName) {
   const cache = await caches.open(cacheName);
-  const cached = await cache.match(req);
-  const fetchPromise = fetch(req).then((res) => {
+  try {
+    const res = await fetch(req);
     if (res.ok) cache.put(req, res.clone());
     return res;
-  }).catch(() => cached);
-  return cached || fetchPromise;
+  } catch (e) {
+    const cached = await cache.match(req);
+    return cached || Response.error();
+  }
 }
