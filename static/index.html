@@ -11875,10 +11875,19 @@ hmac.compare_digest(expected, header)</pre>
                         codecPreferences: ['opus', 'pcmu'],
                         edge: 'ashburn',
                     });
+                    dialerState.device.on('registered', () => {
+                        console.log('Twilio Device REGISTERED — ready for inbound calls');
+                    });
+                    dialerState.device.on('unregistered', () => {
+                        console.warn('Twilio Device UNREGISTERED — inbound calls will NOT ring');
+                    });
                     dialerState.device.on('error', (e) => {
                         console.error('Twilio Device error:', e);
                         toast('Dialer error: ' + (e.message || e.code || 'unknown'));
                     });
+                    // Register with Twilio so inbound calls can reach this client.
+                    // Without this, the Device can only make outbound calls.
+                    await dialerState.device.register();
                     // Inbound call handler — pop modal pre-loaded with caller's CRM record
                     dialerState.device.on('incoming', async (call) => {
                         const fromNumber = (call.parameters && call.parameters.From) || '';
