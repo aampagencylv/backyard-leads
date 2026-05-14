@@ -476,9 +476,24 @@ class EnrichmentWaterfall:
                     result.company_data[k] = v
 
         result.contacts = list(by_email.values())
-        # Sort: highest confidence first, then mobile-phone-having first
+        # Sort: decision-makers first (by title), then highest confidence,
+        # then mobile-phone-having. This ensures the CEO/Owner/Director
+        # becomes the primary contact instead of a technician or admin.
+        _DECISION_MAKER_KEYWORDS = {
+            "ceo", "owner", "founder", "president", "principal",
+            "director", "vp", "vice president", "chief", "managing",
+            "head of", "general manager", "gm", "partner",
+            "marketing", "sales", "business development",
+        }
+        def _title_priority(c):
+            title = (c.job_title or "").lower()
+            if any(kw in title for kw in _DECISION_MAKER_KEYWORDS):
+                return 2  # decision maker
+            if title:
+                return 1  # has a title but not a decision maker
+            return 0  # no title
         result.contacts.sort(
-            key=lambda c: (c.confidence, 1 if c.mobile_phone else 0),
+            key=lambda c: (_title_priority(c), c.confidence, 1 if c.mobile_phone else 0),
             reverse=True,
         )
         return result

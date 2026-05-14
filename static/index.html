@@ -6732,6 +6732,7 @@ function verify(secret, rawBody, header) {
                         </div>
                         <div class="contact-actions" style="display:flex;flex-wrap:wrap;gap:4px">
                             <button class="btn btn-secondary btn-xs" onclick="openScheduleModal(${c.id})" style="background:#e3f2fd;color:#1565c0;border-color:#bbdefb;font-weight:600" title="Pick a time on your calendar + send the invite">📅 Schedule</button>
+                            ${!c.is_primary ? `<button class="btn btn-xs" onclick="makePrimaryContact(${c.id})" style="background:#fff8e1;color:#f57f17;border:1px solid #ffe082;font-weight:600" title="Make this the primary contact for outreach">★ Primary</button>` : ''}
                             <button class="btn btn-secondary btn-xs" onclick="editContact(${c.id})">Edit</button>
                             ${c.phone && (!c.phone_type || c.phone_type === 'unknown' || c.phone_type === 'error') ? `<button class="btn btn-secondary btn-xs" onclick="checkPhoneType(${c.id})" title="Look up via Twilio whether this is mobile / landline / VoIP">🔎 Check Phone</button>` : ''}
                             ${!c.email ? `<button class="btn btn-secondary btn-xs" onclick="setContactEmail(${c.id})">Set Email</button>` : ''}
@@ -7718,6 +7719,17 @@ function verify(secret, rawBody, header) {
                 method: 'PATCH',
                 body: JSON.stringify({ values: { [key]: value } }),
             });
+        }
+
+        async function makePrimaryContact(contactId) {
+            const data = await api(`/api/contacts/${contactId}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ is_primary: true }),
+            });
+            if (data) {
+                toast('Primary contact updated');
+                _refreshCurrentCompany();
+            }
         }
 
         async function editContact(contactId) {
