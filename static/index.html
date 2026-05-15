@@ -12797,9 +12797,12 @@ hmac.compare_digest(expected, header)</pre>
         function openStandaloneDialer() {
             const root = document.getElementById('modal-root');
             root.innerHTML = `
-                <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
-                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:360px">
-                        <h2 style="text-align:center">Dial a Number</h2>
+                <div style="position:fixed;top:0;left:0;right:0;bottom:0;z-index:999;pointer-events:none">
+                    <div id="standalone-dialer-panel" style="position:fixed;top:80px;right:20px;width:340px;pointer-events:auto;background:white;border-radius:12px;padding:20px;box-shadow:0 8px 32px rgba(0,0,0,0.3);cursor:move;z-index:1000" onmousedown="_startDragDialer(event)">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;cursor:move">
+                            <h2 style="margin:0;font-size:18px">Dial a Number</h2>
+                            <button onclick="document.getElementById('modal-root').innerHTML=''" style="background:none;border:none;font-size:18px;cursor:pointer;color:#888">✕</button>
+                        </div>
                         <div class="form-group">
                             <input type="tel" id="standalone-dial-number" placeholder="(555) 123-4567" style="font-size:20px;text-align:center;padding:12px;letter-spacing:1px">
                         </div>
