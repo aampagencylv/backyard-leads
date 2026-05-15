@@ -80,6 +80,9 @@ class User(Base):
     # Stored as a relative URL served by the app (e.g. /uploads/voicemail/3/greeting.mp3)
     voicemail_greeting_url = Column(String(500), nullable=True)
 
+    # Call availability — when False, inbound calls go straight to voicemail.
+    is_available_for_calls = Column(Boolean, default=True, nullable=False)
+
     # Notification preferences — JSON dict of event_type → bool.
     # When null, uses the system defaults. BDRs can toggle each type
     # from Settings → Notifications.

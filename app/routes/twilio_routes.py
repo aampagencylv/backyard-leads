@@ -261,6 +261,21 @@ async def assign_twilio_number(
 
 
 # ============================================================
+# Call availability toggle
+# ============================================================
+
+@router.post("/voice/availability")
+async def toggle_availability(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Toggle whether this BDR is available for inbound calls."""
+    user.is_available_for_calls = not user.is_available_for_calls
+    await db.commit()
+    return {"is_available_for_calls": user.is_available_for_calls}
+
+
+# ============================================================
 # Voice SDK access token (BDR's browser fetches this every ~50 min)
 # ============================================================
 
@@ -556,6 +571,21 @@ async def voice_inbound(request: Request):
         twiml = build_voicemail_twiml(
             company_name="Backyard Marketing Pros",
             recording_status_callback=recording_callback,
+        )
+        return Response(content=twiml, media_type="application/xml")
+
+    # If rep is offline/unavailable, go straight to voicemail
+    if not getattr(rep, 'is_available_for_calls', True):
+        public = settings.public_url.rstrip('/')
+        recording_callback = f"{public}/api/twilio/voice/voicemail-recording?from={from_number}&rep_id={rep.id}"
+        custom_greeting_url = None
+        if rep.voicemail_greeting_url:
+            custom_greeting_url = f"{public}{rep.voicemail_greeting_url}"
+        twiml = build_voicemail_twiml(
+            company_name="Backyard Marketing Pros",
+            rep_first_name=rep.first_name,
+            recording_status_callback=recording_callback,
+            custom_greeting_url=custom_greeting_url,
         )
         return Response(content=twiml, media_type="application/xml")
 

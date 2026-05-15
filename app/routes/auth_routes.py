@@ -103,6 +103,7 @@ async def get_me(user: User = Depends(get_current_user)):
         "twilio_phone_number": user.twilio_phone_number,
         "twilio_identity": user.twilio_identity,
         "dial_mode": user.dial_mode or "browser",
+        "is_available_for_calls": bool(getattr(user, 'is_available_for_calls', True)),
         "onboarding_step": user.onboarding_step,
         "brief_enabled": user.brief_enabled,
         "brief_hour": user.brief_hour,

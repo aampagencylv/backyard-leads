@@ -704,7 +704,10 @@
                 <a data-page="whats-new" onclick="showPage('whats-new')" style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.1);padding-top:8px">What's New <span id="whats-new-badge" class="hidden" style="background:#c0392b;color:white;font-size:9px;padding:1px 5px;border-radius:8px;margin-left:4px">NEW</span></a>
             </nav>
             <div class="sidebar-user">
-                <div id="user-name"></div>
+                <div style="display:flex;align-items:center;gap:8px">
+                    <span id="call-status-dot" onclick="toggleCallAvailability()" style="width:10px;height:10px;border-radius:50%;background:#27ae60;cursor:pointer;flex-shrink:0" title="Online — accepting calls. Click to toggle."></span>
+                    <div id="user-name"></div>
+                </div>
                 <span class="logout" onclick="logout()">Sign out</span>
             </div>
         </aside>
@@ -3343,6 +3346,16 @@ function verify(secret, rawBody, header) {
                     loadChangelog(); // check for new updates
                     // Register Twilio Device immediately so inbound calls ring
                     // even if the BDR hasn't made an outbound call yet.
+                    // Set call availability dot color
+                    const callDot = document.getElementById('call-status-dot');
+                    if (callDot && user.twilio_phone_number) {
+                        const avail = user.is_available_for_calls !== false;
+                        callDot.style.background = avail ? '#27ae60' : '#c0392b';
+                        callDot.title = avail ? 'Online — accepting calls. Click to go offline.' : 'Offline — calls go to voicemail. Click to go online.';
+                        callDot.style.display = 'inline-block';
+                    } else if (callDot) {
+                        callDot.style.display = 'none';
+                    }
                     if (user.twilio_phone_number) {
                         setTimeout(() => {
                             ensureTwilioDevice().then(dev => {
@@ -12846,9 +12859,9 @@ hmac.compare_digest(expected, header)</pre>
                 </div>
             `;
             root.innerHTML = `
-                <div class="modal-backdrop" id="dialer-backdrop">
-                    <div class="dialer" onclick="event.stopPropagation()">
-                        <div class="dialer-header">
+                <div id="dialer-backdrop" style="position:fixed;top:0;left:0;right:0;bottom:0;z-index:999;pointer-events:none">
+                    <div class="dialer" id="dialer-panel" style="position:fixed;top:80px;right:20px;width:340px;pointer-events:auto;box-shadow:0 8px 32px rgba(0,0,0,0.3);border-radius:12px;cursor:move;z-index:1000" onmousedown="_startDragDialer(event)">
+                        <div class="dialer-header" style="cursor:move">
                             <div class="avatar">${escapeHtml((initials || (contact.email||'?')[0] || '?').toUpperCase())}</div>
                             <div style="flex:1">
                                 <div class="name">${escapeHtml(contact.name || contact.email || '(unnamed)')}</div>
@@ -12880,7 +12893,38 @@ hmac.compare_digest(expected, header)</pre>
                     </div>
                 </div>
             `;
-            // Backdrop click does NOT close — user must Save & Close to log
+            // Backdrop is transparent — BDR can interact with CRM behind the floating dialer
+        }
+
+        // Drag handler for floating dialer
+        let _dragState = null;
+        function _startDragDialer(e) {
+            const panel = document.getElementById('dialer-panel');
+            if (!panel || e.target.tagName === 'BUTTON' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+            _dragState = { el: panel, startX: e.clientX, startY: e.clientY, origLeft: panel.offsetLeft, origTop: panel.offsetTop };
+            e.preventDefault();
+        }
+        document.addEventListener('mousemove', (e) => {
+            if (!_dragState) return;
+            const dx = e.clientX - _dragState.startX;
+            const dy = e.clientY - _dragState.startY;
+            _dragState.el.style.left = (_dragState.origLeft + dx) + 'px';
+            _dragState.el.style.top = (_dragState.origTop + dy) + 'px';
+            _dragState.el.style.right = 'auto';
+        });
+        document.addEventListener('mouseup', () => { _dragState = null; });
+
+        // Call availability toggle
+        async function toggleCallAvailability() {
+            const data = await api('/api/twilio/voice/availability', { method: 'POST' });
+            if (data) {
+                const dot = document.getElementById('call-status-dot');
+                if (dot) {
+                    dot.style.background = data.is_available_for_calls ? '#27ae60' : '#c0392b';
+                    dot.title = data.is_available_for_calls ? 'Online — accepting calls. Click to go offline.' : 'Offline — calls go to voicemail. Click to go online.';
+                }
+                toast(data.is_available_for_calls ? 'You are now ONLINE — calls will ring in your browser' : 'You are now OFFLINE — calls will go to voicemail');
+            }
         }
 
         function setDialerStatus(klass, text) {
