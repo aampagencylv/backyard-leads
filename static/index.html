@@ -6771,9 +6771,12 @@ function verify(secret, rawBody, header) {
                             <h4 style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
                                 ${escapeHtml(c.name) || '(no name)'}
                                 ${c.linkedin_url ? `<a href="${escapeHtml(c.linkedin_url)}" target="_blank" rel="noreferrer" style="color:#0077B5;font-size:12px;text-decoration:none" title="View LinkedIn Profile">LinkedIn</a>` : ''}
-                                ${c.is_primary ? '<span style="font-size:10px;background:var(--bmp-green);color:white;padding:1px 6px;border-radius:3px">PRIMARY</span>' : `<span onclick="makePrimaryContact(${c.id})" style="font-size:10px;background:#fff8e1;color:#f57f17;border:1px solid #ffe082;padding:1px 6px;border-radius:3px;cursor:pointer" title="Make this the primary contact">★ Make Primary</span>`}
-                                <span onclick="archiveContact(${c.id}, '${escapeHtml((c.name || c.email || '').replace(/'/g, "\\'"))}')" style="font-size:10px;color:#999;cursor:pointer;margin-left:2px" title="Archive this contact">✕</span>
+                                ${c.is_primary ? '<span style="font-size:10px;background:var(--bmp-green);color:white;padding:2px 8px;border-radius:3px;font-weight:600">PRIMARY</span>' : ''}
                             </h4>
+                            ${!c.is_primary ? `<div style="display:flex;gap:6px;margin-top:4px">
+                                <button onclick="makePrimaryContact(${c.id})" class="btn btn-xs" style="background:#fff8e1;color:#f57f17;border:1px solid #ffe082;font-weight:600;font-size:11px;padding:3px 10px">★ Make Primary</button>
+                                <button onclick="archiveContact(${c.id}, '${escapeHtml((c.name || c.email || '').replace(/'/g, "\\'"))}')" class="btn btn-xs" style="background:#f5f5f5;color:#999;border:1px solid #e0e0e0;font-size:11px;padding:3px 10px">Archive</button>
+                            </div>` : ''}
                             <div class="contact-card-meta">
                                 ${c.title ? escapeHtml(c.title) + ' · ' : ''}
                                 ${c.email ? `<a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a>` : '<em>no email</em>'}
