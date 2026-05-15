@@ -7,56 +7,196 @@
     <script src="/static/twilio.min.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
-        .dialer-app { background: white; border-radius: 16px; box-shadow: 0 8px 32px rgba(0,0,0,0.15); width: 340px; padding: 24px; }
-        h1 { font-size: 18px; text-align: center; color: #333; margin-bottom: 16px; }
-        .status { text-align: center; font-size: 12px; margin-bottom: 12px; padding: 4px 8px; border-radius: 4px; }
+        :root { --bmp-green: #1B5E20; --bmp-orange: #FF723F; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0D3B13 0%, #1B5E20 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 16px;
+        }
+        .brand {
+            color: rgba(255,255,255,0.9);
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            margin-bottom: 12px;
+        }
+        .dialer-app {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.3);
+            width: 100%;
+            max-width: 320px;
+            padding: 20px;
+        }
+        .status {
+            text-align: center;
+            font-size: 11px;
+            font-weight: 500;
+            margin-bottom: 16px;
+            padding: 6px 10px;
+            border-radius: 20px;
+        }
         .status.online { background: #e8f5e9; color: #2e7d32; }
         .status.offline { background: #fce4ec; color: #c62828; }
         .status.connecting { background: #fff3e0; color: #e65100; }
-        .status.in-call { background: #e8f5e9; color: #1b5e20; font-weight: 600; }
-        .number-input { width: 100%; font-size: 22px; text-align: center; padding: 12px; border: 2px solid #e0e0e0; border-radius: 8px; letter-spacing: 2px; margin-bottom: 12px; outline: none; }
-        .number-input:focus { border-color: #4caf50; }
-        .keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 16px; }
-        .keypad button { padding: 10px; font-size: 18px; border: 1px solid #e0e0e0; border-radius: 8px; background: white; cursor: pointer; line-height: 1.2; transition: background 0.1s; }
-        .keypad button:hover { background: #f5f5f5; }
-        .keypad button:active { background: #e0e0e0; }
-        .keypad .letters { font-size: 9px; color: #999; letter-spacing: 2px; display: block; }
-        .call-btn { width: 100%; padding: 14px; font-size: 16px; font-weight: 600; border: none; border-radius: 8px; cursor: pointer; color: white; transition: background 0.2s; }
-        .call-btn.call { background: #4caf50; }
-        .call-btn.call:hover { background: #43a047; }
-        .call-btn.hangup { background: #f44336; }
-        .call-btn.hangup:hover { background: #e53935; }
-        .controls { display: flex; gap: 8px; margin: 12px 0; }
-        .controls button { flex: 1; padding: 10px; border: 1px solid #e0e0e0; border-radius: 8px; background: white; cursor: pointer; font-size: 14px; }
-        .controls button:hover { background: #f5f5f5; }
-        .controls button.active { background: #ffebee; border-color: #ef9a9a; }
-        .timer { text-align: center; font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; color: #333; margin: 8px 0; display: none; }
-        .notes { width: 100%; padding: 8px; border: 1px solid #e0e0e0; border-radius: 6px; font-size: 13px; resize: vertical; min-height: 60px; margin-top: 8px; }
-        .outcome { width: 100%; padding: 8px; border: 1px solid #e0e0e0; border-radius: 6px; font-size: 13px; margin-top: 8px; }
+        .status.in-call { background: #e8f5e9; color: #1b5e20; font-weight: 700; }
+        .number-input {
+            width: 100%;
+            font-size: 24px;
+            text-align: center;
+            padding: 14px;
+            border: 2px solid #e8e8e8;
+            border-radius: 12px;
+            letter-spacing: 1px;
+            margin-bottom: 16px;
+            outline: none;
+            font-weight: 500;
+            color: #333;
+        }
+        .number-input:focus { border-color: var(--bmp-green); }
+        .number-input::placeholder { color: #ccc; font-weight: 400; }
+        .keypad {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px;
+            margin-bottom: 16px;
+        }
+        .keypad button {
+            padding: 12px 8px;
+            font-size: 20px;
+            font-weight: 500;
+            border: none;
+            border-radius: 12px;
+            background: #f5f5f5;
+            cursor: pointer;
+            line-height: 1;
+            transition: all 0.1s;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+        }
+        .keypad button:hover { background: #e8e8e8; }
+        .keypad button:active { background: #ddd; transform: scale(0.96); }
+        .keypad .letters { font-size: 8px; color: #aaa; letter-spacing: 2px; font-weight: 600; }
+        .call-btn {
+            width: 100%;
+            padding: 14px;
+            font-size: 16px;
+            font-weight: 700;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            color: white;
+            transition: all 0.2s;
+            letter-spacing: 0.5px;
+        }
+        .call-btn.call { background: var(--bmp-green); }
+        .call-btn.call:hover { background: #2e7d32; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(27,94,32,0.3); }
+        .call-btn.hangup { background: #e53935; }
+        .call-btn.hangup:hover { background: #c62828; }
+        .call-btn.save { background: #1565c0; margin-top: 10px; }
+        .call-btn.save:hover { background: #0d47a1; }
+        .controls {
+            display: flex;
+            gap: 8px;
+            margin: 16px 0;
+        }
+        .controls button {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 10px;
+            background: #f5f5f5;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.1s;
+        }
+        .controls button:hover { background: #e8e8e8; }
+        .controls button.active { background: #ffebee; color: #c62828; }
+        .controls button.hangup-ctrl { background: #ffebee; color: #c62828; }
+        .controls button.hangup-ctrl:hover { background: #ffcdd2; }
+        .timer {
+            text-align: center;
+            font-size: 28px;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            color: var(--bmp-green);
+            margin: 12px 0;
+            display: none;
+        }
+        .call-to {
+            text-align: center;
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 4px;
+            font-family: monospace;
+        }
+        .notes {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #e8e8e8;
+            border-radius: 8px;
+            font-size: 13px;
+            font-family: inherit;
+            resize: vertical;
+            min-height: 60px;
+            margin-top: 10px;
+            outline: none;
+        }
+        .notes:focus { border-color: var(--bmp-green); }
+        .outcome {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #e8e8e8;
+            border-radius: 8px;
+            font-size: 13px;
+            font-family: inherit;
+            margin-top: 8px;
+            outline: none;
+            background: white;
+        }
         .hidden { display: none !important; }
+        .keypad-toggle {
+            width: 100%;
+            padding: 6px;
+            border: none;
+            border-radius: 8px;
+            background: #f5f5f5;
+            cursor: pointer;
+            font-size: 12px;
+            color: #666;
+            margin-top: 6px;
+        }
     </style>
 </head>
 <body>
+    <div class="brand">Backyard Marketing Pros</div>
     <div class="dialer-app">
-        <h1>BMP Dialer</h1>
-        <div id="status" class="status connecting">Connecting to voice service...</div>
+        <div id="status" class="status connecting">Connecting...</div>
 
         <div id="idle-view">
-            <input type="tel" id="phone-number" class="number-input" placeholder="(555) 123-4567">
+            <input type="tel" id="phone-number" class="number-input" placeholder="Enter number">
             <div class="keypad" id="keypad"></div>
             <button class="call-btn call" onclick="makeCall()">Call</button>
         </div>
 
         <div id="call-view" class="hidden">
-            <div style="text-align:center;font-size:16px;font-weight:500;margin-bottom:4px" id="call-to"></div>
+            <div class="call-to" id="call-to"></div>
             <div id="timer" class="timer">00:00</div>
             <div class="controls">
                 <button id="mute-btn" onclick="toggleMute()">🔇 Mute</button>
-                <button id="hangup-btn" onclick="hangUp()" style="background:#ffebee;color:#c62828;border-color:#ef9a9a">📵 Hang Up</button>
+                <button class="hangup-ctrl" onclick="hangUp()">📵 Hang Up</button>
             </div>
             <div class="keypad hidden" id="dtmf-keypad"></div>
-            <button onclick="document.getElementById('dtmf-keypad').classList.toggle('hidden')" style="width:100%;padding:6px;border:1px solid #e0e0e0;border-radius:6px;background:white;cursor:pointer;font-size:12px;margin-top:4px">⌨️ Keypad</button>
+            <button class="keypad-toggle" onclick="document.getElementById('dtmf-keypad').classList.toggle('hidden')">⌨️ Keypad</button>
             <textarea class="notes" id="call-notes" placeholder="Notes from the call..."></textarea>
             <select class="outcome" id="call-outcome">
                 <option value="">Outcome</option>
@@ -67,7 +207,7 @@
                 <option value="gatekeeper">Gatekeeper</option>
                 <option value="wrong_number">Wrong number</option>
             </select>
-            <button class="call-btn call" onclick="saveAndClose()" style="margin-top:8px;background:#1565c0">Save & Close</button>
+            <button class="call-btn save" onclick="saveAndClose()">Save & Close</button>
         </div>
     </div>
 
@@ -79,26 +219,22 @@
             {n:'*',l:''},{n:'0',l:'+'},{n:'#',l:''},
         ];
 
-        // Build keypads
         ['keypad','dtmf-keypad'].forEach(id => {
             const el = document.getElementById(id);
-            el.innerHTML = keys.map(k => `<button onclick="${id === 'keypad' ? "addDigit" : "sendDtmf"}('${k.n}')">${k.n}<span class="letters">${k.l}</span></button>`).join('');
+            el.innerHTML = keys.map(k =>
+                `<button onclick="${id === 'keypad' ? 'addDigit' : 'sendDtmf'}('${k.n}')">${k.n}${k.l ? '<span class="letters">' + k.l + '</span>' : ''}</button>`
+            ).join('');
         });
 
         function addDigit(d) { document.getElementById('phone-number').value += d; }
 
-        // Auth — get token from parent window or from localStorage
         const token = localStorage.getItem('token');
         if (!token) {
-            document.getElementById('status').textContent = 'Not logged in — open this from inside Prospector';
+            document.getElementById('status').textContent = 'Not logged in — open from Prospector';
             document.getElementById('status').className = 'status offline';
         }
 
-        let device = null;
-        let currentCall = null;
-        let muted = false;
-        let timerInterval = null;
-        let callStart = null;
+        let device = null, currentCall = null, muted = false, timerInterval = null, callStart = null;
 
         async function apiFetch(path, opts = {}) {
             const resp = await fetch(path, {
@@ -112,21 +248,18 @@
             if (!token) return;
             const data = await apiFetch('/api/twilio/voice/token', { method: 'POST' });
             if (!data || !data.token) {
-                document.getElementById('status').textContent = 'Voice service unavailable';
+                document.getElementById('status').textContent = 'Voice unavailable';
                 document.getElementById('status').className = 'status offline';
                 return;
             }
             device = new Twilio.Device(data.token, { codecPreferences: ['opus', 'pcmu'], edge: 'ashburn' });
             await device.register();
-            document.getElementById('status').textContent = 'Ready — ' + (data.identity || 'connected');
+            document.getElementById('status').textContent = 'Ready';
             document.getElementById('status').className = 'status online';
-
             device.on('error', e => {
                 document.getElementById('status').textContent = 'Error: ' + (e.message || e.code);
                 document.getElementById('status').className = 'status offline';
             });
-
-            // Listen for calls from the parent window
             window.addEventListener('message', e => {
                 if (e.data && e.data.type === 'dial') {
                     document.getElementById('phone-number').value = e.data.number || '';
@@ -137,15 +270,12 @@
 
         async function makeCall() {
             const number = document.getElementById('phone-number').value.trim();
-            if (!number) return;
-            if (!device) { alert('Voice not connected'); return; }
-
+            if (!number || !device) return;
             document.getElementById('idle-view').classList.add('hidden');
             document.getElementById('call-view').classList.remove('hidden');
             document.getElementById('call-to').textContent = number;
             document.getElementById('status').textContent = 'Connecting...';
             document.getElementById('status').className = 'status connecting';
-
             try {
                 currentCall = await device.connect({ params: { To: number } });
                 currentCall.on('accept', () => {
@@ -157,16 +287,8 @@
                 });
                 currentCall.on('disconnect', () => endCallUI());
                 currentCall.on('cancel', () => endCallUI());
-                currentCall.on('error', e => {
-                    document.getElementById('status').textContent = 'Call failed: ' + (e.message || e.code);
-                    document.getElementById('status').className = 'status offline';
-                    endCallUI();
-                });
-            } catch (e) {
-                document.getElementById('status').textContent = 'Failed: ' + e.message;
-                document.getElementById('status').className = 'status offline';
-                endCallUI();
-            }
+                currentCall.on('error', e => { endCallUI(); });
+            } catch (e) { endCallUI(); }
         }
 
         function endCallUI() {
@@ -178,8 +300,7 @@
         function updateTimer() {
             if (!callStart) return;
             const s = Math.floor((Date.now() - callStart) / 1000);
-            const m = Math.floor(s / 60);
-            document.getElementById('timer').textContent = m + ':' + String(s % 60).padStart(2, '0');
+            document.getElementById('timer').textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
         }
 
         function toggleMute() {
@@ -190,17 +311,12 @@
             document.getElementById('mute-btn').textContent = muted ? '🔊 Unmute' : '🔇 Mute';
         }
 
-        function hangUp() {
-            if (currentCall) currentCall.disconnect();
-        }
-
-        function sendDtmf(d) {
-            if (currentCall) currentCall.sendDigits(d);
-        }
+        function hangUp() { if (currentCall) currentCall.disconnect(); }
+        function sendDtmf(d) { if (currentCall) currentCall.sendDigits(d); }
 
         async function saveAndClose() {
             const callSid = currentCall?.parameters?.CallSid;
-            if (currentCall) { try { currentCall.disconnect(); } catch(e) {} }
+            if (currentCall) try { currentCall.disconnect(); } catch(e) {}
             const duration = callStart ? Math.floor((Date.now() - callStart) / 1000) : 0;
             await apiFetch('/api/twilio/voice/log-call', {
                 method: 'POST',
@@ -213,10 +329,7 @@
                     direction: 'outbound',
                 }),
             });
-            // Reset
-            currentCall = null;
-            callStart = null;
-            muted = false;
+            currentCall = null; callStart = null; muted = false;
             document.getElementById('call-view').classList.add('hidden');
             document.getElementById('idle-view').classList.remove('hidden');
             document.getElementById('phone-number').value = '';
