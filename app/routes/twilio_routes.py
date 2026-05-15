@@ -799,7 +799,7 @@ async def transcribe_now(
 # ============================================================
 
 class LogCallRequest(BaseModel):
-    call_sid: str
+    call_sid: Optional[str] = None  # may be null for internal/test calls
     contact_id: Optional[int] = None  # null when calling a company main line w/o primary contact
     company_id: Optional[int] = None  # required when contact_id is null
     to_number: Optional[str] = None   # the number we actually dialed (improves timeline summary)
@@ -825,8 +825,9 @@ async def log_call(
         if not contact:
             raise HTTPException(status_code=404, detail="Contact not found")
         company_id = contact.company_id
-    elif not company_id:
-        raise HTTPException(status_code=400, detail="Either contact_id or company_id is required")
+    if not company_id and not req.contact_id:
+        # Internal/test call with no contact or company — just log it without a timeline entry
+        return {"ok": True, "note": "No contact or company — call not logged to timeline"}
 
     # Build a clear summary line — "Called {who} at {number} — outcome (mm:ss)"
     company = None
