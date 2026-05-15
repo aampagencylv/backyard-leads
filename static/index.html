@@ -705,7 +705,9 @@
             </nav>
             <div class="sidebar-user">
                 <div style="display:flex;align-items:center;gap:8px">
-                    <span id="call-status-dot" onclick="toggleCallAvailability()" style="width:10px;height:10px;border-radius:50%;background:#27ae60;cursor:pointer;flex-shrink:0" title="Online — accepting calls. Click to toggle."></span>
+                    <div id="call-status-toggle" onclick="toggleCallAvailability()" style="width:36px;height:20px;border-radius:10px;background:#27ae60;cursor:pointer;flex-shrink:0;position:relative;transition:background 0.2s" title="Online — accepting calls. Click to go offline.">
+                        <div id="call-status-knob" style="width:16px;height:16px;border-radius:50%;background:white;position:absolute;top:2px;left:18px;transition:left 0.2s;box-shadow:0 1px 3px rgba(0,0,0,0.3)"></div>
+                    </div>
                     <div id="user-name"></div>
                 </div>
                 <span class="logout" onclick="logout()">Sign out</span>
@@ -3346,15 +3348,14 @@ function verify(secret, rawBody, header) {
                     loadChangelog(); // check for new updates
                     // Register Twilio Device immediately so inbound calls ring
                     // even if the BDR hasn't made an outbound call yet.
-                    // Set call availability dot color
-                    const callDot = document.getElementById('call-status-dot');
-                    if (callDot && user.twilio_phone_number) {
+                    // Set call availability toggle
+                    const callToggle = document.getElementById('call-status-toggle');
+                    if (callToggle && user.twilio_phone_number) {
                         const avail = user.is_available_for_calls !== false;
-                        callDot.style.background = avail ? '#27ae60' : '#c0392b';
-                        callDot.title = avail ? 'Online — accepting calls. Click to go offline.' : 'Offline — calls go to voicemail. Click to go online.';
-                        callDot.style.display = 'inline-block';
-                    } else if (callDot) {
-                        callDot.style.display = 'none';
+                        _updateCallToggleUI(avail);
+                        callToggle.style.display = 'block';
+                    } else if (callToggle) {
+                        callToggle.style.display = 'none';
                     }
                     if (user.twilio_phone_number) {
                         setTimeout(() => {
@@ -12887,7 +12888,7 @@ hmac.compare_digest(expected, header)</pre>
                             <option value="declined">Declined / not interested</option>
                             <option value="failed">Call failed</option>
                         </select>
-                        <div class="modal-actions">
+                        <div class="modal-actions" style="display:flex;gap:8px">
                             <button class="btn btn-primary" onclick="finishDialer()">Save &amp; Close</button>
                         </div>
                     </div>
@@ -12915,14 +12916,22 @@ hmac.compare_digest(expected, header)</pre>
         document.addEventListener('mouseup', () => { _dragState = null; });
 
         // Call availability toggle
+        function _updateCallToggleUI(isAvailable) {
+            const toggle = document.getElementById('call-status-toggle');
+            const knob = document.getElementById('call-status-knob');
+            if (toggle) {
+                toggle.style.background = isAvailable ? '#27ae60' : '#c0392b';
+                toggle.title = isAvailable ? 'Online — accepting calls. Click to go offline.' : 'Offline — calls go to voicemail. Click to go online.';
+            }
+            if (knob) {
+                knob.style.left = isAvailable ? '18px' : '2px';
+            }
+        }
+
         async function toggleCallAvailability() {
             const data = await api('/api/twilio/voice/availability', { method: 'POST' });
             if (data) {
-                const dot = document.getElementById('call-status-dot');
-                if (dot) {
-                    dot.style.background = data.is_available_for_calls ? '#27ae60' : '#c0392b';
-                    dot.title = data.is_available_for_calls ? 'Online — accepting calls. Click to go offline.' : 'Offline — calls go to voicemail. Click to go online.';
-                }
+                _updateCallToggleUI(data.is_available_for_calls);
                 toast(data.is_available_for_calls ? 'You are now ONLINE — calls will ring in your browser' : 'You are now OFFLINE — calls will go to voicemail');
             }
         }

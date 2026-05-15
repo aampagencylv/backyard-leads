@@ -1,5 +1,39 @@
 [
   {
+    "version": "2.17.0",
+    "date": "2026-05-15",
+    "title": "Floating Dialer + Call Availability Toggle + Notifications",
+    "items": [
+      "Online/Offline toggle switch in sidebar — click to go offline so calls go to voicemail",
+      "Floating draggable dialer — drag the call window anywhere, see your CRM while talking",
+      "Customizable notification preferences — toggle which events pop up (opens, clicks, replies, hot leads)",
+      "Inbound calls now ring in the browser — fixed registration that was preventing calls from connecting",
+      "Call completion error fixed for internal/test calls",
+      "★ Make Primary button on contacts — one click to change who gets the outreach",
+      "✕ Archive button to hide irrelevant contacts without deleting",
+      "Smarter primary contact auto-selection — CEOs and directors chosen over technicians",
+      "Metro area expansion for autopilot — 48 metros, 467 cities nationwide",
+      "Dial pad now shows letters (ABC, DEF, etc) for IVR navigation",
+      "What's New changelog — popup on login + full history page"
+    ]
+  },
+  {
+    "version": "2.14.0",
+    "date": "2026-05-14",
+    "title": "Performance + Dashboard Scoping + Campaign Editing",
+    "items": [
+      "22 database indexes added — pages load 3x faster on Postgres",
+      "Dashboard scoped to each BDR — hot leads, activity, KPIs show only their data",
+      "BDR filter on My Activity — admins can view any rep's dashboard",
+      "Hot Leads by BDR section on Team Overview",
+      "Full call log with waveform playback on Team Overview",
+      "Campaign edit modal — change daily cap, filters, locations while running",
+      "Completed campaigns auto-restart when edited with new criteria",
+      "Contact phone backfill — 347 contacts got company main line numbers",
+      "Resend webhook fix — email delivery tracking now working"
+    ]
+  },
+  {
     "version": "2.13.0",
     "date": "2026-05-13",
     "title": "Browser Navigation + Deep Links",
