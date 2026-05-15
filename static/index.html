@@ -12903,8 +12903,8 @@ hmac.compare_digest(expected, header)</pre>
         // Drag handler for floating dialer
         let _dragState = null;
         function _startDragDialer(e) {
-            const panel = document.getElementById('dialer-panel');
-            if (!panel || e.target.tagName === 'BUTTON' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+            const panel = e.currentTarget;
+            if (!panel || e.target.tagName === 'BUTTON' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;
             _dragState = { el: panel, startX: e.clientX, startY: e.clientY, origLeft: panel.offsetLeft, origTop: panel.offsetTop };
             e.preventDefault();
         }
