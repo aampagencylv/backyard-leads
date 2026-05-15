@@ -12925,7 +12925,7 @@ hmac.compare_digest(expected, header)</pre>
         // Call availability toggle
         function popOutDialer() {
             const number = document.getElementById('standalone-dial-number')?.value || '';
-            const w = window.open('/static/dialer.html', 'bmp-dialer', 'width=380,height=640,resizable=yes,scrollbars=no');
+            const w = window.open('/static/dialer.html?v=' + Date.now(), 'bmp-dialer', 'width=380,height=700,resizable=yes,scrollbars=no');
             if (w && number) {
                 setTimeout(() => w.postMessage({ type: 'dial', number, autoCall: false }, '*'), 1000);
             }
