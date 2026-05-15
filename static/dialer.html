@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BMP Dialer</title>
+    <script src="/static/twilio.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+        .dialer-app { background: white; border-radius: 16px; box-shadow: 0 8px 32px rgba(0,0,0,0.15); width: 340px; padding: 24px; }
+        h1 { font-size: 18px; text-align: center; color: #333; margin-bottom: 16px; }
+        .status { text-align: center; font-size: 12px; margin-bottom: 12px; padding: 4px 8px; border-radius: 4px; }
+        .status.online { background: #e8f5e9; color: #2e7d32; }
+        .status.offline { background: #fce4ec; color: #c62828; }
+        .status.connecting { background: #fff3e0; color: #e65100; }
+        .status.in-call { background: #e8f5e9; color: #1b5e20; font-weight: 600; }
+        .number-input { width: 100%; font-size: 22px; text-align: center; padding: 12px; border: 2px solid #e0e0e0; border-radius: 8px; letter-spacing: 2px; margin-bottom: 12px; outline: none; }
+        .number-input:focus { border-color: #4caf50; }
+        .keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 16px; }
+        .keypad button { padding: 10px; font-size: 18px; border: 1px solid #e0e0e0; border-radius: 8px; background: white; cursor: pointer; line-height: 1.2; transition: background 0.1s; }
+        .keypad button:hover { background: #f5f5f5; }
+        .keypad button:active { background: #e0e0e0; }
+        .keypad .letters { font-size: 9px; color: #999; letter-spacing: 2px; display: block; }
+        .call-btn { width: 100%; padding: 14px; font-size: 16px; font-weight: 600; border: none; border-radius: 8px; cursor: pointer; color: white; transition: background 0.2s; }
+        .call-btn.call { background: #4caf50; }
+        .call-btn.call:hover { background: #43a047; }
+        .call-btn.hangup { background: #f44336; }
+        .call-btn.hangup:hover { background: #e53935; }
+        .controls { display: flex; gap: 8px; margin: 12px 0; }
+        .controls button { flex: 1; padding: 10px; border: 1px solid #e0e0e0; border-radius: 8px; background: white; cursor: pointer; font-size: 14px; }
+        .controls button:hover { background: #f5f5f5; }
+        .controls button.active { background: #ffebee; border-color: #ef9a9a; }
+        .timer { text-align: center; font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; color: #333; margin: 8px 0; display: none; }
+        .notes { width: 100%; padding: 8px; border: 1px solid #e0e0e0; border-radius: 6px; font-size: 13px; resize: vertical; min-height: 60px; margin-top: 8px; }
+        .outcome { width: 100%; padding: 8px; border: 1px solid #e0e0e0; border-radius: 6px; font-size: 13px; margin-top: 8px; }
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+    <div class="dialer-app">
+        <h1>BMP Dialer</h1>
+        <div id="status" class="status connecting">Connecting to voice service...</div>
+
+        <div id="idle-view">
+            <input type="tel" id="phone-number" class="number-input" placeholder="(555) 123-4567">
+            <div class="keypad" id="keypad"></div>
+            <button class="call-btn call" onclick="makeCall()">Call</button>
+        </div>
+
+        <div id="call-view" class="hidden">
+            <div style="text-align:center;font-size:16px;font-weight:500;margin-bottom:4px" id="call-to"></div>
+            <div id="timer" class="timer">00:00</div>
+            <div class="controls">
+                <button id="mute-btn" onclick="toggleMute()">🔇 Mute</button>
+                <button id="hangup-btn" onclick="hangUp()" style="background:#ffebee;color:#c62828;border-color:#ef9a9a">📵 Hang Up</button>
+            </div>
+            <div class="keypad hidden" id="dtmf-keypad"></div>
+            <button onclick="document.getElementById('dtmf-keypad').classList.toggle('hidden')" style="width:100%;padding:6px;border:1px solid #e0e0e0;border-radius:6px;background:white;cursor:pointer;font-size:12px;margin-top:4px">⌨️ Keypad</button>
+            <textarea class="notes" id="call-notes" placeholder="Notes from the call..."></textarea>
+            <select class="outcome" id="call-outcome">
+                <option value="">Outcome</option>
+                <option value="connected">Connected</option>
+                <option value="voicemail">Left voicemail</option>
+                <option value="no_answer">No answer</option>
+                <option value="busy">Busy</option>
+                <option value="gatekeeper">Gatekeeper</option>
+                <option value="wrong_number">Wrong number</option>
+            </select>
+            <button class="call-btn call" onclick="saveAndClose()" style="margin-top:8px;background:#1565c0">Save & Close</button>
+        </div>
+    </div>
+
+    <script>
+        const keys = [
+            {n:'1',l:''},{n:'2',l:'ABC'},{n:'3',l:'DEF'},
+            {n:'4',l:'GHI'},{n:'5',l:'JKL'},{n:'6',l:'MNO'},
+            {n:'7',l:'PQRS'},{n:'8',l:'TUV'},{n:'9',l:'WXYZ'},
+            {n:'*',l:''},{n:'0',l:'+'},{n:'#',l:''},
+        ];
+
+        // Build keypads
+        ['keypad','dtmf-keypad'].forEach(id => {
+            const el = document.getElementById(id);
+            el.innerHTML = keys.map(k => `<button onclick="${id === 'keypad' ? "addDigit" : "sendDtmf"}('${k.n}')">${k.n}<span class="letters">${k.l}</span></button>`).join('');
+        });
+
+        function addDigit(d) { document.getElementById('phone-number').value += d; }
+
+        // Auth — get token from parent window or from localStorage
+        const token = localStorage.getItem('token');
+        if (!token) {
+            document.getElementById('status').textContent = 'Not logged in — open this from inside Prospector';
+            document.getElementById('status').className = 'status offline';
+        }
+
+        let device = null;
+        let currentCall = null;
+        let muted = false;
+        let timerInterval = null;
+        let callStart = null;
+
+        async function apiFetch(path, opts = {}) {
+            const resp = await fetch(path, {
+                ...opts,
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json', ...(opts.headers || {}) },
+            });
+            return resp.ok ? await resp.json() : null;
+        }
+
+        async function init() {
+            if (!token) return;
+            const data = await apiFetch('/api/twilio/voice/token', { method: 'POST' });
+            if (!data || !data.token) {
+                document.getElementById('status').textContent = 'Voice service unavailable';
+                document.getElementById('status').className = 'status offline';
+                return;
+            }
+            device = new Twilio.Device(data.token, { codecPreferences: ['opus', 'pcmu'], edge: 'ashburn' });
+            await device.register();
+            document.getElementById('status').textContent = 'Ready — ' + (data.identity || 'connected');
+            document.getElementById('status').className = 'status online';
+
+            device.on('error', e => {
+                document.getElementById('status').textContent = 'Error: ' + (e.message || e.code);
+                document.getElementById('status').className = 'status offline';
+            });
+
+            // Listen for calls from the parent window
+            window.addEventListener('message', e => {
+                if (e.data && e.data.type === 'dial') {
+                    document.getElementById('phone-number').value = e.data.number || '';
+                    if (e.data.autoCall) makeCall();
+                }
+            });
+        }
+
+        async function makeCall() {
+            const number = document.getElementById('phone-number').value.trim();
+            if (!number) return;
+            if (!device) { alert('Voice not connected'); return; }
+
+            document.getElementById('idle-view').classList.add('hidden');
+            document.getElementById('call-view').classList.remove('hidden');
+            document.getElementById('call-to').textContent = number;
+            document.getElementById('status').textContent = 'Connecting...';
+            document.getElementById('status').className = 'status connecting';
+
+            try {
+                currentCall = await device.connect({ params: { To: number } });
+                currentCall.on('accept', () => {
+                    document.getElementById('status').textContent = 'Connected';
+                    document.getElementById('status').className = 'status in-call';
+                    document.getElementById('timer').style.display = 'block';
+                    callStart = Date.now();
+                    timerInterval = setInterval(updateTimer, 1000);
+                });
+                currentCall.on('disconnect', () => endCallUI());
+                currentCall.on('cancel', () => endCallUI());
+                currentCall.on('error', e => {
+                    document.getElementById('status').textContent = 'Call failed: ' + (e.message || e.code);
+                    document.getElementById('status').className = 'status offline';
+                    endCallUI();
+                });
+            } catch (e) {
+                document.getElementById('status').textContent = 'Failed: ' + e.message;
+                document.getElementById('status').className = 'status offline';
+                endCallUI();
+            }
+        }
+
+        function endCallUI() {
+            if (timerInterval) clearInterval(timerInterval);
+            document.getElementById('status').textContent = 'Call ended';
+            document.getElementById('status').className = 'status online';
+        }
+
+        function updateTimer() {
+            if (!callStart) return;
+            const s = Math.floor((Date.now() - callStart) / 1000);
+            const m = Math.floor(s / 60);
+            document.getElementById('timer').textContent = m + ':' + String(s % 60).padStart(2, '0');
+        }
+
+        function toggleMute() {
+            if (!currentCall) return;
+            muted = !muted;
+            currentCall.mute(muted);
+            document.getElementById('mute-btn').classList.toggle('active', muted);
+            document.getElementById('mute-btn').textContent = muted ? '🔊 Unmute' : '🔇 Mute';
+        }
+
+        function hangUp() {
+            if (currentCall) currentCall.disconnect();
+        }
+
+        function sendDtmf(d) {
+            if (currentCall) currentCall.sendDigits(d);
+        }
+
+        async function saveAndClose() {
+            const callSid = currentCall?.parameters?.CallSid;
+            if (currentCall) { try { currentCall.disconnect(); } catch(e) {} }
+            const duration = callStart ? Math.floor((Date.now() - callStart) / 1000) : 0;
+            await apiFetch('/api/twilio/voice/log-call', {
+                method: 'POST',
+                body: JSON.stringify({
+                    call_sid: callSid || null,
+                    to_number: document.getElementById('phone-number').value,
+                    duration_seconds: duration,
+                    outcome: document.getElementById('call-outcome').value || 'connected',
+                    notes: document.getElementById('call-notes').value,
+                    direction: 'outbound',
+                }),
+            });
+            // Reset
+            currentCall = null;
+            callStart = null;
+            muted = false;
+            document.getElementById('call-view').classList.add('hidden');
+            document.getElementById('idle-view').classList.remove('hidden');
+            document.getElementById('phone-number').value = '';
+            document.getElementById('call-notes').value = '';
+            document.getElementById('call-outcome').value = '';
+            document.getElementById('timer').style.display = 'none';
+            document.getElementById('timer').textContent = '00:00';
+            document.getElementById('status').textContent = 'Ready';
+            document.getElementById('status').className = 'status online';
+        }
+
+        init();
+    </script>
+</body>
+</html>

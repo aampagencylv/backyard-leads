@@ -12801,7 +12801,10 @@ hmac.compare_digest(expected, header)</pre>
                     <div id="standalone-dialer-panel" style="position:fixed;top:80px;right:20px;width:340px;pointer-events:auto;background:white;border-radius:12px;padding:20px;box-shadow:0 8px 32px rgba(0,0,0,0.3);cursor:move;z-index:1000" onmousedown="_startDragDialer(event)">
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;cursor:move">
                             <h2 style="margin:0;font-size:18px">Dial a Number</h2>
-                            <button onclick="document.getElementById('modal-root').innerHTML=''" style="background:none;border:none;font-size:18px;cursor:pointer;color:#888">✕</button>
+                            <div style="display:flex;gap:8px">
+                                <button onclick="popOutDialer()" style="background:none;border:1px solid #ddd;border-radius:4px;font-size:12px;cursor:pointer;color:#666;padding:2px 6px" title="Open in separate window">↗ Pop Out</button>
+                                <button onclick="document.getElementById('modal-root').innerHTML=''" style="background:none;border:none;font-size:18px;cursor:pointer;color:#888">✕</button>
+                            </div>
                         </div>
                         <div class="form-group">
                             <input type="tel" id="standalone-dial-number" placeholder="(555) 123-4567" style="font-size:20px;text-align:center;padding:12px;letter-spacing:1px">
@@ -12871,6 +12874,7 @@ hmac.compare_digest(expected, header)</pre>
                                 <div class="name">${escapeHtml(contact.name || contact.email || '(unnamed)')}</div>
                                 <div class="meta">${escapeHtml(contact.title || '')}${contact.title && contact.company_name ? ' · ' : ''}${escapeHtml(contact.company_name || '')}</div>
                             </div>
+                            <button onclick="popOutDialer()" style="background:none;border:1px solid #ddd;border-radius:4px;font-size:11px;cursor:pointer;color:#666;padding:2px 6px;flex-shrink:0" title="Open in separate window">↗</button>
                             ${isBridge ? '<span style="font-size:10px;background:var(--bmp-orange);color:white;padding:2px 8px;border-radius:10px">BRIDGE</span>' : ''}
                         </div>
                         <div class="dialer-state">
@@ -12919,6 +12923,16 @@ hmac.compare_digest(expected, header)</pre>
         document.addEventListener('mouseup', () => { _dragState = null; });
 
         // Call availability toggle
+        function popOutDialer() {
+            const number = document.getElementById('standalone-dial-number')?.value || '';
+            const w = window.open('/static/dialer.html', 'bmp-dialer', 'width=380,height=640,resizable=yes,scrollbars=no');
+            if (w && number) {
+                setTimeout(() => w.postMessage({ type: 'dial', number, autoCall: false }, '*'), 1000);
+            }
+            // Close the inline dialer
+            document.getElementById('modal-root').innerHTML = '';
+        }
+
         function _updateCallToggleUI(isAvailable) {
             const toggle = document.getElementById('call-status-toggle');
             const knob = document.getElementById('call-status-knob');
