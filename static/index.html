@@ -2553,9 +2553,9 @@ function verify(secret, rawBody, header) {
                 <!-- Notifications -->
                 <div class="search-box" style="max-width:600px;margin-top:16px">
                     <h3 style="margin:0 0 6px">Notifications <span id="notif-status" style="font-size:11px;font-weight:400;color:#888"></span></h3>
-                    <p style="font-size:12px;color:#888;margin-bottom:8px">Toast popups always fire when this tab is open. Enable native browser notifications to also get popups when the tab is in the background — like Slack or Mercury.</p>
-                    <p style="font-size:11px;color:#888;margin-bottom:10px"><strong>You'll be notified for:</strong> 🔥 Hot Leads · 💬 iMessage replies · ✉️ Email replies. (Not: pageviews, opens, clicks — those just go to the timeline.)</p>
-                    <button class="btn btn-primary btn-sm" onclick="enableBrowserNotifications()">🔔 Enable Browser Notifications</button>
+                    <p style="font-size:12px;color:#888;margin-bottom:8px">Choose which events trigger popup notifications. Toast popups fire when this tab is open. Browser notifications pop up even when the tab is in the background.</p>
+                    <button class="btn btn-primary btn-sm" onclick="enableBrowserNotifications()" style="margin-bottom:12px">🔔 Enable Browser Notifications</button>
+                    <div id="notification-prefs-list" style="margin-top:8px"></div>
                 </div>
 
                 <!-- Product Tour -->
@@ -3509,6 +3509,42 @@ function verify(secret, rawBody, header) {
                     };
                 } catch (e) { /* non-fatal */ }
             }
+        }
+
+        async function loadNotificationPrefs() {
+            const data = await api('/api/notifications/preferences');
+            if (!data) return;
+            const el = document.getElementById('notification-prefs-list');
+            if (!el) return;
+            const categories = {};
+            for (const e of data.events) {
+                if (!categories[e.category]) categories[e.category] = [];
+                categories[e.category].push(e);
+            }
+            const catLabels = {engagement: 'Prospect Engagement', deliverability: 'Email Deliverability', pipeline: 'Pipeline & Deals', activity: 'Activity'};
+            el.innerHTML = Object.entries(categories).map(([cat, events]) => `
+                <div style="margin-bottom:12px">
+                    <div style="font-size:11px;font-weight:600;color:#888;text-transform:uppercase;margin-bottom:4px">${catLabels[cat] || cat}</div>
+                    ${events.map(e => `
+                        <label style="display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer;font-size:13px">
+                            <input type="checkbox" class="notif-pref-cb" data-key="${e.key}" ${e.enabled ? 'checked' : ''} onchange="saveNotificationPrefs()">
+                            ${e.label}
+                        </label>
+                    `).join('')}
+                </div>
+            `).join('');
+        }
+
+        async function saveNotificationPrefs() {
+            const prefs = {};
+            document.querySelectorAll('.notif-pref-cb').forEach(cb => {
+                prefs[cb.dataset.key] = cb.checked;
+            });
+            await api('/api/notifications/preferences', {
+                method: 'PUT',
+                body: JSON.stringify(prefs),
+            });
+            toast('Notification preferences saved');
         }
 
         async function enableBrowserNotifications() {
@@ -9804,6 +9840,7 @@ hmac.compare_digest(expected, header)</pre>
             if (delSection) { delSection.classList.toggle('hidden', !isAdminPlus); if (isAdminPlus) loadPendingDeletions(); }
             const fbSection = document.getElementById('feedback-section');
             if (fbSection) { fbSection.classList.toggle('hidden', !isAdminPlus); if (isAdminPlus) loadFeedbackList(); }
+            loadNotificationPrefs();
 
             const tenantKeys = document.getElementById('tenant-keys-section');
             if (tenantKeys) tenantKeys.classList.toggle('hidden', !isAdminPlus);

@@ -80,6 +80,11 @@ class User(Base):
     # Stored as a relative URL served by the app (e.g. /uploads/voicemail/3/greeting.mp3)
     voicemail_greeting_url = Column(String(500), nullable=True)
 
+    # Notification preferences — JSON dict of event_type → bool.
+    # When null, uses the system defaults. BDRs can toggle each type
+    # from Settings → Notifications.
+    notification_prefs_json = Column(Text, nullable=True)
+
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     searches = relationship("Search", back_populates="user")

@@ -32,8 +32,69 @@ from app.auth import get_current_user
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 
 
-# Activity types that should pop up an interruption-style notification
-NOTABLE_TYPES = ["hot_lead", "imessage_received", "email_replied"]
+# All available notification event types with defaults
+NOTIFICATION_EVENTS = {
+    "hot_lead":          {"label": "Hot Lead detected",             "default": True,  "category": "engagement"},
+    "email_replied":     {"label": "Email reply received",          "default": True,  "category": "engagement"},
+    "email_opened":      {"label": "Email opened",                  "default": False, "category": "engagement"},
+    "email_clicked":     {"label": "Link clicked in email",         "default": False, "category": "engagement"},
+    "email_bounced":     {"label": "Email bounced",                 "default": True,  "category": "deliverability"},
+    "imessage_received": {"label": "iMessage reply",                "default": True,  "category": "engagement"},
+    "meeting_booked":    {"label": "Meeting booked",                "default": True,  "category": "pipeline"},
+    "call":              {"label": "Call logged",                   "default": False, "category": "activity"},
+    "deal_update":       {"label": "Deal stage changed",            "default": False, "category": "pipeline"},
+}
+
+# Legacy fallback — used when a user has no prefs set
+DEFAULT_NOTABLE = [k for k, v in NOTIFICATION_EVENTS.items() if v["default"]]
+
+
+def _get_user_notable_types(user: User) -> list[str]:
+    """Return the list of activity types this user wants notifications for."""
+    if not user.notification_prefs_json:
+        return DEFAULT_NOTABLE
+    try:
+        prefs = json.loads(user.notification_prefs_json)
+        return [k for k, enabled in prefs.items() if enabled]
+    except (json.JSONDecodeError, TypeError):
+        return DEFAULT_NOTABLE
+
+
+@router.get("/preferences")
+async def get_preferences(user: User = Depends(get_current_user)):
+    """Return the user's notification preferences with all available events."""
+    prefs = {}
+    if user.notification_prefs_json:
+        try:
+            prefs = json.loads(user.notification_prefs_json)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return {
+        "events": [
+            {
+                "key": k,
+                "label": v["label"],
+                "category": v["category"],
+                "enabled": prefs.get(k, v["default"]),
+                "default": v["default"],
+            }
+            for k, v in NOTIFICATION_EVENTS.items()
+        ]
+    }
+
+
+@router.put("/preferences")
+async def update_preferences(
+    prefs: dict,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Update the user's notification preferences. Body: {event_key: bool, ...}"""
+    # Validate keys
+    clean = {k: bool(v) for k, v in prefs.items() if k in NOTIFICATION_EVENTS}
+    user.notification_prefs_json = json.dumps(clean)
+    await db.commit()
+    return {"ok": True, "prefs": clean}
 
 
 @router.get("/recent")
@@ -62,10 +123,13 @@ async def recent(
     # supervisors). We join Company on the activity to filter by ownership
     # rather than reusing scope_companies because Activity ↔ Company is via
     # company_id only, not a relationship that scope_companies expects.
+    notable_types = _get_user_notable_types(user)
+    if not notable_types:
+        return {"server_now": datetime.now(timezone.utc).isoformat(), "items": []}
     q = (
         select(Activity)
         .where(
-            Activity.activity_type.in_(NOTABLE_TYPES),
+            Activity.activity_type.in_(notable_types),
             Activity.created_at > cutoff,
         )
         .order_by(Activity.created_at.desc())
