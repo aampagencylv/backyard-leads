@@ -3348,13 +3348,17 @@ function verify(secret, rawBody, header) {
                             ensureTwilioDevice().then(dev => {
                                 if (dev) {
                                     console.log('Twilio Device registered for inbound calls');
-                                    // Auto-refresh token every 50 min (tokens expire in 60 min)
                                     setInterval(() => {
-                                        ensureTwilioDevice().catch(() => {});
+                                        ensureTwilioDevice().catch(e => console.warn('Token refresh failed:', e));
                                     }, 50 * 60 * 1000);
                                 }
-                            }).catch(() => {});
+                            }).catch(e => {
+                                console.error('Twilio Device registration FAILED:', e);
+                                toast('Phone registration failed — inbound calls may not ring. Try refreshing.');
+                            });
                         }, 2000);
+                    } else {
+                        console.log('No Twilio number assigned — skipping voice device registration');
                     }
                     refreshNavBadges();
                     startNotificationPoller();
