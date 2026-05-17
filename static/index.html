@@ -4112,6 +4112,24 @@ function verify(secret, rawBody, header) {
             }
         });
 
+        // Keyboard shortcuts on the company detail page: [ = prev, ] = next.
+        // Skipped when the user is typing in an input/textarea/contenteditable
+        // so we don't hijack regular text entry. Walks the same _companiesNavList
+        // that powers the on-screen Prev/Next buttons.
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== '[' && e.key !== ']') return;
+            const t = e.target;
+            if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+            const detail = document.getElementById('page-company-detail');
+            if (!detail || detail.classList.contains('hidden')) return;
+            const currentId = parseInt(document.getElementById('company-detail')?.dataset?.companyId || '0');
+            if (!currentId) return;
+            const idx = (_companiesNavList || []).indexOf(currentId);
+            if (idx === -1) return;
+            const target = e.key === '[' ? _companiesNavList[idx - 1] : _companiesNavList[idx + 1];
+            if (target) { e.preventDefault(); openCompanyDetail(target); }
+        });
+
         // Handle deep links on page load (e.g. /#company/123)
         function _handleHashRoute() {
             const hash = window.location.hash.replace('#', '');
@@ -5374,6 +5392,18 @@ function verify(secret, rawBody, header) {
         let _lastCompaniesData = [];
         let _lastCompaniesFilter = 'active';
 
+        // Ordered list of company IDs from the most recent companies-list
+        // render. Powers the Prev/Next buttons on the company detail page so
+        // BDRs can move through their filtered list without bouncing back to
+        // the index. Persisted to sessionStorage so a hard refresh or deep
+        // link in the same tab keeps the context. Cleared/rewritten every
+        // time the list re-renders.
+        let _companiesNavList = [];
+        try { _companiesNavList = JSON.parse(sessionStorage.getItem('bml_company_nav') || '[]'); } catch (e) {}
+        function _persistCompaniesNav() {
+            try { sessionStorage.setItem('bml_company_nav', JSON.stringify(_companiesNavList)); } catch (e) {}
+        }
+
         async function loadCompanies(filter) {
             _lastCompaniesFilter = filter || 'active';
             let path = '/api/companies/';
@@ -5810,7 +5840,31 @@ function verify(secret, rawBody, header) {
                     </div>
                 </div>
             `).join('');
+            // Cache the ordered ID list so the company detail page can render
+            // Prev/Next buttons that walk the same filter the BDR is viewing.
+            _companiesNavList = companies.map(c => c.id);
+            _persistCompaniesNav();
             _renderMergeBar(companies);
+        }
+
+        // Render the Prev / N of M / Next nav cluster for the company detail
+        // header. Returns '' (renders nothing) if we have no list context —
+        // e.g. opened from a dashboard widget, deep link, or a single-item
+        // search — since a "next" that randomly jumps to an unrelated
+        // company is worse UX than no button at all.
+        function renderCompanyNavButtons(currentId) {
+            const list = _companiesNavList || [];
+            const idx = list.indexOf(currentId);
+            if (idx === -1 || list.length < 2) return '';
+            const prev = idx > 0 ? list[idx - 1] : null;
+            const next = idx < list.length - 1 ? list[idx + 1] : null;
+            return `
+                <div style="display:flex;align-items:center;gap:4px;margin-right:6px;border:1px solid #e0e0e0;border-radius:6px;padding:2px;background:#fafafa">
+                    <button class="btn btn-secondary btn-sm" ${prev ? `onclick="openCompanyDetail(${prev})"` : 'disabled'} title="${prev ? 'Previous company in your list (or press [)' : 'No previous company in this list'}" style="padding:4px 10px;border:none;background:${prev ? '#fff' : 'transparent'};font-weight:600">←</button>
+                    <span style="font-size:12px;color:#666;padding:0 6px;white-space:nowrap" title="Position in your current list">${idx + 1} of ${list.length}</span>
+                    <button class="btn btn-secondary btn-sm" ${next ? `onclick="openCompanyDetail(${next})"` : 'disabled'} title="${next ? 'Next company in your list (or press ])' : 'End of your list'}" style="padding:4px 10px;border:none;background:${next ? '#fff' : 'transparent'};font-weight:600">→</button>
+                </div>
+            `;
         }
 
         function toggleMergeSelection(id, checked) {
@@ -6278,6 +6332,7 @@ function verify(secret, rawBody, header) {
                         </div>
                     </div>
                     <div style="display:flex;gap:8px;align-items:center">
+                        ${renderCompanyNavButtons(d.id)}
                         <span class="status-badge status-${d.status}" style="font-size:13px;padding:4px 12px">${d.status}</span>
                         ${d.website ? `<button class="btn btn-secondary btn-sm" onclick="enrichContactsFromCompany(${d.id})">${d.enriched ? 'Re-Enrich' : 'Enrich'}</button>` : ''}
                         ${d.enriched ? `<button class="btn btn-secondary btn-sm" onclick="clearCompanyEnrichment(${d.id})" title="Clear Netrows-derived fields if they look wrong, then Re-Enrich">🧹 Clear & Re-Enrich</button>` : ''}
