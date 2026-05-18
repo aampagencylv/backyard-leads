@@ -334,6 +334,162 @@ async def unstall_sequences(
 
 
 # ============================================================
+# Disqualify / restore (BDR marks unqualified → admin reviews)
+# ============================================================
+
+DISQUALIFY_REASONS = [
+    "Not a fit for our services",
+    "Already has a vendor / locked in contract",
+    "Too small — not enough budget",
+    "Too large — not our target",
+    "Couldn't reach decision-maker",
+    "No budget right now",
+    "Not interested — do not contact",
+    "Bad contact info — can't reach them",
+    "Out of service area",
+    "Other",
+]
+
+
+class DisqualifyRequest(BaseModel):
+    reason: str
+    notes: Optional[str] = None
+
+
+@router.post("/{company_id}/disqualify")
+async def disqualify_company(
+    company_id: int,
+    req: DisqualifyRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Mark a company as unqualified, pause all active sequence steps,
+    and log an activity so admins can review the decision."""
+    from app.scoping import scope_companies
+    company = (await db.execute(
+        scope_companies(select(Company).where(Company.id == company_id), user, None)
+    )).scalar_one_or_none()
+    if not company:
+        raise HTTPException(404, "Company not found")
+
+    now = datetime.now(timezone.utc)
+    old_status = company.status
+
+    # Update company
+    company.status = "not_interested"
+    full_reason = req.reason if not req.notes else f"{req.reason} — {req.notes}"
+    company.lost_reason = full_reason
+
+    # Pause every unsent, unpaused sequence step for this company
+    active_steps = (await db.execute(
+        select(GeneratedEmail).where(
+            GeneratedEmail.company_id == company_id,
+            GeneratedEmail.is_sent == False,
+            GeneratedEmail.paused_at.is_(None),
+            GeneratedEmail.skipped_at.is_(None),
+        )
+    )).scalars().all()
+    for step in active_steps:
+        step.paused_at = now
+
+    # Log activity — 'disqualified' type so admin dashboard can filter it
+    db.add(Activity(
+        company_id=company_id,
+        user_id=user.id,
+        activity_type="disqualified",
+        content=f"Marked as unqualified: {full_reason} (was: {old_status})",
+    ))
+
+    await db.commit()
+    return {
+        "company_id": company_id,
+        "status": "not_interested",
+        "lost_reason": full_reason,
+        "steps_paused": len(active_steps),
+    }
+
+
+@router.post("/{company_id}/restore-disqualify")
+async def restore_disqualified_company(
+    company_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Admin-only: restore a disqualified company back to active pursuit.
+    Sequences remain paused — admin or BDR can manually resume them."""
+    if user.role not in ("admin", "super_admin"):
+        raise HTTPException(403, "Admin only")
+
+    company = (await db.execute(
+        select(Company).where(Company.id == company_id)
+    )).scalar_one_or_none()
+    if not company:
+        raise HTTPException(404, "Company not found")
+
+    old_reason = company.lost_reason
+    company.status = "pursuing"
+    company.lost_reason = None
+
+    db.add(Activity(
+        company_id=company_id,
+        user_id=user.id,
+        activity_type="status_change",
+        content=f"Restored from disqualified (reason was: {old_reason or 'not recorded'}). Sequences remain paused — resume manually.",
+    ))
+
+    await db.commit()
+    return {"company_id": company_id, "status": "pursuing"}
+
+
+@router.get("/pending-review")
+async def get_pending_review(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Admin-only: companies disqualified in the last 30 days, with the
+    reason and the BDR who logged the decision."""
+    if user.role not in ("admin", "super_admin"):
+        raise HTTPException(403, "Admin only")
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+
+    # Most recent 'disqualified' activity per company
+    rows = (await db.execute(
+        select(Activity, Company, User)
+        .join(Company, Activity.company_id == Company.id)
+        .outerjoin(User, Activity.user_id == User.id)
+        .where(
+            Activity.activity_type == "disqualified",
+            Activity.created_at >= cutoff,
+            Company.status == "not_interested",
+        )
+        .order_by(Activity.created_at.desc())
+    )).all()
+
+    # Dedupe: one row per company (keep most recent)
+    seen: set[int] = set()
+    result = []
+    for act, company, bdru in rows:
+        if company.id in seen:
+            continue
+        seen.add(company.id)
+        bdr_name = None
+        if bdru:
+            bdr_name = f"{bdru.first_name or ''} {bdru.last_name or ''}".strip() or bdru.email
+        result.append({
+            "company_id": company.id,
+            "company_name": company.name,
+            "company_city": company.city,
+            "company_state": company.state,
+            "lost_reason": company.lost_reason,
+            "disqualified_by": bdr_name,
+            "disqualified_at": act.created_at.isoformat() if act.created_at else None,
+        })
+
+    return result
+
+
+# ============================================================
 # Manual company creation + CSV upload
 # ============================================================
 

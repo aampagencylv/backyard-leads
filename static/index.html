@@ -780,6 +780,16 @@
                         <div id="team-heatmap" style="overflow-x:auto"></div>
                     </div>
 
+                    <!-- Needs Review — recently disqualified companies -->
+                    <div class="search-box" style="margin-top:16px;border-left:3px solid #e67e22">
+                        <h3 style="display:flex;justify-content:space-between;align-items:center">
+                            <span>⚠ Needs Review — Unqualified Companies</span>
+                            <span id="pending-review-count" style="font-size:12px;font-weight:400;color:#888"></span>
+                        </h3>
+                        <p style="font-size:12px;color:#888;margin-bottom:10px">BDRs marked these companies unqualified in the last 30 days. Review and restore if needed.</p>
+                        <div id="team-pending-review"></div>
+                    </div>
+
                     <!-- Hot Leads by BDR -->
                     <div class="search-box" style="margin-top:16px">
                         <h3>Hot Leads by BDR</h3>
@@ -4627,6 +4637,32 @@ function verify(secret, rawBody, header) {
             renderConversionFunnel(data.conversion_funnel);
             renderCallLog(data.call_log);
             renderHotLeadsByBdr(data.hot_leads_by_bdr);
+            // Load "Needs Review" separately so it doesn't slow down the main dashboard
+            api('/api/companies/pending-review').then(items => renderPendingReview(items || []));
+        }
+
+        function renderPendingReview(items) {
+            const el = document.getElementById('team-pending-review');
+            const countEl = document.getElementById('pending-review-count');
+            if (!el) return;
+            if (countEl) countEl.textContent = items.length ? `${items.length} pending` : 'none';
+            if (!items.length) {
+                el.innerHTML = '<p style="font-size:12px;color:#27ae60">✅ No companies pending review.</p>';
+                return;
+            }
+            el.innerHTML = items.map(item => `
+                <div style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:13px">
+                    <div style="flex:1;min-width:0">
+                        <a href="#" onclick="openCompanyDetail(${item.company_id});return false" style="font-weight:600;color:inherit;text-decoration:none;border-bottom:1px dashed #aaa">${escapeHtml(item.company_name)}</a>
+                        ${item.company_city ? `<span style="font-size:11px;color:#888;margin-left:6px">${escapeHtml(item.company_city)}${item.company_state ? ', '+escapeHtml(item.company_state) : ''}</span>` : ''}
+                        <div style="font-size:12px;color:#c0392b;margin-top:2px">${escapeHtml(item.lost_reason || 'No reason given')}</div>
+                        <div style="font-size:11px;color:#aaa;margin-top:1px">
+                            By ${escapeHtml(item.disqualified_by || 'unknown')} · ${item.disqualified_at ? fmtRelative(item.disqualified_at) : ''}
+                        </div>
+                    </div>
+                    <button class="btn btn-secondary btn-xs" onclick="adminRestoreCompany(${item.company_id})" style="flex-shrink:0;white-space:nowrap">↩ Restore</button>
+                </div>
+            `).join('');
         }
 
         function _wowChip(wow) {
@@ -6066,7 +6102,7 @@ function verify(secret, rawBody, header) {
                         ${c.status === 'new' && !c.enriched && c.website ? `<button class="btn btn-secondary btn-sm" onclick="enrichCompany(${c.id})">Analyze Website</button>` : ''}
                         ${c.status === 'new' ? `<button class="btn btn-success btn-sm" onclick="pursueCompanies([${c.id}])">Add to Pipeline</button>` : ''}
                         ${c.status !== 'qualified' && c.status !== 'not_interested' ? `<button class="btn btn-success btn-xs" onclick="quickQualify(${c.id},'qualified')">Qualify</button>` : ''}
-                        ${c.status !== 'not_interested' ? `<button class="btn btn-secondary btn-xs" onclick="quickQualify(${c.id},'not_interested')">Unqualify</button>` : ''}
+                        ${c.status !== 'not_interested' ? `<button class="btn btn-secondary btn-xs" onclick="openUnqualifyModal(${c.id}, '${escapeHtml((c.name||'').replace(/'/g,"\\'"))}')">Unqualify</button>` : ''}
                         <button class="btn btn-secondary btn-sm" onclick="openCompanyDetail(${c.id})">Open</button>
                     </div>
                 </div>
@@ -6565,6 +6601,7 @@ function verify(secret, rawBody, header) {
                     <div style="display:flex;gap:8px;align-items:center">
                         ${renderCompanyNavButtons(d.id)}
                         <span class="status-badge status-${d.status}" style="font-size:13px;padding:4px 12px">${d.status}</span>
+                        ${d.status !== 'not_interested' ? `<button class="btn btn-secondary btn-sm" onclick="openUnqualifyModal(${d.id}, '${escapeHtml((d.name||'').replace(/'/g,"\\'"))}')" style="color:#c0392b;border-color:#c0392b" title="Mark as unqualified — pauses sequence and notifies admins">✕ Unqualify</button>` : `<button class="btn btn-secondary btn-sm" onclick="adminRestoreCompany(${d.id})" title="Restore this company to active pursuit">↩ Restore</button>`}
                         ${d.website ? `<button class="btn btn-secondary btn-sm" onclick="enrichContactsFromCompany(${d.id})">${d.enriched ? 'Re-Enrich' : 'Enrich'}</button>` : ''}
                         ${d.enriched ? `<button class="btn btn-secondary btn-sm" onclick="clearCompanyEnrichment(${d.id})" title="Clear Netrows-derived fields if they look wrong, then Re-Enrich">🧹 Clear & Re-Enrich</button>` : ''}
                         ${d.enriched ? `<button class="btn btn-primary btn-sm" onclick="generateAuditReport(${d.id})" id="audit-btn-${d.id}">AI Findability Audit</button>` : ''}
@@ -6953,6 +6990,7 @@ function verify(secret, rawBody, header) {
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
                     <h3 style="margin:0;font-size:14px">Outreach Sequence</h3>
                     <div style="display:flex;align-items:center;gap:8px">
+                        <button class="btn btn-secondary btn-xs" onclick="addNote(${d.id})" title="Log a call note, meeting insight, or any update about this company" style="font-size:11px;padding:3px 8px">📝 Note</button>
                         <span style="font-size:12px;color:#888">Sending to:</span>
                         <select id="sequence-contact-select" onchange="switchSequenceContact(${d.id}, parseInt(this.value))" style="padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px">
                             ${d.contacts.map(c => `<option value="${c.id}" ${c.id === contactId ? 'selected' : ''}>${escapeHtml(c.name || c.email || '(unnamed)')}</option>`).join('')}
@@ -8236,6 +8274,54 @@ function verify(secret, rawBody, header) {
             });
             toast(status === 'qualified' ? 'Company qualified — added to pipeline' : 'Company marked as unqualified');
             loadCompanies(_lastCompaniesFilter);
+        }
+
+        const UNQUALIFY_REASONS = [
+            "Not a fit for our services",
+            "Already has a vendor / locked in contract",
+            "Too small — not enough budget",
+            "Too large — not our target",
+            "Couldn't reach decision-maker",
+            "No budget right now",
+            "Not interested — do not contact",
+            "Bad contact info — can't reach them",
+            "Out of service area",
+            "Other",
+        ];
+
+        async function openUnqualifyModal(companyId, companyName) {
+            const values = await openModal(
+                `Unqualify: ${companyName}`,
+                [
+                    { key: 'reason', label: 'Reason', type: 'select', required: true,
+                      options: UNQUALIFY_REASONS.map(r => ({ value: r, label: r })) },
+                    { key: 'notes', label: 'Additional notes (optional)', type: 'textarea', rows: 3,
+                      placeholder: 'e.g. Spoke to John, said they just signed 2-year deal with competitor…' },
+                ],
+                { saveLabel: '✕ Unqualify Company', cancelLabel: 'Cancel' }
+            );
+            if (!values || !values.reason) return;
+            const r = await api(`/api/companies/${companyId}/disqualify`, {
+                method: 'POST',
+                body: JSON.stringify({ reason: values.reason, notes: values.notes || null }),
+            });
+            if (!r) return;
+            toast(`Company unqualified. ${r.steps_paused > 0 ? `${r.steps_paused} sequence step(s) paused.` : ''} Admins have been notified.`);
+            // Refresh whatever view is open
+            const detailEl = document.getElementById('company-detail');
+            if (detailEl && parseInt(detailEl.dataset.companyId) === companyId) {
+                openCompanyDetail(companyId);
+            } else {
+                loadCompanies(_lastCompaniesFilter);
+            }
+        }
+
+        async function adminRestoreCompany(companyId) {
+            if (!confirm('Restore this company to active pursuit? Their sequences will remain paused — you can resume them manually.')) return;
+            const r = await api(`/api/companies/${companyId}/restore-disqualify`, { method: 'POST' });
+            if (!r) return;
+            toast('Company restored to active pursuit. Sequences remain paused.');
+            openCompanyDetail(companyId);
         }
 
         function _refreshCurrentCompany() {
