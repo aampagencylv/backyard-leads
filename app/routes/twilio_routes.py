@@ -885,6 +885,7 @@ async def log_call(
         "no_answer": "no answer",
         "busy": "line busy",
         "wrong_number": "wrong number",
+        "wrong_contact": "reached wrong contact",
         "gatekeeper": "reached gatekeeper",
         "declined": "declined",
         "failed": "failed",

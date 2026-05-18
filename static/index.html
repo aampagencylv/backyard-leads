@@ -5353,7 +5353,7 @@ function verify(secret, rawBody, header) {
 
             // Outcome funnel
             const outcomes = data.by_outcome || {};
-            const outcomeOrder = ['connected', 'voicemail', 'no_answer', 'busy', 'wrong_number', 'gatekeeper', 'declined', 'failed', 'unknown'];
+            const outcomeOrder = ['connected', 'voicemail', 'no_answer', 'busy', 'wrong_number', 'wrong_contact', 'gatekeeper', 'declined', 'failed', 'unknown'];
             const outcomesPresent = outcomeOrder.filter(o => outcomes[o]);
             const outcomeBars = outcomesPresent.length ? `
                 <div style="margin-bottom:14px">
@@ -5367,6 +5367,7 @@ function verify(secret, rawBody, header) {
                             no_answer: '#95a5a6',
                             busy: '#e67e22',
                             wrong_number: '#c0392b',
+                            wrong_contact: '#8e44ad',
                             gatekeeper: '#9b59b6',
                             declined: '#7f8c8d',
                             failed: '#c0392b',
@@ -13178,6 +13179,7 @@ hmac.compare_digest(expected, header)</pre>
                             <option value="no_answer">No answer</option>
                             <option value="busy">Line busy</option>
                             <option value="wrong_number">Wrong number</option>
+                            <option value="wrong_contact">Wrong contact — reached wrong person</option>
                             <option value="gatekeeper">Reached gatekeeper</option>
                             <option value="declined">Declined / not interested</option>
                             <option value="failed">Call failed</option>
