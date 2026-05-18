@@ -6050,6 +6050,7 @@ function verify(secret, rawBody, header) {
                         <div style="text-align:right">
                             ${c.review_count ? `<div style="font-size:18px;font-weight:700;color:${c.review_count >= 50 ? '#27ae60' : c.review_count >= 20 ? '#f39c12' : '#999'}">${c.review_count}</div><div style="font-size:10px;color:#666">reviews</div>` : '<div style="font-size:11px;color:#999">No reviews</div>'}
                             ${c.rating ? `<div style="color:#f39c12;font-size:12px;margin-top:2px">★ ${c.rating}</div>` : ''}
+                            <div style="margin-top:4px;font-size:11px;color:${(c.contact_count||0) > 0 ? '#1a73e8' : '#bbb'}" title="${(c.contact_count||0) === 1 ? '1 contact' : `${c.contact_count||0} contacts`}">👤 ${c.contact_count || 0}</div>
                         </div>
                     </div>
                     <div class="company-card-meta">

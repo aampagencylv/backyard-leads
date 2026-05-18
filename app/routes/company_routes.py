@@ -145,12 +145,24 @@ async def list_companies(
         for cid, min_step in step_rows:
             seq_step_map[cid] = min_step
 
+    # Prefetch contact counts — single aggregate query.
+    contact_count_map: dict[int, int] = {}
+    if company_ids:
+        count_rows = (await db.execute(
+            select(Contact.company_id, func.count(Contact.id))
+            .where(Contact.company_id.in_(company_ids))
+            .group_by(Contact.company_id)
+        )).all()
+        for cid, cnt in count_rows:
+            contact_count_map[cid] = cnt
+
     return [
         _company_summary(
             c,
             assigned_name=user_name_map.get(c.assigned_to),
             tags=tags_map.get(c.id, []),
             sequence_next_step=seq_step_map.get(c.id),
+            contact_count=contact_count_map.get(c.id, 0),
         )
         for c in companies
     ]
@@ -1957,7 +1969,7 @@ def _infer_name_from_email(email: str) -> tuple[str, str]:
     return first, last
 
 
-def _company_summary(c: Company, assigned_name: Optional[str] = None, tags: Optional[list] = None, sequence_next_step: Optional[int] = None) -> dict:
+def _company_summary(c: Company, assigned_name: Optional[str] = None, tags: Optional[list] = None, sequence_next_step: Optional[int] = None, contact_count: int = 0) -> dict:
     problems = json.loads(c.problems_found) if c.problems_found else []
     return {
         "id": c.id,
@@ -2011,6 +2023,7 @@ def _company_summary(c: Company, assigned_name: Optional[str] = None, tags: Opti
         "updated_at": c.updated_at.isoformat() if c.updated_at else None,
         "tags": tags or [],
         "sequence_next_step": sequence_next_step,
+        "contact_count": contact_count,
     }
 
 
