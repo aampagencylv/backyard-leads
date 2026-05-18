@@ -14,7 +14,7 @@ from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from pydantic import BaseModel
 
 from app.database import get_db
@@ -51,7 +51,10 @@ async def list_companies(
     max_reviews: Optional[int] = None,
     min_rating: Optional[float] = None,
     has_website: Optional[bool] = None,
-    rep_id: Optional[int] = None,  # Admin filter: show only this rep's companies
+    rep_id: Optional[int] = None,
+    has_sequence: Optional[bool] = None,   # True = email_generated, False = not yet
+    tag_id: Optional[int] = None,          # Filter to companies with this tag
+    business_type_contains: Optional[str] = None,  # Substring match on business_type
     sort_by: str = "reviews",
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -76,6 +79,16 @@ async def list_companies(
         query = query.where(Company.rating >= min_rating)
     if has_website is True:
         query = query.where(Company.website.isnot(None), Company.website != "")
+    if has_sequence is True:
+        query = query.where(Company.email_generated == True)
+    elif has_sequence is False:
+        query = query.where(Company.email_generated == False)
+    if tag_id:
+        query = query.where(
+            Company.id.in_(select(company_tags.c.company_id).where(company_tags.c.tag_id == tag_id))
+        )
+    if business_type_contains:
+        query = query.where(Company.business_type.ilike(f"%{business_type_contains}%"))
 
     if sort_by == "reviews":
         query = query.order_by(Company.review_count.desc().nullslast())
@@ -83,13 +96,18 @@ async def list_companies(
         query = query.order_by(Company.rating.desc().nullslast())
     elif sort_by == "name":
         query = query.order_by(Company.name.asc())
+    elif sort_by == "lead_score":
+        query = query.order_by(Company.lead_score.desc().nullslast())
+    elif sort_by == "activity":
+        query = query.order_by(Company.updated_at.desc().nullslast())
     else:
         query = query.order_by(Company.created_at.desc())
 
     result = await db.execute(query)
     companies = result.scalars().all()
-    # Prefetch BDR names for the assigned_name field on each card.
-    # Single query instead of N+1 lookups inside the serializer.
+    company_ids = [c.id for c in companies]
+
+    # Prefetch BDR names — single query instead of N+1.
     assigned_ids = {c.assigned_to for c in companies if c.assigned_to}
     user_name_map: dict[int, str] = {}
     if assigned_ids:
@@ -99,7 +117,43 @@ async def list_companies(
         )).all()
         for uid, fn, ln, email in rows:
             user_name_map[uid] = (f"{fn or ''} {ln or ''}".strip() or email)
-    return [_company_summary(c, assigned_name=user_name_map.get(c.assigned_to)) for c in companies]
+
+    # Prefetch tags for all returned companies — single join query.
+    tags_map: dict[int, list] = {cid: [] for cid in company_ids}
+    if company_ids:
+        tag_rows = (await db.execute(
+            select(company_tags.c.company_id, Tag.id, Tag.name, Tag.color)
+            .join(Tag, Tag.id == company_tags.c.tag_id)
+            .where(company_tags.c.company_id.in_(company_ids))
+        )).all()
+        for cid, tid, tname, tcolor in tag_rows:
+            tags_map[cid].append({"id": tid, "name": tname, "color": tcolor or "#888"})
+
+    # Prefetch next unsent sequence step per company — single aggregate query.
+    # Returns the lowest sequence_order among unsent emails so the UI can
+    # show "Step 2" meaning the company is waiting on step 2.
+    seq_step_map: dict[int, int | None] = {}
+    if company_ids:
+        step_rows = (await db.execute(
+            select(GeneratedEmail.company_id, func.min(GeneratedEmail.sequence_order))
+            .where(
+                GeneratedEmail.company_id.in_(company_ids),
+                GeneratedEmail.is_sent == False,
+            )
+            .group_by(GeneratedEmail.company_id)
+        )).all()
+        for cid, min_step in step_rows:
+            seq_step_map[cid] = min_step
+
+    return [
+        _company_summary(
+            c,
+            assigned_name=user_name_map.get(c.assigned_to),
+            tags=tags_map.get(c.id, []),
+            sequence_next_step=seq_step_map.get(c.id),
+        )
+        for c in companies
+    ]
 
 
 # ============================================================
@@ -1738,7 +1792,7 @@ def _infer_name_from_email(email: str) -> tuple[str, str]:
     return first, last
 
 
-def _company_summary(c: Company, assigned_name: Optional[str] = None) -> dict:
+def _company_summary(c: Company, assigned_name: Optional[str] = None, tags: Optional[list] = None, sequence_next_step: Optional[int] = None) -> dict:
     problems = json.loads(c.problems_found) if c.problems_found else []
     return {
         "id": c.id,
@@ -1789,6 +1843,9 @@ def _company_summary(c: Company, assigned_name: Optional[str] = None) -> dict:
         # revenue, etc). Field definitions live in custom_field_definitions.
         "custom_fields": json.loads(c.custom_fields_json) if c.custom_fields_json else {},
         "created_at": c.created_at.isoformat() if c.created_at else None,
+        "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+        "tags": tags or [],
+        "sequence_next_step": sequence_next_step,
     }
 
 

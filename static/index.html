@@ -961,30 +961,59 @@
                 <div class="page-header">
                     <h1>Companies</h1>
                     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-                        <button class="btn btn-secondary btn-sm" onclick="loadCompanies('active')">Active</button>
-                        <button class="btn btn-secondary btn-sm" onclick="loadCompanies('sequencing')">Sequencing</button>
-                        <button class="btn btn-secondary btn-sm" onclick="loadCompanies('contacted')">Contacted</button>
-                        <button class="btn btn-secondary btn-sm" onclick="loadCompanies('replied')">Replied</button>
-                        <button class="btn btn-secondary btn-sm" onclick="loadCompanies('qualified')">Qualified</button>
-                        <button class="btn btn-secondary btn-sm" onclick="loadCompanies('not_interested')">Unqualified</button>
-                        <button class="btn btn-secondary btn-sm" onclick="loadCompanies('all')">All</button>
+                        <button id="co-filter-active"       class="btn btn-secondary btn-sm" onclick="loadCompanies('active')">Active</button>
+                        <button id="co-filter-sequencing"   class="btn btn-secondary btn-sm" onclick="loadCompanies('sequencing')">Sequencing</button>
+                        <button id="co-filter-contacted"    class="btn btn-secondary btn-sm" onclick="loadCompanies('contacted')">Contacted</button>
+                        <button id="co-filter-replied"      class="btn btn-secondary btn-sm" onclick="loadCompanies('replied')">Replied</button>
+                        <button id="co-filter-qualified"    class="btn btn-secondary btn-sm" onclick="loadCompanies('qualified')">Qualified</button>
+                        <button id="co-filter-not_interested" class="btn btn-secondary btn-sm" onclick="loadCompanies('not_interested')">Unqualified</button>
+                        <button id="co-filter-all"          class="btn btn-secondary btn-sm" onclick="loadCompanies('all')">All</button>
                         <span style="border-left:1px solid #ddd;height:20px;margin:0 4px"></span>
                         <button class="btn btn-primary btn-sm" onclick="showAddCompanyModal()">+ Add Company</button>
                         <button class="btn btn-secondary btn-sm" onclick="showUploadCSVModal()">Upload CSV</button>
                     </div>
                 </div>
                 <!-- Filters -->
-                <div style="display:flex;gap:12px;margin-bottom:16px;align-items:center;flex-wrap:wrap">
+                <div style="display:flex;gap:10px;margin-bottom:16px;align-items:center;flex-wrap:wrap">
                     <select id="company-rep-filter" onchange="loadCompanies(_lastCompaniesFilter)" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px;display:none">
                         <option value="">All Reps</option>
                     </select>
-                    <input type="text" id="company-city-filter" placeholder="Filter by city..." oninput="filterCompaniesLocal()" style="padding:6px 12px;border:1px solid #ddd;border-radius:6px;font-size:13px;width:180px">
+                    <input type="text" id="company-city-filter" placeholder="City / state..." oninput="filterCompaniesLocal()" style="padding:6px 12px;border:1px solid #ddd;border-radius:6px;font-size:13px;width:150px">
+                    <input type="text" id="company-name-filter" placeholder="Name search..." oninput="filterCompaniesLocal()" style="padding:6px 12px;border:1px solid #ddd;border-radius:6px;font-size:13px;width:150px">
+                    <select id="company-sequence-filter" onchange="filterCompaniesLocal()" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px">
+                        <option value="">Any sequence</option>
+                        <option value="yes">In sequence</option>
+                        <option value="no">Not in sequence</option>
+                    </select>
+                    <select id="company-step-filter" onchange="filterCompaniesLocal()" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px">
+                        <option value="">Any step</option>
+                        <option value="1">Waiting on Step 1</option>
+                        <option value="2">Waiting on Step 2</option>
+                        <option value="3">Waiting on Step 3</option>
+                        <option value="4">Waiting on Step 4</option>
+                        <option value="5+">Step 5+</option>
+                    </select>
+                    <select id="company-tag-filter" onchange="filterCompaniesLocal()" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px">
+                        <option value="">Any tag</option>
+                    </select>
+                    <select id="company-biz-type-filter" onchange="filterCompaniesLocal()" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px">
+                        <option value="">Any type</option>
+                    </select>
+                    <select id="company-tier-filter" onchange="filterCompaniesLocal()" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px">
+                        <option value="">Any lead score</option>
+                        <option value="hot">🔥 Hot</option>
+                        <option value="warm">🌤 Warm</option>
+                        <option value="cold">❄️ Cold</option>
+                    </select>
                     <select id="company-sort-filter" onchange="filterCompaniesLocal()" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px">
                         <option value="reviews">Most Reviews</option>
+                        <option value="lead_score">Highest Lead Score</option>
+                        <option value="activity">Latest Activity</option>
                         <option value="name">A-Z by Name</option>
                         <option value="city">A-Z by City</option>
                         <option value="newest">Newest First</option>
                     </select>
+                    <button class="btn btn-secondary btn-sm" onclick="clearCompanyFilters()" title="Clear all filters" style="padding:5px 10px;font-size:12px">✕ Clear</button>
                     <span id="company-count" style="font-size:12px;color:#888"></span>
                 </div>
                 <div id="all-companies"></div>
@@ -5406,37 +5435,116 @@ function verify(secret, rawBody, header) {
 
         async function loadCompanies(filter) {
             _lastCompaniesFilter = filter || 'active';
+
+            // Highlight the active status button
+            ['active','sequencing','contacted','replied','qualified','not_interested','all'].forEach(f => {
+                const btn = document.getElementById(`co-filter-${f}`);
+                if (btn) btn.classList.toggle('btn-primary', f === _lastCompaniesFilter);
+                if (btn) btn.classList.toggle('btn-secondary', f !== _lastCompaniesFilter);
+            });
+
             let path = '/api/companies/';
             if (filter === 'active') path += '?lifecycle=active';
             else if (filter && filter !== 'all') path += `?status=${filter}`;
 
-            // Admin rep filter
             const repId = document.getElementById('company-rep-filter')?.value;
             if (repId) path += (path.includes('?') ? '&' : '?') + `rep_id=${repId}`;
 
             const data = await api(path);
             _lastCompaniesData = data || [];
+
+            // Populate dynamic filter dropdowns from loaded data
+            _populateCompanyFilterDropdowns(_lastCompaniesData);
+
             filterCompaniesLocal();
+        }
+
+        function _populateCompanyFilterDropdowns(companies) {
+            // Business type — unique values from the loaded set
+            const bizSel = document.getElementById('company-biz-type-filter');
+            if (bizSel) {
+                const current = bizSel.value;
+                const types = [...new Set(companies.map(c => c.business_type).filter(Boolean))].sort();
+                bizSel.innerHTML = '<option value="">Any type</option>' +
+                    types.map(t => `<option value="${escapeHtml(t)}" ${t === current ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('');
+            }
+            // Tags — load from API once per page open, then keep stable
+            const tagSel = document.getElementById('company-tag-filter');
+            if (tagSel && tagSel.dataset.loaded !== '1') {
+                tagSel.dataset.loaded = '1';
+                api('/api/crm/tags').then(tags => {
+                    if (!tags) return;
+                    const cur = tagSel.value;
+                    tagSel.innerHTML = '<option value="">Any tag</option>' +
+                        tags.map(t => `<option value="${t.id}" ${String(t.id) === cur ? 'selected' : ''}>${escapeHtml(t.name)}</option>`).join('');
+                });
+            }
         }
 
         function filterCompaniesLocal() {
             let filtered = [..._lastCompaniesData];
-            const cityFilter = (document.getElementById('company-city-filter')?.value || '').trim().toLowerCase();
-            const sortBy = document.getElementById('company-sort-filter')?.value || 'reviews';
 
-            if (cityFilter) {
-                filtered = filtered.filter(c => (c.city || '').toLowerCase().includes(cityFilter) || (c.state || '').toLowerCase().includes(cityFilter));
+            const cityFilter  = (document.getElementById('company-city-filter')?.value  || '').trim().toLowerCase();
+            const nameFilter  = (document.getElementById('company-name-filter')?.value  || '').trim().toLowerCase();
+            const seqFilter   = document.getElementById('company-sequence-filter')?.value || '';
+            const stepFilter  = document.getElementById('company-step-filter')?.value    || '';
+            const tagFilter   = document.getElementById('company-tag-filter')?.value     || '';
+            const bizFilter   = document.getElementById('company-biz-type-filter')?.value || '';
+            const tierFilter  = document.getElementById('company-tier-filter')?.value    || '';
+            const sortBy      = document.getElementById('company-sort-filter')?.value    || 'reviews';
+
+            if (cityFilter) filtered = filtered.filter(c =>
+                (c.city  || '').toLowerCase().includes(cityFilter) ||
+                (c.state || '').toLowerCase().includes(cityFilter));
+
+            if (nameFilter) filtered = filtered.filter(c =>
+                (c.name || '').toLowerCase().includes(nameFilter));
+
+            if (seqFilter === 'yes') filtered = filtered.filter(c => c.email_generated);
+            else if (seqFilter === 'no')  filtered = filtered.filter(c => !c.email_generated);
+
+            if (stepFilter) {
+                if (stepFilter === '5+') {
+                    filtered = filtered.filter(c => c.sequence_next_step != null && c.sequence_next_step >= 5);
+                } else {
+                    const step = parseInt(stepFilter);
+                    filtered = filtered.filter(c => c.sequence_next_step === step);
+                }
             }
 
-            if (sortBy === 'name') filtered.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-            else if (sortBy === 'city') filtered.sort((a, b) => (a.city || '').localeCompare(b.city || ''));
+            if (tagFilter) {
+                const tid = parseInt(tagFilter);
+                filtered = filtered.filter(c => (c.tags || []).some(t => t.id === tid));
+            }
+
+            if (bizFilter) filtered = filtered.filter(c =>
+                (c.business_type || '').toLowerCase() === bizFilter.toLowerCase());
+
+            if (tierFilter) filtered = filtered.filter(c => c.lead_score_tier === tierFilter);
+
+            // Sort
+            if (sortBy === 'name')       filtered.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+            else if (sortBy === 'city')  filtered.sort((a, b) => (a.city || '').localeCompare(b.city || ''));
             else if (sortBy === 'newest') filtered.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+            else if (sortBy === 'lead_score') filtered.sort((a, b) => (b.lead_score || 0) - (a.lead_score || 0));
+            else if (sortBy === 'activity')   filtered.sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
             else filtered.sort((a, b) => (b.review_count || 0) - (a.review_count || 0));
 
             const countEl = document.getElementById('company-count');
             if (countEl) countEl.textContent = `${filtered.length} companies`;
 
             renderCompanies(filtered, 'all-companies');
+        }
+
+        function clearCompanyFilters() {
+            ['company-city-filter','company-name-filter'].forEach(id => {
+                const el = document.getElementById(id); if (el) el.value = '';
+            });
+            ['company-sequence-filter','company-step-filter','company-tag-filter',
+             'company-biz-type-filter','company-tier-filter'].forEach(id => {
+                const el = document.getElementById(id); if (el) el.value = '';
+            });
+            filterCompaniesLocal();
         }
 
         // ============ Contacts ============
@@ -5831,6 +5939,8 @@ function verify(secret, rawBody, header) {
                     </div>
                     ${c.enriched && c.problems_found ? `<div>${c.problems_found.slice(0, 4).map(p => `<span class="problem-tag ${escapeHtml(p.severity || 'medium')}">${escapeHtml((p.type || '').replace(/_/g,' '))}</span>`).join('')}</div>` : ''}
                     ${c.enrichment_summary ? `<p style="font-size:13px;color:#555;margin:8px 0">${escapeHtml(c.enrichment_summary)}</p>` : ''}
+                    ${(c.tags && c.tags.length) ? `<div style="display:flex;gap:4px;flex-wrap:wrap;margin:4px 0">${c.tags.map(t => `<span style="background:${escapeHtml(t.color||'#888')}22;color:${escapeHtml(t.color||'#888')};border:1px solid ${escapeHtml(t.color||'#888')}55;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:500">${escapeHtml(t.name)}</span>`).join('')}</div>` : ''}
+                    ${c.sequence_next_step != null ? `<div style="font-size:11px;color:#1a73e8;margin:2px 0">📬 Waiting on step ${c.sequence_next_step}</div>` : ''}
                     <div class="company-actions">
                         ${c.status === 'new' && !c.enriched && c.website ? `<button class="btn btn-secondary btn-sm" onclick="enrichCompany(${c.id})">Analyze Website</button>` : ''}
                         ${c.status === 'new' ? `<button class="btn btn-success btn-sm" onclick="pursueCompanies([${c.id}])">Add to Pipeline</button>` : ''}
