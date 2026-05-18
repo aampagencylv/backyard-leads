@@ -968,6 +968,7 @@
                         <button id="co-filter-qualified"    class="btn btn-secondary btn-sm" onclick="loadCompanies('qualified')">Qualified</button>
                         <button id="co-filter-not_interested" class="btn btn-secondary btn-sm" onclick="loadCompanies('not_interested')">Unqualified</button>
                         <button id="co-filter-all"          class="btn btn-secondary btn-sm" onclick="loadCompanies('all')">All</button>
+                        <button id="co-filter-stalled"      class="btn btn-secondary btn-sm" onclick="loadStalledSequences()" style="border-color:#e67e22;color:#e67e22">⚠ Stalled</button>
                         <span style="border-left:1px solid #ddd;height:20px;margin:0 4px"></span>
                         <button class="btn btn-primary btn-sm" onclick="showAddCompanyModal()">+ Add Company</button>
                         <button class="btn btn-secondary btn-sm" onclick="showUploadCSVModal()">Upload CSV</button>
@@ -1017,6 +1018,7 @@
                     <span id="company-count" style="font-size:12px;color:#888"></span>
                 </div>
                 <div id="all-companies"></div>
+                <div id="stalled-sequences-view" style="display:none"></div>
             </div>
 
             <!-- Contacts -->
@@ -5435,6 +5437,7 @@ function verify(secret, rawBody, header) {
 
         async function loadCompanies(filter) {
             _lastCompaniesFilter = filter || 'active';
+            _exitStalledView();
 
             // Highlight the active status button
             ['active','sequencing','contacted','replied','qualified','not_interested','all'].forEach(f => {
@@ -5545,6 +5548,122 @@ function verify(secret, rawBody, header) {
                 const el = document.getElementById(id); if (el) el.value = '';
             });
             filterCompaniesLocal();
+        }
+
+        async function loadStalledSequences() {
+            // Highlight the stalled button, clear the rest
+            ['active','sequencing','contacted','replied','qualified','not_interested','all'].forEach(f => {
+                const btn = document.getElementById(`co-filter-${f}`);
+                if (btn) { btn.classList.remove('btn-primary'); btn.classList.add('btn-secondary'); }
+            });
+            const stallBtn = document.getElementById('co-filter-stalled');
+            if (stallBtn) stallBtn.style.cssText = 'border-color:#e67e22;background:#e67e22;color:white';
+
+            // Hide normal list, show stall view
+            const list = document.getElementById('all-companies');
+            const stallView = document.getElementById('stalled-sequences-view');
+            if (list) list.style.display = 'none';
+            if (stallView) { stallView.style.display = ''; stallView.innerHTML = '<p style="color:#888;padding:20px">Loading stalled sequences…</p>'; }
+
+            const data = await api('/api/companies/stalled-sequences');
+            if (!data) { if (stallView) stallView.innerHTML = '<p style="color:#c0392b;padding:20px">Failed to load stall data.</p>'; return; }
+            renderStalledSequences(data, stallView);
+        }
+
+        function renderStalledSequences(items, container) {
+            if (!items.length) {
+                container.innerHTML = '<div style="padding:40px;text-align:center;color:#27ae60;font-size:16px">✅ No stalled sequences — everything looks healthy!</div>';
+                return;
+            }
+            const sevMeta = {
+                critical:     { label: '● Critical',     bg: '#fde8e8', border: '#e74c3c', dot: '#e74c3c', tip: 'Auto-send step the engine missed — needs a re-anchor' },
+                needs_action: { label: '⚠ Needs Action', bg: '#fef3e2', border: '#e67e22', dot: '#e67e22', tip: 'Manual step (call / LinkedIn) the BDR has not completed yet' },
+                paused:       { label: '⏸ Paused',       bg: '#f0f0f0', border: '#999',    dot: '#999',    tip: 'This step was manually paused' },
+            };
+            const stepIcon = { email: '📧', imessage: '💬', call: '📞', linkedin: 'in' };
+
+            const critCount = items.filter(i => i.stalls.some(s => s.severity === 'critical')).length;
+            const actionCount = items.filter(i => i.stalls.some(s => s.severity === 'needs_action') && !i.stalls.some(s => s.severity === 'critical')).length;
+            const pausedCount = items.filter(i => i.stalls.every(s => s.severity === 'paused')).length;
+
+            container.innerHTML = `
+                <div style="display:flex;gap:16px;margin-bottom:20px;flex-wrap:wrap">
+                    <div style="background:#fde8e8;border:1px solid #e74c3c;border-radius:8px;padding:12px 20px;min-width:120px;text-align:center">
+                        <div style="font-size:24px;font-weight:700;color:#e74c3c">${critCount}</div>
+                        <div style="font-size:12px;color:#e74c3c;font-weight:600">Critical</div>
+                        <div style="font-size:11px;color:#999">auto-send missed</div>
+                    </div>
+                    <div style="background:#fef3e2;border:1px solid #e67e22;border-radius:8px;padding:12px 20px;min-width:120px;text-align:center">
+                        <div style="font-size:24px;font-weight:700;color:#e67e22">${actionCount}</div>
+                        <div style="font-size:12px;color:#e67e22;font-weight:600">Needs Action</div>
+                        <div style="font-size:11px;color:#999">BDR tasks overdue</div>
+                    </div>
+                    <div style="background:#f0f0f0;border:1px solid #999;border-radius:8px;padding:12px 20px;min-width:120px;text-align:center">
+                        <div style="font-size:24px;font-weight:700;color:#666">${pausedCount}</div>
+                        <div style="font-size:12px;color:#666;font-weight:600">Paused</div>
+                        <div style="font-size:11px;color:#999">manually halted</div>
+                    </div>
+                </div>
+                ${items.map(item => {
+                    const topSev = item.stalls.some(s => s.severity === 'critical') ? 'critical'
+                                 : item.stalls.some(s => s.severity === 'needs_action') ? 'needs_action'
+                                 : 'paused';
+                    const m = sevMeta[topSev];
+                    const hasCritical = item.stalls.some(s => s.severity === 'critical');
+                    return `
+                    <div style="background:${m.bg};border:1px solid ${m.border};border-radius:8px;margin-bottom:10px;overflow:hidden">
+                        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid ${m.border}40">
+                            <div style="display:flex;align-items:center;gap:10px">
+                                <span style="color:${m.dot};font-weight:700;font-size:13px">${m.label}</span>
+                                <a href="#" onclick="openCompanyDetail(${item.company_id});return false" style="font-weight:600;font-size:14px;color:inherit;text-decoration:none;border-bottom:1px dashed #aaa">${escapeHtml(item.company_name)}</a>
+                                <span class="status-badge status-${item.company_status}" style="font-size:11px">${item.company_status}</span>
+                            </div>
+                            <div style="display:flex;gap:6px">
+                                ${hasCritical ? `<button class="btn btn-sm" onclick="unstallCompany(${item.company_id}, this)" style="background:#e74c3c;color:white;border:none;font-size:12px;padding:4px 10px" title="Re-anchor overdue auto-send steps to fire ASAP">⚡ Unstall</button>` : ''}
+                                <button class="btn btn-secondary btn-sm" onclick="openCompanyDetail(${item.company_id})" style="font-size:12px;padding:4px 10px">Open →</button>
+                            </div>
+                        </div>
+                        <div style="padding:8px 14px">
+                            ${item.stalls.map(s => {
+                                const sm = sevMeta[s.severity];
+                                return `
+                                <div style="display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid ${m.border}20;font-size:13px" title="${sm.tip}">
+                                    <span style="color:${sm.dot};font-size:10px">●</span>
+                                    <span style="background:white;border:1px solid #ddd;padding:1px 7px;border-radius:10px;font-size:11px;font-weight:600">${stepIcon[s.step_type] || '?'} ${escapeHtml(s.step_type)}</span>
+                                    <span style="color:#555;min-width:100px">${escapeHtml(s.label || `Step ${s.sequence_order}`)}</span>
+                                    <span style="color:#888">→</span>
+                                    <span style="font-weight:500">${escapeHtml(s.contact_name)}</span>
+                                    ${s.contact_email ? `<span style="color:#aaa;font-size:11px">${escapeHtml(s.contact_email)}</span>` : ''}
+                                    <span style="margin-left:auto;color:${sm.dot};font-size:12px;white-space:nowrap">${escapeHtml(s.reason)}</span>
+                                </div>`;
+                            }).join('')}
+                        </div>
+                    </div>`;
+                }).join('')}
+            `;
+        }
+
+        async function unstallCompany(companyId, btn) {
+            if (!confirm('Re-anchor all overdue auto-send steps for this company to fire ASAP?')) return;
+            btn.disabled = true; btn.textContent = 'Working…';
+            const r = await api(`/api/companies/${companyId}/unstall-sequences`, { method: 'POST' });
+            if (r) {
+                toast(`${r.message}`);
+                // Reload the stall view to reflect the change
+                loadStalledSequences();
+            } else {
+                btn.disabled = false; btn.textContent = '⚡ Unstall';
+            }
+        }
+
+        // Restore normal companies list view when leaving stalled mode
+        function _exitStalledView() {
+            const list = document.getElementById('all-companies');
+            const stallView = document.getElementById('stalled-sequences-view');
+            const stallBtn = document.getElementById('co-filter-stalled');
+            if (list) list.style.display = '';
+            if (stallView) { stallView.style.display = 'none'; stallView.innerHTML = ''; }
+            if (stallBtn) stallBtn.style.cssText = 'border-color:#e67e22;color:#e67e22';
         }
 
         // ============ Contacts ============

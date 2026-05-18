@@ -14,7 +14,7 @@ from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_, and_
 from pydantic import BaseModel
 
 from app.database import get_db
@@ -154,6 +154,171 @@ async def list_companies(
         )
         for c in companies
     ]
+
+
+@router.get("/stalled-sequences")
+async def get_stalled_sequences(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Return all sequence steps that are stalled, grouped by company.
+
+    Stall categories:
+      critical     — auto_execute step past due >2 h (engine missed it)
+      needs_action — manual step (call/linkedin) past due (BDR hasn't acted)
+      paused       — paused_at set (someone manually paused)
+    """
+    from app.scoping import scope_companies
+    now = datetime.now(timezone.utc)
+    grace = timedelta(hours=2)
+
+    # Scope to companies this user can see
+    scoped_ids_q = scope_companies(select(Company.id), user, None)
+
+    rows = (await db.execute(
+        select(GeneratedEmail, Contact, Company)
+        .join(Contact, GeneratedEmail.contact_id == Contact.id)
+        .join(Company, GeneratedEmail.company_id == Company.id)
+        .where(
+            GeneratedEmail.is_sent == False,
+            GeneratedEmail.skipped_at.is_(None),
+            GeneratedEmail.company_id.in_(scoped_ids_q),
+            or_(
+                # Critical: auto step engine missed
+                and_(
+                    GeneratedEmail.auto_execute == True,
+                    GeneratedEmail.paused_at.is_(None),
+                    GeneratedEmail.scheduled_send_at != None,
+                    GeneratedEmail.scheduled_send_at < now - grace,
+                ),
+                # Needs action: manual step BDR hasn't completed
+                and_(
+                    GeneratedEmail.auto_execute == False,
+                    GeneratedEmail.paused_at.is_(None),
+                    GeneratedEmail.scheduled_send_at != None,
+                    GeneratedEmail.scheduled_send_at < now,
+                ),
+                # Paused: someone halted this step
+                and_(
+                    GeneratedEmail.paused_at.is_not(None),
+                    GeneratedEmail.is_sent == False,
+                ),
+            ),
+        )
+        .order_by(Company.name, GeneratedEmail.scheduled_send_at)
+    )).all()
+
+    # Group by company
+    by_company: dict[int, dict] = {}
+    for ge, contact, company in rows:
+        if company.id not in by_company:
+            by_company[company.id] = {
+                "company_id": company.id,
+                "company_name": company.name,
+                "company_status": company.status,
+                "stalls": [],
+            }
+        # Determine severity + human reason
+        if ge.paused_at:
+            severity = "paused"
+            overdue_hours = round((now - ge.paused_at).total_seconds() / 3600)
+            reason = f"Paused {overdue_hours}h ago"
+        elif ge.auto_execute:
+            overdue_hours = round((now - ge.scheduled_send_at).total_seconds() / 3600)
+            overdue_days = overdue_hours // 24
+            severity = "critical"
+            reason = (
+                f"Auto-send overdue by {overdue_days}d {overdue_hours % 24}h"
+                if overdue_days else f"Auto-send overdue by {overdue_hours}h"
+            )
+        else:
+            overdue_hours = round((now - ge.scheduled_send_at).total_seconds() / 3600)
+            overdue_days = overdue_hours // 24
+            severity = "needs_action"
+            reason = (
+                f"Waiting {overdue_days}d {overdue_hours % 24}h for BDR action"
+                if overdue_days else f"Waiting {overdue_hours}h for BDR action"
+            )
+
+        by_company[company.id]["stalls"].append({
+            "step_id": ge.id,
+            "step_type": ge.step_type or "email",
+            "label": ge.sequence_label or ge.email_type or "",
+            "sequence_order": ge.sequence_order,
+            "contact_id": contact.id,
+            "contact_name": f"{contact.first_name or ''} {contact.last_name or ''}".strip() or contact.email or "(no name)",
+            "contact_email": contact.email,
+            "contact_phone": contact.phone,
+            "severity": severity,
+            "reason": reason,
+            "overdue_hours": overdue_hours if ge.paused_at is None else None,
+            "scheduled_send_at": ge.scheduled_send_at.isoformat() if ge.scheduled_send_at else None,
+            "paused_at": ge.paused_at.isoformat() if ge.paused_at else None,
+            "auto_execute": ge.auto_execute,
+        })
+
+    # Compute per-company top severity for sorting
+    sev_order = {"critical": 0, "needs_action": 1, "paused": 2}
+    result = list(by_company.values())
+    for item in result:
+        item["top_severity"] = min(
+            (sev_order.get(s["severity"], 9) for s in item["stalls"]),
+            default=9,
+        )
+    result.sort(key=lambda x: (x["top_severity"], x["company_name"]))
+    return result
+
+
+@router.post("/{company_id}/unstall-sequences")
+async def unstall_sequences(
+    company_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Re-anchor all overdue auto-execute steps for this company to fire ASAP.
+    Manual steps (call/linkedin) are left alone — BDR still needs to act."""
+    from app.scoping import scope_companies
+    company = (await db.execute(
+        scope_companies(select(Company).where(Company.id == company_id), user, None)
+    )).scalar_one_or_none()
+    if not company:
+        raise HTTPException(404, "Company not found")
+
+    now = datetime.now(timezone.utc)
+    grace = timedelta(hours=2)
+
+    stalled = (await db.execute(
+        select(GeneratedEmail).where(
+            GeneratedEmail.company_id == company_id,
+            GeneratedEmail.auto_execute == True,
+            GeneratedEmail.is_sent == False,
+            GeneratedEmail.paused_at.is_(None),
+            GeneratedEmail.skipped_at.is_(None),
+            GeneratedEmail.scheduled_send_at != None,
+            GeneratedEmail.scheduled_send_at < now - grace,
+        ).order_by(GeneratedEmail.sequence_order)
+    )).scalars().all()
+
+    if not stalled:
+        return {"reanchored": 0, "message": "No overdue auto-execute steps found"}
+
+    # Re-anchor: spread from now, maintaining relative offsets
+    base = min(s.send_delay_days or 0 for s in stalled)
+    for i, step in enumerate(stalled):
+        offset = max((step.send_delay_days or 0) - base, 0)
+        step.scheduled_send_at = now + timedelta(days=offset, minutes=i * 2)
+
+    # Snap to send window
+    try:
+        from app.services.send_window import snap_pending_steps_to_window
+        contact_ids = {s.contact_id for s in stalled if s.contact_id}
+        for cid in contact_ids:
+            await snap_pending_steps_to_window(db, contact_id=cid)
+    except Exception:
+        pass
+
+    await db.commit()
+    return {"reanchored": len(stalled), "message": f"Re-anchored {len(stalled)} step(s) to send ASAP"}
 
 
 # ============================================================
