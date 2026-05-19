@@ -116,3 +116,48 @@ async def init_db():
             # Migrations log their own outcome; don't crash startup if one
             # fails — the app should still come up so the operator can debug.
             pass
+
+    # ---- Post-migration schema drift check ----
+    # Runs the same audit as `python -m scripts.audit_schema` but inline,
+    # then pushes any drift into the recent-errors ring so it surfaces on
+    # the admin System Errors dashboard tile. Soft fail by design — we
+    # never block startup on this; the dashboard's job is visibility.
+    try:
+        from scripts.audit_schema import compare_schema
+        from app.middleware import record_unhandled_error
+        import logging as _logging
+        _log = _logging.getLogger("bmp.schema_audit")
+
+        report = await compare_schema(engine)
+        if report["clean"]:
+            _log.info(
+                f"schema audit clean — {report['tables_declared']} tables, "
+                f"all columns present"
+            )
+        else:
+            for t in report["missing_tables"]:
+                msg = f"Declared table {t!r} is missing from the DB"
+                _log.warning(f"schema drift: {msg}")
+                record_unhandled_error(
+                    method="STARTUP", path=f"/_schema/{t}",
+                    error_type="SchemaDrift", error_msg=msg,
+                    request_id="schema-audit",
+                )
+            for mc in report["missing_columns"]:
+                msg = (
+                    f"Declared column {mc['table']}.{mc['column']} is missing — "
+                    f"add a migration"
+                )
+                _log.warning(f"schema drift: {msg}")
+                record_unhandled_error(
+                    method="STARTUP",
+                    path=f"/_schema/{mc['table']}.{mc['column']}",
+                    error_type="SchemaDrift", error_msg=msg,
+                    request_id="schema-audit",
+                )
+    except Exception as e:
+        # Audit failures shouldn't take the app down. Log + continue.
+        import logging as _logging
+        _logging.getLogger("bmp.schema_audit").warning(
+            f"schema audit skipped: {type(e).__name__}: {e}"
+        )

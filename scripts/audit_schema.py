@@ -2,32 +2,35 @@
 exist in the live database?
 
 This catches the "shipped a feature, forgot the migration" class of bug
-that produced the lost_reason 500s. Run after every deploy. Run from CI.
-Run before promoting a branch that touches models.py.
+that produced the lost_reason 500s. Two ways to use it:
 
-Exit code 0 = clean. Exit code 1 = drift detected (so it can gate a CI
-job). Pass --json for machine-readable output.
-
-Usage:
-  python -m scripts.audit_schema           # human readable
-  python -m scripts.audit_schema --json    # JSON report
+  - CLI: `python -m scripts.audit_schema` (human) or `--json` (machine).
+    Exits 1 on drift so it can gate CI.
+  - Library: `await compare_schema(engine)` from app code.
+    init_db calls this after migrations and pushes any drift into the
+    middleware error ring so the admin dashboard's System Errors panel
+    surfaces it without anyone reading journalctl.
 """
 from __future__ import annotations
 import asyncio
 import json
 import sys
 from sqlalchemy import text
-from app.database import engine
+from sqlalchemy.ext.asyncio import AsyncEngine
 from app.models import Base
 
 
-async def main(json_out: bool):
+async def compare_schema(engine: AsyncEngine) -> dict:
+    """Compare declared models vs live DB. Returns a report dict.
+
+    Does NOT dispose the engine — callers own its lifecycle. Safe to
+    call from app startup (uses a borrowed connection).
+    """
     declared: dict[str, set[str]] = {}
     for table_name, table in Base.metadata.tables.items():
         declared[table_name] = {col.name for col in table.columns}
 
     async with engine.connect() as conn:
-        # Detect Postgres vs SQLite by checking for information_schema
         try:
             await conn.execute(text("SELECT 1 FROM information_schema.tables LIMIT 1"))
             dialect = "postgres"
@@ -55,8 +58,8 @@ async def main(json_out: bool):
 
     missing_tables: list[str] = []
     missing_columns: list[dict] = []
-    extra_tables: list[str] = []  # in DB but not declared — usually fine
-    extra_columns: list[dict] = []  # in DB but not declared — usually fine
+    extra_tables: list[str] = []
+    extra_columns: list[dict] = []
 
     for tname, cols in declared.items():
         if tname not in live:
@@ -68,12 +71,11 @@ async def main(json_out: bool):
             extra_columns.append({"table": tname, "column": col})
 
     for tname in set(live) - set(declared):
-        # Internal Postgres / migration bookkeeping tables we don't care about
         if tname.startswith("pg_") or tname in {"alembic_version", "spatial_ref_sys"}:
             continue
         extra_tables.append(tname)
 
-    report = {
+    return {
         "dialect": dialect,
         "tables_declared": len(declared),
         "tables_live": len(live),
@@ -84,30 +86,35 @@ async def main(json_out: bool):
         "clean": not missing_tables and not missing_columns,
     }
 
+
+async def main(json_out: bool) -> int:
+    from app.database import engine
+    report = await compare_schema(engine)
+
     if json_out:
         print(json.dumps(report, indent=2))
     else:
-        print(f"Dialect: {dialect}")
+        print(f"Dialect: {report['dialect']}")
         print(f"Declared tables: {report['tables_declared']}")
         print(f"Live tables:     {report['tables_live']}\n")
-        if missing_tables:
-            print(f"  MISSING TABLES (declared in models.py, not in DB):")
-            for t in missing_tables:
+        if report["missing_tables"]:
+            print("  MISSING TABLES (declared in models.py, not in DB):")
+            for t in report["missing_tables"]:
                 print(f"    - {t}")
-        if missing_columns:
-            print(f"  MISSING COLUMNS (declared in models.py, not in DB):")
-            for mc in missing_columns:
+        if report["missing_columns"]:
+            print("  MISSING COLUMNS (declared in models.py, not in DB):")
+            for mc in report["missing_columns"]:
                 print(f"    - {mc['table']}.{mc['column']}")
-        if extra_tables:
-            print(f"\n  Extra tables in DB (informational — not a bug):")
-            for t in extra_tables:
+        if report["extra_tables"]:
+            print("\n  Extra tables in DB (informational — not a bug):")
+            for t in report["extra_tables"]:
                 print(f"    - {t}")
-        if extra_columns:
-            print(f"\n  Extra columns in DB (informational — old migrations or manual ALTERs):")
-            for ec in extra_columns[:20]:
+        if report["extra_columns"]:
+            print("\n  Extra columns in DB (informational — old migrations or manual ALTERs):")
+            for ec in report["extra_columns"][:20]:
                 print(f"    - {ec['table']}.{ec['column']}")
-            if len(extra_columns) > 20:
-                print(f"    ... and {len(extra_columns) - 20} more")
+            if len(report["extra_columns"]) > 20:
+                print(f"    ... and {len(report['extra_columns']) - 20} more")
         print()
         if report["clean"]:
             print("✓ Schema clean — every declared column exists in the DB.")
