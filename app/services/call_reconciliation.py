@@ -175,12 +175,13 @@ async def reconcile_calls(db: AsyncSession, *, hours: int = 6) -> dict:
                     company_id = co.id
 
         if not company_id:
-            # Without a company we can't anchor the Activity (FK is NOT NULL).
-            # Skip and count — the call still happened but we don't know who
-            # was called. Likely an outbound to a non-CRM number (test dial,
-            # personal call placed through the dialer, etc.).
-            counters["skipped_missing_data"] += 1
-            continue
+            # Orphan call — number isn't in the CRM. We still record it
+            # against the rep so the dashboard call-count is accurate.
+            # The activity won't appear in any company timeline (those
+            # filter by company_id). If Sebastian later adds the number
+            # as a contact, the activity stays attached to the user but
+            # won't auto-link.
+            counters["orphan_recorded"] = counters.get("orphan_recorded", 0) + 1
 
         mins, secs = divmod(duration, 60)
         dur_str = f" ({mins}:{secs:02d})" if duration else ""

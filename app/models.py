@@ -422,7 +422,10 @@ class Activity(Base):
     __tablename__ = "activities"
 
     id = Column(Integer, primary_key=True, index=True)
-    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    # Nullable so standalone-dialer calls (numbers not in the CRM) can
+    # still be recorded against the user for dashboard counts. Per-company
+    # views naturally filter by company_id so orphans don't pollute them.
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=True)
     contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=True)
     deal_id = Column(Integer, ForeignKey("deals.id"), nullable=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)

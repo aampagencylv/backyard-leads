@@ -855,9 +855,10 @@ async def log_call(
         if not contact:
             raise HTTPException(status_code=404, detail="Contact not found")
         company_id = contact.company_id
-    if not company_id and not req.contact_id:
-        # Internal/test call with no contact or company — just log it without a timeline entry
-        return {"ok": True, "note": "No contact or company — call not logged to timeline"}
+    # We used to bail when both contact_id and company_id were missing
+    # (standalone-dialer calls). That hid those calls from the user's
+    # dashboard count. Activity.company_id is now nullable, so let it
+    # through — the call still attaches to a user via user_id.
 
     # Build a clear summary line — "Called {who} at {number} — outcome (mm:ss)"
     company = None
