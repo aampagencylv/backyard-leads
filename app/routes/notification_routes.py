@@ -9,11 +9,20 @@ Notable activity types — the ones a BDR genuinely wants to be interrupted for:
   - hot_lead          — 🔥 prospect actively on the website (page threshold or high-intent action)
   - imessage_received — text reply from a contact
   - email_replied     — email reply
+  - email_opened      — prospect opened an email (per-email deduped at write time)
+  - email_clicked     — prospect clicked a link (per-email deduped at write time)
+  - email_bounced     — deliverability problem
+  - meeting_booked    — pipeline win
 
 Deliberately excluded (too noisy):
-  - email_opened, email_clicked  — useful in the timeline, not as interruptions
-  - sequence_step_skipped         — informational only
-  - task_created                  — surfaces in the tasks page
+  - sequence_step_skipped — informational only
+  - task_created          — surfaces in the tasks page
+
+Opens/clicks used to be off-by-default because email-client prefetchers
+(Apple Mail Privacy, Outlook SafeLinks, Gmail image proxy) made each
+delivery fire 3-9 phantom engagement events. After per-email dedupe
+landed in track_click + resend_webhook (2026-05-19), one event ≈ one
+real human action, so the team can safely be notified again.
 """
 from __future__ import annotations
 import json
@@ -36,8 +45,8 @@ router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 NOTIFICATION_EVENTS = {
     "hot_lead":          {"label": "Hot Lead detected",             "default": True,  "category": "engagement"},
     "email_replied":     {"label": "Email reply received",          "default": True,  "category": "engagement"},
-    "email_opened":      {"label": "Email opened",                  "default": False, "category": "engagement"},
-    "email_clicked":     {"label": "Link clicked in email",         "default": False, "category": "engagement"},
+    "email_opened":      {"label": "Email opened",                  "default": True,  "category": "engagement"},
+    "email_clicked":     {"label": "Link clicked in email",         "default": True,  "category": "engagement"},
     "email_bounced":     {"label": "Email bounced",                 "default": True,  "category": "deliverability"},
     "imessage_received": {"label": "iMessage reply",                "default": True,  "category": "engagement"},
     "meeting_booked":    {"label": "Meeting booked",                "default": True,  "category": "pipeline"},

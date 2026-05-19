@@ -580,7 +580,17 @@
         .stage-negotiation { background: #fdebd0; color: #e67e22; }
         .stage-closed_won { background: #d5f5e3; color: #1e8449; }
         .stage-closed_lost { background: #f2f3f4; color: #7f8c8d; }
-        .toast { position: fixed; bottom: 20px; right: 20px; background: var(--bmp-green); color: white; padding: 12px 20px; border-radius: 8px; font-size: 14px; z-index: 1000; animation: slideUp 0.3s; }
+        .toast { position: fixed; bottom: 20px; right: 20px; background: var(--bmp-green); color: white; padding: 12px 20px; border-radius: 8px; font-size: 14px; z-index: 1000; animation: slideUp 0.3s; max-width: 380px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+        /* Stack multiple toasts so a burst of notifications doesn't overlap into one blob. */
+        .toast + .toast { bottom: calc(20px + var(--stack-offset, 60px)); }
+        /* Hot signals — louder. Replies, hot_lead, imessage, meeting_booked. */
+        .toast.hot { background: var(--bmp-orange, #FF7A36); }
+        /* Quieter engagement signals — opens, clicks. Used to be off-by-default
+           because of prefetcher inflation; now per-email deduped at the source. */
+        .toast.engagement { background: #5b8def; font-size: 13px; padding: 10px 16px; }
+        /* Clickable toasts — for notifications that link to a company. */
+        .toast.clickable { cursor: pointer; }
+        .toast.clickable:hover { filter: brightness(1.1); }
         /* Help / Feedback floating button — sits to the right of the
            240px sidebar on desktop so it doesn't overlap the
            Sign-out / user-info section. */
@@ -3197,12 +3207,17 @@ function verify(secret, rawBody, header) {
             }
         }
 
-        function toast(msg) {
+        function toast(msg, opts = {}) {
+            // opts: { variant: 'default' | 'hot' | 'engagement', durationMs, onClick }
             const t = document.createElement('div');
-            t.className = 'toast';
+            t.className = 'toast' + (opts.variant ? ` ${opts.variant}` : '');
+            if (opts.onClick) {
+                t.classList.add('clickable');
+                t.addEventListener('click', () => { try { opts.onClick(); } finally { t.remove(); } });
+            }
             t.textContent = msg;
             document.body.appendChild(t);
-            setTimeout(() => t.remove(), 3000);
+            setTimeout(() => t.remove(), opts.durationMs || 3000);
         }
 
         // ============================================================
@@ -3540,21 +3555,40 @@ function verify(secret, rawBody, header) {
         }
 
         function showLiveNotification(n) {
-            const labelMap = {
-                hot_lead:           '🔥 Hot Lead',
-                imessage_received:  '💬 New iMessage',
-                email_replied:      '✉️ Email Reply',
+            // Loud signals (orange toast, native popup, longer linger) — these
+            // are the "stop what you're doing and respond" moments.
+            // Quiet signals (blue toast, shorter linger) — informational
+            // engagement worth knowing about but not interrupting for. Opens
+            // and clicks live here because they happen more often.
+            const LOUD = {
+                hot_lead:          '🔥 Hot Lead',
+                imessage_received: '💬 New iMessage',
+                email_replied:     '✉️ Email Reply',
+                meeting_booked:    '📅 Meeting Booked',
+                email_bounced:     '⚠️ Email Bounced',
             };
-            const tag = labelMap[n.type] || 'Notification';
+            const QUIET = {
+                email_opened:  '📬 Email Opened',
+                email_clicked: '🖱️ Link Clicked',
+            };
+            const tag = LOUD[n.type] || QUIET[n.type] || 'Notification';
+            const isQuiet = n.type in QUIET;
             const who = n.contact_name || n.company_name || 'a contact';
             const title = `${tag} — ${who}`;
             const body = n.content || '';
 
-            // 1. In-tab toast — always
-            toast(`${title}: ${body}`);
+            // 1. In-tab toast — always. Quiet variants get distinct styling so
+            //    a flurry of opens doesn't visually drown out a reply.
+            toast(`${title}: ${body}`, {
+                variant: isQuiet ? 'engagement' : 'hot',
+                durationMs: isQuiet ? 3500 : 6000,
+                onClick: n.company_id ? () => openCompanyDetail(n.company_id) : undefined,
+            });
 
-            // 2. Native browser notification — only if user opted in
-            if ('Notification' in window && Notification.permission === 'granted') {
+            // 2. Native browser notification — only if user opted in AND the
+            //    signal is loud. Opens/clicks stay in-tab so we don't fill
+            //    the OS notification tray with engagement breadcrumbs.
+            if (!isQuiet && 'Notification' in window && Notification.permission === 'granted') {
                 try {
                     const notif = new Notification(title, {
                         body: body.slice(0, 240),
