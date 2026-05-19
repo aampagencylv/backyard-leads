@@ -93,6 +93,20 @@ async def _sequence_engine_loop():
         except Exception as e:
             log.exception(f"campaign auto-advance failed: {e}")
 
+        # Call reconciliation every 5 ticks (5 min). Catches calls
+        # placed through the dialer where the modal didn't fire log_call
+        # (browser navigated away, crashed, user skipped outcome) and
+        # creates stub Activity rows from Twilio's API truth.
+        if tick_count % 5 == 0:
+            try:
+                from app.services.call_reconciliation import reconcile_calls
+                async with async_session() as db:
+                    rc = await reconcile_calls(db, hours=2)
+                if rc.get("stubs_created"):
+                    log.info(f"call_recon tick: {rc}")
+            except Exception as e:
+                log.exception(f"call_recon tick failed: {e}")
+
         # Snoozed-deal wake check every 10 ticks (10 min)
         if tick_count % 10 == 0:
             try:
