@@ -149,6 +149,10 @@ class Company(Base):
 
     # CRM lifecycle
     status = Column(String(50), default="new")  # new, pursuing, sequencing, contacted, replied, qualified, converted, not_interested
+    # Set by the Unqualify modal: "<reason> — <optional notes>". Shown in
+    # the admin Needs Review queue. NULL means the company hasn't been
+    # disqualified (or was restored).
+    lost_reason = Column(String(500), nullable=True)
     assigned_to = Column(Integer, ForeignKey("users.id"), nullable=True)
 
     # Convenience flags (derived but cached)
@@ -659,7 +663,10 @@ class PageView(Base):
     __tablename__ = "page_views"
 
     id = Column(Integer, primary_key=True, index=True)
-    visitor_token = Column(String(32), index=True, nullable=False)  # the TrackingLink.token
+    # 32 hex chars for the click-attribution path (TrackingLink.token), or
+    # 41 chars for anon JS visitors ("anon-" + UUIDv4). Width 64 covers both
+    # comfortably with headroom for any future format.
+    visitor_token = Column(String(64), index=True, nullable=False)
     contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=True, index=True)
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=True, index=True)
     url = Column(Text, nullable=False)

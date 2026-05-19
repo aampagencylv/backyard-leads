@@ -49,7 +49,13 @@ class Slot:
     ends_at: datetime    # tz-aware UTC
 
     def to_payload(self, viewer_tz: str) -> dict:
-        tz = ZoneInfo(viewer_tz) if viewer_tz else timezone.utc
+        # Defensive parse — browsers occasionally send junk like
+        # "Etc/Unknown" or an empty string; fall back to UTC instead
+        # of 500'ing the booking page on those edge cases.
+        try:
+            tz = ZoneInfo(viewer_tz) if viewer_tz else timezone.utc
+        except Exception:
+            tz = timezone.utc
         return {
             "starts_at_utc": self.starts_at.isoformat(),
             "ends_at_utc": self.ends_at.isoformat(),

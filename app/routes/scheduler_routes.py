@@ -703,6 +703,15 @@ async def get_booking_info(
     if not c.is_active:
         raise HTTPException(status_code=503, detail="Booking page is paused")
     days = max(1, min(c.max_advance_days, days))
+    # Sanitize viewer_tz — browsers occasionally send "Etc/Unknown" or
+    # other garbage that ZoneInfo() rejects. Drop bad values here so the
+    # fallback chain below picks a sensible default.
+    if viewer_tz:
+        try:
+            from zoneinfo import ZoneInfo
+            ZoneInfo(viewer_tz)
+        except Exception:
+            viewer_tz = None
     now = datetime.now(timezone.utc)
     window_end = now + timedelta(days=days)
     busy, err = await fetch_user_busy(user, time_min=now, time_max=window_end, config=c)
