@@ -719,8 +719,9 @@ async def sidebar_complete_task(
     task = (await db.execute(select(Task).where(Task.id == req.task_id))).scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="task not found")
+    now = datetime.now(timezone.utc)
     task.completed = True
-    task.completed_at = datetime.now(timezone.utc)
+    task.completed_at = now
     db.add(Activity(
         company_id=task.company_id,
         contact_id=task.contact_id,
@@ -728,6 +729,16 @@ async def sidebar_complete_task(
         activity_type="task_completed",
         content=f"{user.first_name or user.email} completed: {task.description}",
     ))
+
+    # Mirror crm_routes.complete_task: propagate completion to the linked
+    # sequence step so the Stalled tab clears.
+    step = (await db.execute(
+        select(GeneratedEmail).where(GeneratedEmail.task_id == task.id)
+    )).scalar_one_or_none()
+    if step and not step.is_sent:
+        step.is_sent = True
+        step.sent_at = now
+
     await db.commit()
     return {"ok": True, "task_id": task.id}
 

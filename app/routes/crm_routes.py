@@ -336,10 +336,23 @@ async def complete_task(
     task = (await db.execute(select(Task).where(Task.id == task_id))).scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    now = datetime.now(timezone.utc)
     task.completed = True
-    task.completed_at = datetime.now(timezone.utc)
+    task.completed_at = now
     await log_activity(db, task.company_id, "task_completed", f"Completed: {task.description}", user.id,
                        contact_id=task.contact_id, deal_id=task.deal_id)
+
+    # If this task was created by the sequence engine for a manual step
+    # (linkedin/call), mark the linked sequence step done too. Without this
+    # the step stays is_sent=False and shows up forever in the Stalled tab
+    # even though the BDR already did the work.
+    step = (await db.execute(
+        select(GeneratedEmail).where(GeneratedEmail.task_id == task.id)
+    )).scalar_one_or_none()
+    if step and not step.is_sent:
+        step.is_sent = True
+        step.sent_at = now
+
     await db.commit()
     return {"id": task.id, "completed": True}
 
