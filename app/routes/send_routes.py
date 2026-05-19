@@ -11,7 +11,8 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
+import json
 from pydantic import BaseModel
 
 from app.database import get_db
@@ -747,28 +748,53 @@ async def resend_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         await db.commit()
 
     elif event_type == "email.opened":
-        # Per-email open count + first-open timestamp on the GeneratedEmail row
+        # Per-email open count + first-open timestamp on the GeneratedEmail row.
+        # The open_count keeps every event for analytics, but timeline +
+        # auto-qualify use the deduped first-open signal so image-proxy
+        # prefetches (Apple Mail Privacy, Gmail Image Proxy, Outlook
+        # preview) don't inflate engagement scores.
+        is_first_open_for_email = False
         if em:
-            if not em.opened_at:
+            is_first_open_for_email = em.opened_at is None
+            if is_first_open_for_email:
                 em.opened_at = now
             em.open_count = (em.open_count or 0) + 1
-        # Per-company open counter — used for "opened 3+ times" auto-qualify.
-        # Read it off the enrichment_summary blob for backwards-compat, but
-        # also write [opened] for each event so historical aggregation still
-        # works for older companies.
-        summary = company.enrichment_summary or ""
-        company_open_count = summary.count("[opened]") + 1
-        if company_open_count >= 3 and company.status in ("sequencing", "contacted"):
+
+        # Auto-qualify when the recipient has opened 3+ DISTINCT emails.
+        # Re-opens of the same email don't accumulate. Flush so this open
+        # is visible to the count below.
+        await db.flush()
+        distinct_opens = (await db.execute(
+            select(func.count()).select_from(GeneratedEmail).where(
+                GeneratedEmail.company_id == company_id,
+                GeneratedEmail.opened_at.is_not(None),
+            )
+        )).scalar() or 0
+
+        already_auto_qualified = "[Auto-qualified: opened" in (company.enrichment_summary or "")
+        if (distinct_opens >= 3 and company.status in ("sequencing", "contacted")
+                and not already_auto_qualified):
             company.status = "qualified"
-            company.enrichment_summary = summary + " [Auto-qualified: opened 3+ times]"
+            company.enrichment_summary = (company.enrichment_summary or "") + (
+                f" [Auto-qualified: opened {distinct_opens} distinct emails]"
+            )
             await _advance_deal_from_sequence(db, company.id)
             await _create_engagement_task(db, company, int(contact_id) if contact_id else None,
-                                          reason=f"opened {company_open_count}× recently")
-        else:
-            company.enrichment_summary = summary + " [opened]"
-        if contact_id:
-            db.add(Activity(company_id=company_id, contact_id=int(contact_id),
-                            activity_type="email_opened", content="Email opened"))
+                                          reason=f"opened {distinct_opens} distinct emails")
+        elif is_first_open_for_email:
+            # Lightweight breadcrumb — only on first open per email so
+            # re-opens don't pile up tokens in the summary string.
+            company.enrichment_summary = (company.enrichment_summary or "") + " [opened]"
+
+        # Timeline entry: one email_opened Activity per (email_id, contact).
+        # Re-opens by image proxies bump em.open_count but don't spawn
+        # additional Activity rows that would poison the lead score.
+        if contact_id and em and is_first_open_for_email:
+            db.add(Activity(
+                company_id=company_id, contact_id=int(contact_id),
+                activity_type="email_opened", content="Email opened",
+                metadata_json=json.dumps({"email_id": em.id}),
+            ))
         await db.commit()
 
     elif event_type == "email.clicked":

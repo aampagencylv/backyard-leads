@@ -99,23 +99,44 @@ async def track_click(token: str, request: Request):
 
         # Log the first click as an Activity. Subsequent clicks (re-clicks,
         # bot prefetches) increment click_count but don't spam the timeline.
+        #
+        # Per-email_id dedupe: a single email typically contains the same
+        # destination URL wrapped through multiple tracking tokens (logo,
+        # body link, signature, footer). Email-client link prefetchers
+        # (Apple Mail Privacy Protection, Outlook SafeLinks, Gmail proxy)
+        # fire every link the moment a message arrives — generating N
+        # "first clicks" on N different tokens within the same email.
+        # Collapse those to ONE email_clicked Activity per (email_id, contact).
         if is_first_click and link.contact_id and link.company_id:
-            ua = request.headers.get("user-agent", "")[:200]
-            ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "")
-            short_dest = link.destination_url[:120] + ("…" if len(link.destination_url) > 120 else "")
-            db.add(Activity(
-                company_id=link.company_id,
-                contact_id=link.contact_id,
-                activity_type="email_clicked",
-                content=f"Clicked link → {short_dest}",
-                metadata_json=__import__("json").dumps({
-                    "destination_url": link.destination_url,
-                    "label": link.label,
-                    "email_id": link.email_id,
-                    "user_agent": ua,
-                    "ip": ip,
-                }),
-            ))
+            already_clicked = False
+            if link.email_id:
+                # metadata_json is plain text JSON; the LIKE pattern matches
+                # the exact "email_id": N substring that json.dumps produces.
+                already_clicked = (await db.execute(
+                    select(Activity.id).where(
+                        Activity.activity_type == "email_clicked",
+                        Activity.contact_id == link.contact_id,
+                        Activity.metadata_json.like(f'%"email_id": {link.email_id}%'),
+                    ).limit(1)
+                )).scalar_one_or_none() is not None
+
+            if not already_clicked:
+                ua = request.headers.get("user-agent", "")[:200]
+                ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "")
+                short_dest = link.destination_url[:120] + ("…" if len(link.destination_url) > 120 else "")
+                db.add(Activity(
+                    company_id=link.company_id,
+                    contact_id=link.contact_id,
+                    activity_type="email_clicked",
+                    content=f"Clicked link → {short_dest}",
+                    metadata_json=json.dumps({
+                        "destination_url": link.destination_url,
+                        "label": link.label,
+                        "email_id": link.email_id,
+                        "user_agent": ua,
+                        "ip": ip,
+                    }),
+                ))
         await db.commit()
 
     # 302 redirect with Set-Cookie. visitor_token is the click token itself —
