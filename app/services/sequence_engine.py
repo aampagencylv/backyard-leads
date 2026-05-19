@@ -41,6 +41,15 @@ logger = logging.getLogger("sequence_engine")
 import os as _os
 DAILY_SEND_CAP_PER_USER = int(_os.environ.get("DAILY_SEND_CAP", "50"))
 
+# How long to wait on a manual step (LinkedIn / call / iMessage with
+# auto_execute=False) before auto-skipping it. Auto-emails further down
+# the sequence already fire on their own scheduled_send_at — they never
+# wait on a manual upstream step — but unsent manual rows pile up in the
+# Stalled tab and make sequences look broken. After this many days past
+# scheduled_send_at, auto-skip the step with skip_reason="manual_overdue_<N>d"
+# so the sequence keeps a clean shape. Override via env MANUAL_AUTOSKIP_DAYS.
+MANUAL_AUTOSKIP_DAYS = int(_os.environ.get("MANUAL_AUTOSKIP_DAYS", "3"))
+
 
 # ============================================================
 # 30-day default template (Steve approved 2026-05-06)
@@ -386,6 +395,43 @@ async def process_pending_steps(db: AsyncSession, max_per_tick: int = 50) -> dic
     skip-if, dispatch to the right handler. Returns counters for logging."""
     now = datetime.now(timezone.utc)
     counters = {"checked": 0, "sent": 0, "skipped": 0, "tasks_created": 0, "errors": 0}
+
+    # ---- Auto-skip overdue manual steps ----
+    # LinkedIn / call / iMessage steps with auto_execute=False rely on a BDR
+    # to act. If they've been overdue >MANUAL_AUTOSKIP_DAYS without action,
+    # skip them so the sequence keeps a clean shape. Downstream auto-emails
+    # are unaffected because they fire on their own scheduled_send_at — the
+    # engine does not enforce upstream-step dependencies. We respect linked
+    # Task completion: if the Task is done, complete_task should have already
+    # marked the step sent — we leave any such row alone.
+    autoskip_cutoff = now - timedelta(days=MANUAL_AUTOSKIP_DAYS)
+    overdue_manual = (await db.execute(
+        select(GeneratedEmail).where(
+            GeneratedEmail.is_sent == False,
+            GeneratedEmail.paused_at.is_(None),
+            GeneratedEmail.skipped_at.is_(None),
+            GeneratedEmail.auto_execute == False,
+            GeneratedEmail.step_type.in_(("linkedin", "call", "imessage")),
+            GeneratedEmail.scheduled_send_at != None,
+            GeneratedEmail.scheduled_send_at < autoskip_cutoff,
+        ).limit(max_per_tick)
+    )).scalars().all()
+    for step in overdue_manual:
+        if step.task_id:
+            t = (await db.execute(select(Task).where(Task.id == step.task_id))).scalar_one_or_none()
+            if t and t.completed:
+                continue  # complete_task should have handled it — leave alone
+        step.skipped_at = now
+        step.skip_reason = f"manual_overdue_{MANUAL_AUTOSKIP_DAYS}d"
+        db.add(Activity(
+            company_id=step.company_id, contact_id=step.contact_id,
+            activity_type="sequence_step_skipped",
+            content=(
+                f"[Auto] Skipped {step.step_type} step #{step.sequence_order} — "
+                f"manual action overdue >{MANUAL_AUTOSKIP_DAYS}d. Downstream auto-steps continue."
+            ),
+        ))
+        counters["skipped"] += 1
 
     # Pull ready auto-execute steps (email, imessage)
     auto_rows = (await db.execute(
