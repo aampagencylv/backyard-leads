@@ -106,6 +106,7 @@ async def init_db():
         "scripts.migrate_site_visitor_sessions",
         "scripts.migrate_campaign_archive",
         "scripts.migrate_performance_indexes",
+        "scripts.migrate_sequence_templates",
     ):
         try:
             mod = __import__(_migration_module, fromlist=["main"])

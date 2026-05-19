@@ -705,6 +705,7 @@
                 <a data-page="audit-reports" id="nav-audit-reports" onclick="showPage('audit-reports')" class="hidden">Audit Reports</a>
                 <a data-page="site-visitors" id="nav-site-visitors" onclick="showPage('site-visitors')" class="hidden">Site Visitors</a>
                 <a data-page="autopilot" id="nav-autopilot" onclick="showPage('autopilot')" style="margin-top:12px;border-top:1px solid rgba(255,255,255,0.1);padding-top:12px">Auto Pilot</a>
+                <a data-page="sequence-templates" id="nav-sequence-templates" onclick="showPage('sequence-templates')" class="hidden">Sequence Templates</a>
                 <a href="#" onclick="event.preventDefault();openStandaloneDialer()" style="color:var(--bmp-orange)">Dial a Number</a>
                 <a data-page="developer" id="nav-developer" onclick="showPage('developer')" class="hidden">Developer</a>
                 <a data-page="dns-health" id="nav-dns-health" onclick="showPage('dns-health')" class="hidden">DNS Health</a>
@@ -2112,6 +2113,19 @@ function verify(secret, rawBody, header) {
                 </div>
             </div>
 
+            <div id="page-sequence-templates" class="hidden">
+                <div class="page-header" style="margin-bottom:14px">
+                    <h1 style="margin:0">📋 Sequence Templates</h1>
+                    <p style="font-size:13px;color:#666;margin-top:4px">Define the multi-channel cadences the engine uses for new sequences. The template marked <strong>Default</strong> is what every new sequence starts with. Admins only.</p>
+                </div>
+                <div style="display:flex;gap:8px;margin-bottom:14px">
+                    <button class="btn btn-success btn-sm" onclick="newSequenceTemplate()">+ New Template</button>
+                    <button class="btn btn-secondary btn-sm" onclick="loadSequenceTemplates()">↻ Refresh</button>
+                </div>
+                <div id="sequence-templates-list" class="panel" style="margin-bottom:14px"></div>
+                <div id="sequence-template-editor" class="panel" style="display:none"></div>
+            </div>
+
             <div id="page-settings" class="hidden">
                 <div class="page-header"><h1>Settings</h1></div>
                 <div class="search-box" style="max-width:600px">
@@ -3442,6 +3456,8 @@ function verify(secret, rawBody, header) {
                     if (navAudit) navAudit.classList.toggle('hidden', !isAdminPlus);
                     const navVisitors = document.getElementById('nav-site-visitors');
                     if (navVisitors) navVisitors.classList.toggle('hidden', !isAdminPlus);
+                    const navSeqTemplates = document.getElementById('nav-sequence-templates');
+                    if (navSeqTemplates) navSeqTemplates.classList.toggle('hidden', !isAdminPlus);
                     // DNS Health — super_admin only (it surfaces email auth
                     // status which is platform-level, not per-tenant).
                     const navDns = document.getElementById('nav-dns-health');
@@ -4239,6 +4255,15 @@ function verify(secret, rawBody, header) {
             if (page === 'settings') loadSettings();
             if (page === 'calendar') loadCalendarPage();
             if (page === 'audit-reports') loadAuditReportsPage();
+            if (page === 'sequence-templates') {
+                if (!currentUser || !(currentUser.role === 'admin' || currentUser.role === 'super_admin')) {
+                    target.classList.add('hidden');
+                    showPage('dashboard');
+                    toast('Sequence templates are admin-only');
+                    return;
+                }
+                loadSequenceTemplates();
+            }
             if (page === 'whats-new') { loadChangelog(); dismissWhatsNew(); }
             if (page === 'site-visitors') {
                 if (!currentUser || !(currentUser.role === 'admin' || currentUser.role === 'super_admin')) {
@@ -14036,6 +14061,260 @@ hmac.compare_digest(expected, header)</pre>
         // moved here, alongside the new sidebar + scheduler controls.
 
         let _arNativeHosts = [];  // cached host list for the dropdown
+
+        // ================================================================
+        // Sequence Templates — admin step editor.
+        // CRUD + apply-to-existing. Steps array drives the UI; we re-render
+        // on every mutation so the order is the source of truth in memory
+        // and we only POST/PATCH on Save.
+        // ================================================================
+        let _seqTemplateDraft = null;          // {id?, name, steps[], auto_skip_days, auto_resume_days, is_active}
+        const SEQ_CHANNELS = ['email', 'imessage', 'call', 'linkedin'];
+        const SEQ_SKIP_CONDS = ['no_email', 'no_phone', 'no_linkedin', 'opted_out', 'landline'];
+        const SEQ_CHANNEL_ICON = { email: '✉️', imessage: '💬', call: '📞', linkedin: '🔗' };
+
+        async function loadSequenceTemplates() {
+            const list = document.getElementById('sequence-templates-list');
+            if (!list) return;
+            list.innerHTML = '<p style="color:#888;font-size:13px;padding:14px">Loading…</p>';
+            const data = await api('/api/sequence-templates');
+            if (!Array.isArray(data)) { list.innerHTML = '<p style="color:#c0392b;padding:14px">Failed to load.</p>'; return; }
+            if (data.length === 0) {
+                list.innerHTML = '<p style="color:#888;padding:14px">No templates yet — click <strong>+ New Template</strong> to create one.</p>';
+                return;
+            }
+            list.innerHTML = `
+                <table style="width:100%;border-collapse:collapse">
+                    <thead><tr style="background:#f8f9fa">
+                        <th style="text-align:left;padding:10px;font-size:11px;color:#666;text-transform:uppercase">Name</th>
+                        <th style="text-align:left;padding:10px;font-size:11px;color:#666;text-transform:uppercase">Steps</th>
+                        <th style="text-align:left;padding:10px;font-size:11px;color:#666;text-transform:uppercase">Auto-skip</th>
+                        <th style="text-align:left;padding:10px;font-size:11px;color:#666;text-transform:uppercase">Auto-resume</th>
+                        <th style="text-align:left;padding:10px;font-size:11px;color:#666;text-transform:uppercase">Status</th>
+                        <th style="text-align:right;padding:10px;font-size:11px;color:#666;text-transform:uppercase">Actions</th>
+                    </tr></thead>
+                    <tbody>
+                        ${data.map(t => `
+                            <tr style="border-top:1px solid #eee">
+                                <td style="padding:10px">
+                                    <strong>${escapeHtml(t.name)}</strong>
+                                    ${t.is_default ? ' <span style="background:#fdebd0;color:#e67e22;font-size:10px;padding:2px 6px;border-radius:8px;margin-left:4px">DEFAULT</span>' : ''}
+                                </td>
+                                <td style="padding:10px;font-size:13px">${t.step_count}</td>
+                                <td style="padding:10px;font-size:13px">${t.auto_skip_days}d</td>
+                                <td style="padding:10px;font-size:13px">${t.auto_resume_days === 0 ? 'never' : t.auto_resume_days + 'd'}</td>
+                                <td style="padding:10px">
+                                    <span style="font-size:11px;padding:2px 8px;border-radius:8px;background:${t.is_active ? '#d5f5e3' : '#f2f3f4'};color:${t.is_active ? '#1e8449' : '#7f8c8d'}">${t.is_active ? 'Active' : 'Inactive'}</span>
+                                </td>
+                                <td style="padding:10px;text-align:right">
+                                    <button class="btn btn-secondary btn-xs" onclick="editSequenceTemplate(${t.id})">Edit</button>
+                                    ${!t.is_default ? `<button class="btn btn-secondary btn-xs" onclick="makeSequenceTemplateDefault(${t.id})">Make Default</button>` : ''}
+                                    ${!t.is_default ? `<button class="btn btn-secondary btn-xs" onclick="deleteSequenceTemplate(${t.id})" style="color:#c0392b">Delete</button>` : ''}
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+        }
+
+        function newSequenceTemplate() {
+            _seqTemplateDraft = {
+                id: null,
+                name: 'New Template',
+                steps: [
+                    { day: 0, step_type: 'email', label: 'cold', skip_if: ['no_email', 'opted_out'], auto: true },
+                ],
+                auto_skip_days: 3,
+                auto_resume_days: 0,
+                is_active: true,
+            };
+            renderSequenceTemplateEditor();
+        }
+
+        async function editSequenceTemplate(id) {
+            const t = await api(`/api/sequence-templates/${id}`);
+            if (!t || t.error) { toast('Failed to load template'); return; }
+            _seqTemplateDraft = {
+                id: t.id,
+                name: t.name,
+                steps: t.steps.map(s => ({ ...s, skip_if: [...(s.skip_if || [])] })),
+                auto_skip_days: t.auto_skip_days,
+                auto_resume_days: t.auto_resume_days,
+                is_active: t.is_active,
+                is_default: t.is_default,
+            };
+            renderSequenceTemplateEditor();
+        }
+
+        function renderSequenceTemplateEditor() {
+            const box = document.getElementById('sequence-template-editor');
+            if (!box || !_seqTemplateDraft) { box && (box.style.display = 'none'); return; }
+            const d = _seqTemplateDraft;
+            box.style.display = 'block';
+            box.innerHTML = `
+                <div style="padding:14px">
+                    <h3 style="margin-top:0">${d.id ? 'Edit Template' : 'New Template'}${d.is_default ? ' <span style="font-size:11px;color:#e67e22">DEFAULT</span>' : ''}</h3>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;max-width:760px">
+                        <label style="font-size:12px;color:#666">Name
+                            <input id="st-name" value="${escapeHtml(d.name)}" style="width:100%;padding:6px 10px;border:1px solid #ddd;border-radius:6px;margin-top:4px">
+                        </label>
+                        <label style="font-size:12px;color:#666;display:flex;align-items:flex-end;gap:6px;padding-bottom:6px">
+                            <input type="checkbox" id="st-active" ${d.is_active ? 'checked' : ''}>
+                            Active
+                        </label>
+                        <label style="font-size:12px;color:#666">Auto-skip overdue manual step after (days)
+                            <input id="st-skip" type="number" min="0" max="60" value="${d.auto_skip_days}" style="width:100%;padding:6px 10px;border:1px solid #ddd;border-radius:6px;margin-top:4px">
+                        </label>
+                        <label style="font-size:12px;color:#666">Auto-resume paused sequence after (days, 0 = never)
+                            <input id="st-resume" type="number" min="0" max="90" value="${d.auto_resume_days}" style="width:100%;padding:6px 10px;border:1px solid #ddd;border-radius:6px;margin-top:4px">
+                        </label>
+                    </div>
+                    <div style="margin-bottom:8px"><strong>Steps</strong> <span style="font-size:11px;color:#888">(day = days from sequence start)</span></div>
+                    <div id="st-steps"></div>
+                    <button class="btn btn-secondary btn-sm" onclick="addSequenceTemplateStep()" style="margin-top:8px">+ Add Step</button>
+                    <div style="border-top:1px solid #eee;margin-top:18px;padding-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+                        <button class="btn btn-success btn-sm" onclick="saveSequenceTemplate()">💾 Save</button>
+                        <button class="btn btn-secondary btn-sm" onclick="closeSequenceTemplateEditor()">Cancel</button>
+                        ${d.id ? `<button class="btn btn-secondary btn-sm" onclick="applyTemplateToExisting(${d.id})" style="margin-left:auto;border-color:#e67e22;color:#e67e22">Apply to In-Flight Sequences…</button>` : ''}
+                    </div>
+                </div>
+            `;
+            renderSequenceTemplateSteps();
+        }
+
+        function renderSequenceTemplateSteps() {
+            const host = document.getElementById('st-steps');
+            if (!host) return;
+            const d = _seqTemplateDraft;
+            host.innerHTML = d.steps.map((s, i) => `
+                <div style="display:flex;gap:8px;align-items:center;padding:8px;border:1px solid #eee;border-radius:6px;margin-bottom:6px;background:#fafafa">
+                    <span style="font-size:11px;color:#888;width:24px;text-align:center">#${i + 1}</span>
+                    <span style="font-size:18px">${SEQ_CHANNEL_ICON[s.step_type] || ''}</span>
+                    <label style="font-size:11px;color:#666">Day
+                        <input type="number" min="0" value="${s.day}" onchange="updateSeqStep(${i},'day',this.value)" style="width:54px;padding:4px 6px;border:1px solid #ddd;border-radius:4px;margin-left:4px">
+                    </label>
+                    <select onchange="updateSeqStep(${i},'step_type',this.value)" style="padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px">
+                        ${SEQ_CHANNELS.map(c => `<option value="${c}" ${c === s.step_type ? 'selected' : ''}>${c}</option>`).join('')}
+                    </select>
+                    <input value="${escapeHtml(s.label || '')}" placeholder="label (cold, follow_up_1…)" onchange="updateSeqStep(${i},'label',this.value)" style="flex:1;min-width:140px;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px">
+                    <label style="font-size:11px;color:#666;display:flex;align-items:center;gap:4px">
+                        <input type="checkbox" ${s.auto ? 'checked' : ''} onchange="updateSeqStep(${i},'auto',this.checked)">
+                        auto
+                    </label>
+                    <select multiple size="1" title="Skip-if conditions" onchange="updateSeqStepSkipIf(${i}, Array.from(this.selectedOptions).map(o=>o.value))" style="padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:11px;min-width:120px">
+                        ${SEQ_SKIP_CONDS.map(c => `<option value="${c}" ${(s.skip_if||[]).includes(c) ? 'selected' : ''}>${c}</option>`).join('')}
+                    </select>
+                    <button class="btn btn-xs" onclick="moveSeqStep(${i},-1)" ${i === 0 ? 'disabled' : ''} title="Move up" style="background:transparent;color:#888;border:1px solid #ddd">↑</button>
+                    <button class="btn btn-xs" onclick="moveSeqStep(${i},1)" ${i === d.steps.length - 1 ? 'disabled' : ''} title="Move down" style="background:transparent;color:#888;border:1px solid #ddd">↓</button>
+                    <button class="btn btn-xs" onclick="deleteSeqStep(${i})" title="Delete" style="background:transparent;color:#c0392b;border:1px solid #f5b7b1">×</button>
+                </div>
+            `).join('');
+        }
+
+        function updateSeqStep(idx, field, value) {
+            const s = _seqTemplateDraft.steps[idx];
+            if (field === 'day') s.day = parseInt(value) || 0;
+            else if (field === 'auto') s.auto = !!value;
+            else s[field] = value;
+            if (field === 'day' || field === 'step_type') renderSequenceTemplateSteps();
+        }
+        function updateSeqStepSkipIf(idx, vals) { _seqTemplateDraft.steps[idx].skip_if = vals; }
+        function addSequenceTemplateStep() {
+            const last = _seqTemplateDraft.steps[_seqTemplateDraft.steps.length - 1];
+            _seqTemplateDraft.steps.push({
+                day: (last ? last.day : 0) + 2,
+                step_type: 'email',
+                label: '',
+                skip_if: ['no_email', 'opted_out'],
+                auto: true,
+            });
+            renderSequenceTemplateSteps();
+        }
+        function moveSeqStep(idx, dir) {
+            const s = _seqTemplateDraft.steps;
+            const j = idx + dir;
+            if (j < 0 || j >= s.length) return;
+            [s[idx], s[j]] = [s[j], s[idx]];
+            renderSequenceTemplateSteps();
+        }
+        function deleteSeqStep(idx) {
+            if (!confirm('Remove this step?')) return;
+            _seqTemplateDraft.steps.splice(idx, 1);
+            renderSequenceTemplateSteps();
+        }
+        function closeSequenceTemplateEditor() {
+            _seqTemplateDraft = null;
+            const box = document.getElementById('sequence-template-editor');
+            if (box) box.style.display = 'none';
+        }
+
+        async function saveSequenceTemplate() {
+            const d = _seqTemplateDraft;
+            d.name = document.getElementById('st-name').value.trim();
+            d.is_active = document.getElementById('st-active').checked;
+            d.auto_skip_days = parseInt(document.getElementById('st-skip').value) || 0;
+            d.auto_resume_days = parseInt(document.getElementById('st-resume').value) || 0;
+            if (!d.name) { toast('Name is required'); return; }
+            // Validate step day ordering on the client too so errors are immediate.
+            let lastDay = -1;
+            for (let i = 0; i < d.steps.length; i++) {
+                if (d.steps[i].day < lastDay) { toast(`Step #${i + 1} day comes before earlier step's day — fix order`); return; }
+                lastDay = d.steps[i].day;
+            }
+            const payload = {
+                name: d.name,
+                steps: d.steps,
+                auto_skip_days: d.auto_skip_days,
+                auto_resume_days: d.auto_resume_days,
+                is_active: d.is_active,
+            };
+            const opts = { method: d.id ? 'PATCH' : 'POST', body: JSON.stringify(payload), headers: { 'Content-Type': 'application/json' } };
+            const result = await api(d.id ? `/api/sequence-templates/${d.id}` : '/api/sequence-templates', opts);
+            if (!result || result.error) { toast('Save failed: ' + (result && result.detail || 'unknown')); return; }
+            toast('Saved');
+            closeSequenceTemplateEditor();
+            loadSequenceTemplates();
+        }
+
+        async function makeSequenceTemplateDefault(id) {
+            if (!confirm('Make this the default template? Every new sequence will use these steps from now on.')) return;
+            const result = await api(`/api/sequence-templates/${id}/set-default`, { method: 'POST' });
+            if (!result || result.error) { toast('Failed'); return; }
+            toast('Default updated');
+            loadSequenceTemplates();
+        }
+
+        async function deleteSequenceTemplate(id) {
+            if (!confirm('Delete this template? (Default cannot be deleted.)')) return;
+            const result = await api(`/api/sequence-templates/${id}`, { method: 'DELETE' });
+            if (!result || result.error) { toast('Failed'); return; }
+            toast('Deleted');
+            loadSequenceTemplates();
+        }
+
+        async function applyTemplateToExisting(id) {
+            // Two-phase: dry-run first to show the user the scope, then confirm.
+            const preview = await api(`/api/sequence-templates/${id}/apply-to-existing`, {
+                method: 'POST',
+                body: JSON.stringify({ dry_run: true }),
+                headers: { 'Content-Type': 'application/json' },
+            });
+            if (!preview || preview.error) { toast('Preview failed'); return; }
+            const msg = `Re-anchor this template onto ALL in-flight sequences?\n\n` +
+                `Considered: ${preview.contacts_considered} contacts\n` +
+                `Will update: contacts with remaining unsent steps\n\n` +
+                `Sent + paused + skipped rows are preserved. Unsent rows on each affected contact are replaced.`;
+            if (!confirm(msg)) return;
+            const result = await api(`/api/sequence-templates/${id}/apply-to-existing`, {
+                method: 'POST',
+                body: JSON.stringify({ dry_run: false }),
+                headers: { 'Content-Type': 'application/json' },
+            });
+            if (!result || result.error) { toast('Apply failed'); return; }
+            toast(`Applied — ${result.contacts_updated} contacts updated, ${result.steps_deleted} deleted, ${result.steps_created} created`);
+        }
+
 
         async function loadAuditReportsPage() {
             // Fetch runtime config + the native-host list in parallel

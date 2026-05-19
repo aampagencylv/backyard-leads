@@ -1306,6 +1306,34 @@ class Feedback(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
 
 
+class SequenceTemplate(Base):
+    """Editable sequence templates — replaces the hard-coded
+    DEFAULT_30DAY_TEMPLATE constant in sequence_engine.py.
+
+    steps_json: list of {day, step_type, label, skip_if, auto} dicts.
+                Same shape as DEFAULT_30DAY_TEMPLATE.
+    auto_skip_days: how many days overdue a manual step (linkedin/call/
+                imessage with auto=False) can sit before the engine
+                auto-skips it. Default mirrors MANUAL_AUTOSKIP_DAYS.
+    auto_resume_days: if a sequence pauses (e.g. on a reply) and then
+                no new activity happens for this many days, auto-resume
+                from the next unsent step. 0 = never auto-resume.
+    """
+    __tablename__ = "sequence_templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(120), nullable=False, unique=True)
+    is_active = Column(Boolean, default=True, nullable=False, index=True)
+    is_default = Column(Boolean, default=False, nullable=False, index=True)
+    steps_json = Column(Text, nullable=False)
+    auto_skip_days = Column(Integer, default=3, nullable=False)
+    auto_resume_days = Column(Integer, default=0, nullable=False)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+
 class PendingDeletion(Base):
     """Soft-delete holding area. BDR deletions land here for admin approval."""
     __tablename__ = "pending_deletions"

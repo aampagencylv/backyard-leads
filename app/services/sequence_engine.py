@@ -30,7 +30,7 @@ from typing import Optional
 from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import GeneratedEmail, Contact, Company, Activity, Task, User
+from app.models import GeneratedEmail, Contact, Company, Activity, Task, User, SequenceTemplate
 from app.config import settings
 
 logger = logging.getLogger("sequence_engine")
@@ -396,6 +396,78 @@ async def process_pending_steps(db: AsyncSession, max_per_tick: int = 50) -> dic
     now = datetime.now(timezone.utc)
     counters = {"checked": 0, "sent": 0, "skipped": 0, "tasks_created": 0, "errors": 0}
 
+    # ---- Auto-resume paused sequences after quiet period ----
+    # If a contact's sequence was paused (e.g. they replied, then went
+    # cold), the template can request that the sequence resume after
+    # auto_resume_days of no activity. We resume by clearing paused_at
+    # on every remaining step for that contact AND bumping their
+    # scheduled_send_at forward so steps don't all fire at once.
+    #
+    # Activity definition: any Activity row on the contact since the
+    # pause (reply, call, manual touch). If nothing new since pause,
+    # the contact has gone quiet — safe to start the cadence again.
+    default_tmpl_row = (await db.execute(
+        select(SequenceTemplate).where(
+            SequenceTemplate.is_default == True,
+            SequenceTemplate.is_active == True,
+        ).limit(1)
+    )).scalar_one_or_none()
+    auto_resume_days = (default_tmpl_row.auto_resume_days if default_tmpl_row else 0) or 0
+    if auto_resume_days > 0:
+        resume_cutoff = now - timedelta(days=auto_resume_days)
+        paused_contacts = (await db.execute(
+            select(GeneratedEmail.contact_id, func.max(GeneratedEmail.paused_at).label("paused_at"))
+            .where(
+                GeneratedEmail.paused_at.is_not(None),
+                GeneratedEmail.is_sent == False,
+                GeneratedEmail.skipped_at.is_(None),
+            )
+            .group_by(GeneratedEmail.contact_id)
+            .having(func.max(GeneratedEmail.paused_at) < resume_cutoff)
+            .limit(max_per_tick)
+        )).all()
+        for contact_id, paused_at in paused_contacts:
+            recent = (await db.execute(
+                select(Activity.id).where(
+                    Activity.contact_id == contact_id,
+                    Activity.created_at > paused_at,
+                    Activity.activity_type.in_((
+                        "email_replied", "imessage_received", "call",
+                        "email_opened", "email_clicked", "note",
+                    )),
+                ).limit(1)
+            )).scalar_one_or_none()
+            if recent is not None:
+                continue  # contact engaged since the pause — keep sequence paused
+            # Resume: clear paused_at on remaining steps + re-anchor schedules
+            # so they fire on a fresh cadence (first step today, subsequent
+            # steps spaced by original deltas).
+            remaining = (await db.execute(
+                select(GeneratedEmail).where(
+                    GeneratedEmail.contact_id == contact_id,
+                    GeneratedEmail.paused_at.is_not(None),
+                    GeneratedEmail.is_sent == False,
+                    GeneratedEmail.skipped_at.is_(None),
+                ).order_by(GeneratedEmail.sequence_order)
+            )).scalars().all()
+            if not remaining:
+                continue
+            anchor_old = remaining[0].scheduled_send_at or now
+            for step in remaining:
+                step.paused_at = None
+                if step.scheduled_send_at:
+                    delta = step.scheduled_send_at - anchor_old
+                    step.scheduled_send_at = now + delta
+            company_id = remaining[0].company_id
+            db.add(Activity(
+                company_id=company_id, contact_id=contact_id,
+                activity_type="sequence_resumed",
+                content=(
+                    f"[Auto] Sequence auto-resumed — paused {auto_resume_days}+ days "
+                    f"with no further activity. {len(remaining)} steps re-anchored."
+                ),
+            ))
+
     # ---- Auto-skip overdue manual steps ----
     # LinkedIn / call / iMessage steps with auto_execute=False rely on a BDR
     # to act. If they've been overdue >MANUAL_AUTOSKIP_DAYS without action,
@@ -751,7 +823,22 @@ async def start_sequence_from_template(
     most-recent contact context.
     """
     if template is None:
-        template = DEFAULT_30DAY_TEMPLATE
+        # Prefer the admin-editable DB template marked is_default=True.
+        # Falls back to the in-code constant if the table is empty (fresh
+        # DB before the seed migration runs).
+        default_tmpl = (await db.execute(
+            select(SequenceTemplate).where(
+                SequenceTemplate.is_default == True,
+                SequenceTemplate.is_active == True,
+            ).order_by(SequenceTemplate.id.desc()).limit(1)
+        )).scalar_one_or_none()
+        if default_tmpl:
+            try:
+                template = json.loads(default_tmpl.steps_json)
+            except (TypeError, ValueError):
+                template = DEFAULT_30DAY_TEMPLATE
+        else:
+            template = DEFAULT_30DAY_TEMPLATE
 
     if contact.unsubscribed_at:
         return 0

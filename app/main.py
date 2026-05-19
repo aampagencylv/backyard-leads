@@ -50,6 +50,7 @@ from app.routes import (
     extension_download_routes,
     feedback_routes,
     site_visitors_routes,
+    sequence_template_routes,
 )
 
 
@@ -330,6 +331,7 @@ app.include_router(embed_sidebar_routes.router)
 app.include_router(extension_download_routes.router)
 app.include_router(site_visitors_routes.router)
 app.include_router(feedback_routes.router)
+app.include_router(sequence_template_routes.router)
 
 # Serve static frontend + user-uploaded files (logos, etc.).
 # var/uploads/ is gitignored and persists across deploys; ensure the
