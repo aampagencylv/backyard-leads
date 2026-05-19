@@ -12,7 +12,7 @@ from math import exp
 from typing import Optional
 from collections import defaultdict
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
 
@@ -1251,4 +1251,66 @@ async def team_dashboard(
         "conversion_funnel": funnel_rows,
         "call_log": all_calls,
         "hot_leads_by_bdr": hot_by_bdr,
+    }
+
+
+# ============================================================
+# Recent unhandled errors — admin diagnostics tile
+# ============================================================
+
+@router.get("/admin/errors")
+async def admin_recent_errors(
+    hours: int = 24,
+    user: User = Depends(get_current_user),
+):
+    """Return a summary + last-N raw entries from the in-process error
+    ring buffer that the request-id middleware appends to whenever a
+    route 500s. Admin-only.
+
+    The ring is process-local (capped at 500); on restart the count
+    resets. That matches what an admin wants here — "what's broken
+    *now*" — and avoids us building a real error-store DB table.
+    """
+    if user.role not in ("admin", "super_admin"):
+        raise HTTPException(403, "Admin only")
+
+    from datetime import datetime, timezone, timedelta
+    from app.middleware import get_recent_errors
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=max(1, min(hours, 168)))
+    items = []
+    for e in get_recent_errors():
+        try:
+            ts = datetime.fromisoformat(e["ts"])
+        except (KeyError, ValueError):
+            continue
+        if ts >= cutoff:
+            items.append(e)
+
+    # Bucket by (path, error_type) — same shape as the journalctl audit
+    buckets: dict[tuple[str, str], dict] = {}
+    for e in items:
+        key = (e["path"], e["error_type"])
+        b = buckets.setdefault(key, {
+            "path": e["path"],
+            "error_type": e["error_type"],
+            "count": 0,
+            "first_seen": e["ts"],
+            "last_seen": e["ts"],
+            "sample_message": e.get("error_msg") or "",
+            "sample_request_id": e.get("request_id") or "",
+        })
+        b["count"] += 1
+        if e["ts"] < b["first_seen"]:
+            b["first_seen"] = e["ts"]
+        if e["ts"] > b["last_seen"]:
+            b["last_seen"] = e["ts"]
+    top = sorted(buckets.values(), key=lambda x: x["count"], reverse=True)
+
+    return {
+        "window_hours": hours,
+        "total_errors": len(items),
+        "ring_capacity": 500,
+        "buckets": top,
+        "recent": list(reversed(items))[:30],
     }

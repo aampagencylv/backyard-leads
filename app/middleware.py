@@ -9,9 +9,11 @@ similar).
 """
 from __future__ import annotations
 import logging
+import threading
 import time
 import uuid
 from collections import defaultdict, deque
+from datetime import datetime, timezone
 from typing import Callable
 
 from fastapi import Request, Response
@@ -19,6 +21,44 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 log = logging.getLogger("bmp.middleware")
+
+
+# ============================================================
+# Recent-errors ring buffer
+# ============================================================
+#
+# An in-process ring of the last N unhandled exceptions, exposed via
+# /api/admin/errors so the admin dashboard can surface a count + the
+# top offenders without anyone reading journalctl. Cap at 500 so the
+# memory cost is bounded.
+#
+# Single-process deploy → a plain deque + lock is enough. If we ever
+# scale to multiple workers / boxes the API surface stays the same but
+# the backing store moves to Redis.
+
+_RECENT_ERRORS: deque = deque(maxlen=500)
+_RECENT_ERRORS_LOCK = threading.Lock()
+
+
+def record_unhandled_error(method: str, path: str, error_type: str,
+                            error_msg: str, request_id: str) -> None:
+    """Append one entry to the in-process ring. Safe to call from any
+    coroutine — uses a sync lock around a deque write which is O(1)."""
+    with _RECENT_ERRORS_LOCK:
+        _RECENT_ERRORS.append({
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "method": method,
+            "path": path,
+            "error_type": error_type,
+            "error_msg": (error_msg or "")[:300],
+            "request_id": request_id,
+        })
+
+
+def get_recent_errors() -> list[dict]:
+    """Return a snapshot copy. Caller can safely iterate without the lock."""
+    with _RECENT_ERRORS_LOCK:
+        return list(_RECENT_ERRORS)
 
 
 # ============================================================
@@ -66,6 +106,16 @@ class RequestIdAndErrorHandler(BaseHTTPMiddleware):
             )
             capture_exception(e, request_method=request.method,
                               request_path=request.url.path)
+            # Also append to the in-process ring so /api/admin/errors
+            # can surface a live count + top offenders without anyone
+            # reading journalctl.
+            record_unhandled_error(
+                method=request.method,
+                path=request.url.path,
+                error_type=type(e).__name__,
+                error_msg=str(e),
+                request_id=rid,
+            )
             return JSONResponse(
                 {"detail": "Internal server error", "request_id": rid},
                 status_code=500,
