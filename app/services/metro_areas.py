@@ -304,18 +304,29 @@ METRO_AREAS: dict[str, list[str]] = {
 
 def expand_metro(location: str) -> list[str]:
     """If the location matches a known metro area, return all suburbs.
-    Otherwise return the location as-is in a single-item list."""
-    key = location.lower().strip()
-    # Strip common state suffixes for matching
-    for suffix in [
-        ", az", ", nv", ", tx", ", fl", ", ca", ", co", ", ga", ", nc",
-        ", tn", ", sc", ", va", ", md", ", nj", ", ct", ", ny", ", il",
-        ", mi", ", oh", ", mn", ", wa", ", or", ", ut", ", hi",
-        " arizona", " nevada", " texas", " florida", " california",
-        " colorado", " georgia",
-    ]:
-        key = key.replace(suffix, "")
-    key = key.strip()
+    Otherwise return the location as-is in a single-item list.
+
+    Accepts any of: 'Houston, TX', 'Houston, Texas', 'Houston'. We match
+    on the city portion only — everything before the first comma — so the
+    state form (abbreviation vs full name) doesn't matter. For comma-less
+    input we fall back to stripping a trailing state token."""
+    raw = location.lower().strip()
+
+    if "," in raw:
+        # "houston, texas" / "houston, tx" → "houston"
+        key = raw.split(",", 1)[0].strip()
+    else:
+        # "houston tx" / "houston texas" / "houston" → "houston"
+        key = raw
+        for suffix in (
+            " arizona", " nevada", " texas", " florida", " california",
+            " colorado", " georgia", " az", " nv", " tx", " fl", " ca",
+            " co", " ga", " nc", " tn", " sc", " va", " md", " nj", " ct",
+            " ny", " il", " mi", " oh", " mn", " wa", " or", " ut", " hi",
+        ):
+            if key.endswith(suffix):
+                key = key[: -len(suffix)].strip()
+                break
 
     if key in METRO_AREAS:
         return METRO_AREAS[key]
