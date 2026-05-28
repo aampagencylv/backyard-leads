@@ -841,6 +841,11 @@ class Campaign(Base):
     # implies the campaign is no longer running.
     archived_at = Column(DateTime(timezone=True), nullable=True)
 
+    # When set on a campaign with status='scheduled', the activation loop
+    # flips it to 'running' once this time (UTC) passes. Cleared when the
+    # campaign actually starts or the schedule is cancelled.
+    scheduled_start_at = Column(DateTime(timezone=True), nullable=True)
+
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 

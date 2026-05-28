@@ -153,6 +153,7 @@ async def list_campaigns(
             "last_run_at": c.last_run_at.isoformat() if c.last_run_at else None,
             "created_at": c.created_at.isoformat() if c.created_at else None,
             "archived_at": c.archived_at.isoformat() if c.archived_at else None,
+            "scheduled_start_at": c.scheduled_start_at.isoformat() if c.scheduled_start_at else None,
         })
     return out
 
@@ -246,8 +247,65 @@ async def start_campaign(
         raise HTTPException(status_code=400, detail="Campaign is already running")
 
     campaign.status = "running"
+    campaign.scheduled_start_at = None  # starting now overrides any pending schedule
     await db.commit()
     return {"id": campaign.id, "status": "running"}
+
+
+class ScheduleCampaignRequest(BaseModel):
+    scheduled_start_at: str  # ISO 8601, UTC (e.g. "2026-06-01T14:00:00Z")
+
+
+@router.post("/{campaign_id}/schedule")
+async def schedule_campaign(
+    campaign_id: int,
+    req: ScheduleCampaignRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Schedule a campaign to start at a future time. The activation loop
+    flips it to 'running' once scheduled_start_at passes."""
+    campaign = (await db.execute(select(Campaign).where(Campaign.id == campaign_id))).scalar_one_or_none()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if campaign.status == "running":
+        raise HTTPException(status_code=400, detail="Campaign is already running — pause it first to reschedule")
+
+    # Parse the incoming ISO timestamp. Accept trailing 'Z'.
+    try:
+        raw = req.scheduled_start_at.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid scheduled_start_at — expected ISO 8601")
+
+    if dt <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="Scheduled time must be in the future")
+
+    campaign.status = "scheduled"
+    campaign.scheduled_start_at = dt
+    await db.commit()
+    return {"id": campaign.id, "status": "scheduled", "scheduled_start_at": dt.isoformat()}
+
+
+@router.post("/{campaign_id}/unschedule")
+async def unschedule_campaign(
+    campaign_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Cancel a pending schedule — returns the campaign to draft."""
+    campaign = (await db.execute(select(Campaign).where(Campaign.id == campaign_id))).scalar_one_or_none()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if campaign.status != "scheduled":
+        raise HTTPException(status_code=400, detail="Campaign is not scheduled")
+
+    campaign.status = "draft"
+    campaign.scheduled_start_at = None
+    await db.commit()
+    return {"id": campaign.id, "status": "draft"}
 
 
 @router.post("/{campaign_id}/pause")

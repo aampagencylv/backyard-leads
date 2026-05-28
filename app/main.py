@@ -81,6 +81,14 @@ async def _sequence_engine_loop():
 
         tick_count += 1
 
+        # Scheduled-campaign activation — every tick (60s). Flips any
+        # 'scheduled' campaign whose scheduled_start_at has passed over to
+        # 'running' so the auto-advance pass below picks it up the same tick.
+        try:
+            await _activate_scheduled_campaigns()
+        except Exception as e:
+            log.exception(f"scheduled-campaign activation failed: {e}")
+
         # Campaign auto-advance — every tick (60s). Each batch takes
         # 1-2 min internally (Google Maps + enrichment + Claude email
         # generation), so back-to-back firing produces continuous
@@ -128,6 +136,35 @@ async def _sequence_engine_loop():
                 log.exception(f"morning_brief tick failed: {e}")
 
         await asyncio.sleep(60)
+
+
+async def _activate_scheduled_campaigns():
+    """Flip 'scheduled' campaigns to 'running' once their start time passes.
+
+    Linda (and team) can schedule an autopilot campaign to begin on a
+    future date. We store scheduled_start_at (UTC) and set status to
+    'scheduled'. This pass — run every tick — promotes any whose time has
+    arrived. The scheduled_start_at is left in place as a record of when
+    it kicked off; the status change is what gates execution."""
+    from datetime import datetime as _dt, timezone as _tz
+    from sqlalchemy import select as _select
+    from app.models import Campaign as _Campaign
+
+    now = _dt.now(_tz.utc)
+    async with async_session() as db:
+        due = (await db.execute(
+            _select(_Campaign).where(
+                _Campaign.status == "scheduled",
+                _Campaign.scheduled_start_at.isnot(None),
+                _Campaign.scheduled_start_at <= now,
+            )
+        )).scalars().all()
+        for camp in due:
+            camp.status = "running"
+            log.info(f"campaign #{camp.id} '{camp.name}' activated on schedule "
+                     f"(was due {camp.scheduled_start_at.isoformat()})")
+        if due:
+            await db.commit()
 
 
 async def _advance_full_auto_campaigns():

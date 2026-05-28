@@ -109,6 +109,7 @@ async def init_db():
         "scripts.migrate_sequence_templates",
         "scripts.migrate_company_lost_reason",
         "scripts.migrate_activity_company_nullable",
+        "scripts.migrate_campaign_scheduled_start",
     ):
         try:
             mod = __import__(_migration_module, fromlist=["main"])
