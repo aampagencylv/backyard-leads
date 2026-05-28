@@ -10062,16 +10062,22 @@ hmac.compare_digest(expected, header)</pre>
                                 <option value="full_auto">Full Auto — sends automatically</option>
                             </select>
                         </div>
+                        <div class="form-group" id="camp-schedule-group" style="display:none;background:#e8f0fe;border:1px solid #1a73e8;border-radius:8px;padding:12px;margin-top:12px">
+                            <label style="color:#1a4d8f">🗓 Start date &amp; time (your local time)</label>
+                            <input type="datetime-local" id="camp-schedule-at" style="width:100%;padding:8px;border:1px solid #1a73e8;border-radius:6px">
+                            <div style="font-size:11px;color:#5f6368;margin-top:4px">The campaign will automatically begin prospecting at this time — no need to be logged in.</div>
+                        </div>
                         <div class="modal-actions" style="display:flex;gap:8px;margin-top:16px">
                             <button class="btn btn-secondary" onclick="document.getElementById('modal-root').innerHTML=''">Cancel</button>
-                            <button class="btn btn-primary" onclick="submitCampaign()">Create Campaign</button>
+                            <button class="btn btn-secondary" id="camp-schedule-btn" onclick="submitCampaign(true)" style="border-color:#1a73e8;color:#1a73e8">🗓 Schedule</button>
+                            <button class="btn btn-primary" onclick="submitCampaign(false)">Create Campaign</button>
                         </div>
                     </div>
                 </div>
             `;
         }
 
-        async function submitCampaign() {
+        async function submitCampaign(scheduleMode = false) {
             const types = Array.from(document.querySelectorAll('.camp-type-cb:checked')).map(cb => cb.value);
             const locText = document.getElementById('camp-locations').value;
             const locations = locText.split('\n').map(l => l.trim()).filter(Boolean);
@@ -10079,6 +10085,31 @@ hmac.compare_digest(expected, header)</pre>
 
             if (!types.length) { toast('Select at least one business type'); return; }
             if (!locations.length) { toast('Enter at least one location'); return; }
+
+            // Schedule flow: first click reveals the date picker (pre-filled
+            // with tomorrow 9am). The user picks a time and clicks Schedule
+            // again to actually create + schedule.
+            let scheduledISO = null;
+            if (scheduleMode) {
+                const grp = document.getElementById('camp-schedule-group');
+                const dateEl = document.getElementById('camp-schedule-at');
+                if (grp.style.display === 'none') {
+                    const def = new Date();
+                    def.setDate(def.getDate() + 1);
+                    def.setHours(9, 0, 0, 0);
+                    const pad = n => String(n).padStart(2, '0');
+                    dateEl.value = `${def.getFullYear()}-${pad(def.getMonth()+1)}-${pad(def.getDate())}T${pad(def.getHours())}:${pad(def.getMinutes())}`;
+                    grp.style.display = '';
+                    dateEl.focus();
+                    document.getElementById('camp-schedule-btn').textContent = '🗓 Confirm Schedule';
+                    toast('Pick a start date, then click Confirm Schedule.');
+                    return;
+                }
+                const dt = new Date(dateEl.value);
+                if (!dateEl.value || isNaN(dt.getTime())) { toast('Pick a valid start date'); return; }
+                if (dt <= new Date()) { toast('Pick a time in the future'); return; }
+                scheduledISO = dt.toISOString();
+            }
 
             const data = await api('/api/campaigns/', {
                 method: 'POST',
@@ -10096,11 +10127,21 @@ hmac.compare_digest(expected, header)</pre>
                     member_ids: memberIds,
                 }),
             });
-            if (data) {
-                toast('Campaign created! Click Start to begin.');
-                document.getElementById('modal-root').innerHTML = '';
-                loadCampaigns();
+            if (!data) return;
+
+            if (scheduledISO) {
+                const sched = await api(`/api/campaigns/${data.id}/schedule`, {
+                    method: 'POST',
+                    body: JSON.stringify({ scheduled_start_at: scheduledISO }),
+                });
+                toast(sched
+                    ? `Campaign created and scheduled for ${fmtScheduledStart(scheduledISO)}.`
+                    : 'Campaign created, but scheduling failed — set it from the campaign card.');
+            } else {
+                toast('Campaign created! Click Start Now or Schedule it from the card.');
             }
+            document.getElementById('modal-root').innerHTML = '';
+            loadCampaigns();
         }
 
         async function startCampaign(id) {
