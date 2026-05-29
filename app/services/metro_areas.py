@@ -9,6 +9,8 @@ back to the city name as-is (Google Places text search still returns
 results in the broader area).
 """
 
+import re
+
 # Pre-built metro area mappings — all major US backyard-industry markets
 METRO_AREAS: dict[str, list[str]] = {
 
@@ -302,32 +304,45 @@ METRO_AREAS: dict[str, list[str]] = {
 }
 
 
+# Every US state, full name + abbreviation, lowercased — used to strip a
+# trailing state token off a location string so we can match the city to a
+# metro key. Longest-first matching (handled in the regex via sorted len)
+# means "new york" wins over a bare "ny" fragment.
+_STATE_TOKENS = (
+    "alabama", "alaska", "arizona", "arkansas", "california", "colorado",
+    "connecticut", "delaware", "florida", "georgia", "hawaii", "idaho",
+    "illinois", "indiana", "iowa", "kansas", "kentucky", "louisiana", "maine",
+    "maryland", "massachusetts", "michigan", "minnesota", "mississippi",
+    "missouri", "montana", "nebraska", "nevada", "new hampshire", "new jersey",
+    "new mexico", "new york", "north carolina", "north dakota", "ohio",
+    "oklahoma", "oregon", "pennsylvania", "rhode island", "south carolina",
+    "south dakota", "tennessee", "texas", "utah", "vermont", "virginia",
+    "washington", "west virginia", "wisconsin", "wyoming",
+    "al", "ak", "az", "ar", "ca", "co", "ct", "de", "fl", "ga", "hi", "id",
+    "il", "in", "ia", "ks", "ky", "la", "me", "md", "ma", "mi", "mn", "ms",
+    "mo", "mt", "ne", "nv", "nh", "nj", "nm", "ny", "nc", "nd", "oh", "ok",
+    "or", "pa", "ri", "sc", "sd", "tn", "tx", "ut", "vt", "va", "wa", "wv",
+    "wi", "wy",
+)
+# Strip a trailing state preceded by ANY separator — comma, hyphen, or
+# whitespace — so 'Miami, FL', 'Miami-FL', 'Miami FL', and 'Miami, Florida'
+# all normalize to 'miami'. The required separator + end-anchor means
+# hyphenated city names survive: 'Winston-Salem, NC' loses only ', nc'.
+_STATE_RE = re.compile(
+    r"[\s,\-]+(?:" + "|".join(sorted(_STATE_TOKENS, key=len, reverse=True)) + r")$"
+)
+
+
 def expand_metro(location: str) -> list[str]:
-    """If the location matches a known metro area, return all suburbs.
-    Otherwise return the location as-is in a single-item list.
+    """If the location matches a known metro area, return all its suburbs;
+    otherwise return the location unchanged in a one-item list.
 
-    Accepts any of: 'Houston, TX', 'Houston, Texas', 'Houston'. We match
-    on the city portion only — everything before the first comma — so the
-    state form (abbreviation vs full name) doesn't matter. For comma-less
-    input we fall back to stripping a trailing state token."""
+    Normalizes to the city by stripping a trailing US state token regardless
+    of separator: 'Miami, FL', 'Miami, Florida', 'Miami-FL', 'Miami FL', and
+    'Miami' all resolve to 'miami'. BDRs type locations free-hand, so the
+    separator format can't be assumed."""
     raw = location.lower().strip()
-
-    if "," in raw:
-        # "houston, texas" / "houston, tx" → "houston"
-        key = raw.split(",", 1)[0].strip()
-    else:
-        # "houston tx" / "houston texas" / "houston" → "houston"
-        key = raw
-        for suffix in (
-            " arizona", " nevada", " texas", " florida", " california",
-            " colorado", " georgia", " az", " nv", " tx", " fl", " ca",
-            " co", " ga", " nc", " tn", " sc", " va", " md", " nj", " ct",
-            " ny", " il", " mi", " oh", " mn", " wa", " or", " ut", " hi",
-        ):
-            if key.endswith(suffix):
-                key = key[: -len(suffix)].strip()
-                break
-
+    key = _STATE_RE.sub("", raw).strip().rstrip(",").strip()
     if key in METRO_AREAS:
         return METRO_AREAS[key]
     return [location]
