@@ -483,6 +483,18 @@ async def serve_admin():
     return HTMLResponse(html, headers={"Cache-Control": "no-store, max-age=0"})
 
 
+@app.get("/login", response_class=HTMLResponse)
+async def serve_login():
+    """Universal login form at leadprospector.ai/login (also reachable
+    on any host as a fallback). Email + password searches across every
+    tenant; on success the response carries a redirect URL pointing at
+    the user's tenant primary domain, with the JWT in a ?_lp_token=
+    query param so the cross-subdomain hop preserves auth."""
+    with open("static/login.html") as f:
+        html = f.read()
+    return HTMLResponse(html, headers={"Cache-Control": "no-store, max-age=0"})
+
+
 @app.get("/reset-password", response_class=HTMLResponse)
 async def serve_reset_password(request: Request):
     """Password-reset landing. Serves the tenant app shell (index.html)

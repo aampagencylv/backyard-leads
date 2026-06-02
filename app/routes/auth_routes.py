@@ -52,6 +52,103 @@ async def register(
     )
 
 
+class UniversalLoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user_name: str
+    user_email: str
+    tenant_name: str
+    redirect_url: str  # Full URL the browser should navigate to
+
+
+@router.post("/universal-login", response_model=UniversalLoginResponse)
+async def universal_login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: AsyncSession = Depends(get_db),  # cross-tenant — no auto-filter
+):
+    """Email + password login that searches across every tenant.
+
+    Powers the leadprospector.ai/login form. A user with the same email
+    + password in any tenant gets matched; the response tells the
+    browser where to redirect (their tenant's primary domain), with a
+    JWT for that tenant carried in the URL so localStorage transfer
+    across the subdomain hop works.
+
+    Super_admin users redirect to app.leadprospector.ai/admin instead
+    of their tenant — they're the platform operators.
+
+    Same enumeration-protection as /login: identical 401 response for
+    "wrong email" and "wrong password" so an attacker can't probe which
+    emails exist on the platform.
+
+    If the same email + password matches in multiple tenants (rare
+    today; common once we add multi-tenant memberships), the first
+    match wins. We'll add a "choose tenant" picker if + when this
+    actually trips real users.
+    """
+    from app.models import TenantDomain
+    email = form_data.username.strip().lower()
+    raw_password = form_data.password
+
+    # Cross-tenant user lookup — get every user with this email across
+    # the platform. Don't bother filtering by password in SQL; bcrypt
+    # is per-row anyway.
+    candidates = (await db.execute(
+        select(User).where(User.email == email, User.is_active == True)
+    )).scalars().all()
+
+    matched_user: Optional[User] = None
+    for u in candidates:
+        if verify_password(raw_password, u.hashed_password):
+            matched_user = u
+            break
+
+    if matched_user is None:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    # Resolve the redirect URL.
+    # 1. super_admin → app.leadprospector.ai/admin
+    # 2. anyone else → their tenant's primary domain
+    if matched_user.role == "super_admin":
+        redirect_url = "https://app.leadprospector.ai/admin"
+        tenant_name = "Platform admin"
+    else:
+        primary = (await db.execute(
+            select(TenantDomain).where(
+                TenantDomain.tenant_id == matched_user.tenant_id,
+                TenantDomain.is_primary == True,
+            ).limit(1)
+        )).scalar_one_or_none()
+        # Fallback: any verified domain for that tenant, then slug, then apex.
+        if primary is None:
+            primary = (await db.execute(
+                select(TenantDomain).where(
+                    TenantDomain.tenant_id == matched_user.tenant_id,
+                    TenantDomain.is_verified == True,
+                ).limit(1)
+            )).scalar_one_or_none()
+        host = primary.domain if primary else "app.leadprospector.ai"
+        redirect_url = f"https://{host}/"
+        # Tenant name comes from the Tenant row; cheap lookup.
+        from app.models import Tenant as _T
+        tenant_row = (await db.execute(
+            select(_T).where(_T.id == matched_user.tenant_id)
+        )).scalar_one_or_none()
+        tenant_name = tenant_row.name if tenant_row else ""
+
+    token = create_access_token({
+        "sub": str(matched_user.id),
+        "tenant_id": matched_user.tenant_id,
+    })
+    return UniversalLoginResponse(
+        access_token=token,
+        user_name=matched_user.full_name,
+        user_email=matched_user.email,
+        tenant_name=tenant_name,
+        redirect_url=redirect_url,
+    )
+
+
 @router.post("/login", response_model=TokenResponse)
 async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),

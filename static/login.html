@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign in · LeadProspector</title>
+<style>
+  :root {
+    --bg: #0a0e14;
+    --bg-2: #161b22;
+    --border: #2b3540;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --accent: #ff6b1a;
+    --accent-dim: #c54400;
+    --danger: #f85149;
+    --green: #3fb950;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+
+  .card { background: var(--bg-2); border: 1px solid var(--border); border-radius: 12px; padding: 40px 36px; width: 100%; max-width: 400px; }
+  .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 24px; }
+  .brand-dot { width: 10px; height: 10px; background: var(--accent); border-radius: 2px; box-shadow: 0 0 12px rgba(255,107,26,0.5); }
+  .brand-name { font-weight: 700; font-size: 16px; letter-spacing: -0.2px; }
+
+  h1 { font-size: 22px; letter-spacing: -0.3px; margin-bottom: 6px; }
+  .lede { color: var(--text-dim); font-size: 13px; margin-bottom: 24px; line-height: 1.55; }
+
+  .form-group { margin-bottom: 14px; }
+  label { display: block; font-size: 12px; font-weight: 600; color: var(--text-dim); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+  input[type=email], input[type=password] { width: 100%; padding: 10px 12px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; font-size: 14px; font-family: inherit; }
+  input:focus { outline: none; border-color: var(--accent); }
+
+  .btn { display: block; width: 100%; padding: 11px 14px; background: var(--accent); color: white; border: 0; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.15s; }
+  .btn:hover { background: var(--accent-dim); }
+  .btn:disabled { opacity: 0.6; cursor: wait; }
+
+  .help { text-align: center; margin-top: 16px; font-size: 12px; color: var(--text-dim); }
+  .help a { color: var(--accent); text-decoration: none; cursor: pointer; }
+  .help a:hover { text-decoration: underline; }
+
+  .alert { padding: 10px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 14px; display: none; }
+  .alert.error { background: rgba(248, 81, 73, 0.1); border: 1px solid rgba(248,81,73,0.3); color: var(--danger); }
+  .alert.ok { background: rgba(63, 185, 80, 0.1); border: 1px solid rgba(63,185,80,0.3); color: var(--green); }
+  .alert.show { display: block; }
+
+  .footer { text-align: center; margin-top: 24px; font-size: 11px; color: var(--text-dim); }
+  .footer a { color: var(--text-dim); text-decoration: none; }
+  .footer a:hover { color: var(--text); }
+
+  /* Forgot password sub-form */
+  .forgot-wrap { display: none; }
+  .forgot-wrap.show { display: block; }
+  .login-wrap.hide { display: none; }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="brand"><span class="brand-dot"></span> <span class="brand-name">LeadProspector</span></div>
+
+  <!-- Login -->
+  <div id="login-wrap" class="login-wrap">
+    <h1>Welcome back.</h1>
+    <p class="lede">Sign in to your team account. We'll route you to the right workspace.</p>
+
+    <div id="alert" class="alert"></div>
+
+    <div class="form-group">
+      <label for="email">Email</label>
+      <input id="email" type="email" autocomplete="username" autofocus>
+    </div>
+    <div class="form-group">
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')login()">
+    </div>
+    <button class="btn" id="login-btn" onclick="login()">Sign in</button>
+
+    <div class="help">
+      <a onclick="showForgot()">Forgot password?</a>
+    </div>
+  </div>
+
+  <!-- Forgot password -->
+  <div id="forgot-wrap" class="forgot-wrap">
+    <h1>Reset your password.</h1>
+    <p class="lede">We'll email you a link to set a new one. The link expires in 30 minutes.</p>
+
+    <div id="forgot-alert" class="alert"></div>
+
+    <div class="form-group">
+      <label for="forgot-email">Email</label>
+      <input id="forgot-email" type="email" autocomplete="username" onkeydown="if(event.key==='Enter')sendReset()">
+    </div>
+    <button class="btn" id="forgot-btn" onclick="sendReset()">Send reset link</button>
+
+    <div class="help">
+      <a onclick="showLogin()">← Back to sign in</a>
+    </div>
+  </div>
+</div>
+
+<div class="footer">
+  © 2026 LeadProspector · Operated by AAMP Agency
+</div>
+
+<script>
+  function show(id) { document.getElementById(id).classList.add('show'); }
+  function hide(id) { document.getElementById(id).classList.remove('show'); }
+  function alertEl(id, kind, msg) {
+    const el = document.getElementById(id);
+    el.className = 'alert ' + kind + ' show';
+    el.textContent = msg;
+  }
+
+  function showLogin() {
+    document.getElementById('login-wrap').classList.remove('hide');
+    hide('forgot-wrap');
+    document.getElementById('alert').className = 'alert';
+  }
+  function showForgot() {
+    document.getElementById('login-wrap').classList.add('hide');
+    show('forgot-wrap');
+    document.getElementById('forgot-alert').className = 'alert';
+    document.getElementById('forgot-email').value = document.getElementById('email').value;
+  }
+
+  async function login() {
+    const email = document.getElementById('email').value.trim();
+    const pw = document.getElementById('password').value;
+    const btn = document.getElementById('login-btn');
+    if (!email || !pw) { alertEl('alert', 'error', 'Email and password are required.'); return; }
+
+    btn.disabled = true; btn.textContent = 'Signing in…';
+    try {
+      const form = new URLSearchParams();
+      form.set('username', email);
+      form.set('password', pw);
+      const res = await fetch('/api/auth/universal-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: form.toString(),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        alertEl('alert', 'error', d.detail || 'Sign-in failed.');
+        return;
+      }
+      const data = await res.json();
+      // The redirect URL is a different origin than this page (e.g.
+      // we're at leadprospector.ai/login, target is acme.leadprospector.ai/).
+      // localStorage doesn't cross origins, so we pass the JWT in the URL.
+      // The destination index.html picks it up on load and tucks it away.
+      alertEl('alert', 'ok', `Welcome back, ${data.user_name}. Redirecting to ${data.tenant_name}…`);
+      const sep = data.redirect_url.includes('?') ? '&' : '?';
+      window.location.href = data.redirect_url + sep + '_lp_token=' + encodeURIComponent(data.access_token);
+    } catch (e) {
+      alertEl('alert', 'error', 'Network error. Try again.');
+    } finally {
+      btn.disabled = false; btn.textContent = 'Sign in';
+    }
+  }
+
+  async function sendReset() {
+    const email = document.getElementById('forgot-email').value.trim();
+    const btn = document.getElementById('forgot-btn');
+    if (!email) { alertEl('forgot-alert', 'error', 'Email required.'); return; }
+    btn.disabled = true; btn.textContent = 'Sending…';
+    try {
+      await fetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      // Always success-shaped — server doesn't reveal which emails exist.
+      alertEl('forgot-alert', 'ok', "If that email exists, a reset link has been sent. Check your inbox.");
+    } catch (e) {
+      alertEl('forgot-alert', 'error', 'Network error. Try again.');
+    } finally {
+      btn.disabled = false; btn.textContent = 'Send reset link';
+    }
+  }
+</script>
+
+</body>
+</html>
