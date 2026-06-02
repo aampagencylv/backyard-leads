@@ -174,6 +174,20 @@
         <button class="btn" onclick="activateTenant()">Activate</button>
       </div>
 
+      <h2 style="margin-top: 24px;">Email sending</h2>
+      <div id="email-status" style="font-size:13px;color:var(--text-dim);margin-bottom:12px">—</div>
+      <div id="email-records" class="hidden" style="background:var(--panel-2);border-radius:6px;padding:14px;margin-bottom:16px;font-size:12px">
+        <div style="margin-bottom:10px;color:var(--text-dim)">Add these records to <strong>leadprospector.ai</strong> DNS, then click "Recheck" to verify with Resend.</div>
+        <table style="width:100%">
+          <thead><tr><th style="padding:6px">Type</th><th style="padding:6px">Name</th><th style="padding:6px">Value</th><th></th></tr></thead>
+          <tbody id="email-records-tbody"></tbody>
+        </table>
+        <button class="btn btn-sm" style="margin-top:10px" onclick="recheckEmailStatus()">Recheck status</button>
+      </div>
+
+      <h2 style="margin-top: 24px;">Voice (Twilio)</h2>
+      <div id="voice-status" style="font-size:13px;color:var(--text-dim);margin-bottom:24px">—</div>
+
       <h2 style="margin-top: 24px;">Domains</h2>
       <div class="row" style="margin-bottom: 12px;">
         <input id="new-domain" placeholder="crm.acme.com" class="grow">
@@ -343,9 +357,56 @@ async function openTenant(tenantId) {
   document.getElementById("stat-companies").textContent = data.counts.companies;
   document.getElementById("stat-contacts").textContent = data.counts.contacts;
   document.getElementById("stat-campaigns").textContent = data.counts.campaigns;
+  renderProvisioning(data.provisioning || {});
   renderDomains(data.domains || []);
   show("tenant-detail");
   document.getElementById("tenant-detail").scrollIntoView({ behavior: "smooth" });
+}
+
+function renderProvisioning(p) {
+  // Email
+  const es = document.getElementById("email-status");
+  const er = document.getElementById("email-records");
+  if (!p.resend_domain_id) {
+    es.innerHTML = '<span class="pill pill-warn">not provisioned</span> &nbsp; <span style="color:var(--text-dim)">No sending domain yet. Tenant will use the shared platform sender until configured.</span>';
+    er.classList.add("hidden");
+  } else {
+    const verified = p.resend_domain_status === "verified";
+    es.innerHTML = `
+      <span class="pill ${verified ? 'pill-ok' : 'pill-warn'}">${verified ? 'verified' : (p.resend_domain_status || 'pending')}</span>
+      &nbsp; Sending domain: <code>${escapeHtml(p.resend_domain_name || '')}</code>
+    `;
+    if (verified) {
+      er.classList.add("hidden");
+    } else {
+      er.classList.remove("hidden");
+      const tbody = document.getElementById("email-records-tbody");
+      tbody.innerHTML = (p.resend_records || []).map(r => `
+        <tr>
+          <td style="padding:6px"><strong>${escapeHtml(r.type || '')}</strong></td>
+          <td style="padding:6px"><code>${escapeHtml(r.name || '')}</code></td>
+          <td style="padding:6px;word-break:break-all"><code>${escapeHtml((r.value || '').slice(0, 80))}${(r.value || '').length > 80 ? '…' : ''}</code></td>
+          <td style="padding:6px"><button class="btn btn-sm" onclick="navigator.clipboard.writeText(${JSON.stringify(r.value || '')})">Copy</button></td>
+        </tr>
+      `).join('');
+    }
+  }
+  // Voice
+  const vs = document.getElementById("voice-status");
+  if (!p.twilio_subaccount_sid) {
+    vs.innerHTML = '<span class="pill pill-warn">not provisioned</span> &nbsp; <span style="color:var(--text-dim)">Twilio sub-account not created (master credentials missing or API failed).</span>';
+  } else {
+    vs.innerHTML = `<span class="pill pill-ok">ready</span> &nbsp; Sub-account SID: <code>${escapeHtml(p.twilio_subaccount_sid)}</code>`;
+  }
+}
+
+async function recheckEmailStatus() {
+  if (!currentTenantId) return;
+  try {
+    const res = await api("POST", `/api/admin/tenants/${currentTenantId}/refresh-email-status`);
+    toast(`Resend says: ${res.status}`);
+    await openTenant(currentTenantId);
+  } catch (e) { toast(e.message, "error"); }
 }
 
 function renderDomains(domains) {

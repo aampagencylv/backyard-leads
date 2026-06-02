@@ -109,6 +109,41 @@ async def create_tenant(
     db.add(tenant)
     await db.flush()  # need tenant.id before seeding the RuntimeConfig
 
+    # Provision a Twilio sub-account so the tenant has isolated voice/SMS
+    # from day one. Best-effort — if TWILIO_MASTER_* isn't configured, or
+    # the API returns an error, we still create the tenant and surface
+    # the missing creds in the admin UI.
+    twilio_sid = None
+    twilio_token = None
+    try:
+        from app.services.twilio_provisioning import create_sub_account
+        sub = await create_sub_account(friendly_name=f"LeadProspector · {tenant.name[:48]}")
+        if sub:
+            twilio_sid, twilio_token = sub
+    except Exception:
+        # twilio_provisioning never raises by contract, but defense-in-depth.
+        pass
+
+    # Provision a Resend sending domain for the tenant. Best-effort.
+    # On success we get back the SPF/DKIM/DMARC records that have to land
+    # in leadprospector.ai's DNS — surfaced in /api/admin/tenants/{id}
+    # for the operator to copy.
+    resend_domain_id = None
+    resend_domain_name = None
+    resend_records_json = None
+    resend_status = None
+    try:
+        from app.services.resend_provisioning import create_domain
+        import json as _json
+        result = await create_domain(subdomain=f"go.{slug}")
+        if result:
+            resend_domain_id = result["domain_id"]
+            resend_domain_name = result["domain_name"]
+            resend_records_json = _json.dumps(result["records"])
+            resend_status = result["status"]
+    except Exception:
+        pass
+
     # Seed a RuntimeConfig row so every per-tenant accessor (Twilio creds,
     # brand colors, send window, pipeline stages) finds something on first
     # call instead of upserting a row at the wrong moment in a request.
@@ -117,6 +152,12 @@ async def create_tenant(
     db.add(RuntimeConfig(
         tenant_id=tenant.id,
         brand_company_name=tenant.name[:120],
+        twilio_account_sid=twilio_sid,
+        twilio_auth_token=twilio_token,
+        resend_domain_id=resend_domain_id,
+        resend_domain_name=resend_domain_name,
+        resend_domain_records_json=resend_records_json,
+        resend_domain_status=resend_status,
     ))
 
     # Auto-register {slug}.leadprospector.ai as a verified tenant domain so
@@ -204,6 +245,22 @@ async def tenant_detail(
         select(TenantDomain).where(TenantDomain.tenant_id == tenant_id)
     )).scalars().all()
 
+    # Pull this tenant's RuntimeConfig directly (cross-tenant session, so
+    # we filter manually). Used by the admin UI to surface provisioning
+    # status: does the tenant have a Twilio sub-account? Resend domain?
+    # Are the DNS records ready to copy to the registrar?
+    import json as _json
+    rc = (await db.execute(
+        select(RuntimeConfig).where(RuntimeConfig.tenant_id == tenant_id)
+    )).scalar_one_or_none()
+    provisioning = {
+        "twilio_subaccount_sid": (rc.twilio_account_sid[:8] + "..." if rc and rc.twilio_account_sid else None),
+        "resend_domain_id": rc.resend_domain_id if rc else None,
+        "resend_domain_name": rc.resend_domain_name if rc else None,
+        "resend_domain_status": rc.resend_domain_status if rc else None,
+        "resend_records": (_json.loads(rc.resend_domain_records_json) if rc and rc.resend_domain_records_json else []),
+    }
+
     return {
         "tenant": TenantOut.model_validate(tenant, from_attributes=True).model_dump(),
         "counts": {
@@ -216,7 +273,32 @@ async def tenant_detail(
             {"id": d.id, "domain": d.domain, "is_primary": d.is_primary}
             for d in domains
         ],
+        "provisioning": provisioning,
     }
+
+
+@router.post("/tenants/{tenant_id}/refresh-email-status")
+async def refresh_email_status(
+    tenant_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_super_admin),
+):
+    """Re-fetch the Resend domain status for this tenant — useful after
+    the platform admin has added the DNS records and wants to confirm
+    Resend has verified the domain."""
+    rc = (await db.execute(
+        select(RuntimeConfig).where(RuntimeConfig.tenant_id == tenant_id)
+    )).scalar_one_or_none()
+    if not rc or not rc.resend_domain_id:
+        raise HTTPException(status_code=404, detail="tenant has no Resend domain provisioned")
+    from app.services.resend_provisioning import get_domain_status
+    status_data = await get_domain_status(rc.resend_domain_id)
+    if not status_data:
+        raise HTTPException(status_code=502, detail="Could not fetch status from Resend")
+    new_status = status_data.get("status") or rc.resend_domain_status
+    rc.resend_domain_status = new_status
+    await db.commit()
+    return {"status": new_status, "domain_name": rc.resend_domain_name}
 
 
 # ----------------------------------------------------------------------

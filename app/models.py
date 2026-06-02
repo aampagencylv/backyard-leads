@@ -589,6 +589,15 @@ class RuntimeConfig(TenantMixin, Base):
     # settings.resend_webhook_secret env var if this is empty.
     resend_webhook_secret = Column(Text, nullable=True)
 
+    # Per-tenant Resend sending domain tracking. Set by
+    # resend_provisioning.create_domain() on tenant creation. records_json
+    # holds the SPF/DKIM/DMARC blob the platform admin needs to copy to
+    # leadprospector.ai's DNS provider for the domain to verify.
+    resend_domain_id = Column(String(64), nullable=True)
+    resend_domain_name = Column(String(255), nullable=True)
+    resend_domain_records_json = Column(Text, nullable=True)
+    resend_domain_status = Column(String(32), nullable=True)
+
     # Google Maps API key — powers /find-leads (Places API + nearby search) and
     # the campaign runner's geo-targeted scrapes. Platform-tier: super_admin
     # only. DB-first with env fallback so rotation doesn't need a redeploy.
