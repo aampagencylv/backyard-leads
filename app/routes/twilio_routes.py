@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
 
-from app.database import get_db, async_session
+from app.tenancy import get_tenant_db, async_session
 from app.models import User, Contact, Company, Activity, GeneratedEmail
 from app.auth import get_current_user, verify_recording_token
 from app.runtime_config import get_twilio_credentials
@@ -74,7 +74,7 @@ async def numbers_available(
     contains: Optional[str] = None,
     iso_country: str = "US",
     limit: int = 10,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Search Twilio's inventory for buyable numbers (typically by area code)."""
@@ -97,7 +97,7 @@ class BuyNumberRequest(BaseModel):
 @router.post("/numbers/buy")
 async def numbers_buy(
     req: BuyNumberRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Provision a number into the Twilio account. Costs $1.15/mo per number."""
@@ -126,7 +126,7 @@ async def numbers_buy(
 
 @router.get("/numbers/owned")
 async def numbers_owned(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """List numbers we own + which user (if any) is assigned to each."""
@@ -156,7 +156,7 @@ async def numbers_owned(
 @router.delete("/numbers/{phone_sid}")
 async def numbers_release(
     phone_sid: str,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Release a number back to Twilio (stops the $1.15/mo billing).
@@ -195,7 +195,7 @@ class AssignTwilioRequest(BaseModel):
 async def assign_twilio_number(
     user_id: int,
     req: AssignTwilioRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Assign or unassign a Twilio number to a team member (admin only)."""
@@ -266,7 +266,7 @@ async def assign_twilio_number(
 
 @router.post("/voice/availability")
 async def toggle_availability(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Toggle whether this BDR is available for inbound calls."""
@@ -281,7 +281,7 @@ async def toggle_availability(
 
 @router.post("/voice/token")
 async def voice_token(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Mint a Twilio Voice SDK access token for the current rep."""
@@ -448,7 +448,7 @@ class BridgeCallRequest(BaseModel):
 @router.post("/voice/bridge-call")
 async def bridge_call(
     req: BridgeCallRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """
@@ -691,7 +691,7 @@ async def voicemail_recording(request: Request):
 @router.get("/inbound/lookup")
 async def inbound_lookup(
     phone: str,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """When the browser receives an inbound call via the SDK, it calls this
@@ -720,7 +720,7 @@ async def proxy_recording(
     activity_id: int,
     request: Request,
     t: Optional[str] = None,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
     """
     Proxy a Twilio recording through our auth — Twilio recording URLs
@@ -804,7 +804,7 @@ async def proxy_recording(
 @router.post("/voice/transcribe-now/{activity_id}")
 async def transcribe_now(
     activity_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Manual re-trigger for the transcription pipeline.
@@ -843,7 +843,7 @@ class LogCallRequest(BaseModel):
 @router.post("/voice/log-call")
 async def log_call(
     req: LogCallRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Create an Activity row when the dialer modal closes.
@@ -1006,7 +1006,7 @@ class SendSmsRequest(BaseModel):
 @router.post("/sms/send")
 async def sms_send(
     req: SendSmsRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Send a one-off SMS to a contact. Logs to the timeline as

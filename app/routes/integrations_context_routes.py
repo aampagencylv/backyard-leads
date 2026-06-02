@@ -28,7 +28,7 @@ from sqlalchemy import select, func, or_, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_user
-from app.database import get_db
+from app.tenancy import get_tenant_db
 from app.models import (
     User, Company, Contact, Activity, GeneratedEmail, AuditReportModel, Task,
 )
@@ -83,7 +83,7 @@ async def get_context(
     linkedin: Optional[str] = Query(None, description="LinkedIn profile URL — used by the Chrome extension's LinkedIn content script"),
     company_id: Optional[int] = Query(None, description="Direct company id"),
     conversation_id: Optional[str] = Query(None, description="Missive conversation ID — persisted onto the contact so status-change hooks know which thread to write back to"),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ) -> dict:
     """Resolve a contact/company/activity bundle for the given lookup
@@ -398,7 +398,7 @@ class LogNoteRequest(BaseModel):
 @router.post("/sidebar/log-activity")
 async def sidebar_log_activity(
     req: LogNoteRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ) -> dict:
     """Append an Activity row from the sidebar. Used for inline 'Log a
@@ -435,7 +435,7 @@ class QuickAddRequest(BaseModel):
 @router.post("/sidebar/quick-add")
 async def sidebar_quick_add(
     req: QuickAddRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ) -> dict:
     """Minimal-form add a prospect from the sidebar. Creates a Company
@@ -498,7 +498,7 @@ class MissiveTagSyncRequest(BaseModel):
 @router.post("/sidebar/missive-sync-tag")
 async def sidebar_missive_sync_tag(
     req: MissiveTagSyncRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ) -> dict:
     """Apply the right Missive shared label for the contact's current
@@ -563,7 +563,7 @@ class SetStatusRequest(BaseModel):
 @router.post("/sidebar/set-status")
 async def sidebar_set_status(
     req: SetStatusRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ) -> dict:
     """Quick status change from the sidebar. Also fires the Missive tag
@@ -639,7 +639,7 @@ class CreateTaskRequest(BaseModel):
 @router.post("/sidebar/create-task")
 async def sidebar_create_task(
     req: CreateTaskRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ) -> dict:
     """Create a task scoped to the company (and optionally to a specific
@@ -712,7 +712,7 @@ class CompleteTaskRequest(BaseModel):
 @router.post("/sidebar/complete-task")
 async def sidebar_complete_task(
     req: CompleteTaskRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ) -> dict:
     """Mark a task complete from the sidebar."""
@@ -751,7 +751,7 @@ class SendIMessageRequest(BaseModel):
 @router.post("/sidebar/send-imessage")
 async def sidebar_send_imessage(
     req: SendIMessageRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ) -> dict:
     """Send a quick iMessage to the contact's phone — uses the Blooio
@@ -798,7 +798,7 @@ class SendNextStepRequest(BaseModel):
 @router.post("/sidebar/send-next-step")
 async def sidebar_send_next_step(
     req: SendNextStepRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ) -> dict:
     """Find the next unsent step for this contact and fire it now via

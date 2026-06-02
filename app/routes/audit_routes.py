@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.database import get_db
+from app.tenancy import get_tenant_db
 from app.models import User, Company, Activity, Task, AuditReportModel
 from app.auth import get_current_user, require_admin
 from app.services.audit_report import generate_audit, render_report_html
@@ -91,7 +91,7 @@ def _const_eq(a: str, b: str) -> bool:
 @router.post("/api/companies/{company_id}/audit")
 async def generate_audit_report(
     company_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Generate an AI Findability Audit report for a company."""
@@ -196,7 +196,7 @@ async def generate_audit_report(
 
 @router.post("/api/audit/refresh-all")
 async def refresh_all_reports(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(require_admin),
 ):
     """Inject CTA buttons into existing audit reports that are missing them.
@@ -250,7 +250,7 @@ async def refresh_all_reports(
 @router.get("/report/{token}", response_class=HTMLResponse)
 async def view_report(
     token: str,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
     """Serve the audit report HTML. Public — no auth needed."""
     report = (await db.execute(
@@ -275,7 +275,7 @@ async def view_report(
 @router.post("/api/track/report-view")
 async def track_report_view(
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
     """Track when a prospect views their audit report. Creates a hot-lead task."""
     try:
@@ -324,7 +324,7 @@ async def track_report_view(
 @router.get("/report/{token}/competitors", response_class=HTMLResponse)
 async def view_competitor_report(
     token: str,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
     """Serve the competitor comparison report.
 
@@ -438,7 +438,7 @@ setTimeout(poll, POLL_INTERVAL_MS);
 @router.get("/report/{token}/compare", response_class=HTMLResponse)
 async def request_competitor_comparison(
     token: str,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
     """
     When prospect clicks "See Your Competitive Comparison":
@@ -641,7 +641,7 @@ setTimeout(checkBooking, POLL_INTERVAL_MS);
 # ============================================================
 
 @router.get("/api/report/{token}/booking-status")
-async def report_booking_status(token: str, db: AsyncSession = Depends(get_db)):
+async def report_booking_status(token: str, db: AsyncSession = Depends(get_tenant_db)):
     """Status snapshot used by both the gate page and the post-booking
     'still generating' page.
 
@@ -679,7 +679,7 @@ class UnlockRequest(_BM):
 async def unlock_competitor_report(
     token: str,
     req: UnlockRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
     """Prospect clicked "I've scheduled" below the iClosed widget.
 
@@ -742,7 +742,7 @@ async def unlock_competitor_report(
 # ============================================================
 
 @router.post("/api/iclosed/webhook")
-async def iclosed_webhook(request: Request, db: AsyncSession = Depends(get_db)):
+async def iclosed_webhook(request: Request, db: AsyncSession = Depends(get_tenant_db)):
     """Receive booking-confirmed events from iClosed.
 
     Configure in iClosed settings:
@@ -905,7 +905,7 @@ def _esc(s):
 @router.get("/api/companies/{company_id}/audit")
 async def get_company_audit(
     company_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Get existing audit report data for a company (if one has been generated)."""

@@ -10,7 +10,7 @@ from sqlalchemy import select, or_
 from pydantic import BaseModel
 from datetime import datetime, timezone
 
-from app.database import get_db
+from app.tenancy import get_tenant_db
 from app.models import User, Company, Contact, Activity, Tag, Task, GeneratedEmail, company_tags
 from app.auth import get_current_user
 import json
@@ -32,7 +32,7 @@ class AddNoteRequest(BaseModel):
 @router.get("/companies/{company_id}/timeline")
 async def get_timeline(
     company_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     # Verify company ownership
@@ -88,7 +88,7 @@ async def get_timeline(
 async def add_note(
     company_id: int,
     req: AddNoteRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     company = (await db.execute(select(Company).where(Company.id == company_id))).scalar_one_or_none()
@@ -147,7 +147,7 @@ class CreateTagRequest(BaseModel):
 
 
 @router.get("/tags")
-async def list_tags(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+async def list_tags(db: AsyncSession = Depends(get_tenant_db), user: User = Depends(get_current_user)):
     result = await db.execute(select(Tag))
     return [{"id": t.id, "name": t.name, "color": t.color} for t in result.scalars().all()]
 
@@ -155,7 +155,7 @@ async def list_tags(db: AsyncSession = Depends(get_db), user: User = Depends(get
 @router.post("/tags")
 async def create_tag(
     req: CreateTagRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     tag = Tag(name=req.name, color=req.color)
@@ -169,7 +169,7 @@ async def create_tag(
 async def add_tag_to_company(
     company_id: int,
     tag_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     company = (await db.execute(select(Company).where(Company.id == company_id))).scalar_one_or_none()
@@ -195,7 +195,7 @@ async def add_tag_to_company(
 async def remove_tag_from_company(
     company_id: int,
     tag_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     await db.execute(
@@ -222,7 +222,7 @@ class CreateTaskRequest(BaseModel):
 @router.get("/companies/{company_id}/tasks")
 async def get_company_tasks(
     company_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     result = await db.execute(
@@ -244,7 +244,7 @@ async def get_company_tasks(
 
 @router.get("/tasks/upcoming")
 async def get_upcoming_tasks(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """All open tasks for the current user, with company name attached."""
@@ -268,7 +268,7 @@ async def get_upcoming_tasks(
 
 @router.get("/tasks/all")
 async def get_all_open_tasks(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """All open tasks across the team."""
@@ -296,7 +296,7 @@ async def get_all_open_tasks(
 async def create_task(
     company_id: int,
     req: CreateTaskRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     company = (await db.execute(select(Company).where(Company.id == company_id))).scalar_one_or_none()
@@ -330,7 +330,7 @@ async def create_task(
 @router.patch("/tasks/{task_id}/complete")
 async def complete_task(
     task_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     task = (await db.execute(select(Task).where(Task.id == task_id))).scalar_one_or_none()
@@ -364,7 +364,7 @@ async def complete_task(
 @router.get("/search")
 async def search_crm(
     q: str = Query(..., min_length=2),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Search companies and contacts by name, email, city, or phone."""
@@ -420,7 +420,7 @@ async def search_crm(
 
 @router.get("/users")
 async def list_users(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     result = await db.execute(select(User).where(User.is_active == True))

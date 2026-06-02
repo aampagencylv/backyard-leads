@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
-from app.database import get_db
+from app.tenancy import get_tenant_db
 from app.models import User
 from app.auth import get_current_user
 from app.services.audit_log import record_audit
@@ -187,7 +187,7 @@ def _payload(rc, settings_obj, *, include_platform: bool) -> dict:
 
 @router.get("/brand")
 async def get_brand(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
     """Public org brand — colors + logo + company name. No auth so the
     login page + public booking pages can pick up the brand too. This
@@ -199,7 +199,7 @@ async def get_brand(
 
 @router.get("/runtime-config")
 async def get_runtime_config(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Returns config visible to the requesting user.
@@ -217,7 +217,7 @@ async def get_runtime_config(
 
 @router.get("/runtime-config/native-scheduler-hosts")
 async def list_native_scheduler_hosts(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Used by the Audit Reports settings page to populate the
@@ -260,7 +260,7 @@ async def get_messaging_default(
 async def update_runtime_config(
     req: UpdateRuntimeConfigRequest,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Update runtime config. Per-field role gating:

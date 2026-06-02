@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
 
-from app.database import get_db
+from app.tenancy import get_tenant_db
 from app.models import User, ApiKey, Webhook
 from app.auth import get_current_user, require_admin
 
@@ -45,7 +45,7 @@ def _key_payload(k: ApiKey) -> dict:
 
 @router.get("/api-keys")
 async def list_api_keys(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """List the caller's keys. Admins additionally see all keys for
@@ -69,7 +69,7 @@ class CreateApiKeyRequest(BaseModel):
 @router.post("/api-keys")
 async def create_api_key(
     req: CreateApiKeyRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Generate a new API key. Returns the plaintext ONCE — caller
@@ -105,7 +105,7 @@ async def create_api_key(
 @router.delete("/api-keys/{key_id}")
 async def revoke_api_key(
     key_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Soft-delete by setting is_active=False. Hard delete intentionally
@@ -157,7 +157,7 @@ def _webhook_payload(w: Webhook, *, include_secret: bool = False) -> dict:
 
 @router.get("/webhooks")
 async def list_webhooks(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     q = select(Webhook).order_by(Webhook.created_at.desc())
@@ -176,7 +176,7 @@ class CreateWebhookRequest(BaseModel):
 @router.post("/webhooks")
 async def create_webhook(
     req: CreateWebhookRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     if not req.name or not req.name.strip():
@@ -217,7 +217,7 @@ class UpdateWebhookRequest(BaseModel):
 async def update_webhook(
     webhook_id: int,
     req: UpdateWebhookRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     row = (await db.execute(select(Webhook).where(Webhook.id == webhook_id))).scalar_one_or_none()
@@ -245,7 +245,7 @@ async def update_webhook(
 @router.delete("/webhooks/{webhook_id}")
 async def delete_webhook(
     webhook_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     row = (await db.execute(select(Webhook).where(Webhook.id == webhook_id))).scalar_one_or_none()
@@ -261,7 +261,7 @@ async def delete_webhook(
 @router.post("/webhooks/{webhook_id}/test")
 async def test_webhook(
     webhook_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Fire a synthetic 'webhook.test' event to the configured URL.

@@ -16,7 +16,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_user
-from app.database import get_db
+from app.tenancy import get_tenant_db
 from app.models import User, SequenceTemplate, GeneratedEmail, Contact, Company, Activity
 
 
@@ -92,7 +92,7 @@ def _to_dict(t: SequenceTemplate) -> dict:
 
 @router.get("")
 async def list_templates(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     _require_admin(user)
@@ -109,7 +109,7 @@ async def list_templates(
 @router.get("/{template_id}")
 async def get_template(
     template_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     _require_admin(user)
@@ -130,7 +130,7 @@ class TemplatePayload(BaseModel):
 @router.post("")
 async def create_template(
     payload: TemplatePayload,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     _require_admin(user)
@@ -164,7 +164,7 @@ async def create_template(
 async def update_template(
     template_id: int,
     payload: TemplatePayload,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     _require_admin(user)
@@ -198,7 +198,7 @@ async def update_template(
 @router.post("/{template_id}/set-default")
 async def set_default(
     template_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     _require_admin(user)
@@ -220,7 +220,7 @@ async def set_default(
 @router.delete("/{template_id}")
 async def delete_template(
     template_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     _require_admin(user)
@@ -247,7 +247,7 @@ class ApplyToExistingRequest(BaseModel):
 async def apply_to_existing(
     template_id: int,
     payload: ApplyToExistingRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Re-anchor in-flight sequences onto this template.

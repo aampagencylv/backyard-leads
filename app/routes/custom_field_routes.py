@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
 
-from app.database import get_db
+from app.tenancy import get_tenant_db
 from app.models import User, CustomFieldDefinition, Company, Contact
 from app.auth import get_current_user, require_admin
 
@@ -54,7 +54,7 @@ def _to_dict(d: CustomFieldDefinition) -> dict:
 async def list_definitions(
     entity_type: Optional[str] = None,
     include_inactive: bool = False,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """List custom field definitions. Filter by entity_type
@@ -82,7 +82,7 @@ class CreateDefinitionRequest(BaseModel):
 @router.post("")
 async def create_definition(
     req: CreateDefinitionRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(require_admin),
 ):
     if req.entity_type not in ("company", "contact"):
@@ -137,7 +137,7 @@ class UpdateDefinitionRequest(BaseModel):
 async def update_definition(
     def_id: int,
     req: UpdateDefinitionRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(require_admin),
 ):
     row = (await db.execute(
@@ -167,7 +167,7 @@ async def update_definition(
 @router.delete("/{def_id}")
 async def delete_definition(
     def_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(require_admin),
 ):
     """Soft-delete: marks the definition is_active=False so existing
@@ -198,7 +198,7 @@ class SetValuesRequest(BaseModel):
 async def set_company_custom_fields(
     company_id: int,
     req: SetValuesRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Merge custom field values into a company's custom_fields_json.
@@ -244,7 +244,7 @@ async def set_company_custom_fields(
 async def set_contact_custom_fields(
     contact_id: int,
     req: SetValuesRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Same as set_company_custom_fields but for Contact rows."""

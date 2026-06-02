@@ -33,7 +33,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.database import get_db
+from app.tenancy import get_tenant_db
 from app.models import User, Activity, Contact, Company
 from app.auth import get_current_user
 
@@ -95,7 +95,7 @@ async def get_preferences(user: User = Depends(get_current_user)):
 @router.put("/preferences")
 async def update_preferences(
     prefs: dict,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Update the user's notification preferences. Body: {event_key: bool, ...}"""
@@ -110,7 +110,7 @@ async def update_preferences(
 async def recent(
     since: Optional[str] = Query(None, description="ISO 8601 timestamp; only return activities created strictly after this"),
     limit: int = Query(20, ge=1, le=100),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Return notable activities since `since`. Cap at last 5 minutes if `since`

@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import ALGORITHM, SECRET_KEY, get_current_user
 from app.config import settings
-from app.database import get_db
+from app.tenancy import get_tenant_db
 from app.models import User
 from app.services.google_oauth import (
     GoogleAPIError,
@@ -130,7 +130,7 @@ async def google_oauth_callback(
     code: str | None = None,
     state: str | None = None,
     error: str | None = None,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
     """Google redirects here after consent. We:
       1. Verify the state JWT to learn which user authorized
@@ -267,7 +267,7 @@ class _SetCalendarRequest(BaseModel):
 async def set_my_booking_calendar(
     body: _SetCalendarRequest,
     user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
     """Update which calendar new bookings land on. We only validate
     the picked id against the user's own calendar list, so a rep can't
@@ -294,7 +294,7 @@ async def set_my_booking_calendar(
 @router.post("/disconnect")
 async def google_oauth_disconnect(
     user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
     """Best-effort revoke at Google + clear stored tokens. Booking
     slug is retained so we don't break old booking URLs the user may

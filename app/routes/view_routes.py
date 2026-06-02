@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
-from app.database import get_db
+from app.tenancy import get_tenant_db
 from app.models import User, SavedView
 from app.auth import get_current_user
 import json
@@ -24,7 +24,7 @@ class CreateViewRequest(BaseModel):
 @router.get("/")
 async def list_views(
     page: Optional[str] = None,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """List saved views for the current user, optionally filtered by page."""
@@ -50,7 +50,7 @@ async def list_views(
 @router.post("/")
 async def create_view(
     req: CreateViewRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     if req.page not in ("companies", "pipeline"):
@@ -77,7 +77,7 @@ async def create_view(
 @router.delete("/{view_id}")
 async def delete_view(
     view_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     result = await db.execute(select(SavedView).where(SavedView.id == view_id))

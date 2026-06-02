@@ -55,7 +55,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
 
-from app.database import get_db, async_session
+from app.tenancy import get_tenant_db, async_session
 from app.models import User, Contact, Company, Activity, GeneratedEmail
 from app.auth import get_current_user
 from app.runtime_config import get_blooio_api_key
@@ -75,7 +75,7 @@ router = APIRouter(prefix="/api/blooio", tags=["blooio"])
 
 @router.get("/test")
 async def test(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     api_key = await get_blooio_api_key(db)
@@ -106,7 +106,7 @@ class SendMessageRequest(BaseModel):
 @router.post("/send")
 async def send_imessage(
     req: SendMessageRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     contact = (await db.execute(select(Contact).where(Contact.id == req.contact_id))).scalar_one_or_none()
@@ -189,7 +189,7 @@ class GenerateMessageRequest(BaseModel):
 @router.post("/generate-message")
 async def generate_message(
     req: GenerateMessageRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Use Claude to draft a personalized iMessage for the composer.
@@ -261,7 +261,7 @@ async def generate_message(
 async def lookup_contact_phone_type(
     contact_id: int,
     force: bool = False,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Look up whether the contact's phone is mobile / landline / voip and
@@ -311,7 +311,7 @@ async def lookup_contact_phone_type(
 @router.get("/capability")
 async def capability(
     phone: str,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     api_key = await get_blooio_api_key(db)
@@ -347,7 +347,7 @@ WEBHOOK_FRIENDLY_NAME = "BMP Prospector — inbound iMessage handler"
 
 @router.post("/webhook/setup")
 async def webhook_setup(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Register our /api/blooio/inbound URL on Blooio. Idempotent — if

@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
 
-from app.database import get_db
+from app.tenancy import get_tenant_db
 from app.models import User, Contact, Company, Activity, GeneratedEmail
 from app.auth import get_current_user
 from app.services.sequence_engine import (
@@ -36,7 +36,7 @@ router = APIRouter(prefix="/api/sequences", tags=["sequences"])
 async def start(
     contact_id: int,
     label: str = Query("main"),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Materialize the 30-day default template into queued steps for this contact.
@@ -77,7 +77,7 @@ async def start(
 async def get_for_contact(
     contact_id: int,
     label: Optional[str] = None,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """List sequence steps for a contact, ordered by sequence_order. Optionally
@@ -124,7 +124,7 @@ async def pause(
     contact_id: int,
     label: str = Query("main"),
     reason: str = Query("manual"),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     n = await pause_sequence(db, contact_id, reason=f"manual ({user.email}): {reason}", sequence_label=label)
@@ -141,7 +141,7 @@ async def resume(
     contact_id: int,
     label: str = Query("main"),
     body: Optional[RescheduleRequest] = None,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     resume_at_dt = None
@@ -172,7 +172,7 @@ class ReworkRequest(BaseModel):
 async def rework_sequence(
     contact_id: int,
     body: ReworkRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Delete remaining unsent steps and regenerate them based on call context.
@@ -284,7 +284,7 @@ async def rework_sequence(
 
 @router.post("/run-now")
 async def run_now(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Admin: force a scheduler tick immediately. Useful for testing — don't
@@ -302,7 +302,7 @@ async def run_now(
 @router.post("/post-call/{activity_id}")
 async def trigger_post_call_sequence(
     activity_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Generate a 3-step post-call follow-up sequence using the call transcript +
@@ -432,7 +432,7 @@ class ReorderRequest(BaseModel):
 @router.patch("/reorder")
 async def reorder(
     req: ReorderRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Reorder steps within a sequence. Only renumbers sequence_order — does

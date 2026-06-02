@@ -25,7 +25,7 @@ from fastapi.responses import JSONResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_user_from_api_key
-from app.database import get_db
+from app.tenancy import get_tenant_db
 from app.models import User
 from app.services.mcp_tools import (
     TOOL_DEFINITIONS, TOOL_HANDLERS, WRITE_TOOL_NAMES,
@@ -210,7 +210,7 @@ async def _handle_resources_read(params: dict, db: AsyncSession, user: User) -> 
 @router.post("/mcp")
 async def mcp_endpoint(
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_user_from_api_key),
 ):
     """Single JSON-RPC 2.0 endpoint. Accepts one request OR a batch

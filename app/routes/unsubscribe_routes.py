@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.database import get_db
+from app.tenancy import get_tenant_db
 from app.models import Contact, GeneratedEmail, Activity
 
 router = APIRouter(tags=["unsubscribe"])
@@ -20,7 +20,7 @@ router = APIRouter(tags=["unsubscribe"])
 @router.get("/unsubscribe", response_class=HTMLResponse)
 async def unsubscribe(
     t: str = Query(..., min_length=10, description="Per-contact unsubscribe token"),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
     contact = (await db.execute(
         select(Contact).where(Contact.unsubscribe_token == t)

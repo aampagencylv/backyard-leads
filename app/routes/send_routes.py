@@ -15,7 +15,7 @@ from sqlalchemy import select, func
 import json
 from pydantic import BaseModel
 
-from app.database import get_db
+from app.tenancy import get_tenant_db
 from app.models import User, Company, Contact, GeneratedEmail, Activity, Task, Deal
 from app.auth import get_current_user
 from app.services.email_sender import send_email, get_sender_info
@@ -32,7 +32,7 @@ router = APIRouter(prefix="/api/send", tags=["send"])
 @router.post("/email/{email_id}")
 async def send_single_email(
     email_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     email = (await db.execute(select(GeneratedEmail).where(GeneratedEmail.id == email_id))).scalar_one_or_none()
@@ -123,7 +123,7 @@ async def send_single_email(
 @router.post("/contact/{contact_id}/sequence")
 async def send_next_in_sequence(
     contact_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Send the next unsent (and unpaused) email in this contact's sequence."""
@@ -233,7 +233,7 @@ class EditEmailRequest(BaseModel):
 async def edit_email(
     email_id: int,
     req: EditEmailRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     email = (await db.execute(select(GeneratedEmail).where(GeneratedEmail.id == email_id))).scalar_one_or_none()
@@ -252,7 +252,7 @@ async def edit_email(
 @router.delete("/email/{email_id}")
 async def delete_email(
     email_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     email = (await db.execute(select(GeneratedEmail).where(GeneratedEmail.id == email_id))).scalar_one_or_none()
@@ -278,7 +278,7 @@ class RescheduleRequest(BaseModel):
 async def reschedule_step(
     email_id: int,
     req: RescheduleRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Reschedule a sequence step to a different day."""
@@ -322,7 +322,7 @@ class InsertStepRequest(BaseModel):
 async def add_sequence_step(
     contact_id: int,
     req: InsertStepRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Add a custom step to a contact's sequence (email, LinkedIn, call, text, or custom task)."""
@@ -401,7 +401,7 @@ async def add_sequence_step(
 @router.post("/email/{email_id}/complete")
 async def complete_step(
     email_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Mark a LinkedIn/call/text/custom step as done (BDR completed the task)."""
@@ -429,7 +429,7 @@ async def complete_step(
 @router.post("/contact/{contact_id}/pause")
 async def pause_sequence(
     contact_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     contact = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()
@@ -455,7 +455,7 @@ async def pause_sequence(
 @router.post("/contact/{contact_id}/resume")
 async def resume_sequence(
     contact_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     contact = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()
@@ -522,14 +522,14 @@ async def _profile_payload(db: AsyncSession, user: User) -> dict:
 
 
 @router.get("/profile")
-async def get_profile(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+async def get_profile(db: AsyncSession = Depends(get_tenant_db), user: User = Depends(get_current_user)):
     return await _profile_payload(db, user)
 
 
 @router.patch("/profile")
 async def update_profile(
     req: UpdateProfileRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     for field in ("first_name", "last_name", "nickname", "phone_number",
@@ -679,7 +679,7 @@ def _verify_svix(raw_body: bytes, headers: dict, secret: str) -> bool:
 
 
 @router.post("/webhook/resend")
-async def resend_webhook(request: Request, db: AsyncSession = Depends(get_db)):
+async def resend_webhook(request: Request, db: AsyncSession = Depends(get_tenant_db)):
     """
     Handle Resend webhook events.
     Events: email.sent, email.delivered, email.opened, email.clicked,
@@ -918,7 +918,7 @@ class SendAdHocEmailRequest(BaseModel):
 @router.post("/adhoc")
 async def send_adhoc_email(
     req: SendAdHocEmailRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Send a one-off custom email to a contact. Sanitizes the HTML body,

@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_user
 from app.config import settings
-from app.database import get_db
+from app.tenancy import get_tenant_db
 from app.models import Activity, Booking, Company, Contact, SchedulingConfig, User
 from app.services.google_oauth import (
     GoogleAPIError, create_event, refresh_access_token,
@@ -111,7 +111,7 @@ def _config_payload(c: SchedulingConfig) -> dict:
 @host_router.get("/config")
 async def get_my_scheduling_config(
     user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
     c = await _get_or_create_config(db, user.id)
     return _config_payload(c)
@@ -212,7 +212,7 @@ def _validate_rules(rules: list) -> list:
 async def patch_my_scheduling_config(
     body: SchedulingConfigPatch,
     user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
     c = await _get_or_create_config(db, user.id)
     if body.slot_minutes is not None:
@@ -277,7 +277,7 @@ async def patch_my_scheduling_config(
 async def upcoming_bookings(
     days: int = 30,
     user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
     """Return the rep's confirmed bookings starting in the next N
     days. Includes prospect info, matched company/contact, Google
@@ -333,7 +333,7 @@ async def upcoming_bookings(
 @host_router.get("/my-google-calendars")
 async def list_my_google_calendars(
     user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
     """List the user's Google calendars — used by the Calendar Settings
     UI to populate the "conflict calendars" multi-select. Returns id +
@@ -371,7 +371,7 @@ async def preview_my_slots(
     days: int = 7,
     effective: bool = False,
     user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
     """Server-side preview of the next N days of bookable slots.
 
@@ -447,7 +447,7 @@ async def book_for_contact(
     body: InternalBookingRequest,
     background: BackgroundTasks,
     user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
     """Rep-initiated booking. If the rep has a default_booking_host
     configured (e.g. BDR routed to admin's "Discovery Call" calendar),
@@ -693,7 +693,7 @@ async def _resolve_host_by_slug(db: AsyncSession, slug: str) -> User:
 @public_router.get("/{slug}/info")
 async def get_booking_info(
     slug: str, days: int = 14, viewer_tz: Optional[str] = None,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
     """Public — what to render on the booking page. No auth."""
     user = await _resolve_host_by_slug(db, slug)
@@ -822,7 +822,7 @@ async def confirm_booking(
     slug: str,
     body: BookingConfirmRequest,
     background: BackgroundTasks,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
     """Create the Google Calendar event + persist the Booking. Returns
     the confirmation page payload (which the frontend renders)."""
@@ -1138,7 +1138,7 @@ booking_page_router = APIRouter(tags=["public-booking-page"])
 
 
 @booking_page_router.get("/book/{slug}", response_class=HTMLResponse)
-async def render_booking_page(slug: str, db: AsyncSession = Depends(get_db)):
+async def render_booking_page(slug: str, db: AsyncSession = Depends(get_tenant_db)):
     """Static brand-styled booking page. Single HTML doc with vanilla
     JS that calls /api/book/{slug}/info on load + /confirm on submit.
     No SPA routing — keeping booking flow simple & SEO-indexable.

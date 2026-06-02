@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from pydantic import BaseModel
 
-from app.database import get_db
+from app.tenancy import get_tenant_db
 from app.models import (
     User, Feedback, PendingDeletion,
     Company, Contact, Deal,
@@ -36,7 +36,7 @@ class SubmitFeedbackRequest(BaseModel):
 @router.post("/feedback")
 async def submit_feedback(
     req: SubmitFeedbackRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     if not req.message.strip():
@@ -55,7 +55,7 @@ async def submit_feedback(
 @router.get("/feedback")
 async def list_feedback(
     resolved: Optional[bool] = None,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(require_admin),
 ):
     q = select(Feedback, User.first_name, User.last_name, User.email).join(User, Feedback.user_id == User.id)
@@ -82,7 +82,7 @@ async def list_feedback(
 @router.patch("/feedback/{feedback_id}")
 async def update_feedback(
     feedback_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(require_admin),
     resolved: Optional[bool] = None,
     admin_notes: Optional[str] = None,
@@ -111,7 +111,7 @@ class RequestDeletionBody(BaseModel):
 @router.post("/deletions/request")
 async def request_deletion(
     req: RequestDeletionBody,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """BDR/BDR+ request a deletion — goes to pending queue for admin approval."""
@@ -158,7 +158,7 @@ async def request_deletion(
 
 @router.get("/deletions/pending")
 async def list_pending_deletions(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(require_admin),
 ):
     rows = (await db.execute(
@@ -183,7 +183,7 @@ async def list_pending_deletions(
 
 @router.get("/deletions/pending/count")
 async def pending_deletion_count(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     if user.role not in ("admin", "super_admin"):
@@ -197,7 +197,7 @@ async def pending_deletion_count(
 @router.post("/deletions/{deletion_id}/approve")
 async def approve_deletion(
     deletion_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(require_admin),
 ):
     pd = (await db.execute(select(PendingDeletion).where(PendingDeletion.id == deletion_id))).scalar_one_or_none()
@@ -228,7 +228,7 @@ async def approve_deletion(
 @router.post("/deletions/{deletion_id}/reject")
 async def reject_deletion(
     deletion_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(require_admin),
 ):
     pd = (await db.execute(select(PendingDeletion).where(PendingDeletion.id == deletion_id))).scalar_one_or_none()

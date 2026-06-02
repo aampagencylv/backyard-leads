@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
-from app.database import get_db
+from app.tenancy import get_tenant_db
 from app.models import User, Search, Company
 from app.auth import get_current_user
 from app.config import settings
@@ -32,7 +32,7 @@ class SearchResponse(BaseModel):
 async def create_search(
     req: SearchRequest,
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Start a new lead search. Scrapes maps and returns businesses."""
@@ -108,7 +108,7 @@ class YellowPagesSearchRequest(BaseModel):
 @router.post("/yellow-pages")
 async def yellow_pages_search_endpoint(
     req: YellowPagesSearchRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Alternative SMB lead source via Netrows /businesses/search.
@@ -185,7 +185,7 @@ async def yellow_pages_search_endpoint(
 
 @router.get("/history")
 async def get_search_history(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Get all past searches for this user."""

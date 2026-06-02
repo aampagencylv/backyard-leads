@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.tenancy import get_tenant_db
 from app.auth import get_current_user
 from app.models import User, Company, Contact, SiteVisitorSession, PageView, Activity
 
@@ -37,7 +37,7 @@ async def list_recent_visitors(
     include_isp: bool = Query(False, description="Include ISP/residential IPs (noisy)"),
     include_unresolved: bool = Query(False, description="Include sessions we couldn't resolve"),
     limit: int = Query(50, ge=1, le=200),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """List recent identified site visitors, grouped by resolved company
@@ -140,7 +140,7 @@ async def list_recent_visitors(
 @router.get("/sessions/{session_id}/pageviews")
 async def session_pageviews(
     session_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Drilldown — list the pages this visitor session viewed."""
@@ -184,7 +184,7 @@ class ConvertRequest(BaseModel):
 async def convert_session_to_company(
     session_id: int,
     req: ConvertRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Promote a resolved visitor session into a real Company record so

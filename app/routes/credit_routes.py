@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.database import get_db
+from app.tenancy import get_tenant_db
 from app.auth import get_current_user, require_admin
 from app.models import User, CreditLedger
 from app.services.credit_meter import RATE_CARD
@@ -35,7 +35,7 @@ def _window_start(days: int) -> datetime:
 async def my_credits(
     days: int = Query(30, ge=1, le=365),
     user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
     """Return the current user's credit usage over the last `days`.
     Shim mode: no balance, just spend totals."""
@@ -100,7 +100,7 @@ async def rate_card(_user: User = Depends(get_current_user)):
 async def cogs_summary(
     days: int = Query(30, ge=1, le=365),
     _admin: User = Depends(require_admin),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
     """Platform-wide cost-of-goods over the last `days`.
     Admin/super_admin only. Shows raw vendor spend, broken out by vendor + action."""
@@ -160,7 +160,7 @@ async def cogs_summary(
 async def cogs_by_user(
     days: int = Query(30, ge=1, le=365),
     _admin: User = Depends(require_admin),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
     """Per-user COGS breakdown — what each rep is costing the platform.
     Helps spot outliers (rep burning credits without booking meetings)."""
@@ -208,7 +208,7 @@ async def cogs_by_user(
 async def cogs_recent(
     limit: int = Query(50, ge=1, le=500),
     _admin: User = Depends(require_admin),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
     """Tail of the credit ledger — last N rows. For debugging / spot-checking."""
     rows = (await db.execute(

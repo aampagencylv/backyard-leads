@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
 from pydantic import BaseModel
 
-from app.database import get_db
+from app.tenancy import get_tenant_db
 from app.models import User, Company, Contact, Deal, Activity, CustomFieldDefinition
 from app.auth import get_user_from_api_key
 from app.scoping import scope_companies, check_company_access, check_contact_access
@@ -106,7 +106,7 @@ async def list_companies(
     offset: int = 0,
     status: Optional[str] = None,
     search: Optional[str] = None,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_user_from_api_key),
 ):
     """List companies. Honors the caller's role-based scoping —
@@ -128,7 +128,7 @@ async def list_companies(
 @router.get("/companies/{company_id}")
 async def get_company(
     company_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_user_from_api_key),
 ):
     company = (await db.execute(select(Company).where(Company.id == company_id))).scalar_one_or_none()
@@ -153,7 +153,7 @@ class CreateCompanyAPI(BaseModel):
 @router.post("/companies", status_code=201)
 async def create_company(
     req: CreateCompanyAPI,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_user_from_api_key),
 ):
     if not req.name or not req.name.strip():
@@ -238,7 +238,7 @@ class UpdateCompanyAPI(BaseModel):
 async def patch_company(
     company_id: int,
     req: UpdateCompanyAPI,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_user_from_api_key),
 ):
     company = (await db.execute(select(Company).where(Company.id == company_id))).scalar_one_or_none()
@@ -280,7 +280,7 @@ async def patch_company(
 @router.get("/contacts/{contact_id}")
 async def get_contact(
     contact_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_user_from_api_key),
 ):
     contact = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()
@@ -307,7 +307,7 @@ class CreateContactAPI(BaseModel):
 @router.post("/contacts", status_code=201)
 async def create_contact(
     req: CreateContactAPI,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_user_from_api_key),
 ):
     if not req.company_id and not req.company_domain:
@@ -400,7 +400,7 @@ class UpdateContactAPI(BaseModel):
 async def patch_contact(
     contact_id: int,
     req: UpdateContactAPI,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_user_from_api_key),
 ):
     contact = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()

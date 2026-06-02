@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_user
 from app.config import settings
-from app.database import get_db
+from app.tenancy import get_tenant_db
 from app.models import User
 from app.services.mcp_tools import TOOL_DEFINITIONS, TOOL_HANDLERS
 
@@ -144,7 +144,7 @@ async def _execute_tool(
 async def chat(
     body: ChatRequest,
     user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
     """Run one conversation turn. The client sends the full history;
     we run the tool-use loop and return the final assistant reply
