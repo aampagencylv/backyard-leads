@@ -75,11 +75,125 @@ _RESERVED_SLUGS = {
 
 @router.get("/tenants", response_model=list[TenantOut])
 async def list_tenants(
+    include_metrics: bool = False,
     db: AsyncSession = Depends(get_db),
     _: User = Depends(require_super_admin),
 ):
+    """List every tenant. When `include_metrics=true`, also bundle
+    per-tenant user count + 30-day spend so the admin dashboard's
+    card grid renders in one round-trip instead of N+1.
+    """
     rows = (await db.execute(select(Tenant).order_by(Tenant.id))).scalars().all()
-    return [TenantOut.model_validate(t, from_attributes=True) for t in rows]
+    out = [TenantOut.model_validate(t, from_attributes=True).model_dump() for t in rows]
+
+    if include_metrics and rows:
+        from datetime import datetime, timezone, timedelta
+        from sqlalchemy import func as _func
+        from app.models import CreditLedger
+        tenant_ids = [t.id for t in rows]
+        window_start = datetime.now(timezone.utc) - timedelta(days=30)
+
+        user_counts = dict((await db.execute(
+            select(User.tenant_id, _func.count())
+            .where(User.tenant_id.in_(tenant_ids))
+            .group_by(User.tenant_id)
+        )).all())
+
+        spend_rows = (await db.execute(
+            select(CreditLedger.tenant_id,
+                   _func.coalesce(_func.sum(CreditLedger.raw_cost_usd), 0.0))
+            .where(CreditLedger.tenant_id.in_(tenant_ids),
+                   CreditLedger.created_at >= window_start)
+            .group_by(CreditLedger.tenant_id)
+        )).all()
+        spend_30d = {row[0]: float(row[1]) for row in spend_rows}
+
+        for t in out:
+            t["user_count"] = int(user_counts.get(t["id"], 0))
+            t["spend_30d_usd"] = float(spend_30d.get(t["id"], 0.0))
+
+    return out
+
+
+@router.get("/dashboard")
+async def admin_dashboard(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_super_admin),
+):
+    """One-shot summary for the platform admin dashboard home page.
+
+    Returns:
+      - kpis: total active tenants, total users, today $, last-30d $
+      - recent_tenants: 5 most recently created
+      - top_spenders: top-5 tenants by 30d raw_cost_usd
+    """
+    from datetime import datetime, timezone, timedelta
+    from sqlalchemy import func as _func
+    from app.models import CreditLedger
+
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    month_start = now - timedelta(days=30)
+
+    tenants_active = (await db.execute(
+        select(_func.count()).select_from(Tenant).where(Tenant.status == "active")
+    )).scalar() or 0
+    tenants_total = (await db.execute(
+        select(_func.count()).select_from(Tenant)
+    )).scalar() or 0
+    users_total = (await db.execute(
+        select(_func.count()).select_from(User).where(User.is_active == True)
+    )).scalar() or 0
+    spend_today = float((await db.execute(
+        select(_func.coalesce(_func.sum(CreditLedger.raw_cost_usd), 0.0))
+        .where(CreditLedger.created_at >= today_start)
+    )).scalar() or 0)
+    spend_30d = float((await db.execute(
+        select(_func.coalesce(_func.sum(CreditLedger.raw_cost_usd), 0.0))
+        .where(CreditLedger.created_at >= month_start)
+    )).scalar() or 0)
+
+    recent_rows = (await db.execute(
+        select(Tenant).order_by(Tenant.created_at.desc()).limit(5)
+    )).scalars().all()
+    recent_tenants = [{
+        "id": t.id, "name": t.name, "slug": t.slug, "status": t.status,
+        "onboarding_step": t.onboarding_step,
+        "created_at": t.created_at.isoformat() if t.created_at else None,
+    } for t in recent_rows]
+
+    top_rows = (await db.execute(
+        select(CreditLedger.tenant_id,
+               _func.coalesce(_func.sum(CreditLedger.raw_cost_usd), 0.0).label("usd"))
+        .where(CreditLedger.created_at >= month_start)
+        .group_by(CreditLedger.tenant_id)
+        .order_by(_func.sum(CreditLedger.raw_cost_usd).desc())
+        .limit(5)
+    )).all()
+    top_tenant_ids = [r[0] for r in top_rows if r[0]]
+    top_names: dict[int, str] = {}
+    if top_tenant_ids:
+        name_rows = (await db.execute(
+            select(Tenant.id, Tenant.name).where(Tenant.id.in_(top_tenant_ids))
+        )).all()
+        top_names = {row.id: row.name for row in name_rows}
+    top_spenders = [{
+        "tenant_id": r[0],
+        "tenant_name": top_names.get(r[0], f"#{r[0]}"),
+        "usd": float(r[1]),
+    } for r in top_rows]
+
+    return {
+        "kpis": {
+            "tenants_active": int(tenants_active),
+            "tenants_total": int(tenants_total),
+            "users_total": int(users_total),
+            "spend_today_usd": spend_today,
+            "spend_30d_usd": spend_30d,
+        },
+        "recent_tenants": recent_tenants,
+        "top_spenders": top_spenders,
+    }
 
 
 @router.post("/tenants", response_model=TenantOut, status_code=201)

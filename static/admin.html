@@ -6,289 +6,361 @@
 <title>LeadProspector · Platform Admin</title>
 <style>
   :root {
-    --bg: #0f1419;
-    --panel: #1a2129;
-    --panel-2: #232c36;
+    --bg: #0a0e14;
+    --bg-2: #0f1419;
+    --panel: #161b22;
+    --panel-2: #1e2530;
+    --panel-3: #232c36;
     --border: #2b3540;
+    --border-2: #384450;
     --text: #e6edf3;
     --text-dim: #8b949e;
-    --accent: #e65100;
+    --text-muted: #6e7681;
+    --accent: #ff6b1a;
     --accent-dim: #c54400;
+    --accent-soft: rgba(255, 107, 26, 0.12);
     --danger: #f85149;
     --success: #3fb950;
     --warning: #d29922;
+    --sidebar-w: 240px;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
   button { font-family: inherit; font-size: inherit; cursor: pointer; }
-  input, select { font-family: inherit; font-size: 14px; padding: 8px 12px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
-  input:focus { outline: none; border-color: var(--accent); }
-
-  .topbar { background: var(--panel); border-bottom: 1px solid var(--border); padding: 12px 24px; display: flex; align-items: center; gap: 16px; }
-  .topbar .title { font-weight: 600; font-size: 16px; }
-  .topbar .sub { color: var(--text-dim); font-size: 12px; }
-  .topbar .spacer { flex: 1; }
-  .topbar .actor { color: var(--text-dim); font-size: 13px; }
-
-  .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
-
-  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 16px; }
-  .panel h2 { font-size: 14px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
-
+  input, select, textarea { font-family: inherit; font-size: 14px; padding: 8px 12px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
-  th { color: var(--text-dim); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+  th { color: var(--text-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
   tr:hover td { background: var(--panel-2); }
-  tr.clickable { cursor: pointer; }
 
-  .btn { padding: 8px 14px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); }
-  .btn:hover { background: var(--border); }
-  .btn-primary { background: var(--accent); border-color: var(--accent); }
-  .btn-primary:hover { background: var(--accent-dim); }
+  .hidden { display: none !important; }
+  .empty { padding: 24px; text-align: center; color: var(--text-dim); font-size: 13px; }
+
+  .btn { padding: 8px 14px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); transition: all 0.12s; }
+  .btn:hover { background: var(--border); border-color: var(--border-2); }
+  .btn-primary { background: var(--accent); border-color: var(--accent); color: white; }
+  .btn-primary:hover { background: var(--accent-dim); border-color: var(--accent-dim); }
   .btn-danger { color: var(--danger); }
   .btn-sm { padding: 4px 10px; font-size: 12px; }
-  .btn-row { display: flex; gap: 8px; }
+  .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
 
-  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-  .grow { flex: 1; }
-
-  .pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; letter-spacing: 0.2px; }
   .pill-ok { background: rgba(63, 185, 80, 0.15); color: var(--success); }
   .pill-warn { background: rgba(210, 153, 34, 0.15); color: var(--warning); }
   .pill-bad { background: rgba(248, 81, 73, 0.15); color: var(--danger); }
   .pill-dim { background: var(--panel-2); color: var(--text-dim); }
 
-  .stat { display: inline-block; padding: 14px 20px; background: var(--panel-2); border-radius: 6px; margin-right: 12px; }
-  .stat .label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; }
-  .stat .value { font-size: 24px; font-weight: 600; margin-top: 2px; }
+  .app { display: flex; min-height: 100vh; }
+  .sidebar { width: var(--sidebar-w); background: var(--bg-2); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; position: sticky; top: 0; height: 100vh; }
+  .sidebar-brand { padding: 20px 20px 24px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--border); }
+  .sidebar-brand .dot { width: 10px; height: 10px; background: var(--accent); border-radius: 2px; box-shadow: 0 0 12px rgba(255,107,26,0.5); }
+  .sidebar-brand .name { font-weight: 700; font-size: 15px; letter-spacing: -0.2px; }
+  .sidebar-brand .role { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; margin-top: 2px; }
 
-  .empty { padding: 32px; text-align: center; color: var(--text-dim); }
+  .sidebar-nav { padding: 16px 12px; flex: 1; }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 6px; color: var(--text-dim); cursor: pointer; font-size: 13px; transition: all 0.12s; user-select: none; margin-bottom: 2px; }
+  .nav-item:hover { background: var(--panel); color: var(--text); }
+  .nav-item.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .nav-item .icon { font-size: 14px; width: 18px; text-align: center; }
 
-  .hidden { display: none !important; }
+  .sidebar-foot { padding: 16px 12px; border-top: 1px solid var(--border); }
+  .actor-card { padding: 10px 12px; background: var(--panel); border-radius: 6px; font-size: 12px; }
+  .actor-card .email { color: var(--text); font-weight: 500; word-break: break-word; }
+  .actor-card .actions { display: flex; gap: 6px; margin-top: 8px; }
+  .actor-card .actions a { font-size: 11px; color: var(--text-dim); cursor: pointer; }
 
-  .toast { position: fixed; bottom: 24px; right: 24px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 12px 16px; box-shadow: 0 6px 24px rgba(0,0,0,0.5); }
-  .toast.error { border-color: var(--danger); color: var(--danger); }
-  .toast.ok { border-color: var(--success); color: var(--success); }
+  .main { flex: 1; min-width: 0; padding: 28px 36px; }
 
-  .impersonating-banner { background: var(--danger); color: white; padding: 8px 24px; font-weight: 600; text-align: center; }
+  .page-header { display: flex; align-items: center; gap: 14px; margin-bottom: 24px; flex-wrap: wrap; }
+  .page-header h1 { font-size: 22px; letter-spacing: -0.3px; font-weight: 600; }
+  .page-header .sub { color: var(--text-dim); font-size: 13px; margin-top: 2px; }
+  .page-header .actions { margin-left: auto; display: flex; gap: 8px; }
 
-  /* Login */
-  .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
-  .login-card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 32px; width: 360px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 16px; }
+  .panel h2 { font-size: 13px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 14px; }
+
+  .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 24px; }
+  .kpi { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px; }
+  .kpi .label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; }
+  .kpi .value { font-size: 28px; font-weight: 700; letter-spacing: -0.5px; margin-top: 6px; }
+  .kpi .delta { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+
+  .tenant-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+  .tenant-card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px; cursor: pointer; transition: all 0.15s; }
+  .tenant-card:hover { border-color: var(--border-2); transform: translateY(-1px); }
+  .tenant-card .tc-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 8px; }
+  .tenant-card .tc-name { font-weight: 600; font-size: 15px; letter-spacing: -0.2px; }
+  .tenant-card .tc-slug { font-size: 11px; color: var(--text-dim); font-family: ui-monospace, monospace; margin-top: 2px; }
+  .tenant-card .tc-stats { display: flex; gap: 14px; padding: 12px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); margin-top: 12px; }
+  .tenant-card .tc-stat { flex: 1; }
+  .tenant-card .tc-stat .lbl { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .tenant-card .tc-stat .val { font-size: 16px; font-weight: 600; margin-top: 2px; }
+  .tenant-card .tc-foot { margin-top: 12px; display: flex; gap: 6px; justify-content: space-between; align-items: center; }
+  .tenant-card .tc-cta { font-size: 12px; color: var(--accent); }
+
+  .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .detail-grid > .panel { margin-bottom: 0; }
+  .stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .stat { background: var(--panel-2); padding: 14px; border-radius: 8px; }
+  .stat .label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .stat .value { font-size: 22px; font-weight: 600; margin-top: 4px; }
+  .form-group { margin-bottom: 12px; }
+  .form-group label { display: block; font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; margin-bottom: 4px; }
+
+  .toast { position: fixed; bottom: 24px; right: 24px; background: var(--panel-2); border: 1px solid var(--border-2); border-radius: 6px; padding: 12px 16px; box-shadow: 0 6px 24px rgba(0,0,0,0.5); z-index: 1000; min-width: 240px; max-width: 360px; }
+  .toast.error { border-color: var(--danger); }
+  .toast.ok { border-color: var(--success); }
+
+  .impersonating-banner { background: var(--danger); color: white; padding: 8px 16px; font-weight: 600; text-align: center; font-size: 13px; }
+
+  .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+  .login-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 32px 36px; width: 100%; max-width: 380px; }
   .login-card h1 { font-size: 18px; margin-bottom: 4px; }
   .login-card .sub { color: var(--text-dim); margin-bottom: 24px; font-size: 13px; }
   .login-card input { width: 100%; margin-bottom: 12px; }
-  .login-card button { width: 100%; }
+  .login-card .btn { width: 100%; }
+  .login-error { color: var(--danger); margin-top: 12px; font-size: 13px; min-height: 16px; }
 
-  .form-group { margin-bottom: 12px; }
-  .form-group label { display: block; font-size: 12px; font-weight: 600; color: var(--text-dim); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+  @media (max-width: 768px) {
+    .app { flex-direction: column; }
+    .sidebar { width: 100%; height: auto; position: relative; }
+    .sidebar-nav { display: flex; flex-wrap: wrap; padding: 8px; }
+    .nav-item { flex: 1 0 auto; }
+    .main { padding: 20px; }
+    .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+    .stat-row { grid-template-columns: repeat(2, 1fr); }
+    .detail-grid { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
 
-<div id="impersonating-banner" class="impersonating-banner hidden">
-  IMPERSONATING tenant #<span id="acting-tenant-id">—</span> · <button class="btn btn-sm" onclick="endImpersonation()">End</button>
-</div>
-
-<!-- Login -->
 <div id="login-view" class="login-wrap">
   <div class="login-card">
     <h1>LeadProspector · Platform Admin</h1>
-    <div class="sub">Super-admin login.</div>
+    <div class="sub">Super-admin only.</div>
     <input id="login-email" type="email" placeholder="Email" autofocus>
-    <input id="login-password" type="password" placeholder="Password">
-    <button class="btn btn-primary" onclick="login()">Sign in</button>
-    <div id="login-error" style="color: var(--danger); margin-top: 12px; font-size: 13px;"></div>
+    <input id="login-password" type="password" placeholder="Password" onkeydown="if(event.key==='Enter')doLogin()">
+    <button class="btn btn-primary" onclick="doLogin()">Sign in</button>
+    <div id="login-error" class="login-error"></div>
+    <div style="text-align:center;margin-top:14px;font-size:12px;color:var(--text-dim)">
+      Operator console. <a href="/login" style="color:var(--accent)">User login →</a>
+    </div>
   </div>
 </div>
 
-<!-- App -->
 <div id="app-view" class="hidden">
-  <div class="topbar">
-    <div>
-      <div class="title">LeadProspector · Admin</div>
-      <div class="sub">Platform admin console · tenants and domains</div>
-    </div>
-    <div class="spacer"></div>
-    <div class="actor"><span id="actor-email"></span></div>
-    <button class="btn btn-sm" onclick="logout()">Sign out</button>
+  <div id="impersonating-banner" class="impersonating-banner hidden">
+    IMPERSONATING tenant #<span id="acting-tenant-id">—</span> · <button class="btn btn-sm" onclick="endImpersonation()">End</button>
   </div>
 
-  <div class="container">
-
-    <div class="panel">
-      <h2>Platform costs</h2>
-      <div style="font-size:12px;color:var(--text-dim);margin-bottom:16px">True cost of goods — what we actually pay vendors. From <code>credit_ledger.raw_cost_usd</code>. Updated in real time.</div>
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
-        <div class="stat" style="display:block">
-          <div class="label">Today</div>
-          <div class="value" id="cost-today">$—</div>
-          <div style="font-size:11px;color:var(--text-dim)" id="cost-today-events">—</div>
-        </div>
-        <div class="stat" style="display:block">
-          <div class="label">Last 7 days</div>
-          <div class="value" id="cost-7d">$—</div>
-          <div style="font-size:11px;color:var(--text-dim)" id="cost-7d-events">—</div>
-        </div>
-        <div class="stat" style="display:block">
-          <div class="label">Last 30 days</div>
-          <div class="value" id="cost-30d">$—</div>
-          <div style="font-size:11px;color:var(--text-dim)" id="cost-30d-events">—</div>
-        </div>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="dot"></div>
         <div>
-          <h3 style="font-size:12px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">By vendor (30d)</h3>
-          <table id="cost-vendor-table"><tbody></tbody></table>
-        </div>
-        <div>
-          <h3 style="font-size:12px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">By tenant (30d)</h3>
-          <table id="cost-tenant-table"><tbody></tbody></table>
+          <div class="name">LeadProspector</div>
+          <div class="role">Platform admin</div>
         </div>
       </div>
-    </div>
-
-    <div class="panel">
-      <h2>Users</h2>
-      <div class="row" style="margin-bottom: 12px;">
-        <input id="users-search" placeholder="Search email or name…" style="flex:1;max-width:320px" oninput="debouncedLoadUsers()">
-        <select id="users-filter-tenant" onchange="loadUsers()" style="font-size:13px"><option value="">All tenants</option></select>
-        <select id="users-filter-role" onchange="loadUsers()" style="font-size:13px">
-          <option value="">All roles</option>
-          <option value="super_admin">super_admin</option>
-          <option value="admin">admin</option>
-          <option value="senior_rep">senior_rep</option>
-          <option value="sales_rep">sales_rep</option>
-          <option value="read_only">read_only</option>
-        </select>
-        <label style="font-size:12px;color:var(--text-dim);display:flex;align-items:center;gap:6px">
-          <input type="checkbox" id="users-filter-active" onchange="loadUsers()"> Active only
-        </label>
-        <div class="grow"></div>
-        <span class="sub" id="users-count">—</span>
-      </div>
-      <table>
-        <thead><tr><th>Email</th><th>Name</th><th>Tenant</th><th>Role</th><th>Active</th><th></th></tr></thead>
-        <tbody id="users-tbody"></tbody>
-      </table>
-      <div id="users-empty" class="empty hidden">No users match.</div>
-    </div>
-
-    <div class="panel">
-      <h2>Tenants</h2>
-      <div class="row" style="margin-bottom: 16px;">
-        <button class="btn btn-primary" onclick="showCreateTenant()">+ New tenant</button>
-        <div class="grow"></div>
-        <span class="sub" id="tenants-count"></span>
-      </div>
-      <table>
-        <thead><tr><th>ID</th><th>Name</th><th>Slug</th><th>Plan</th><th>Status</th><th>Onboarding</th><th></th></tr></thead>
-        <tbody id="tenants-tbody"></tbody>
-      </table>
-    </div>
-
-    <!-- Create tenant form -->
-    <div id="create-tenant-panel" class="panel hidden">
-      <h2>Create tenant</h2>
-      <div class="form-group">
-        <label>Agency name</label>
-        <input id="create-name" placeholder="Acme Agency">
-      </div>
-      <div class="form-group">
-        <label>Slug (becomes &lt;slug&gt;.leadprospector.ai)</label>
-        <input id="create-slug" placeholder="acme">
-      </div>
-      <div class="form-group">
-        <label>Plan</label>
-        <select id="create-plan">
-          <option value="starter">starter</option>
-          <option value="growth">growth</option>
-          <option value="scale">scale</option>
-          <option value="enterprise">enterprise</option>
-        </select>
-      </div>
-      <div class="btn-row">
-        <button class="btn btn-primary" onclick="createTenant()">Create</button>
-        <button class="btn" onclick="hideCreateTenant()">Cancel</button>
-      </div>
-    </div>
-
-    <!-- Tenant detail -->
-    <div id="tenant-detail" class="panel hidden">
-      <h2><span id="detail-name"></span> <span class="pill pill-dim" id="detail-id"></span></h2>
-
-      <div style="margin-bottom: 20px;">
-        <span class="stat"><div class="label">Users</div><div class="value" id="stat-users">—</div></span>
-        <span class="stat"><div class="label">Companies</div><div class="value" id="stat-companies">—</div></span>
-        <span class="stat"><div class="label">Contacts</div><div class="value" id="stat-contacts">—</div></span>
-        <span class="stat"><div class="label">Campaigns</div><div class="value" id="stat-campaigns">—</div></span>
-      </div>
-
-      <div class="btn-row" style="margin-bottom: 24px;">
-        <button class="btn" onclick="impersonate()">Impersonate</button>
-        <button class="btn" onclick="suspendTenant()">Suspend</button>
-        <button class="btn" onclick="activateTenant()">Activate</button>
-      </div>
-
-      <h2 style="margin-top: 24px;">Email sending</h2>
-      <div id="email-status" style="font-size:13px;color:var(--text-dim);margin-bottom:12px">—</div>
-      <div id="email-records" class="hidden" style="background:var(--panel-2);border-radius:6px;padding:14px;margin-bottom:16px;font-size:12px">
-        <div style="margin-bottom:10px;color:var(--text-dim)">Add these records to <strong>leadprospector.ai</strong> DNS, then click "Recheck" to verify with Resend.</div>
-        <table style="width:100%">
-          <thead><tr><th style="padding:6px">Type</th><th style="padding:6px">Name</th><th style="padding:6px">Value</th><th></th></tr></thead>
-          <tbody id="email-records-tbody"></tbody>
-        </table>
-        <button class="btn btn-sm" style="margin-top:10px" onclick="recheckEmailStatus()">Recheck status</button>
-      </div>
-
-      <h2 style="margin-top: 24px;">Voice (Twilio)</h2>
-      <div id="voice-status" style="font-size:13px;color:var(--text-dim);margin-bottom:24px">—</div>
-
-      <h2 style="margin-top: 24px;">Costs (last 30 days)</h2>
-      <div style="display:flex;gap:24px;margin-bottom:14px">
-        <div><div style="font-size:11px;color:var(--text-dim);text-transform:uppercase">Total</div><div style="font-size:22px;font-weight:600" id="tenant-cost-total">$—</div></div>
-        <div><div style="font-size:11px;color:var(--text-dim);text-transform:uppercase">Events</div><div style="font-size:22px;font-weight:600" id="tenant-cost-events">—</div></div>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px">
-        <div>
-          <h3 style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">By vendor</h3>
-          <table id="tenant-cost-vendor-table"><tbody></tbody></table>
-        </div>
-        <div>
-          <h3 style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">By action</h3>
-          <table id="tenant-cost-action-table"><tbody></tbody></table>
+      <nav class="sidebar-nav">
+        <div class="nav-item" data-nav="dashboard" onclick="go('dashboard')"><span class="icon">▦</span> Dashboard</div>
+        <div class="nav-item" data-nav="tenants" onclick="go('tenants')"><span class="icon">⊞</span> Tenants</div>
+        <div class="nav-item" data-nav="users" onclick="go('users')"><span class="icon">⚭</span> Users</div>
+        <div class="nav-item" data-nav="costs" onclick="go('costs')"><span class="icon">$</span> Costs</div>
+        <div class="nav-item" data-nav="keys" onclick="go('keys')"><span class="icon">⚷</span> API Keys</div>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="actor-card">
+          <div class="email" id="actor-email">—</div>
+          <div class="actions">
+            <a onclick="logout()">Sign out</a>
+          </div>
         </div>
       </div>
+    </aside>
 
-      <h2 style="margin-top: 24px;">API Keys vault</h2>
-      <div style="font-size:12px;color:var(--text-dim);margin-bottom:12px">All integration credentials for this tenant. Masked — full values never leave the database. Use the existing tenant /api/runtime-config endpoints to rotate.</div>
-      <table>
-        <thead><tr><th>Service</th><th>Field</th><th>Status</th><th>Value (masked)</th></tr></thead>
-        <tbody id="keys-tbody"></tbody>
-      </table>
+    <main class="main">
 
-      <h2 style="margin-top: 24px;">Domains</h2>
-      <div class="row" style="margin-bottom: 12px;">
-        <input id="new-domain" placeholder="crm.acme.com" class="grow">
-        <button class="btn btn-primary" onclick="addDomain()">Add domain</button>
-      </div>
-      <table>
-        <thead><tr><th>Domain</th><th>Primary</th><th>Verified</th><th></th></tr></thead>
-        <tbody id="domains-tbody"></tbody>
-      </table>
+      <section id="page-dashboard" class="page hidden">
+        <div class="page-header">
+          <div>
+            <h1>Dashboard</h1>
+            <div class="sub">Platform health at a glance.</div>
+          </div>
+          <div class="actions">
+            <button class="btn btn-sm" onclick="loadDashboard()">↻ Refresh</button>
+          </div>
+        </div>
 
-      <h2 style="margin-top: 24px;">Provision first user</h2>
-      <div class="row">
-        <input id="user-email" placeholder="founder@acme.com" class="grow">
-        <input id="user-first" placeholder="First name" style="width: 140px;">
-        <input id="user-last" placeholder="Last name" style="width: 140px;">
-        <input id="user-pw" placeholder="Temp password" style="width: 180px;">
-        <button class="btn btn-primary" onclick="provisionUser()">Create user</button>
-      </div>
-    </div>
+        <div class="kpi-grid">
+          <div class="kpi"><div class="label">Active tenants</div><div class="value" id="kpi-tenants">—</div><div class="delta" id="kpi-tenants-sub">—</div></div>
+          <div class="kpi"><div class="label">Active users</div><div class="value" id="kpi-users">—</div><div class="delta">Across all tenants</div></div>
+          <div class="kpi"><div class="label">Spend today</div><div class="value" id="kpi-today">—</div><div class="delta">Vendor cost · raw</div></div>
+          <div class="kpi"><div class="label">Spend last 30d</div><div class="value" id="kpi-30d">—</div><div class="delta">All vendors combined</div></div>
+        </div>
 
+        <div class="detail-grid">
+          <div class="panel">
+            <h2>Recent tenants</h2>
+            <table><thead><tr><th>Name</th><th>Slug</th><th>Status</th><th>Onboarding</th></tr></thead><tbody id="dash-recent-tbody"></tbody></table>
+          </div>
+          <div class="panel">
+            <h2>Top spenders (30d)</h2>
+            <table><thead><tr><th>Tenant</th><th style="text-align:right">Spend</th></tr></thead><tbody id="dash-top-tbody"></tbody></table>
+          </div>
+        </div>
+      </section>
+
+      <section id="page-tenants" class="page hidden">
+        <div class="page-header">
+          <div><h1>Tenants</h1><div class="sub" id="tenants-count">—</div></div>
+          <div class="actions"><button class="btn btn-primary" onclick="showCreateTenant()">+ New tenant</button></div>
+        </div>
+
+        <div id="create-tenant-panel" class="panel hidden">
+          <h2>Create tenant</h2>
+          <div class="form-group"><label>Agency name</label><input id="create-name" placeholder="Acme Marketing"></div>
+          <div class="form-group"><label>Slug — becomes &lt;slug&gt;.leadprospector.ai</label><input id="create-slug" placeholder="acme"></div>
+          <div class="form-group"><label>Plan</label><select id="create-plan"><option value="starter">starter</option><option value="growth">growth</option><option value="scale">scale</option><option value="enterprise">enterprise</option></select></div>
+          <div class="btn-row"><button class="btn btn-primary" onclick="createTenant()">Create</button><button class="btn" onclick="hideCreateTenant()">Cancel</button></div>
+        </div>
+
+        <div id="tenant-grid" class="tenant-grid"></div>
+        <div id="tenant-empty" class="empty hidden">No tenants yet.</div>
+      </section>
+
+      <section id="page-tenant" class="page hidden">
+        <div class="page-header">
+          <div><h1 id="td-name">—</h1><div class="sub"><span id="td-id">—</span> · <span id="td-slug">—</span></div></div>
+          <div class="actions">
+            <button class="btn btn-sm" onclick="go('tenants')">← Back</button>
+            <button class="btn btn-sm" onclick="impersonate()">Impersonate</button>
+            <button class="btn btn-sm" id="td-suspend-btn" onclick="suspendTenant()">Suspend</button>
+            <button class="btn btn-sm" id="td-activate-btn" onclick="activateTenant()">Activate</button>
+          </div>
+        </div>
+
+        <div class="stat-row" style="margin-bottom:16px">
+          <div class="stat"><div class="label">Users</div><div class="value" id="td-users">—</div></div>
+          <div class="stat"><div class="label">Companies</div><div class="value" id="td-companies">—</div></div>
+          <div class="stat"><div class="label">Contacts</div><div class="value" id="td-contacts">—</div></div>
+          <div class="stat"><div class="label">Campaigns</div><div class="value" id="td-campaigns">—</div></div>
+        </div>
+
+        <div class="detail-grid">
+          <div class="panel">
+            <h2>Email sending</h2>
+            <div id="td-email-status" style="font-size:13px;color:var(--text-dim);margin-bottom:10px">—</div>
+            <div id="td-email-records" class="hidden" style="background:var(--panel-2);border-radius:6px;padding:12px;font-size:11px">
+              <div style="color:var(--text-dim);margin-bottom:8px">DNS records (auto-added when CF is configured):</div>
+              <table><tbody id="td-email-records-tbody"></tbody></table>
+              <button class="btn btn-sm" style="margin-top:8px" onclick="recheckEmailStatus()">Recheck</button>
+            </div>
+          </div>
+          <div class="panel">
+            <h2>Voice (Twilio)</h2>
+            <div id="td-voice-status" style="font-size:13px;color:var(--text-dim)">—</div>
+          </div>
+        </div>
+
+        <div class="panel" style="margin-top:14px">
+          <h2>Costs · last 30 days</h2>
+          <div style="display:flex;gap:24px;margin-bottom:14px">
+            <div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase">Total</div><div style="font-size:22px;font-weight:600" id="td-cost-total">$—</div></div>
+            <div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase">Events</div><div style="font-size:22px;font-weight:600" id="td-cost-events">—</div></div>
+          </div>
+          <div class="detail-grid">
+            <div><h2 style="font-size:11px">By vendor</h2><table id="td-cost-vendor"><tbody></tbody></table></div>
+            <div><h2 style="font-size:11px">By action</h2><table id="td-cost-action"><tbody></tbody></table></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>API Keys vault</h2>
+          <div style="font-size:11px;color:var(--text-dim);margin-bottom:10px">All credentials this tenant has on file. Masked.</div>
+          <table><thead><tr><th>Service</th><th>Field</th><th>Status</th><th>Value (masked)</th></tr></thead><tbody id="td-keys-tbody"></tbody></table>
+        </div>
+
+        <div class="panel">
+          <h2>Domains</h2>
+          <div style="display:flex;gap:8px;margin-bottom:10px">
+            <input id="td-new-domain" placeholder="crm.acme.com" style="flex:1">
+            <button class="btn btn-primary" onclick="addDomain()">Add domain</button>
+          </div>
+          <table><thead><tr><th>Domain</th><th>Primary</th><th>Verified</th><th></th></tr></thead><tbody id="td-domains-tbody"></tbody></table>
+        </div>
+
+        <div class="panel">
+          <h2>Provision first user</h2>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+            <input id="td-user-email" placeholder="founder@acme.com">
+            <input id="td-user-first" placeholder="First name">
+            <input id="td-user-last" placeholder="Last name">
+            <input id="td-user-pw" placeholder="Temp password">
+          </div>
+          <button class="btn btn-primary" style="margin-top:10px" onclick="provisionUser()">Create user + send invite</button>
+        </div>
+      </section>
+
+      <section id="page-users" class="page hidden">
+        <div class="page-header">
+          <div><h1>Users</h1><div class="sub" id="users-count">—</div></div>
+        </div>
+
+        <div class="panel">
+          <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
+            <input id="users-search" placeholder="Search email or name…" style="flex:1;min-width:240px;max-width:340px" oninput="debouncedLoadUsers()">
+            <select id="users-filter-tenant" onchange="loadUsers()" style="font-size:13px"><option value="">All tenants</option></select>
+            <select id="users-filter-role" onchange="loadUsers()" style="font-size:13px">
+              <option value="">All roles</option><option value="super_admin">super_admin</option><option value="admin">admin</option><option value="senior_rep">senior_rep</option><option value="sales_rep">sales_rep</option><option value="read_only">read_only</option>
+            </select>
+            <label style="font-size:12px;color:var(--text-dim);display:flex;align-items:center;gap:6px">
+              <input type="checkbox" id="users-filter-active" style="width:auto;padding:0" onchange="loadUsers()"> Active only
+            </label>
+          </div>
+          <table><thead><tr><th>Email</th><th>Name</th><th>Tenant</th><th>Role</th><th>Active</th><th></th></tr></thead><tbody id="users-tbody"></tbody></table>
+          <div id="users-empty" class="empty hidden">No users match.</div>
+        </div>
+      </section>
+
+      <section id="page-costs" class="page hidden">
+        <div class="page-header">
+          <div><h1>Costs</h1><div class="sub">Vendor cost across the platform. raw_cost_usd from credit_ledger.</div></div>
+          <div class="actions"><button class="btn btn-sm" onclick="loadPlatformCosts()">↻ Refresh</button></div>
+        </div>
+
+        <div class="kpi-grid">
+          <div class="kpi"><div class="label">Today</div><div class="value" id="cost-today">$—</div><div class="delta" id="cost-today-events">—</div></div>
+          <div class="kpi"><div class="label">Last 7 days</div><div class="value" id="cost-7d">$—</div><div class="delta" id="cost-7d-events">—</div></div>
+          <div class="kpi"><div class="label">Last 30 days</div><div class="value" id="cost-30d">$—</div><div class="delta" id="cost-30d-events">—</div></div>
+          <div class="kpi"><div class="label">Tenants w/ spend</div><div class="value" id="cost-tenant-count">—</div><div class="delta">30d window</div></div>
+        </div>
+
+        <div class="detail-grid">
+          <div class="panel"><h2>By vendor (30d)</h2><table id="cost-vendor-table"><tbody></tbody></table></div>
+          <div class="panel"><h2>By tenant (30d)</h2><table id="cost-tenant-table"><tbody></tbody></table></div>
+        </div>
+      </section>
+
+      <section id="page-keys" class="page hidden">
+        <div class="page-header">
+          <div><h1>API Keys</h1><div class="sub">Per-tenant integration footprint. Click a row to view + manage the full vault.</div></div>
+        </div>
+
+        <div class="panel">
+          <table>
+            <thead><tr><th>Tenant</th><th>Twilio</th><th>Resend</th><th>Netrows</th><th>Blooio</th><th>Apollo</th></tr></thead>
+            <tbody id="keys-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+    </main>
   </div>
 </div>
 
@@ -297,25 +369,23 @@
 <script>
 const TOKEN_KEY = "ap_admin_token";
 const ACTOR_KEY = "ap_admin_actor";
-
 let token = localStorage.getItem(TOKEN_KEY);
 let actor = JSON.parse(localStorage.getItem(ACTOR_KEY) || "null");
 let currentTenantId = null;
+let _tenants = [];
 
-function show(id) { document.getElementById(id).classList.remove("hidden"); }
-function hide(id) { document.getElementById(id).classList.add("hidden"); }
-function toast(msg, kind="ok") {
+function showLogin() { document.getElementById("login-view").classList.remove("hidden"); document.getElementById("app-view").classList.add("hidden"); }
+function showApp() { document.getElementById("login-view").classList.add("hidden"); document.getElementById("app-view").classList.remove("hidden"); }
+function toast(msg, kind = "ok") {
   const t = document.getElementById("toast");
-  t.textContent = msg;
-  t.className = "toast " + kind;
+  t.textContent = msg; t.className = "toast " + kind;
   setTimeout(() => t.classList.add("hidden"), 3500);
 }
+function escapeHtml(s) { return (s ?? "").toString().replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
+function fmtUSD(n) { const v = Number(n) || 0; if (v < 1) return "$" + v.toFixed(3); if (v < 100) return "$" + v.toFixed(2); return "$" + Math.round(v).toLocaleString(); }
 
-async function api(method, path, body=null) {
-  const opts = {
-    method,
-    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
-  };
+async function api(method, path, body = null) {
+  const opts = { method, headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token } };
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch(path, opts);
   if (res.status === 401) { logout(); throw new Error("not authenticated"); }
@@ -326,67 +396,303 @@ async function api(method, path, body=null) {
   return data;
 }
 
-async function login() {
+async function doLogin() {
   const email = document.getElementById("login-email").value.trim();
   const password = document.getElementById("login-password").value;
   const errEl = document.getElementById("login-error");
   errEl.textContent = "";
   try {
-    const form = new URLSearchParams();
-    form.set("username", email);
-    form.set("password", password);
-    const res = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: form.toString(),
-    });
-    if (!res.ok) {
-      const t = await res.text();
-      throw new Error("invalid credentials");
-    }
+    const form = new URLSearchParams(); form.set("username", email); form.set("password", password);
+    const res = await fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: form.toString() });
+    if (!res.ok) throw new Error("Invalid credentials");
     const data = await res.json();
-    // Verify role is super_admin via /api/auth/me
     token = data.access_token;
-    const me = await fetch("/api/auth/me", { headers: { "Authorization": "Bearer " + token }})
-                  .then(r => r.json());
-    if (me.role !== "super_admin") {
-      errEl.textContent = "Super-admin access required.";
-      token = null;
-      return;
-    }
+    const me = await fetch("/api/auth/me", { headers: { "Authorization": "Bearer " + token } }).then(r => r.json());
+    if (me.role !== "super_admin") { errEl.textContent = "Super-admin access required."; token = null; return; }
     actor = { email: me.email, role: me.role };
     localStorage.setItem(TOKEN_KEY, token);
     localStorage.setItem(ACTOR_KEY, JSON.stringify(actor));
-    bootApp();
-  } catch (e) {
-    errEl.textContent = e.message;
-  }
+    await bootApp();
+  } catch (e) { errEl.textContent = e.message; }
 }
 
 function logout() {
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(ACTOR_KEY);
-  token = null;
-  actor = null;
-  hide("app-view");
-  show("login-view");
+  localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(ACTOR_KEY);
+  token = null; actor = null;
+  showLogin();
 }
 
 async function bootApp() {
-  hide("login-view");
-  show("app-view");
+  showApp();
   document.getElementById("actor-email").textContent = actor.email;
-  await loadTenants();
-  loadPlatformCosts().catch(() => {});
-  loadUsers().catch(() => {});
+  await loadTenantsBackground();
+  applyRoute();
 }
 
+// ============ Hash router ============
+function go(page, ...args) {
+  const path = "#/" + [page, ...args].join("/");
+  if (location.hash === path) applyRoute();
+  else location.hash = path;
+}
+window.addEventListener("hashchange", applyRoute);
+
+function applyRoute() {
+  const parts = (location.hash || "#/dashboard").slice(1).split("/").filter(Boolean);
+  const page = parts[0] || "dashboard";
+  document.querySelectorAll(".page").forEach(el => el.classList.add("hidden"));
+  document.querySelectorAll(".nav-item").forEach(el => el.classList.remove("active"));
+  const navKey = (page === "tenant") ? "tenants" : page;
+  const navEl = document.querySelector(`.nav-item[data-nav="${navKey}"]`);
+  if (navEl) navEl.classList.add("active");
+
+  switch (page) {
+    case "dashboard": document.getElementById("page-dashboard").classList.remove("hidden"); loadDashboard(); break;
+    case "tenants":   document.getElementById("page-tenants").classList.remove("hidden");   renderTenantGrid(); break;
+    case "tenant":    document.getElementById("page-tenant").classList.remove("hidden");    openTenant(parseInt(parts[1] || "0")); break;
+    case "users":     document.getElementById("page-users").classList.remove("hidden");     loadUsers(); break;
+    case "costs":     document.getElementById("page-costs").classList.remove("hidden");     loadPlatformCosts(); break;
+    case "keys":      document.getElementById("page-keys").classList.remove("hidden");      renderKeysOverview(); break;
+    default:          document.getElementById("page-dashboard").classList.remove("hidden"); loadDashboard();
+  }
+}
+
+// ============ Dashboard ============
+async function loadDashboard() {
+  try {
+    const d = await api("GET", "/api/admin/dashboard");
+    document.getElementById("kpi-tenants").textContent = d.kpis.tenants_active;
+    document.getElementById("kpi-tenants-sub").textContent = `${d.kpis.tenants_total} total`;
+    document.getElementById("kpi-users").textContent = d.kpis.users_total;
+    document.getElementById("kpi-today").textContent = fmtUSD(d.kpis.spend_today_usd);
+    document.getElementById("kpi-30d").textContent = fmtUSD(d.kpis.spend_30d_usd);
+
+    document.getElementById("dash-recent-tbody").innerHTML = d.recent_tenants.length
+      ? d.recent_tenants.map(t => `<tr style="cursor:pointer" onclick="go('tenant', ${t.id})"><td><strong>${escapeHtml(t.name)}</strong></td><td><code>${escapeHtml(t.slug)}</code></td><td>${pillForStatus(t.status)}</td><td>${pillForOnboarding(t.onboarding_step)}</td></tr>`).join("")
+      : `<tr><td colspan="4" class="empty">No tenants yet.</td></tr>`;
+
+    document.getElementById("dash-top-tbody").innerHTML = d.top_spenders.length
+      ? d.top_spenders.map(t => `<tr style="cursor:pointer" onclick="go('tenant', ${t.tenant_id})"><td>${escapeHtml(t.tenant_name)}</td><td style="text-align:right;font-family:ui-monospace,monospace">${fmtUSD(t.usd)}</td></tr>`).join("")
+      : `<tr><td colspan="2" class="empty">No spend yet.</td></tr>`;
+  } catch (e) { toast("Couldn't load dashboard: " + e.message, "error"); }
+}
+
+// ============ Tenants ============
+async function loadTenantsBackground() {
+  try {
+    _tenants = await api("GET", "/api/admin/tenants?include_metrics=true");
+    const f = document.getElementById("users-filter-tenant");
+    if (f) {
+      const cur = f.value;
+      f.innerHTML = '<option value="">All tenants</option>' + _tenants.map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join("");
+      f.value = cur;
+    }
+  } catch (e) {}
+}
+
+async function renderTenantGrid() {
+  await loadTenantsBackground();
+  document.getElementById("tenants-count").textContent = `${_tenants.length} tenant${_tenants.length === 1 ? "" : "s"}`;
+  const grid = document.getElementById("tenant-grid");
+  const empty = document.getElementById("tenant-empty");
+  if (!_tenants.length) { grid.innerHTML = ""; empty.classList.remove("hidden"); return; }
+  empty.classList.add("hidden");
+  grid.innerHTML = _tenants.map(t => `
+    <div class="tenant-card" onclick="go('tenant', ${t.id})">
+      <div class="tc-head">
+        <div>
+          <div class="tc-name">${escapeHtml(t.name)}</div>
+          <div class="tc-slug">${escapeHtml(t.slug)}.leadprospector.ai</div>
+        </div>
+        ${pillForStatus(t.status)}
+      </div>
+      <div class="tc-stats">
+        <div class="tc-stat"><div class="lbl">Users</div><div class="val">${t.user_count ?? '—'}</div></div>
+        <div class="tc-stat"><div class="lbl">30d cost</div><div class="val">${t.spend_30d_usd !== undefined ? fmtUSD(t.spend_30d_usd) : '—'}</div></div>
+        <div class="tc-stat"><div class="lbl">Plan</div><div class="val" style="font-size:13px;text-transform:capitalize">${escapeHtml(t.plan)}</div></div>
+      </div>
+      <div class="tc-foot">
+        ${pillForOnboarding(t.onboarding_step || "pending")}
+        <span class="tc-cta">Manage →</span>
+      </div>
+    </div>
+  `).join("");
+}
+
+function pillForStatus(s) {
+  if (s === "active") return `<span class="pill pill-ok">active</span>`;
+  if (s === "suspended") return `<span class="pill pill-bad">suspended</span>`;
+  return `<span class="pill pill-dim">${escapeHtml(s)}</span>`;
+}
+function pillForOnboarding(s) {
+  if (s === "done") return `<span class="pill pill-ok">onboarded</span>`;
+  return `<span class="pill pill-warn">${escapeHtml(s || "pending")}</span>`;
+}
+
+function showCreateTenant() { document.getElementById("create-tenant-panel").classList.remove("hidden"); }
+function hideCreateTenant() { document.getElementById("create-tenant-panel").classList.add("hidden"); ["create-name","create-slug"].forEach(id => document.getElementById(id).value = ""); }
+
+async function createTenant() {
+  const name = document.getElementById("create-name").value.trim();
+  const slug = document.getElementById("create-slug").value.trim();
+  const plan = document.getElementById("create-plan").value;
+  if (!name || !slug) { toast("name + slug required", "error"); return; }
+  try {
+    const out = await api("POST", "/api/admin/tenants", { name, slug, plan });
+    toast("Tenant created");
+    hideCreateTenant();
+    setTimeout(() => go("tenant", out.id), 200);
+  } catch (e) { toast(e.message, "error"); }
+}
+
+// ============ Tenant detail ============
+async function openTenant(tenantId) {
+  currentTenantId = tenantId;
+  if (!tenantId) { go("tenants"); return; }
+  try {
+    const data = await api("GET", `/api/admin/tenants/${tenantId}`);
+    document.getElementById("td-name").textContent = data.tenant.name;
+    document.getElementById("td-id").textContent = "#" + data.tenant.id;
+    document.getElementById("td-slug").textContent = data.tenant.slug + ".leadprospector.ai";
+    document.getElementById("td-users").textContent = data.counts.users;
+    document.getElementById("td-companies").textContent = data.counts.companies;
+    document.getElementById("td-contacts").textContent = data.counts.contacts;
+    document.getElementById("td-campaigns").textContent = data.counts.campaigns;
+    renderProvisioning(data.provisioning || {});
+    renderDomains(data.domains || []);
+    const suspendBtn = document.getElementById("td-suspend-btn");
+    const activateBtn = document.getElementById("td-activate-btn");
+    if (data.tenant.status === "suspended") { suspendBtn.classList.add("hidden"); activateBtn.classList.remove("hidden"); }
+    else { suspendBtn.classList.remove("hidden"); activateBtn.classList.add("hidden"); }
+  } catch (e) { toast("Could not load tenant: " + e.message, "error"); return; }
+  loadTenantCosts(tenantId).catch(() => {});
+  loadTenantKeys(tenantId).catch(() => {});
+}
+
+function renderProvisioning(p) {
+  const es = document.getElementById("td-email-status");
+  const er = document.getElementById("td-email-records");
+  if (!p.resend_domain_id) {
+    es.innerHTML = '<span class="pill pill-warn">not provisioned</span>';
+    er.classList.add("hidden");
+  } else {
+    const verified = p.resend_domain_status === "verified";
+    es.innerHTML = `<span class="pill ${verified ? 'pill-ok' : 'pill-warn'}">${verified ? 'verified' : (p.resend_domain_status || 'pending')}</span> &nbsp; <code>${escapeHtml(p.resend_domain_name || '')}</code>`;
+    if (verified) er.classList.add("hidden");
+    else {
+      er.classList.remove("hidden");
+      document.getElementById("td-email-records-tbody").innerHTML = (p.resend_records || []).map(r => `<tr><td><strong>${escapeHtml(r.type || '')}</strong></td><td><code>${escapeHtml(r.name || '')}</code></td><td style="word-break:break-all"><code>${escapeHtml((r.value || '').slice(0, 60))}${(r.value || '').length > 60 ? '…' : ''}</code></td><td><button class="btn btn-sm" onclick="navigator.clipboard.writeText(${JSON.stringify(r.value || '')})">Copy</button></td></tr>`).join("");
+    }
+  }
+  const vs = document.getElementById("td-voice-status");
+  vs.innerHTML = p.twilio_subaccount_sid
+    ? `<span class="pill pill-ok">ready</span> &nbsp; <code>${escapeHtml(p.twilio_subaccount_sid)}</code>`
+    : '<span class="pill pill-warn">not provisioned</span>';
+}
+
+function renderDomains(domains) {
+  const tbody = document.getElementById("td-domains-tbody");
+  if (!domains.length) { tbody.innerHTML = `<tr><td colspan="4" class="empty">No custom domains yet.</td></tr>`; return; }
+  tbody.innerHTML = domains.map(d => `<tr><td>${escapeHtml(d.domain)}</td><td>${d.is_primary ? '<span class="pill pill-ok">primary</span>' : ''}</td><td>${d.is_verified ? '<span class="pill pill-ok">verified</span>' : '<span class="pill pill-warn">unverified</span>'}</td><td class="btn-row"><button class="btn btn-sm" onclick="verifyDomain(${d.id})">Verify</button> <button class="btn btn-sm btn-danger" onclick="deleteDomain(${d.id})">Remove</button></td></tr>`).join("");
+}
+
+async function loadTenantCosts(tenantId) {
+  try {
+    const c = await api("GET", `/api/admin/tenants/${tenantId}/costs?days=30`);
+    document.getElementById("td-cost-total").textContent = fmtUSD(c.total_usd);
+    document.getElementById("td-cost-events").textContent = c.events.toLocaleString();
+    document.querySelector("#td-cost-vendor tbody").innerHTML = c.by_vendor.length
+      ? c.by_vendor.map(v => `<tr><td>${escapeHtml(v.vendor)}</td><td style="text-align:right;font-family:ui-monospace,monospace">${fmtUSD(v.usd)}</td></tr>`).join("")
+      : `<tr><td colspan="2" class="empty">No spend.</td></tr>`;
+    document.querySelector("#td-cost-action tbody").innerHTML = c.by_action.length
+      ? c.by_action.map(a => `<tr><td style="font-size:12px">${escapeHtml(a.action_type)}</td><td style="text-align:right;font-family:ui-monospace,monospace">${fmtUSD(a.usd)}</td></tr>`).join("")
+      : `<tr><td colspan="2" class="empty">No spend.</td></tr>`;
+  } catch (e) {}
+}
+
+async function loadTenantKeys(tenantId) {
+  const tbody = document.getElementById("td-keys-tbody");
+  try {
+    const k = await api("GET", `/api/admin/tenants/${tenantId}/keys`);
+    const rows = [
+      ["Twilio", "Account SID", k.twilio.account_sid],
+      ["Twilio", "Auth Token", k.twilio.auth_token],
+      ["Twilio", "API Key SID", k.twilio.api_key_sid],
+      ["Twilio", "API Key Secret", k.twilio.api_key_secret],
+      ["Twilio", "TwiML App SID", k.twilio.twiml_app_sid],
+      ["Resend", "Domain", { set: !!k.resend.domain_id, masked: k.resend.domain_name || null }],
+      ["Resend", "Status", { set: !!k.resend.domain_status, masked: k.resend.domain_status || null }],
+      ["Resend", "Webhook secret", k.resend.webhook_secret],
+      ["Netrows", "API Key", k.netrows],
+      ["Blooio", "API Key", k.blooio.api_key],
+      ["Blooio", "Signing secret", k.blooio.signing_secret],
+      ["Deepgram", "API Key", k.deepgram],
+      ["Apollo", "API Key (BYO)", k.apollo],
+      ["Google Maps", "API Key", k.google_maps],
+    ];
+    tbody.innerHTML = rows.map(([svc, field, val]) => {
+      const isSet = val && val.set; const masked = val && val.masked;
+      return `<tr><td><strong>${escapeHtml(svc)}</strong></td><td style="color:var(--text-dim);font-size:12px">${escapeHtml(field)}</td><td>${isSet ? '<span class="pill pill-ok">set</span>' : '<span class="pill pill-dim">—</span>'}</td><td style="font-family:ui-monospace,monospace;font-size:12px;color:${isSet ? 'var(--text)' : 'var(--text-dim)'}">${isSet && masked ? escapeHtml(masked) : '—'}</td></tr>`;
+    }).join("");
+  } catch (e) { tbody.innerHTML = `<tr><td colspan="4" class="empty">${escapeHtml(e.message)}</td></tr>`; }
+}
+
+async function recheckEmailStatus() {
+  if (!currentTenantId) return;
+  try { const r = await api("POST", `/api/admin/tenants/${currentTenantId}/refresh-email-status`); toast(`Resend says: ${r.status}`); await openTenant(currentTenantId); }
+  catch (e) { toast(e.message, "error"); }
+}
+
+async function impersonate() {
+  if (!currentTenantId) return;
+  try {
+    const res = await api("POST", `/api/admin/tenants/${currentTenantId}/impersonate`);
+    localStorage.setItem("ap_admin_real_token", token);
+    token = res.access_token; localStorage.setItem(TOKEN_KEY, token);
+    document.getElementById("acting-tenant-id").textContent = res.acting_as_tenant_id;
+    document.getElementById("impersonating-banner").classList.remove("hidden");
+    toast("Impersonating tenant #" + res.acting_as_tenant_id);
+  } catch (e) { toast(e.message, "error"); }
+}
+async function endImpersonation() {
+  try {
+    const res = await api("POST", "/api/admin/impersonate/end");
+    token = res.access_token; localStorage.setItem(TOKEN_KEY, token);
+    localStorage.removeItem("ap_admin_real_token");
+    document.getElementById("impersonating-banner").classList.add("hidden");
+    toast("Back to platform admin");
+  } catch (e) { toast(e.message, "error"); }
+}
+
+async function suspendTenant() { if (!confirm("Suspend this tenant?")) return; try { await api("PATCH", `/api/admin/tenants/${currentTenantId}`, { status: "suspended" }); toast("Suspended"); await openTenant(currentTenantId); } catch (e) { toast(e.message, "error"); } }
+async function activateTenant() { try { await api("PATCH", `/api/admin/tenants/${currentTenantId}`, { status: "active" }); toast("Activated"); await openTenant(currentTenantId); } catch (e) { toast(e.message, "error"); } }
+
+async function addDomain() {
+  const domain = document.getElementById("td-new-domain").value.trim().toLowerCase();
+  if (!domain) return;
+  try { await api("POST", `/api/admin/tenants/${currentTenantId}/domains`, { domain, is_primary: false }); document.getElementById("td-new-domain").value = ""; toast("Domain added"); await openTenant(currentTenantId); }
+  catch (e) { toast(e.message, "error"); }
+}
+async function verifyDomain(id) { try { const r = await api("POST", `/api/admin/domains/${id}/verify`); toast(r.verified ? "Verified: " + r.reason : "Not verified: " + r.reason, r.verified ? "ok" : "error"); await openTenant(currentTenantId); } catch (e) { toast(e.message, "error"); } }
+async function deleteDomain(id) { if (!confirm("Remove this domain?")) return; try { await api("DELETE", `/api/admin/domains/${id}`); toast("Removed"); await openTenant(currentTenantId); } catch (e) { toast(e.message, "error"); } }
+
+async function provisionUser() {
+  const email = document.getElementById("td-user-email").value.trim();
+  const first_name = document.getElementById("td-user-first").value.trim();
+  const last_name = document.getElementById("td-user-last").value.trim();
+  const temp_password = document.getElementById("td-user-pw").value;
+  if (!email || !first_name || !last_name || !temp_password) { toast("All fields required", "error"); return; }
+  try {
+    await api("POST", `/api/admin/tenants/${currentTenantId}/users`, { email, first_name, last_name, temp_password, role: "super_admin" });
+    toast("User created — invite email sent");
+    ["td-user-email","td-user-first","td-user-last","td-user-pw"].forEach(id => document.getElementById(id).value = "");
+    await openTenant(currentTenantId);
+  } catch (e) { toast(e.message, "error"); }
+}
+
+// ============ Users ============
 let _usersDebounce = null;
-function debouncedLoadUsers() {
-  if (_usersDebounce) clearTimeout(_usersDebounce);
-  _usersDebounce = setTimeout(() => loadUsers().catch(() => {}), 250);
-}
-
+function debouncedLoadUsers() { if (_usersDebounce) clearTimeout(_usersDebounce); _usersDebounce = setTimeout(() => loadUsers().catch(() => {}), 250); }
 async function loadUsers() {
   const search = document.getElementById("users-search").value.trim();
   const tenantFilter = document.getElementById("users-filter-tenant").value;
@@ -399,72 +705,31 @@ async function loadUsers() {
   if (activeOnly) params.set("active_only", "true");
   try {
     const data = await api("GET", "/api/admin/users?" + params.toString());
-    renderUsers(data.items || []);
+    const tbody = document.getElementById("users-tbody");
+    const empty = document.getElementById("users-empty");
     document.getElementById("users-count").textContent = `${data.items.length} user${data.items.length === 1 ? "" : "s"}`;
-  } catch (e) {
-    document.getElementById("users-empty").textContent = "Could not load: " + e.message;
-    document.getElementById("users-empty").classList.remove("hidden");
-  }
+    if (!data.items.length) { tbody.innerHTML = ""; empty.classList.remove("hidden"); return; }
+    empty.classList.add("hidden");
+    const roles = ["super_admin", "admin", "senior_rep", "sales_rep", "read_only"];
+    tbody.innerHTML = data.items.map(u => `
+      <tr>
+        <td>${escapeHtml(u.email)}</td>
+        <td style="font-size:13px">${escapeHtml(u.full_name || '—')}</td>
+        <td style="font-size:12px;cursor:pointer;color:var(--accent)" onclick="go('tenant', ${u.tenant_id})">${escapeHtml(u.tenant_name)}</td>
+        <td><span class="pill ${u.role === 'super_admin' ? 'pill-warn' : u.role === 'admin' ? 'pill-ok' : 'pill-dim'}">${escapeHtml(u.role)}</span></td>
+        <td>${u.is_active ? '<span class="pill pill-ok">active</span>' : '<span class="pill pill-bad">disabled</span>'}</td>
+        <td>
+          <select onchange="changeUserRole(${u.id}, this.value)" style="font-size:11px;padding:2px 6px">${roles.map(r => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${r}</option>`).join("")}</select>
+          <button class="btn btn-sm" onclick="toggleUserActive(${u.id}, ${!u.is_active})" style="margin-left:6px">${u.is_active ? 'Disable' : 'Enable'}</button>
+        </td>
+      </tr>
+    `).join("");
+  } catch (e) { toast("Couldn't load users: " + e.message, "error"); }
 }
+async function changeUserRole(userId, newRole) { try { await api("PATCH", `/api/admin/users/${userId}`, { role: newRole }); toast(`Role: ${newRole}`); await loadUsers(); } catch (e) { toast(e.message, "error"); } }
+async function toggleUserActive(userId, makeActive) { if (!confirm(`${makeActive ? 'Enable' : 'Disable'} this user?`)) return; try { await api("PATCH", `/api/admin/users/${userId}`, { is_active: makeActive }); toast(makeActive ? "Enabled" : "Disabled"); await loadUsers(); } catch (e) { toast(e.message, "error"); } }
 
-function renderUsers(items) {
-  const tbody = document.getElementById("users-tbody");
-  const empty = document.getElementById("users-empty");
-  tbody.innerHTML = "";
-  if (!items.length) { empty.classList.remove("hidden"); empty.textContent = "No users match."; return; }
-  empty.classList.add("hidden");
-
-  const roles = ["super_admin", "admin", "senior_rep", "sales_rep", "read_only"];
-  for (const u of items) {
-    const tr = document.createElement("tr");
-    const rolePill = u.role === "super_admin"
-      ? '<span class="pill pill-warn">super_admin</span>'
-      : u.role === "admin"
-        ? '<span class="pill pill-ok">admin</span>'
-        : `<span class="pill pill-dim">${escapeHtml(u.role)}</span>`;
-    tr.innerHTML = `
-      <td>${escapeHtml(u.email)}</td>
-      <td style="font-size:13px">${escapeHtml(u.full_name || '—')}</td>
-      <td style="font-size:12px">${escapeHtml(u.tenant_name)}</td>
-      <td>${rolePill}</td>
-      <td>${u.is_active ? '<span class="pill pill-ok">active</span>' : '<span class="pill pill-bad">disabled</span>'}</td>
-      <td>
-        <select onchange="changeUserRole(${u.id}, this.value)" style="font-size:12px;padding:2px 6px">
-          ${roles.map(r => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${r}</option>`).join("")}
-        </select>
-        <button class="btn btn-sm" onclick="toggleUserActive(${u.id}, ${!u.is_active})" style="margin-left:6px">
-          ${u.is_active ? 'Disable' : 'Enable'}
-        </button>
-      </td>
-    `;
-    tbody.appendChild(tr);
-  }
-}
-
-async function changeUserRole(userId, newRole) {
-  try {
-    await api("PATCH", `/api/admin/users/${userId}`, { role: newRole });
-    toast(`Role changed to ${newRole}`);
-    await loadUsers();
-  } catch (e) { toast(e.message, "error"); }
-}
-
-async function toggleUserActive(userId, makeActive) {
-  if (!confirm(`${makeActive ? 'Enable' : 'Disable'} this user?`)) return;
-  try {
-    await api("PATCH", `/api/admin/users/${userId}`, { is_active: makeActive });
-    toast(makeActive ? "User enabled" : "User disabled");
-    await loadUsers();
-  } catch (e) { toast(e.message, "error"); }
-}
-
-function fmtUSD(n) {
-  const v = Number(n) || 0;
-  if (v < 1) return "$" + v.toFixed(3);
-  if (v < 100) return "$" + v.toFixed(2);
-  return "$" + Math.round(v).toLocaleString();
-}
-
+// ============ Costs ============
 async function loadPlatformCosts() {
   try {
     const c = await api("GET", "/api/admin/costs?days=30");
@@ -474,327 +739,38 @@ async function loadPlatformCosts() {
     document.getElementById("cost-7d-events").textContent = `${c.seven_day.events.toLocaleString()} events`;
     document.getElementById("cost-30d").textContent = fmtUSD(c.window.total_usd);
     document.getElementById("cost-30d-events").textContent = `${c.window.events.toLocaleString()} events`;
-
+    document.getElementById("cost-tenant-count").textContent = c.window.by_tenant.length;
     const vt = document.querySelector("#cost-vendor-table tbody");
-    vt.innerHTML = c.window.by_vendor.length
-      ? c.window.by_vendor.map(v => `
-          <tr>
-            <td style="font-size:13px"><strong>${escapeHtml(v.vendor)}</strong></td>
-            <td style="text-align:right;font-family:ui-monospace,monospace">${fmtUSD(v.usd)}</td>
-            <td style="text-align:right;color:var(--text-dim);font-size:11px">${v.events.toLocaleString()}</td>
-          </tr>`).join("")
-      : `<tr><td colspan="3" class="empty">No spend in this window.</td></tr>`;
-
+    vt.innerHTML = c.window.by_vendor.length ? c.window.by_vendor.map(v => `<tr><td><strong>${escapeHtml(v.vendor)}</strong></td><td style="text-align:right;font-family:ui-monospace,monospace">${fmtUSD(v.usd)}</td><td style="text-align:right;color:var(--text-dim);font-size:11px">${v.events.toLocaleString()}</td></tr>`).join("") : `<tr><td colspan="3" class="empty">No spend.</td></tr>`;
     const tt = document.querySelector("#cost-tenant-table tbody");
-    tt.innerHTML = c.window.by_tenant.length
-      ? c.window.by_tenant.map(t => `
-          <tr>
-            <td style="font-size:13px">${escapeHtml(t.tenant_name)}</td>
-            <td style="text-align:right;font-family:ui-monospace,monospace">${fmtUSD(t.usd)}</td>
-            <td style="text-align:right;color:var(--text-dim);font-size:11px">${t.events.toLocaleString()}</td>
-          </tr>`).join("")
-      : `<tr><td colspan="3" class="empty">No spend in this window.</td></tr>`;
-  } catch (e) { /* swallow — panel shows dashes */ }
+    tt.innerHTML = c.window.by_tenant.length ? c.window.by_tenant.map(t => `<tr style="cursor:pointer" onclick="go('tenant', ${t.tenant_id})"><td>${escapeHtml(t.tenant_name)}</td><td style="text-align:right;font-family:ui-monospace,monospace">${fmtUSD(t.usd)}</td><td style="text-align:right;color:var(--text-dim);font-size:11px">${t.events.toLocaleString()}</td></tr>`).join("") : `<tr><td colspan="3" class="empty">No spend.</td></tr>`;
+  } catch (e) { toast("Couldn't load costs: " + e.message, "error"); }
 }
 
-async function loadTenantCosts(tenantId) {
-  try {
-    const c = await api("GET", `/api/admin/tenants/${tenantId}/costs?days=30`);
-    document.getElementById("tenant-cost-total").textContent = fmtUSD(c.total_usd);
-    document.getElementById("tenant-cost-events").textContent = c.events.toLocaleString();
-    const vt = document.querySelector("#tenant-cost-vendor-table tbody");
-    vt.innerHTML = c.by_vendor.length
-      ? c.by_vendor.map(v => `<tr><td style="font-size:12px">${escapeHtml(v.vendor)}</td><td style="text-align:right;font-family:ui-monospace,monospace;font-size:12px">${fmtUSD(v.usd)}</td></tr>`).join("")
-      : `<tr><td colspan="2" class="empty" style="font-size:11px">—</td></tr>`;
-    const at = document.querySelector("#tenant-cost-action-table tbody");
-    at.innerHTML = c.by_action.length
-      ? c.by_action.map(a => `<tr><td style="font-size:12px">${escapeHtml(a.action_type)}</td><td style="text-align:right;font-family:ui-monospace,monospace;font-size:12px">${fmtUSD(a.usd)}</td></tr>`).join("")
-      : `<tr><td colspan="2" class="empty" style="font-size:11px">—</td></tr>`;
-  } catch (e) { /* swallow */ }
-}
-
-async function loadTenants() {
-  const rows = await api("GET", "/api/admin/tenants");
-  document.getElementById("tenants-count").textContent = `${rows.length} tenant${rows.length === 1 ? "" : "s"}`;
-  const tbody = document.getElementById("tenants-tbody");
-  tbody.innerHTML = "";
-  // Mirror tenants into the Users panel's tenant filter dropdown
-  const filter = document.getElementById("users-filter-tenant");
-  if (filter) {
-    const current = filter.value;
-    filter.innerHTML = '<option value="">All tenants</option>' +
-      rows.map(t => `<option value="${t.id}">${escapeHtml(t.name)} (#${t.id})</option>`).join("");
-    filter.value = current;
-  }
-  for (const t of rows) {
-    const tr = document.createElement("tr");
-    tr.className = "clickable";
-    tr.innerHTML = `
-      <td>${t.id}</td>
-      <td>${escapeHtml(t.name)}</td>
-      <td>${escapeHtml(t.slug)}</td>
-      <td>${escapeHtml(t.plan)}</td>
-      <td>${pillForStatus(t.status)}</td>
-      <td>${pillForOnboarding(t.onboarding_step || "pending")}</td>
-      <td><button class="btn btn-sm" onclick="event.stopPropagation(); openTenant(${t.id})">Open</button></td>
-    `;
-    tr.onclick = () => openTenant(t.id);
-    tbody.appendChild(tr);
-  }
-}
-
-function pillForStatus(s) {
-  if (s === "active") return `<span class="pill pill-ok">active</span>`;
-  if (s === "suspended") return `<span class="pill pill-bad">suspended</span>`;
-  return `<span class="pill pill-dim">${escapeHtml(s)}</span>`;
-}
-function pillForOnboarding(s) {
-  if (s === "done") return `<span class="pill pill-ok">done</span>`;
-  if (s === "pending") return `<span class="pill pill-warn">pending</span>`;
-  return `<span class="pill pill-warn">${escapeHtml(s)}</span>`;
-}
-function escapeHtml(s) { return (s || "").toString().replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
-
-function showCreateTenant() { show("create-tenant-panel"); }
-function hideCreateTenant() { hide("create-tenant-panel"); ["create-name","create-slug"].forEach(id => document.getElementById(id).value = ""); }
-
-async function createTenant() {
-  const name = document.getElementById("create-name").value.trim();
-  const slug = document.getElementById("create-slug").value.trim();
-  const plan = document.getElementById("create-plan").value;
-  if (!name || !slug) { toast("name + slug required", "error"); return; }
-  try {
-    await api("POST", "/api/admin/tenants", { name, slug, plan });
-    toast("Tenant created");
-    hideCreateTenant();
-    await loadTenants();
-  } catch (e) { toast(e.message, "error"); }
-}
-
-async function openTenant(tenantId) {
-  currentTenantId = tenantId;
-  const data = await api("GET", `/api/admin/tenants/${tenantId}`);
-  document.getElementById("detail-name").textContent = data.tenant.name;
-  document.getElementById("detail-id").textContent = "#" + data.tenant.id;
-  document.getElementById("stat-users").textContent = data.counts.users;
-  document.getElementById("stat-companies").textContent = data.counts.companies;
-  document.getElementById("stat-contacts").textContent = data.counts.contacts;
-  document.getElementById("stat-campaigns").textContent = data.counts.campaigns;
-  renderProvisioning(data.provisioning || {});
-  renderDomains(data.domains || []);
-  show("tenant-detail");
-  document.getElementById("tenant-detail").scrollIntoView({ behavior: "smooth" });
-  // Load API Keys + Cost panels separately so slow fetches don't block
-  // the rest of the tenant-detail render.
-  loadKeys(tenantId).catch(() => {});
-  loadTenantCosts(tenantId).catch(() => {});
-}
-
-async function loadKeys(tenantId) {
+// ============ API Keys overview ============
+async function renderKeysOverview() {
+  await loadTenantsBackground();
   const tbody = document.getElementById("keys-tbody");
-  if (!tbody) return;
-  tbody.innerHTML = '<tr><td colspan="4" class="empty">Loading…</td></tr>';
-  try {
-    const k = await api("GET", `/api/admin/tenants/${tenantId}/keys`);
-    const rows = [];
-    // Order = how Steve thinks about them, not alphabetical.
-    const groups = [
-      ["Twilio", "Account SID",  k.twilio.account_sid],
-      ["Twilio", "Auth Token",   k.twilio.auth_token],
-      ["Twilio", "API Key SID",  k.twilio.api_key_sid],
-      ["Twilio", "API Key Secret", k.twilio.api_key_secret],
-      ["Twilio", "TwiML App SID", k.twilio.twiml_app_sid],
-      ["Resend", "Domain",       { set: !!k.resend.domain_id, masked: k.resend.domain_name || null }],
-      ["Resend", "Domain status", { set: !!k.resend.domain_status, masked: k.resend.domain_status || null }],
-      ["Resend", "Webhook secret", k.resend.webhook_secret],
-      ["Netrows", "API Key",     k.netrows],
-      ["Blooio", "API Key",      k.blooio.api_key],
-      ["Blooio", "Signing secret", k.blooio.signing_secret],
-      ["Deepgram", "API Key",    k.deepgram],
-      ["Apollo", "API Key (BYO)", k.apollo],
-      ["Google Maps", "API Key", k.google_maps],
-    ];
-    for (const [service, field, val] of groups) {
-      const isSet = val && val.set;
-      const masked = val && val.masked;
-      rows.push(`
-        <tr>
-          <td style="font-weight:600">${escapeHtml(service)}</td>
-          <td style="color:var(--text-dim);font-size:12px">${escapeHtml(field)}</td>
-          <td>${isSet ? '<span class="pill pill-ok">set</span>' : '<span class="pill pill-dim">—</span>'}</td>
-          <td style="font-family:ui-monospace,monospace;font-size:12px;color:${isSet ? 'var(--text)' : 'var(--text-dim)'}">${isSet && masked ? escapeHtml(masked) : '—'}</td>
-        </tr>
-      `);
-    }
-    tbody.innerHTML = rows.join("");
-  } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="4" class="empty">Could not load: ${escapeHtml(e.message)}</td></tr>`;
-  }
+  if (!_tenants.length) { tbody.innerHTML = `<tr><td colspan="6" class="empty">No tenants yet.</td></tr>`; return; }
+  tbody.innerHTML = `<tr><td colspan="6" class="empty">Loading…</td></tr>`;
+  const dots = await Promise.all(_tenants.map(t => api("GET", `/api/admin/tenants/${t.id}/keys`).catch(() => null)));
+  tbody.innerHTML = _tenants.map((t, i) => {
+    const k = dots[i];
+    function d(set) { return set ? '<span style="color:var(--success);font-size:14px">●</span>' : '<span style="color:var(--text-muted);font-size:14px">○</span>'; }
+    return `<tr style="cursor:pointer" onclick="go('tenant', ${t.id})">
+      <td><strong>${escapeHtml(t.name)}</strong> <span style="color:var(--text-dim);font-size:11px">${escapeHtml(t.slug)}</span></td>
+      <td>${d(k?.twilio?.account_sid?.set)}</td>
+      <td>${d(!!k?.resend?.domain_id)}</td>
+      <td>${d(k?.netrows?.set)}</td>
+      <td>${d(k?.blooio?.api_key?.set)}</td>
+      <td>${d(k?.apollo?.set)}</td>
+    </tr>`;
+  }).join("");
 }
 
-function renderProvisioning(p) {
-  // Email
-  const es = document.getElementById("email-status");
-  const er = document.getElementById("email-records");
-  if (!p.resend_domain_id) {
-    es.innerHTML = '<span class="pill pill-warn">not provisioned</span> &nbsp; <span style="color:var(--text-dim)">No sending domain yet. Tenant will use the shared platform sender until configured.</span>';
-    er.classList.add("hidden");
-  } else {
-    const verified = p.resend_domain_status === "verified";
-    es.innerHTML = `
-      <span class="pill ${verified ? 'pill-ok' : 'pill-warn'}">${verified ? 'verified' : (p.resend_domain_status || 'pending')}</span>
-      &nbsp; Sending domain: <code>${escapeHtml(p.resend_domain_name || '')}</code>
-    `;
-    if (verified) {
-      er.classList.add("hidden");
-    } else {
-      er.classList.remove("hidden");
-      const tbody = document.getElementById("email-records-tbody");
-      tbody.innerHTML = (p.resend_records || []).map(r => `
-        <tr>
-          <td style="padding:6px"><strong>${escapeHtml(r.type || '')}</strong></td>
-          <td style="padding:6px"><code>${escapeHtml(r.name || '')}</code></td>
-          <td style="padding:6px;word-break:break-all"><code>${escapeHtml((r.value || '').slice(0, 80))}${(r.value || '').length > 80 ? '…' : ''}</code></td>
-          <td style="padding:6px"><button class="btn btn-sm" onclick="navigator.clipboard.writeText(${JSON.stringify(r.value || '')})">Copy</button></td>
-        </tr>
-      `).join('');
-    }
-  }
-  // Voice
-  const vs = document.getElementById("voice-status");
-  if (!p.twilio_subaccount_sid) {
-    vs.innerHTML = '<span class="pill pill-warn">not provisioned</span> &nbsp; <span style="color:var(--text-dim)">Twilio sub-account not created (master credentials missing or API failed).</span>';
-  } else {
-    vs.innerHTML = `<span class="pill pill-ok">ready</span> &nbsp; Sub-account SID: <code>${escapeHtml(p.twilio_subaccount_sid)}</code>`;
-  }
-}
-
-async function recheckEmailStatus() {
-  if (!currentTenantId) return;
-  try {
-    const res = await api("POST", `/api/admin/tenants/${currentTenantId}/refresh-email-status`);
-    toast(`Resend says: ${res.status}`);
-    await openTenant(currentTenantId);
-  } catch (e) { toast(e.message, "error"); }
-}
-
-function renderDomains(domains) {
-  const tbody = document.getElementById("domains-tbody");
-  tbody.innerHTML = "";
-  if (!domains.length) {
-    tbody.innerHTML = `<tr><td colspan="4" class="empty">No custom domains yet.</td></tr>`;
-    return;
-  }
-  for (const d of domains) {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${escapeHtml(d.domain)}</td>
-      <td>${d.is_primary ? '<span class="pill pill-ok">primary</span>' : ''}</td>
-      <td>${d.is_verified ? '<span class="pill pill-ok">verified</span>' : '<span class="pill pill-warn">unverified</span>'}</td>
-      <td class="btn-row">
-        <button class="btn btn-sm" onclick="verifyDomain(${d.id})">Verify DNS</button>
-        <button class="btn btn-sm btn-danger" onclick="deleteDomain(${d.id})">Remove</button>
-      </td>
-    `;
-    tbody.appendChild(tr);
-  }
-}
-
-async function addDomain() {
-  const domain = document.getElementById("new-domain").value.trim().toLowerCase();
-  if (!domain) return;
-  try {
-    await api("POST", `/api/admin/tenants/${currentTenantId}/domains`, { domain, is_primary: false });
-    document.getElementById("new-domain").value = "";
-    toast("Domain added — verify DNS next");
-    await openTenant(currentTenantId);
-  } catch (e) { toast(e.message, "error"); }
-}
-
-async function verifyDomain(domainId) {
-  try {
-    const res = await api("POST", `/api/admin/domains/${domainId}/verify`);
-    toast(res.verified ? "Verified: " + res.reason : "Not verified: " + res.reason, res.verified ? "ok" : "error");
-    await openTenant(currentTenantId);
-  } catch (e) { toast(e.message, "error"); }
-}
-
-async function deleteDomain(domainId) {
-  if (!confirm("Remove this domain?")) return;
-  try {
-    await api("DELETE", `/api/admin/domains/${domainId}`);
-    toast("Domain removed");
-    await openTenant(currentTenantId);
-  } catch (e) { toast(e.message, "error"); }
-}
-
-async function provisionUser() {
-  const email = document.getElementById("user-email").value.trim();
-  const first_name = document.getElementById("user-first").value.trim();
-  const last_name = document.getElementById("user-last").value.trim();
-  const temp_password = document.getElementById("user-pw").value;
-  if (!email || !first_name || !last_name || !temp_password) { toast("All fields required", "error"); return; }
-  try {
-    await api("POST", `/api/admin/tenants/${currentTenantId}/users`, {
-      email, first_name, last_name, temp_password, role: "super_admin",
-    });
-    toast("User created — share the temp password securely");
-    ["user-email","user-first","user-last","user-pw"].forEach(id => document.getElementById(id).value = "");
-  } catch (e) { toast(e.message, "error"); }
-}
-
-async function impersonate() {
-  if (!currentTenantId) return;
-  try {
-    const res = await api("POST", `/api/admin/tenants/${currentTenantId}/impersonate`);
-    // Stash a "real" token so we can recover and swap to the impersonation token
-    localStorage.setItem("ap_admin_real_token", token);
-    token = res.access_token;
-    localStorage.setItem(TOKEN_KEY, token);
-    document.getElementById("acting-tenant-id").textContent = res.acting_as_tenant_id;
-    show("impersonating-banner");
-    toast("Now impersonating tenant #" + res.acting_as_tenant_id);
-  } catch (e) { toast(e.message, "error"); }
-}
-
-async function endImpersonation() {
-  try {
-    const res = await api("POST", "/api/admin/impersonate/end");
-    token = res.access_token;
-    localStorage.setItem(TOKEN_KEY, token);
-    localStorage.removeItem("ap_admin_real_token");
-    hide("impersonating-banner");
-    toast("Returned to platform admin");
-  } catch (e) { toast(e.message, "error"); }
-}
-
-async function suspendTenant() {
-  if (!currentTenantId) return;
-  if (!confirm("Suspend this tenant? Their users will be blocked from signing in.")) return;
-  try {
-    await api("PATCH", `/api/admin/tenants/${currentTenantId}`, { status: "suspended" });
-    toast("Suspended");
-    await loadTenants();
-    await openTenant(currentTenantId);
-  } catch (e) { toast(e.message, "error"); }
-}
-
-async function activateTenant() {
-  if (!currentTenantId) return;
-  try {
-    await api("PATCH", `/api/admin/tenants/${currentTenantId}`, { status: "active" });
-    toast("Activated");
-    await loadTenants();
-    await openTenant(currentTenantId);
-  } catch (e) { toast(e.message, "error"); }
-}
-
-// Boot
-if (token && actor) {
-  bootApp().catch(() => logout());
-} else {
-  show("login-view");
-}
+// ============ Boot ============
+if (token && actor) bootApp().catch(() => logout());
+else showLogin();
 </script>
 
 </body>
