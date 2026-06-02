@@ -151,6 +151,32 @@
     </div>
 
     <div class="panel">
+      <h2>Users</h2>
+      <div class="row" style="margin-bottom: 12px;">
+        <input id="users-search" placeholder="Search email or name…" style="flex:1;max-width:320px" oninput="debouncedLoadUsers()">
+        <select id="users-filter-tenant" onchange="loadUsers()" style="font-size:13px"><option value="">All tenants</option></select>
+        <select id="users-filter-role" onchange="loadUsers()" style="font-size:13px">
+          <option value="">All roles</option>
+          <option value="super_admin">super_admin</option>
+          <option value="admin">admin</option>
+          <option value="senior_rep">senior_rep</option>
+          <option value="sales_rep">sales_rep</option>
+          <option value="read_only">read_only</option>
+        </select>
+        <label style="font-size:12px;color:var(--text-dim);display:flex;align-items:center;gap:6px">
+          <input type="checkbox" id="users-filter-active" onchange="loadUsers()"> Active only
+        </label>
+        <div class="grow"></div>
+        <span class="sub" id="users-count">—</span>
+      </div>
+      <table>
+        <thead><tr><th>Email</th><th>Name</th><th>Tenant</th><th>Role</th><th>Active</th><th></th></tr></thead>
+        <tbody id="users-tbody"></tbody>
+      </table>
+      <div id="users-empty" class="empty hidden">No users match.</div>
+    </div>
+
+    <div class="panel">
       <h2>Tenants</h2>
       <div class="row" style="margin-bottom: 16px;">
         <button class="btn btn-primary" onclick="showCreateTenant()">+ New tenant</button>
@@ -352,6 +378,84 @@ async function bootApp() {
   document.getElementById("actor-email").textContent = actor.email;
   await loadTenants();
   loadPlatformCosts().catch(() => {});
+  loadUsers().catch(() => {});
+}
+
+let _usersDebounce = null;
+function debouncedLoadUsers() {
+  if (_usersDebounce) clearTimeout(_usersDebounce);
+  _usersDebounce = setTimeout(() => loadUsers().catch(() => {}), 250);
+}
+
+async function loadUsers() {
+  const search = document.getElementById("users-search").value.trim();
+  const tenantFilter = document.getElementById("users-filter-tenant").value;
+  const roleFilter = document.getElementById("users-filter-role").value;
+  const activeOnly = document.getElementById("users-filter-active").checked;
+  const params = new URLSearchParams({ limit: "200" });
+  if (search) params.set("search", search);
+  if (tenantFilter) params.set("tenant_id", tenantFilter);
+  if (roleFilter) params.set("role", roleFilter);
+  if (activeOnly) params.set("active_only", "true");
+  try {
+    const data = await api("GET", "/api/admin/users?" + params.toString());
+    renderUsers(data.items || []);
+    document.getElementById("users-count").textContent = `${data.items.length} user${data.items.length === 1 ? "" : "s"}`;
+  } catch (e) {
+    document.getElementById("users-empty").textContent = "Could not load: " + e.message;
+    document.getElementById("users-empty").classList.remove("hidden");
+  }
+}
+
+function renderUsers(items) {
+  const tbody = document.getElementById("users-tbody");
+  const empty = document.getElementById("users-empty");
+  tbody.innerHTML = "";
+  if (!items.length) { empty.classList.remove("hidden"); empty.textContent = "No users match."; return; }
+  empty.classList.add("hidden");
+
+  const roles = ["super_admin", "admin", "senior_rep", "sales_rep", "read_only"];
+  for (const u of items) {
+    const tr = document.createElement("tr");
+    const rolePill = u.role === "super_admin"
+      ? '<span class="pill pill-warn">super_admin</span>'
+      : u.role === "admin"
+        ? '<span class="pill pill-ok">admin</span>'
+        : `<span class="pill pill-dim">${escapeHtml(u.role)}</span>`;
+    tr.innerHTML = `
+      <td>${escapeHtml(u.email)}</td>
+      <td style="font-size:13px">${escapeHtml(u.full_name || '—')}</td>
+      <td style="font-size:12px">${escapeHtml(u.tenant_name)}</td>
+      <td>${rolePill}</td>
+      <td>${u.is_active ? '<span class="pill pill-ok">active</span>' : '<span class="pill pill-bad">disabled</span>'}</td>
+      <td>
+        <select onchange="changeUserRole(${u.id}, this.value)" style="font-size:12px;padding:2px 6px">
+          ${roles.map(r => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${r}</option>`).join("")}
+        </select>
+        <button class="btn btn-sm" onclick="toggleUserActive(${u.id}, ${!u.is_active})" style="margin-left:6px">
+          ${u.is_active ? 'Disable' : 'Enable'}
+        </button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+async function changeUserRole(userId, newRole) {
+  try {
+    await api("PATCH", `/api/admin/users/${userId}`, { role: newRole });
+    toast(`Role changed to ${newRole}`);
+    await loadUsers();
+  } catch (e) { toast(e.message, "error"); }
+}
+
+async function toggleUserActive(userId, makeActive) {
+  if (!confirm(`${makeActive ? 'Enable' : 'Disable'} this user?`)) return;
+  try {
+    await api("PATCH", `/api/admin/users/${userId}`, { is_active: makeActive });
+    toast(makeActive ? "User enabled" : "User disabled");
+    await loadUsers();
+  } catch (e) { toast(e.message, "error"); }
 }
 
 function fmtUSD(n) {
@@ -414,6 +518,14 @@ async function loadTenants() {
   document.getElementById("tenants-count").textContent = `${rows.length} tenant${rows.length === 1 ? "" : "s"}`;
   const tbody = document.getElementById("tenants-tbody");
   tbody.innerHTML = "";
+  // Mirror tenants into the Users panel's tenant filter dropdown
+  const filter = document.getElementById("users-filter-tenant");
+  if (filter) {
+    const current = filter.value;
+    filter.innerHTML = '<option value="">All tenants</option>' +
+      rows.map(t => `<option value="${t.id}">${escapeHtml(t.name)} (#${t.id})</option>`).join("");
+    filter.value = current;
+  }
   for (const t of rows) {
     const tr = document.createElement("tr");
     tr.className = "clickable";

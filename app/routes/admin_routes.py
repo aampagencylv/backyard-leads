@@ -453,6 +453,125 @@ async def tenant_costs(
     }
 
 
+@router.get("/users")
+async def list_all_users(
+    search: Optional[str] = None,
+    tenant_id: Optional[int] = None,
+    role: Optional[str] = None,
+    active_only: bool = False,
+    limit: int = 200,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_super_admin),
+):
+    """Cross-tenant user listing for the platform admin console.
+
+    Filters:
+      search       — substring match on email + first/last name
+      tenant_id    — narrow to one tenant
+      role         — exact-match (super_admin / admin / senior_rep / sales_rep / read_only)
+      active_only  — only is_active=True
+
+    Returns up to `limit` users joined with their tenant name. Sorted
+    by tenant_id then email for a predictable readout.
+    """
+    q = select(User)
+    if tenant_id is not None:
+        q = q.where(User.tenant_id == tenant_id)
+    if role:
+        q = q.where(User.role == role)
+    if active_only:
+        q = q.where(User.is_active == True)
+    if search:
+        s = f"%{search.strip().lower()}%"
+        from sqlalchemy import or_, func as _func
+        q = q.where(or_(
+            _func.lower(User.email).like(s),
+            _func.lower(User.first_name).like(s),
+            _func.lower(User.last_name).like(s),
+        ))
+    q = q.order_by(User.tenant_id, User.email).limit(min(limit, 500)).offset(offset)
+    rows = (await db.execute(q)).scalars().all()
+
+    tenant_ids = list({u.tenant_id for u in rows})
+    tenant_names: dict[int, str] = {}
+    if tenant_ids:
+        t_rows = (await db.execute(
+            select(Tenant.id, Tenant.name).where(Tenant.id.in_(tenant_ids))
+        )).all()
+        tenant_names = {r.id: r.name for r in t_rows}
+
+    return {
+        "items": [{
+            "id": u.id,
+            "tenant_id": u.tenant_id,
+            "tenant_name": tenant_names.get(u.tenant_id, f"#{u.tenant_id}"),
+            "email": u.email,
+            "full_name": u.full_name,
+            "first_name": u.first_name,
+            "last_name": u.last_name,
+            "role": u.role,
+            "is_active": u.is_active,
+            "created_at": u.created_at.isoformat() if u.created_at else None,
+            "last_login_at": u.last_login_at.isoformat() if getattr(u, "last_login_at", None) else None,
+        } for u in rows],
+        "count": len(rows),
+        "offset": offset,
+        "limit": limit,
+    }
+
+
+class AdminUserPatch(BaseModel):
+    role: Optional[str] = None        # super_admin / admin / senior_rep / sales_rep / read_only
+    is_active: Optional[bool] = None  # toggle access without deleting
+
+
+@router.patch("/users/{user_id}")
+async def admin_update_user(
+    user_id: int,
+    req: AdminUserPatch,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(require_super_admin),
+):
+    """Cross-tenant user mutation. Super_admin only.
+
+    Used by /admin's Users panel to:
+      - change a user's role (promote sales_rep → admin, etc.)
+      - toggle is_active (suspend without deleting)
+
+    Self-protection: a super_admin can't demote themselves or
+    deactivate themselves from this endpoint — easy way to lock
+    yourself out of the platform.
+    """
+    u = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    if not u:
+        raise HTTPException(status_code=404, detail="user not found")
+
+    if u.id == actor.id and req.role is not None and req.role != "super_admin":
+        raise HTTPException(status_code=400, detail="Can't demote yourself")
+    if u.id == actor.id and req.is_active is False:
+        raise HTTPException(status_code=400, detail="Can't deactivate yourself")
+
+    changes = {}
+    if req.role is not None:
+        valid = {"super_admin", "admin", "senior_rep", "sales_rep", "read_only"}
+        if req.role not in valid:
+            raise HTTPException(status_code=400, detail=f"role must be one of {sorted(valid)}")
+        changes["role"] = {"from": u.role, "to": req.role}
+        u.role = req.role
+    if req.is_active is not None:
+        changes["is_active"] = {"from": u.is_active, "to": req.is_active}
+        u.is_active = req.is_active
+
+    await db.commit()
+    await db.refresh(u)
+    if changes:
+        await record_audit(db, actor=actor, action="admin_user_updated",
+                           target_type="user", target_id=u.id,
+                           metadata={"tenant_id": u.tenant_id, "changes": changes})
+    return {"id": u.id, "email": u.email, "role": u.role, "is_active": u.is_active, "tenant_id": u.tenant_id}
+
+
 @router.get("/tenants/{tenant_id}/keys")
 async def tenant_api_keys(
     tenant_id: int,
