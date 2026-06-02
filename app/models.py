@@ -15,6 +15,7 @@ class Tenant(Base):
     slug = Column(String(64), nullable=False, unique=True)
     status = Column(String(32), nullable=False, default="active", server_default="active")
     plan = Column(String(32), nullable=False, default="starter", server_default="starter")
+    onboarding_step = Column(String(32), nullable=False, default="pending", server_default="pending")
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), server_default=sa_text("NOW()"))
     updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), server_default=sa_text("NOW()"))
 

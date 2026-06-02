@@ -238,6 +238,76 @@ async def end_impersonation(
 
 
 # ----------------------------------------------------------------------
+# First-user provisioning inside a tenant
+# ----------------------------------------------------------------------
+
+class TenantUserCreate(BaseModel):
+    email: str = Field(min_length=3, max_length=255)
+    first_name: str = Field(min_length=1, max_length=100)
+    last_name: str = Field(min_length=1, max_length=100)
+    role: str = Field(default="super_admin",
+                      description="super_admin (default for first user) | admin | sales_rep | senior_rep | read_only")
+    temp_password: str = Field(min_length=8, max_length=128,
+                               description="One-time password emailed to the user. They reset on first login.")
+
+
+class TenantUserOut(BaseModel):
+    id: int
+    tenant_id: int
+    email: str
+    role: str
+
+
+@router.post("/tenants/{tenant_id}/users", response_model=TenantUserOut, status_code=201)
+async def create_tenant_user(
+    tenant_id: int,
+    req: TenantUserCreate,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(require_super_admin),
+):
+    """Provision a user inside a specific tenant.
+
+    Use this for onboarding the first super_admin of a new tenant. The
+    caller is a platform super_admin (always tenant #1 today). The new
+    user belongs to the target tenant — every subsequent action they
+    take is scoped there.
+    """
+    tenant = (await db.execute(select(Tenant).where(Tenant.id == tenant_id))).scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="tenant not found")
+
+    valid_roles = {"super_admin", "admin", "senior_rep", "sales_rep", "read_only"}
+    if req.role not in valid_roles:
+        raise HTTPException(status_code=400, detail=f"role must be one of {sorted(valid_roles)}")
+
+    # Email uniqueness is checked within the target tenant only — two
+    # tenants can each have their own steve@example.com.
+    existing = (await db.execute(
+        select(User).where(User.email == req.email.lower(), User.tenant_id == tenant_id)
+    )).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=409, detail="email already exists in this tenant")
+
+    from app.auth import hash_password
+    user = User(
+        tenant_id=tenant_id,
+        email=req.email.lower().strip(),
+        first_name=req.first_name.strip(),
+        last_name=req.last_name.strip(),
+        role=req.role,
+        hashed_password=hash_password(req.temp_password),
+        is_active=True,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    await record_audit(db, actor=actor, action="tenant_user_provisioned",
+                       target_type="user", target_id=user.id,
+                       metadata={"tenant_id": tenant_id, "email": user.email, "role": user.role})
+    return TenantUserOut(id=user.id, tenant_id=tenant_id, email=user.email, role=user.role)
+
+
+# ----------------------------------------------------------------------
 # Custom-domain registration
 # ----------------------------------------------------------------------
 

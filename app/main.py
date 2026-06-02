@@ -52,6 +52,7 @@ from app.routes import (
     site_visitors_routes,
     sequence_template_routes,
     admin_routes,
+    onboard_routes,
 )
 
 
@@ -409,6 +410,7 @@ app.include_router(site_visitors_routes.router)
 app.include_router(feedback_routes.router)
 app.include_router(sequence_template_routes.router)
 app.include_router(admin_routes.router)
+app.include_router(onboard_routes.router)
 
 # Serve static frontend + user-uploaded files (logos, etc.).
 # var/uploads/ is gitignored and persists across deploys; ensure the
