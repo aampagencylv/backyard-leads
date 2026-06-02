@@ -106,11 +106,27 @@ async def create_tenant(
         tenant_id=tenant.id,
         brand_company_name=tenant.name[:120],
     ))
+
+    # Auto-register {slug}.leadprospector.ai as a verified tenant domain so
+    # Caddy's on-demand TLS ask endpoint accepts the cert request the first
+    # time someone hits the URL. Verified=True is safe because the slug
+    # subdomain is under DNS we control (wildcard A record on
+    # leadprospector.ai) — there's no third-party DNS verification needed.
+    platform_host = f"{slug}.leadprospector.ai"
+    db.add(TenantDomain(
+        tenant_id=tenant.id,
+        domain=platform_host,
+        is_primary=True,
+        is_verified=True,
+        verified_at=datetime.now(timezone.utc),
+    ))
+
     await db.commit()
     await db.refresh(tenant)
     await record_audit(db, actor=actor, action="tenant_created",
                        target_type="tenant", target_id=tenant.id,
-                       metadata={"name": tenant.name, "slug": tenant.slug})
+                       metadata={"name": tenant.name, "slug": tenant.slug,
+                                 "platform_host": platform_host})
     return TenantOut.model_validate(tenant, from_attributes=True)
 
 
