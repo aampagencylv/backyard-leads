@@ -422,9 +422,34 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 app.mount("/uploads", StaticFiles(directory="var/uploads"), name="uploads")
 
 
+# Hostnames that show the public LeadProspector marketing landing page.
+# Everything else falls through to the tenant app (BMP today; any tenant
+# slug or custom domain tomorrow).
+_LANDING_HOSTS = {"leadprospector.ai", "www.leadprospector.ai"}
+
+# Hostnames that show the platform admin console. Convenience routing so
+# `app.leadprospector.ai/` lands on the admin shell instead of the tenant
+# app — separate URL surface for the operator's daily-driver.
+_ADMIN_HOSTS = {"app.leadprospector.ai"}
+
+
 @app.get("/", response_class=HTMLResponse)
-async def serve_app():
-    with open("static/index.html") as f:
+async def serve_app(request: Request):
+    """Root handler. Host header decides which shell we return.
+
+    - leadprospector.ai / www.leadprospector.ai → marketing landing
+    - app.leadprospector.ai                     → platform admin console
+    - everything else (tenant slugs + custom    → tenant app
+      domains + BMP legacy hosts)
+    """
+    host = (request.headers.get("host") or "").split(":", 1)[0].lower().strip()
+    if host in _LANDING_HOSTS:
+        path = "static/landing.html"
+    elif host in _ADMIN_HOSTS:
+        path = "static/admin.html"
+    else:
+        path = "static/index.html"
+    with open(path) as f:
         html = f.read()
     return HTMLResponse(html, headers={"Cache-Control": "no-store, max-age=0"})
 
@@ -433,7 +458,10 @@ async def serve_app():
 async def serve_admin():
     """Platform admin console (tenants, domains, impersonation).
     Auth is enforced by the API endpoints the page calls — page itself
-    is a static shell and safe to serve unauthenticated."""
+    is a static shell and safe to serve unauthenticated.
+
+    Reachable at https://app.leadprospector.ai/ (host-routed via /)
+    or directly via /admin on any host."""
     with open("static/admin.html") as f:
         html = f.read()
     return HTMLResponse(html, headers={"Cache-Control": "no-store, max-age=0"})

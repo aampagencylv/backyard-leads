@@ -63,6 +63,15 @@ class TenantPatch(BaseModel):
 
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$")
 
+# Reserved slugs that collide with platform-owned hostnames or routes.
+# A tenant can't claim these — would either intercept admin login or be
+# rejected by the Caddy ask endpoint.
+_RESERVED_SLUGS = {
+    "app", "www", "edge", "api", "admin", "auth", "login",
+    "mail", "blog", "docs", "help", "support", "billing",
+    "status", "static", "assets", "cdn", "dashboard",
+}
+
 
 @router.get("/tenants", response_model=list[TenantOut])
 async def list_tenants(
@@ -83,6 +92,9 @@ async def create_tenant(
     if not _SLUG_RE.match(slug):
         raise HTTPException(status_code=400,
                             detail="slug must be lowercase letters/digits/hyphens, 4-64 chars")
+    if slug in _RESERVED_SLUGS:
+        raise HTTPException(status_code=400,
+                            detail=f"slug '{slug}' is reserved — collides with a platform hostname")
 
     existing = (await db.execute(select(Tenant).where(Tenant.slug == slug))).scalar_one_or_none()
     if existing:

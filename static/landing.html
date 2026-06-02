@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LeadProspector — multi-tenant cold outreach for agencies</title>
+<meta name="description" content="The white-label cold-outreach + CRM platform for BDR agencies. Calls, email, iMessage, sequencing, and AI prospecting under your own brand.">
+<style>
+  :root {
+    --bg: #0a0e14;
+    --bg-2: #0f1419;
+    --panel: #161b22;
+    --border: #2b3540;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --text-muted: #6e7681;
+    --accent: #ff6b1a;
+    --accent-dim: #c54400;
+    --accent-glow: rgba(255, 107, 26, 0.25);
+    --green: #3fb950;
+    --max-w: 1100px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", system-ui, sans-serif; line-height: 1.55; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .container { max-width: var(--max-w); margin: 0 auto; padding: 0 24px; }
+
+  /* Header */
+  header { padding: 20px 0; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: rgba(10, 14, 20, 0.85); backdrop-filter: blur(12px); z-index: 100; }
+  .nav { display: flex; align-items: center; gap: 24px; }
+  .brand { font-weight: 700; font-size: 18px; letter-spacing: -0.3px; display: flex; align-items: center; gap: 10px; }
+  .brand-dot { width: 10px; height: 10px; background: var(--accent); border-radius: 2px; box-shadow: 0 0 12px var(--accent-glow); }
+  .nav-spacer { flex: 1; }
+  .nav-link { color: var(--text-dim); font-size: 14px; }
+  .nav-link:hover { color: var(--text); text-decoration: none; }
+  .btn { display: inline-block; padding: 10px 18px; border-radius: 8px; font-size: 14px; font-weight: 600; transition: all 0.15s; border: 1px solid transparent; cursor: pointer; }
+  .btn-primary { background: var(--accent); color: white; }
+  .btn-primary:hover { background: var(--accent-dim); text-decoration: none; }
+  .btn-ghost { color: var(--text); border-color: var(--border); background: transparent; }
+  .btn-ghost:hover { border-color: var(--text-dim); text-decoration: none; }
+
+  /* Hero */
+  .hero { padding: 96px 0 80px; text-align: center; }
+  .hero h1 { font-size: 56px; line-height: 1.05; letter-spacing: -1.5px; font-weight: 700; max-width: 880px; margin: 0 auto 24px; }
+  .hero h1 .accent { color: var(--accent); }
+  .hero .lede { font-size: 19px; color: var(--text-dim); max-width: 700px; margin: 0 auto 36px; }
+  .hero .cta-row { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .hero .btn { padding: 14px 28px; font-size: 15px; }
+  .hero .pill { display: inline-block; padding: 4px 12px; background: rgba(255, 107, 26, 0.1); color: var(--accent); border: 1px solid rgba(255, 107, 26, 0.3); border-radius: 20px; font-size: 12px; font-weight: 600; margin-bottom: 24px; letter-spacing: 0.5px; }
+
+  /* Sections */
+  section { padding: 64px 0; }
+  section h2 { font-size: 32px; letter-spacing: -0.8px; margin-bottom: 12px; }
+  section .lede-sub { color: var(--text-dim); font-size: 16px; max-width: 640px; margin-bottom: 48px; }
+
+  /* Feature grid */
+  .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .feature { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 24px; }
+  .feature .icon { width: 32px; height: 32px; background: rgba(255, 107, 26, 0.12); border-radius: 8px; display: flex; align-items: center; justify-content: center; margin-bottom: 16px; color: var(--accent); font-size: 18px; font-weight: 700; }
+  .feature h3 { font-size: 15px; margin-bottom: 6px; }
+  .feature p { color: var(--text-dim); font-size: 13px; }
+
+  /* What's included strip */
+  .strip { background: var(--bg-2); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 48px 0; }
+  .channels { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; text-align: center; }
+  .channel { padding: 16px; border-radius: 8px; }
+  .channel .label { font-size: 11px; color: var(--text-muted); letter-spacing: 1px; text-transform: uppercase; }
+  .channel .name { font-size: 16px; font-weight: 600; margin-top: 4px; }
+  .channel .note { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+
+  /* CTA section */
+  .cta-block { background: linear-gradient(135deg, rgba(255,107,26,0.08) 0%, rgba(255,107,26,0.02) 100%); border: 1px solid rgba(255,107,26,0.25); border-radius: 16px; padding: 48px; text-align: center; }
+  .cta-block h3 { font-size: 26px; margin-bottom: 8px; letter-spacing: -0.5px; }
+  .cta-block p { color: var(--text-dim); margin-bottom: 24px; }
+
+  /* Footer */
+  footer { padding: 32px 0; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 12px; }
+  .foot-row { display: flex; align-items: center; gap: 24px; }
+  .foot-row a { color: var(--text-muted); }
+  .foot-row a:hover { color: var(--text); }
+
+  @media (max-width: 720px) {
+    .hero { padding: 56px 0 40px; }
+    .hero h1 { font-size: 36px; }
+    .hero .lede { font-size: 16px; }
+    section { padding: 40px 0; }
+    section h2 { font-size: 24px; }
+    .features { grid-template-columns: 1fr; }
+    .channels { grid-template-columns: repeat(2, 1fr); }
+    .cta-block { padding: 32px 24px; }
+    .nav .nav-link.hide-sm { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container nav">
+    <div class="brand"><span class="brand-dot"></span> LeadProspector</div>
+    <div class="nav-spacer"></div>
+    <a href="#features" class="nav-link hide-sm">Features</a>
+    <a href="#stack" class="nav-link hide-sm">Stack</a>
+    <a href="mailto:hello@leadprospector.ai" class="nav-link hide-sm">Contact</a>
+    <a href="https://app.leadprospector.ai/admin" class="btn btn-ghost">Sign in</a>
+  </div>
+</header>
+
+<div class="hero">
+  <div class="container">
+    <div class="pill">Multi-tenant SaaS · For BDR agencies</div>
+    <h1>The cold-outreach platform <span class="accent">your agency runs on.</span></h1>
+    <p class="lede">Calls, email, iMessage, AI-generated sequences, and a full CRM — under your own brand. Stop stitching together six tools for every client. Run all of your outbound on one platform.</p>
+    <div class="cta-row">
+      <a href="mailto:hello@leadprospector.ai?subject=LeadProspector%20demo" class="btn btn-primary">Book a demo</a>
+      <a href="https://app.leadprospector.ai/admin" class="btn btn-ghost">Sign in</a>
+    </div>
+  </div>
+</div>
+
+<section id="features">
+  <div class="container">
+    <h2>Everything a BDR team needs.</h2>
+    <p class="lede-sub">Outbound across every channel, with AI sequencing, deal pipelines, and conversion analytics baked in. Each tenant gets their own subdomain, their own brand, their own data — fully isolated.</p>
+    <div class="features">
+      <div class="feature">
+        <div class="icon">📞</div>
+        <h3>Voice + SMS</h3>
+        <p>Each tenant gets their own Twilio sub-account. Click-to-call, voicemail, A2P 10DLC SMS, full call recording + transcription.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">✉️</div>
+        <h3>Email sequences</h3>
+        <p>Auto-provisioned sending subdomain per tenant. SPF/DKIM/DMARC handled. AI-generated cold emails + follow-ups + reply classification.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">💬</div>
+        <h3>iMessage</h3>
+        <p>Higher response rates than SMS for iPhone-heavy markets. Native integration via Blooio.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">🎯</div>
+        <h3>AI prospect discovery</h3>
+        <p>Google Maps + Netrows + Hunter + Apollo enrichment. Auto-qualifies prospects against your criteria, generates personalized sequences for the ones that pass.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">📊</div>
+        <h3>Pipeline + CRM</h3>
+        <p>Drag-and-drop kanban, configurable stages, auto-advance on engagement signals, snooze-and-revive, task management.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">🔍</div>
+        <h3>Audit reports</h3>
+        <p>Generate AI-powered GEO + local SEO audits for prospects. Drop them in cold emails to earn the meeting before pitching.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="strip">
+  <div class="container">
+    <div class="channels">
+      <div class="channel">
+        <div class="label">Voice</div>
+        <div class="name">Twilio</div>
+        <div class="note">Sub-account per tenant</div>
+      </div>
+      <div class="channel">
+        <div class="label">Email</div>
+        <div class="name">Resend</div>
+        <div class="note">Auto-provisioned domain</div>
+      </div>
+      <div class="channel">
+        <div class="label">AI</div>
+        <div class="name">Claude + GPT-5</div>
+        <div class="note">Tiered + prompt-cached</div>
+      </div>
+      <div class="channel">
+        <div class="label">Enrichment</div>
+        <div class="name">Netrows + Hunter</div>
+        <div class="note">Platform-brokered</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<section id="stack">
+  <div class="container">
+    <h2>White-label, your way.</h2>
+    <p class="lede-sub">Run on your own domain (CRM tied to your agency's brand). All AI, calls, email, and SMS are billed through us — your customer pays you a flat monthly fee, you keep the margin. Hard usage caps protect your unit economics.</p>
+    <div class="features">
+      <div class="feature">
+        <div class="icon">🏷</div>
+        <h3>Your domain</h3>
+        <p>Point a CNAME at <code style="background:var(--bg);padding:1px 6px;border-radius:4px;font-size:12px">edge.leadprospector.ai</code>. We auto-provision SSL via Let's Encrypt. Done.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">🎨</div>
+        <h3>Your brand</h3>
+        <p>Logo, colors, sending name, postal address, audit-report branding, scheduler page — all per-tenant settings.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">💰</div>
+        <h3>Predictable cost</h3>
+        <p>Per-seat pricing with all AI / Twilio / Resend / data costs bundled. Hard cap on metered usage prevents runaway bills. Top-up packs for heavy months.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <div class="cta-block">
+      <h3>Onboard your first tenant in 20 minutes.</h3>
+      <p>Five minutes to first email send. Calling live in 10. SMS in 2–3 weeks (carrier approval).</p>
+      <a href="mailto:hello@leadprospector.ai?subject=LeadProspector%20early%20access" class="btn btn-primary">Request access</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container foot-row">
+    <div>&copy; 2026 LeadProspector. Operated by AAMP Agency.</div>
+    <div class="nav-spacer"></div>
+    <a href="mailto:hello@leadprospector.ai">Contact</a>
+    <a href="https://app.leadprospector.ai/admin">Sign in</a>
+  </div>
+</footer>
+
+</body>
+</html>
