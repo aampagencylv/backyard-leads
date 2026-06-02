@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, Boolean, Table
+from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, Boolean, Table, text as sa_text
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 from app.database import Base
@@ -13,10 +13,10 @@ class Tenant(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(255), nullable=False)
     slug = Column(String(64), nullable=False, unique=True)
-    status = Column(String(32), nullable=False, default="active")
-    plan = Column(String(32), nullable=False, default="starter")
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    status = Column(String(32), nullable=False, default="active", server_default="active")
+    plan = Column(String(32), nullable=False, default="starter", server_default="starter")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), server_default=sa_text("NOW()"))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), server_default=sa_text("NOW()"))
 
 
 class TenantDomain(Base):
@@ -28,8 +28,8 @@ class TenantDomain(Base):
     id = Column(Integer, primary_key=True)
     tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     domain = Column(String(255), nullable=False, unique=True)
-    is_primary = Column(Boolean, nullable=False, default=False)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    is_primary = Column(Boolean, nullable=False, default=False, server_default=sa_text("false"))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), server_default=sa_text("NOW()"))
 
 
 class TenantMixin:

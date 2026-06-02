@@ -47,8 +47,21 @@ async def main() -> None:
                 "ON tenant_domains(domain)"
             ))
             print("+ created table tenant_domains")
+        else:
+            # Repair: if the table was already created by Base.metadata.create_all
+            # before we added server_default, retrofit the column defaults so
+            # future raw-SQL INSERTs (like the seed below) work.
+            await conn.execute(text(
+                "ALTER TABLE tenant_domains "
+                "ALTER COLUMN created_at SET DEFAULT NOW()"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE tenant_domains "
+                "ALTER COLUMN is_primary SET DEFAULT FALSE"
+            ))
 
-        # Seed BMP's domains as tenant #1
+        # Seed BMP's domains as tenant #1. INSERT explicitly sets created_at
+        # so we don't depend on the column default being in place.
         for domain, is_primary in BMP_HOSTS:
             r = await conn.execute(text(
                 "SELECT 1 FROM tenant_domains WHERE domain = :d"
@@ -56,8 +69,8 @@ async def main() -> None:
             if r.scalar():
                 continue
             await conn.execute(text(
-                "INSERT INTO tenant_domains (tenant_id, domain, is_primary) "
-                "VALUES (1, :d, :p)"
+                "INSERT INTO tenant_domains (tenant_id, domain, is_primary, created_at) "
+                "VALUES (1, :d, :p, NOW())"
             ), {"d": domain, "p": is_primary})
             print(f"  + seeded {domain} -> tenant 1 (primary={is_primary})")
 
