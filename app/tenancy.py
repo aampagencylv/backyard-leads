@@ -197,8 +197,6 @@ def install_tenant_filter() -> None:
     @event.listens_for(Session, "do_orm_execute")
     def _auto_tenant_filter(execute_state):
         # Only filter SELECTs — INSERT/UPDATE/DELETE keep behaving normally.
-        # tenant_id on inserts is handled by the column DEFAULT 1 + per-route
-        # explicit assignment as we migrate.
         if not execute_state.is_select:
             return
         tid = execute_state.session.info.get("tenant_id")
@@ -212,8 +210,29 @@ def install_tenant_filter() -> None:
             )
         )
 
+    @event.listens_for(Session, "before_flush")
+    def _auto_tenant_stamp(session, flush_context, instances):
+        """Stamp tenant_id onto any new TenantMixin instance that doesn't
+        have one set. Symmetric with the SELECT auto-filter — routes can
+        do `db.add(Company(...))` without touching tenant_id manually
+        and the session's resolved tenant gets stamped automatically.
+
+        Only fires when session.info["tenant_id"] is set (tenant-aware
+        sessions); legacy get_db sessions still rely on the column
+        DEFAULT 1 to backfill.
+        """
+        tid = session.info.get("tenant_id")
+        if tid is None:
+            return
+        for obj in session.new:
+            if not isinstance(obj, TenantMixin):
+                continue
+            current = getattr(obj, "tenant_id", None)
+            if current is None:
+                obj.tenant_id = tid
+
     _FILTER_INSTALLED = True
-    log.info("tenant auto-filter installed (do_orm_execute hook)")
+    log.info("tenant auto-filter installed (do_orm_execute + before_flush hooks)")
 
 
 def scope_to_tenant(query, model, tenant_id: int):
