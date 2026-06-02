@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, Boolean, Table, text as sa_text
+from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, Boolean, Table, LargeBinary, UniqueConstraint, text as sa_text
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 from app.database import Base
@@ -30,6 +30,26 @@ class TenantDomain(Base):
     domain = Column(String(255), nullable=False, unique=True)
     is_primary = Column(Boolean, nullable=False, default=False, server_default=sa_text("false"))
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), server_default=sa_text("NOW()"))
+
+
+class TenantSecret(Base):
+    """Per-tenant encrypted credential. Stores things like a tenant's
+    Twilio sub-account SID/auth-token, Resend domain credentials, or
+    any per-tenant API key the platform brokers.
+
+    value_encrypted is AES-GCM ciphertext (Fernet). Plaintext is never
+    persisted. Access goes through app.secrets_vault, not direct ORM
+    reads, so encryption stays consistent.
+    """
+    __tablename__ = "tenant_secrets"
+    __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_tenant_secrets_tid_name"),)
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    name = Column(String(128), nullable=False)
+    value_encrypted = Column(LargeBinary, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), server_default=sa_text("NOW()"))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), server_default=sa_text("NOW()"))
 
 
 class TenantMixin:
