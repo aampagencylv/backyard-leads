@@ -19,6 +19,19 @@ class Tenant(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
+class TenantDomain(Base):
+    """Custom-domain → tenant mapping. Subdomain routing
+    ({slug}.agencyprospector.com) does NOT need a row here — it's resolved
+    via tenants.slug. Use this table for tenants on their own hostname."""
+    __tablename__ = "tenant_domains"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    domain = Column(String(255), nullable=False, unique=True)
+    is_primary = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
 class TenantMixin:
     """Adds tenant_id to a model. default=1 mirrors the DB-side DEFAULT 1,
     so any code path that hasn't been updated to set tenant_id explicitly
