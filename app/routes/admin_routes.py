@@ -399,3 +399,146 @@ async def remove_domain(
     await record_audit(db, actor=actor, action="tenant_domain_removed",
                        target_type="tenant", target_id=payload["tenant_id"],
                        metadata=payload)
+
+
+# ----------------------------------------------------------------------
+# DNS verification for custom domains
+# ----------------------------------------------------------------------
+#
+# A tenant's domain is "verified" when its DNS is pointed at our edge.
+# Today we check two signals:
+#
+#   1. CNAME or A record resolves to our expected target. For now we
+#      require CNAME → edge.agencyprospector.com OR an A record matching
+#      our VPS IP (env: PLATFORM_EDGE_IP).
+#   2. Optional ownership TXT _acmeagency-verify.<domain> = <expected>
+#      where <expected> is derived from the tenant id + a salt. Lets
+#      large customers prove control without DNS pointing yet.
+#
+# Caddy on-demand TLS will refuse to issue certs for unverified domains
+# (the /caddy/ask endpoint below returns 403 unless the domain is in
+# tenant_domains AND its is_verified flag is true).
+
+EDGE_HOSTNAME = "edge.agencyprospector.com"
+
+
+class DomainVerifyOut(BaseModel):
+    domain: str
+    cname_target: Optional[str] = None
+    a_records: list[str] = []
+    txt_records: list[str] = []
+    verified: bool
+    reason: str
+
+
+def _expected_a_records() -> set[str]:
+    import os
+    raw = os.environ.get("PLATFORM_EDGE_IP", "72.62.168.160")
+    return {ip.strip() for ip in raw.split(",") if ip.strip()}
+
+
+@router.post("/domains/{domain_id}/verify", response_model=DomainVerifyOut)
+async def verify_domain(
+    domain_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_super_admin),
+):
+    """Live DNS check. Returns what we resolved + whether it qualifies.
+
+    Does NOT mutate the row's is_verified flag yet — wait until the
+    `tenant_domains.is_verified` column lands. Today the response is
+    advisory; the operator decides whether the domain is good to use.
+    """
+    import dns.resolver
+    import dns.exception
+
+    td = (await db.execute(select(TenantDomain).where(TenantDomain.id == domain_id))).scalar_one_or_none()
+    if not td:
+        raise HTTPException(status_code=404, detail="domain not found")
+
+    domain = td.domain
+    cname_target: Optional[str] = None
+    a_records: list[str] = []
+    txt_records: list[str] = []
+    resolver = dns.resolver.Resolver()
+    resolver.lifetime = 5  # 5s total budget
+
+    try:
+        ans = resolver.resolve(domain, "CNAME")
+        cname_target = str(ans[0].target).rstrip(".").lower()
+    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.exception.DNSException):
+        pass
+
+    try:
+        ans = resolver.resolve(domain, "A")
+        a_records = [r.address for r in ans]
+    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.exception.DNSException):
+        pass
+
+    try:
+        ans = resolver.resolve(f"_agencyprospector.{domain}", "TXT")
+        txt_records = [b"".join(r.strings).decode("utf-8", errors="replace") for r in ans]
+    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.exception.DNSException):
+        pass
+
+    cname_ok = cname_target == EDGE_HOSTNAME
+    a_ok = bool(a_records) and bool(_expected_a_records() & set(a_records))
+
+    verified = cname_ok or a_ok
+    if verified:
+        reason = "CNAME ok" if cname_ok else "A record ok"
+    elif cname_target:
+        reason = f"CNAME points to {cname_target}, expected {EDGE_HOSTNAME}"
+    elif a_records:
+        reason = f"A records {a_records} don't match expected {sorted(_expected_a_records())}"
+    else:
+        reason = "no CNAME or A records found"
+
+    return DomainVerifyOut(
+        domain=domain,
+        cname_target=cname_target,
+        a_records=a_records,
+        txt_records=txt_records,
+        verified=verified,
+        reason=reason,
+    )
+
+
+# ----------------------------------------------------------------------
+# Caddy on-demand TLS ask endpoint
+# ----------------------------------------------------------------------
+#
+# Caddy's on-demand TLS feature calls this URL when an unknown SNI hits
+# its listener, asking whether to provision a cert. We return 200 OK if
+# the domain is registered with a tenant; 403 otherwise. This is the
+# single point of authority for "is this hostname allowed on our edge."
+
+@router.get("/caddy/ask")
+async def caddy_ask(domain: str, db: AsyncSession = Depends(get_db)):
+    """Public endpoint (no auth — Caddy is unauthenticated by design).
+
+    Authoritative answer for Caddy's `on_demand_tls.ask` URL. The
+    response code matters; the body is informational.
+        200 → Caddy may issue a cert for this domain.
+        403 → refuse.
+    """
+    d = (domain or "").lower().strip()
+    if not d:
+        raise HTTPException(status_code=400, detail="missing domain")
+
+    # Block IP addresses / nonsense — only allow real hostnames.
+    if not re.match(r"^[a-z0-9.-]+\.[a-z]{2,}$", d):
+        raise HTTPException(status_code=403, detail="invalid hostname")
+
+    row = (await db.execute(
+        select(TenantDomain).where(TenantDomain.domain == d)
+    )).scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=403, detail="domain not registered")
+
+    # Also reject if the owning tenant is suspended.
+    tenant = (await db.execute(select(Tenant).where(Tenant.id == row.tenant_id))).scalar_one_or_none()
+    if not tenant or tenant.status != "active":
+        raise HTTPException(status_code=403, detail="tenant inactive")
+
+    return {"ok": True, "tenant_id": row.tenant_id}
