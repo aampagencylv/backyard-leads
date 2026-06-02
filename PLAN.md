@@ -84,61 +84,106 @@ Tables that are NOT tenant-scoped (global): `tenants`, `plans`, `domains` (looku
 
 ## 6. Per-tenant runtime config
 
-`runtime_config` becomes a per-tenant table (one row per tenant). Refactor `get_twilio_credentials(db)`, `get_netrows_api_key(db)`, etc. to take `tenant_id` and pull the per-tenant row.
+`runtime_config` becomes a per-tenant table (one row per tenant). The platform brings all API keys (see §7), so this table now holds **per-tenant configuration**, not per-tenant credentials.
 
 Per-tenant fields:
-- BYO API keys (Twilio account SID + auth token + API key/secret, Resend API key, Anthropic optional, Apollo, Hunter, ZoomInfo, Google Maps)
-- Sending: `send_domain`, `reply_domain`, `inbound_reply_domain`
-- Brand: org name, postal address, sender display defaults, logo URL, color palette
-- Behavior: messaging direction defaults, send window, pipeline stages
-- Webhook secrets (Resend, Blooio, iClosed) — per-tenant
+- Sending: `send_subdomain` (e.g., `go.<tenant>.agencyprospector.com`), `reply_subdomain`, `inbound_reply_subdomain` — auto-provisioned on tenant creation
+- Twilio identity: assigned phone numbers, A2P brand registration ID, Trust Hub customer profile ID
+- Brand: org name, postal address (CAN-SPAM footer), sender display defaults, logo URL, color palette
+- Behavior: messaging direction defaults, send window, pipeline stages, notification preferences
+- BYO sending domain (optional upgrade): if a tenant brings their own `go.theiragency.com`, store the DNS verification state here
 
-**Encryption (block 4):** every secret field (API keys, signing secrets) is encrypted at write time with Fernet (`cryptography` library) using a master key in `.env`. The accessor functions transparently decrypt. Reads return the plaintext for use; the DB never holds plaintext.
+**Platform credentials** (Twilio account SID, Resend API key, Anthropic key, Netrows key, etc.) live in the platform's `.env` — single set, used for every tenant via the wrapped-service accessors. All secrets in the `.env` are loaded once at boot; no plaintext stored in DB.
+
+**App-layer encryption** still applies to any sensitive per-tenant data that does land in the DB (Twilio Trust Hub registration info, BYO domain secrets, webhook signing secrets for tenant-specific endpoints). Fernet (`cryptography` library) with a master key in `.env`.
 
 ---
 
 ## 7. API key strategy + integrations
 
+**Decision: platform brings ALL keys.** Customers never see an API key. Everything is metered against per-plan credit bundles with hard caps (see §8). This is the GoHighLevel / Apollo / Clay model — friendliest possible onboarding + highest margin + zero runaway-bill risk for either side.
+
 | Service | Model | Notes |
 |---|---|---|
-| Twilio (voice + SMS) | **BYO required** | Customer owns numbers + A2P + caller-ID reputation |
-| Resend (email) | **BYO required** | Customer's sending domain + reputation |
-| Anthropic (Claude) | **BYO + platform fallback** | Platform-provided as paid add-on for the BYO-averse |
-| Apollo / Hunter / ZoomInfo | **BYO required** | Often already owned |
-| Google Maps | **BYO required** | Free tier handles most |
-| Netrows (enrichment) | **Platform-wrapped** ⭐ | Moat — never exposed |
-| DataForSEO (audits) | **Platform-wrapped** ⭐ | Moat — never exposed |
-| Deepgram (transcription) | **Platform-wrapped** | Small cost, bundled |
-| Blooio (iMessage) | **Platform-wrapped** | No customer accounts exist |
+| Twilio (voice + SMS) | **Platform-controlled** | Single Twilio account; each tenant = Trust Hub Customer Profile + A2P brand. We provision phone numbers from our inventory or port the tenant's existing number. |
+| Resend (email) | **Platform-controlled** | Single Resend account; each tenant gets an auto-provisioned subdomain `go.<tenant>.agencyprospector.com` registered as a separate Resend domain (independent DKIM/SPF/DMARC → independent reputation). BYO domain available as upgrade. |
+| Anthropic (Claude) | **Platform-controlled** | Single Anthropic account, prompt caching + model tiering enforced (see §8). Customer's AI usage metered against bundle. |
+| OpenAI | **Platform-controlled** | Same — pluggable behind the model abstraction; not used today but supported for future model choice. |
+| Apollo / Hunter / ZoomInfo | **Platform-controlled** | Single keys; enrichment lookups metered against bundle. |
+| Google Maps | **Platform-controlled** | Single key; place lookups bundled. |
+| Netrows (enrichment) | **Platform-wrapped** ⭐ | Moat — proprietary capability. |
+| DataForSEO (audits) | **Platform-wrapped** ⭐ | Moat. |
+| Deepgram (transcription) | **Platform-controlled** | Call-recording transcription. |
+| Blooio (iMessage) | **Platform-controlled** | iMessage send/receive. |
 
-⭐ = the platform-wrapped services are what the credits ledger tracks.
+⭐ = the moat services — what makes the platform sticky. A customer who churns can't take Netrows + DataForSEO with them.
+
+**Enterprise BYO escape valve** (deferred to Phase 2 — see §16): the rare sophisticated customer who insists on their own Anthropic key for compliance reasons gets it as a paid enterprise add-on. Their AI usage doesn't count against the bundle; they pay Anthropic directly. ~10% of customers max; not built in v1.
 
 ---
 
-## 8. Credits model (platform-wrapped services only)
+## 8. Credits model (everything metered, hard caps prevent runaway bills)
 
-A `tenant_credits` table tracks usage per service per billing period. Decrement on each call. Soft warning at 80%, hard cap at 100% (configurable, can be disabled per-tenant by platform admin).
+A `tenant_credits` table tracks usage per service per billing period. Every paid action decrements. Soft warning at 80%, hard cap at 100% — at 100%, the feature stops serving and the customer must buy a top-up pack or upgrade their plan. This is what prevents the "$5K surprise bill" problem: **we never serve usage that isn't paid for.**
 
-Metered services: **enrichment lookups · audit reports · iMessages · transcription minutes**. (Customer's own Twilio/Resend/Anthropic spend is invisible to us.)
+**Metered services (8 total):**
+- AI sequences (Claude/OpenAI generations)
+- Email sends (Resend)
+- Outbound call minutes (Twilio voice)
+- SMS sends (Twilio)
+- iMessages (Blooio)
+- Enrichment lookups (Netrows + Apollo + Hunter + ZoomInfo combined)
+- Audit reports (DataForSEO)
+- Transcription minutes (Deepgram)
 
-Monthly reset at the Stripe subscription anniversary.
+**Top-up packs** for power users who hit caps mid-period:
+- 100 AI sequences for $80
+- 500 AI sequences for $375 (encourages prepay → cleaner cash flow than overage billing)
+- Similar packs for the other metered services
+
+Monthly reset at the Stripe subscription anniversary. Platform admin can manually grant bonus credits per tenant (apology gestures, trial extensions).
+
+### Unit economics safeguards (build in Phase A)
+
+The wrap-and-mark-up model only stays profitable if we protect the AI margin. Two implementation requirements from day one:
+
+1. **Anthropic prompt caching** — Claude charges 10% of the normal input rate for cached prompt prefixes. Our sequence-generation prompts have large stable prefixes (system instructions, business context, examples) that compress beautifully. Implementation: structure all Anthropic calls to put stable content in the cacheable prefix, dynamic content (this contact's data) at the tail. **Expected cost reduction: ~80% on input tokens, ~4x margin improvement per sequence.**
+
+2. **Model tiering per task** — not every AI call needs Sonnet. Use Claude Haiku (~5x cheaper) for: skip-condition evaluation, lead scoring, quick personalization touches. Reserve Sonnet for the actual sequence-generation prompts where output quality is the product. Currently we use Sonnet for everything — fixable.
+
+Both are ~1 day of refactor each. Built in Phase A so the unit economics are healthy from the day we charge a customer.
 
 ---
 
 ## 9. Pricing tiers (starting numbers — tune after 60 days)
 
-| Plan | Per seat / mo | Enrichments | Audits | iMessages | Transcript hrs |
-|---|---|---|---|---|---|
-| **Starter** | $197 | 500 | 5 | 200 | 5 |
-| **Growth** | $297 | 2,000 | 25 | 1,000 | 25 |
-| **Scale** | $497 | 6,000 | 100 | 3,500 | 100 |
-| **Enterprise** | custom | custom | custom | custom | custom |
+Per-seat pricing. Bundles include the most realistic per-seat-per-month usage; power users buy top-up packs (§8) or upgrade tier.
 
-**Overages:** `$0.20/enrichment · $2/audit · $0.10/iMessage · $0.30/transcript minute`
+| Plan | Per seat/mo | AI sequences | Emails | Call min | SMS | iMsg | Enrich | Audits | Transcript |
+|---|---|---|---|---|---|---|---|---|---|
+| **Starter** | $197 | 150 | 1,000 | 300 | 100 | 200 | 500 | 5 | 5h |
+| **Growth** | $297 | 500 | 3,000 | 1,000 | 500 | 1,000 | 2,000 | 25 | 25h |
+| **Scale** | $497 | 1,500 | 6,000 | 3,000 | 1,500 | 3,500 | 6,000 | 100 | 100h |
+| **Enterprise** | custom | custom | custom | custom | custom | custom | custom | custom | custom |
+
+**Overage rates** (when a customer hits cap and buys overage rather than upgrading):
+- AI sequence: **$1.00 each** (cost ~$0.012 with caching → ~80x markup, plenty of room for promo discounts)
+- Email send: **$0.005**
+- Call minute: **$0.05**
+- SMS send: **$0.04**
+- iMessage: **$0.10**
+- Enrichment: **$0.20**
+- Audit: **$2.00**
+- Transcript minute: **$0.30**
+
+**Top-up packs** (cheaper per-unit than overage to encourage prepay):
+- 100 AI sequences: **$80** ($0.80 each)
+- 500 AI sequences: **$375** ($0.75 each)
+- Similar volume discounts on other services
 
 **Annual discount:** 20% (paid up-front).
 
-**First customer (friendly trial):** treat as paid Growth tier with the first 90 days free. They get the full real experience with no billing risk; we get production-realistic feedback.
+**First customer (friendly trial):** treat as paid Growth tier with the first 90 days free. They get the full real experience with no billing risk; we get production-realistic feedback that will retune these numbers.
 
 ---
 
@@ -167,35 +212,40 @@ Lives at `admin.agencyprospector.com`. Only the platform owner (super-super-admi
 
 ## 11. Onboarding flow
 
-When platform admin creates a new tenant (or self-service signup later):
+Radically simpler than the BYO-keys version. Customer never enters an API key — platform owns everything. Goal: tenant signs up and is sending email within **5 minutes**, calling within **10 minutes**, SMS-ready in 2-3 weeks (A2P delay is unavoidable).
+
+When a new tenant signs up (or platform admin creates one):
 
 1. **Create tenant + first super_admin user**, send invite email
 2. New super_admin lands at `<tenant>.agencyprospector.com/onboard`
-3. **Step 1: Brand** — agency name, logo upload, postal address (CAN-SPAM footer)
-4. **Step 2: Connect Twilio** — paste account SID + auth token + buy/assign a phone number
-5. **Step 3: Connect Resend + sending domain** — paste API key, configure `go.theiragency.com` DNS (SPF/DKIM/DMARC), wait for verification
-6. **Step 4: Connect Anthropic** (or skip → use platform with markup)
-7. **Step 5: Connect enrichment services** (Apollo / Hunter / ZoomInfo — any or all)
-8. **Step 6: Invite team** — add seats
-9. **Step 7: Set plan** — confirm trial/paid plan
-10. Done → land on dashboard
+3. **Step 1: Brand** — agency name, logo upload, brand colors, postal address (CAN-SPAM footer), default sender display name
+4. **Step 2: Pick a phone number** — choose by area code from our Twilio inventory (instantly assigned), OR port an existing number (10-business-day process). Voice calling is **live immediately** with a fresh number.
+5. **Step 3: Sending email — auto-provisioned** — platform spins up `go.<tenant>.agencyprospector.com` as a new Resend domain in our account. SPF/DKIM/DMARC auto-configured (we control the parent DNS). **Live in 60 seconds.** Optional: upgrade later to BYO domain.
+6. **Step 4: A2P 10DLC registration** — collect EIN, legal business name, sample message use case, opt-in language source. We submit Trust Hub registration on the tenant's behalf. **SMS goes live 2-3 weeks later** when carriers approve; UI clearly states the timeline.
+7. **Step 5: Invite team** — add seats (each = a user with a role)
+8. **Step 6: Confirm plan** — Starter / Growth / Scale; trial period applies if friendly
+9. Done → land on dashboard, ready to prospect.
 
-Each step is skippable except brand/Twilio/Resend (you can't do anything useful without sending + calling). Resume from where you left off.
+**No API keys collected.** No DNS work for the customer. The only thing that takes time is A2P 10DLC carrier approval, which is universal across every platform doing business SMS.
+
+Onboarding state is persisted; the customer can resume from where they left off. Steps 4-6 are individually skippable; only Brand + Phone number are required to enter the app.
 
 ---
 
 ## 12. Phase-by-phase task list
 
 ### Phase A — Foundation (2 weeks)
-**Goal:** code is multi-tenant-safe but no behavior change visible to BMP users.
+**Goal:** code is multi-tenant-safe + AI unit economics are healthy. No behavior change visible to BMP users.
 
 - [ ] Create `tenants` table; insert tenant #1 (BMP)
 - [ ] Migration: add `tenant_id` to every tenant-owned table, backfill to 1, add NOT NULL constraint
 - [ ] Tenant context middleware (resolves from Host header / JWT claim)
 - [ ] Refactor `scope_companies` and every other query helper to scope by tenant
 - [ ] Per-tenant `runtime_config` table; refactor accessors (`get_twilio_credentials`, etc.) to take `tenant_id`
-- [ ] App-layer Fernet encryption for all API-key columns; master key in `.env`
+- [ ] App-layer Fernet encryption for any per-tenant secrets that stay in DB (webhook keys, BYO-domain secrets)
 - [ ] Supabase RLS policies: every tenant table gets a policy `tenant_id = current_setting('app.tenant_id')`
+- [ ] **Anthropic prompt caching** — restructure sequence-generation prompts to put stable content in cacheable prefix; verify cache-hit telemetry; expect ~80% input-token cost reduction
+- [ ] **Claude model tiering** — pluggable model selector; Sonnet for sequence generation, Haiku for skip-eval/scoring/lighter touches; per-task `model` setting
 - [ ] Smoke tests: prove tenant A can't see tenant B's data via the API or direct DB queries
 
 ### Phase B — Tenant routing, onboarding, admin console (1.5 weeks)
@@ -210,13 +260,15 @@ Each step is skippable except brand/Twilio/Resend (you can't do anything useful 
 - [ ] Onboarding wizard (steps 1-9 above)
 - [ ] Sending-domain DNS verification helper
 
-### Phase B½ — Credits ledger (3-4 days)
-**Goal:** wrapped-service usage is metered and enforced.
+### Phase B½ — Credits ledger (1 week)
+**Goal:** every paid service is metered and hard-capped.
 
 - [ ] `tenant_credits` table with per-service counters and reset_at
-- [ ] Decrement hooks at every wrapped-service call site (Netrows, DataForSEO, Blooio, Deepgram)
-- [ ] Soft warning (80%) + hard cap (100%) with bypass flag
-- [ ] Per-tenant usage view in platform admin
+- [ ] Decrement hooks at every metered call site: **AI sequences, emails (Resend), call minutes (Twilio voice), SMS (Twilio), iMessages (Blooio), enrichments (Netrows + Apollo + Hunter + ZoomInfo), audits (DataForSEO), transcription (Deepgram)** — 8 services total
+- [ ] Soft warning at 80% + hard cap at 100% with platform-admin bypass flag
+- [ ] Top-up pack purchase flow (Stripe checkout → credit grant)
+- [ ] Per-tenant usage view in platform admin (current period, trend, top consumers)
+- [ ] Customer-facing usage dashboard (their bundle, what's burned, what's left, top-up CTA)
 - [ ] Monthly auto-reset on Stripe billing anniversary
 
 ### Phase C — Billing (1 week)
@@ -276,12 +328,15 @@ Zero-downtime. Phases A-D each deploy independently.
 | 1 | One codebase, multi-tenant. Kill the duplicate tree. | 2026-06-02 |
 | 2 | Hybrid domain model: default subdomain + optional custom domain via CNAME. | 2026-06-02 |
 | 3 | Caddy replaces nginx for auto-SSL on arbitrary hostnames. | 2026-06-02 |
-| 4 | BYO API keys for Twilio, Resend, Apollo, Hunter, ZoomInfo, Google Maps, Anthropic (with platform fallback). | 2026-06-02 |
-| 5 | Platform-wrapped (and credit-metered): Netrows, DataForSEO, Deepgram, Blooio. | 2026-06-02 |
-| 6 | Per-seat tiered pricing ($197 / $297 / $497) + overages on the 4 wrapped services. Numbers tuned after 60d real-usage data. | 2026-06-02 |
+| 4 | **Platform brings ALL keys** (Twilio, Resend, Anthropic, OpenAI, Apollo, Hunter, ZoomInfo, Google Maps, Netrows, DataForSEO, Deepgram, Blooio). Customers never see an API key. | 2026-06-02 |
+| 5 | Every paid service is metered with **hard caps** (no runaway bills). Top-up packs and tier upgrades are how power users get more. | 2026-06-02 |
+| 5a | **Anthropic prompt caching + Claude model tiering** (Sonnet for generation, Haiku for lighter tasks) built into Phase A. Protects AI margin from day one. | 2026-06-02 |
+| 6 | Per-seat tiered pricing ($197 / $297 / $497) with bundled usage across 8 metered services. Numbers tuned after 60d real-usage data. | 2026-06-02 |
 | 7 | Tenant resolution: Host header primary, JWT claim secondary, impersonation via combined claims. | 2026-06-02 |
 | 8 | First customer = friendly trial, treated like a paid Growth-tier customer with 90-day free period. | 2026-06-02 |
 | 9 | Marketing/platform admin at `agencyprospector.com`; tenants at `<slug>.agencyprospector.com` or custom domains. | 2026-06-02 |
+| 10 | **Sending: auto-provisioned subdomain** `go.<tenant>.agencyprospector.com` on tenant creation. BYO sending domain available as upgrade (path BMP will take). | 2026-06-02 |
+| 11 | **SMS: A2P 10DLC registration per tenant via Twilio Trust Hub**. Voice live immediately, SMS live 2-3 weeks after tenant signup. | 2026-06-02 |
 
 ---
 
@@ -292,8 +347,9 @@ Zero-downtime. Phases A-D each deploy independently.
 - SSO (Google / Microsoft / SAML)
 - Multi-region deployments
 - Read replicas for analytics
-- AI cost flow-through with markup (revisit once an enterprise customer asks)
+- **Enterprise BYO API keys** (Anthropic, Twilio, Resend) for the rare customer with compliance/volume reasons to want their own. Sold as a paid enterprise add-on with the customer's usage exempt from the bundle. Build when the first customer asks; ~80% of customers will never want this.
 - Tenant data export (GDPR self-serve)
+- Multi-currency billing (USD only for v1)
 
 ---
 
@@ -304,7 +360,10 @@ Zero-downtime. Phases A-D each deploy independently.
 - **Branding:** logo, marketing site copy, screenshots, demo video
 - **First customer:** identified? Outreach started?
 - **Support tooling:** Help Scout / Front / Intercom / just email + Notion docs?
-- **Domain:** `agencyprospector.com` purchased + DNS configured?
+- **Domain:** `agencyprospector.com` purchased + DNS configured? Wildcard `*.agencyprospector.com` pointed at VPS?
+- **Twilio Trust Hub ISV account:** since we'll register every customer as a Trust Hub Customer Profile + A2P brand, we need our own ISV-tier account set up with Twilio. Apply early — takes ~1 week. Determines whether SMS will be ready by Phase D.
+- **Anthropic volume / Build tier:** at scale we can negotiate Anthropic pricing down further (pure margin). Worth a conversation once we have ~10 paying customers' usage data.
+- **Stripe Connect or Stripe SaaS billing setup:** which model? Subscription + metered usage is the v1 plan; configure now so it's ready for Phase C.
 
 ---
 
