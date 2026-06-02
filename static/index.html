@@ -645,6 +645,53 @@
     <!-- wavesurfer.js — waveform playback for call recordings (CallRail-style).
          UMD build, ~50KB gzipped, lazy-decoded so page load is unaffected. -->
     <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.min.js" defer></script>
+
+    <!-- ===================== Sentry browser SDK =====================
+         Catches JS exceptions, unhandled promise rejections, AND 5xx
+         responses (via httpClientIntegration) so 502 bursts during
+         deploys land in Sentry alongside backend errors. Same project
+         DSN as the FastAPI SDK — events are tagged by runtime so the
+         dashboard can filter python vs javascript.
+
+         Loaded synchronously and FIRST so it captures init errors. -->
+    <script src="https://browser.sentry-cdn.com/8.55.0/bundle.min.js"
+            crossorigin="anonymous"></script>
+    <script>
+      // No-op if the CDN failed to load — Sentry should never be allowed
+      // to break the app it's observing.
+      if (window.Sentry && typeof Sentry.init === "function") {
+        try {
+          Sentry.init({
+            dsn: "https://19efcc3318c9536c4d2612b9585b18b2@o4511465796534272.ingest.us.sentry.io/4511496758231040",
+            environment: "production",
+            release: "frontend-2026-06-02",
+            // 10% performance sampling matches the backend.
+            tracesSampleRate: 0.1,
+            // Send 5xx/4xx HTTP failures as Sentry events (this is the
+            // signal Steve wanted: "see the 502 toasts in Sentry").
+            integrations: [
+              Sentry.httpClientIntegration({
+                failedRequestStatusCodes: [[500, 599]],
+              }),
+            ],
+            // Don't include credentials or request bodies — match the
+            // scrubbing posture of the Python side.
+            sendDefaultPii: false,
+            beforeSend(event) {
+              // Drop events from the /admin console — separate page,
+              // separate noise profile.
+              try {
+                if ((event.request?.url || "").includes("/admin")) return null;
+              } catch (e) {}
+              return event;
+            },
+          });
+        } catch (e) {
+          // Never let Sentry init break the page.
+          console.warn("Sentry init failed:", e);
+        }
+      }
+    </script>
 </head>
 <body>
     <!-- ===================== AUTH SCREEN ===================== -->
