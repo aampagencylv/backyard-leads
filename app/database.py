@@ -65,19 +65,38 @@ async def init_db():
             await conn.execute(text("PRAGMA journal_mode=WAL"))
             await conn.execute(text("PRAGMA synchronous=NORMAL"))
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # `Base.metadata.create_all` is a no-op once tables exist, but each
+    # CREATE TABLE IF NOT EXISTS still costs a Supabase round-trip (~100ms).
+    # 35 tables → ~3s on every deploy. Sentinel: once the migration ledger
+    # records "_create_all", we trust that the schema is in place and skip
+    # this on every subsequent startup. New tables added later are picked
+    # up by their own migration scripts.
+    _CREATE_ALL_SENTINEL = "_internal_create_all_v1"
 
-    # Recent column-additions — chained here as a safety net even when
-    # the VPS systemd unit also runs them.
-    for _migration_module in (
+    async with engine.begin() as conn:
+        from app.services.migration_utils import (
+            ensure_schema_migrations_table, applied_migrations, mark_applied,
+        )
+        await ensure_schema_migrations_table(conn)
+        already = await applied_migrations(conn)
+        if _CREATE_ALL_SENTINEL not in already:
+            await conn.run_sync(Base.metadata.create_all)
+            await mark_applied(conn, _CREATE_ALL_SENTINEL)
+
+    # Column-addition migrations. Each module is named once here; the
+    # ledger tracks which have been applied so a deploy whose ledger
+    # already lists the migration skips reading anything beyond a single
+    # `SELECT name FROM schema_migrations`. With 44 migrations × 15
+    # column_exists checks × ~100ms RTT to Supabase, the savings is
+    # ~60 seconds per deploy.
+    _MIGRATIONS = (
         "scripts.migrate_audit_booked",
         "scripts.migrate_reply_sentiment",
         "scripts.migrate_apollo_key",
         "scripts.migrate_lead_score",
         "scripts.migrate_campaign_targets",
         "scripts.migrate_custom_fields",
-        "scripts.migrate_company_socials",  # ordering matters: must run AFTER migrate_custom_fields
+        "scripts.migrate_company_socials",  # must run AFTER migrate_custom_fields
         "scripts.migrate_morning_brief",
         "scripts.migrate_sos_lookups",
         "scripts.migrate_netrows_extras",
@@ -116,10 +135,24 @@ async def init_db():
         "scripts.migrate_tenant_secrets",
         "scripts.migrate_tenant_onboarding",
         "scripts.migrate_tenant_domain_verified",
-    ):
+    )
+
+    # Decide which actually need to run.
+    pending = [m for m in _MIGRATIONS if m not in already]
+    if pending:
+        import logging as _logging
+        _logging.getLogger("bmp.migrations").info(
+            f"running {len(pending)} migration(s); {len(_MIGRATIONS) - len(pending)} already applied"
+        )
+    for _migration_module in pending:
         try:
             mod = __import__(_migration_module, fromlist=["main"])
             await mod.main()
+            # Only mark applied on success. A migration that raised stays
+            # un-marked so the next deploy retries it.
+            async with engine.begin() as conn:
+                from app.services.migration_utils import mark_applied as _mark
+                await _mark(conn, _migration_module)
         except Exception:
             # Migrations log their own outcome; don't crash startup if one
             # fails — the app should still come up so the operator can debug.
