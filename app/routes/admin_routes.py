@@ -290,6 +290,63 @@ async def tenant_detail(
     }
 
 
+@router.get("/tenants/{tenant_id}/keys")
+async def tenant_api_keys(
+    tenant_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_super_admin),
+):
+    """Per-tenant API Keys vault. Super_admin only — never exposed to
+    the tenant's own users.
+
+    Returns the same `{set, masked}` shape the legacy Settings UI used
+    for the platform-tier credentials, but scoped to one tenant. Used
+    by /admin's tenant detail page to show Steve every credential we
+    have on file for a given tenant in one glance.
+
+    Auth tokens / signing secrets are MASKED — the first 8 chars + the
+    last 4. Never the full value. Steve can still rotate via the
+    tenant's own /api/runtime-config PATCH (with a super_admin token)
+    if he needs to.
+    """
+    rc = (await db.execute(
+        select(RuntimeConfig).where(RuntimeConfig.tenant_id == tenant_id)
+    )).scalar_one_or_none()
+    if not rc:
+        raise HTTPException(status_code=404, detail="tenant has no RuntimeConfig")
+
+    from app.runtime_config import mask_key
+
+    def t(field):
+        v = (field or "").strip()
+        return {"set": bool(v), "masked": mask_key(v) if v else None}
+
+    return {
+        "tenant_id": tenant_id,
+        "twilio": {
+            "account_sid":    t(rc.twilio_account_sid),
+            "auth_token":     t(rc.twilio_auth_token),
+            "api_key_sid":    t(rc.twilio_api_key_sid),
+            "api_key_secret": t(rc.twilio_api_key_secret),
+            "twiml_app_sid":  t(rc.twilio_twiml_app_sid),
+        },
+        "netrows":     t(rc.netrows_api_key),
+        "deepgram":    t(rc.deepgram_api_key),
+        "blooio": {
+            "api_key":        t(rc.blooio_api_key),
+            "signing_secret": t(rc.blooio_signing_secret),
+        },
+        "resend": {
+            "webhook_secret": t(rc.resend_webhook_secret),
+            "domain_id":      rc.resend_domain_id,
+            "domain_name":    rc.resend_domain_name,
+            "domain_status":  rc.resend_domain_status,
+        },
+        "google_maps": t(rc.google_maps_api_key),
+        "apollo":      t(rc.apollo_api_key),
+    }
+
+
 @router.post("/tenants/{tenant_id}/refresh-email-status")
 async def refresh_email_status(
     tenant_id: int,
