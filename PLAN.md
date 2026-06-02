@@ -234,19 +234,28 @@ Onboarding state is persisted; the customer can resume from where they left off.
 
 ## 12. Phase-by-phase task list
 
-### Phase A — Foundation (2 weeks)
+### Phase A — Foundation (2 weeks) — **SUBSTANTIALLY COMPLETE 2026-06-02**
 **Goal:** code is multi-tenant-safe + AI unit economics are healthy. No behavior change visible to BMP users.
 
-- [ ] Create `tenants` table; insert tenant #1 (BMP)
-- [ ] Migration: add `tenant_id` to every tenant-owned table, backfill to 1, add NOT NULL constraint
-- [ ] Tenant context middleware (resolves from Host header / JWT claim)
-- [ ] Refactor `scope_companies` and every other query helper to scope by tenant
-- [ ] Per-tenant `runtime_config` table; refactor accessors (`get_twilio_credentials`, etc.) to take `tenant_id`
-- [ ] App-layer Fernet encryption for any per-tenant secrets that stay in DB (webhook keys, BYO-domain secrets)
-- [ ] Supabase RLS policies: every tenant table gets a policy `tenant_id = current_setting('app.tenant_id')`
-- [ ] **Anthropic prompt caching** — restructure sequence-generation prompts to put stable content in cacheable prefix; verify cache-hit telemetry; expect ~80% input-token cost reduction
-- [ ] **Claude model tiering** — pluggable model selector; Sonnet for sequence generation, Haiku for skip-eval/scoring/lighter touches; per-task `model` setting
-- [ ] Smoke tests: prove tenant A can't see tenant B's data via the API or direct DB queries
+- [x] Create `tenants` table; insert tenant #1 (BMP) — `2d9a8f6`
+- [x] Migration: add `tenant_id` to every tenant-owned table (32 tables), backfill to 1 via DEFAULT, NOT NULL enforced — `2d9a8f6`
+- [x] `Tenant` model + `TenantMixin` applied to 30 mapped classes + 2 association tables — `36d8c26`
+- [x] `tenant_domains` table seeded with BMP's 3 hosts → tenant 1 — `69ee6c1` / `e57b69b`
+- [x] Tenant resolver `app/tenancy.py` (JWT claim → custom domain → `{slug}.agencyprospector.com` → tenant 1 fallback) — `69ee6c1`
+- [x] Postgres RLS `tenant_isolation` policy on all 32 tables (dormant; activates when we migrate off the BYPASSRLS `postgres` role) — `60480f8`
+- [x] `get_tenant_db` FastAPI dependency that stamps `session.info["tenant_id"]` + sets the GUC — `f3b5bce`
+- [x] ORM auto-tenant-filter via `do_orm_execute` hook (real enforcement today) — `f726ec4`
+- [x] INSERT auto-stamp via `before_flush` hook (`tenant_id` set automatically) — `2ccad94`
+- [x] 215 routes across 30 route files migrated to `get_tenant_db` — `1be7ad0`, `68d602a`, `9927d72`, `0e5acd3`
+- [x] JWT carries `tenant_id` claim minted at login; resolver checks claim first — `0e5acd3`
+- [x] Background sequence engine + activation/wake/morning-brief passes iterate per active tenant, scoped via `tenant_scope` — `f0d1879`
+- [x] Encrypted per-tenant secrets vault (`tenant_secrets` table + Fernet, `app/secrets_vault.py`) — `e5a9340`
+- [x] AI client wrapper (`app/services/ai_client.py`) — model tier constants + prompt-cache helper — `3de11ca`
+- [x] Reply classifier moved to Haiku 4.5 + prompt-cached system rubric (~5x cheaper) — `3de11ca`
+- [x] Cold-email generator prompt-cached on its ~1500-token composed system prompt (5-10x cheaper after first prospect) — `3de11ca`
+- [ ] Per-tenant `runtime_config` accessor refactor (defer: today's accessors work tenant-scoped via ORM filter; per-tenant override columns + helpers come with first non-BMP onboard)
+- [ ] Sweep remaining 7 email_generator callsites onto `ai_client.chat_with_system` + cacheable=True
+- [ ] Smoke tests: prove tenant A can't see tenant B's via API or direct DB queries (manual probe done with tid=99 returning 0 rows; formal test fixture pending)
 
 ### Phase B — Tenant routing, onboarding, admin console (1.5 weeks)
 **Goal:** you can create agency #2 yourself in 20 minutes.
