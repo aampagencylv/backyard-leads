@@ -35,8 +35,26 @@ class ResendProvisionResult(TypedDict):
     status: str           # not_started | pending | verified | failed
 
 
+def _api_key() -> Optional[str]:
+    """Resolve which Resend API key to use for tenant domain provisioning.
+
+    Order of preference:
+      1. PLATFORM_RESEND_API_KEY — the LeadProspector Resend workspace
+         (where every new tenant's go.{slug}.leadprospector.ai should
+         live; platform pays the Resend bill, tenant pays platform)
+      2. RESEND_API_KEY — fallback to BMP's existing Resend account.
+         Useful pre-platform-Resend setup; once PLATFORM_RESEND_API_KEY
+         is set, new tenant domains land in the right account.
+    """
+    platform = (os.environ.get("PLATFORM_RESEND_API_KEY") or "").strip()
+    if platform:
+        return platform
+    fallback = (os.environ.get("RESEND_API_KEY") or "").strip()
+    return fallback or None
+
+
 def is_configured() -> bool:
-    return bool((os.environ.get("RESEND_API_KEY") or "").strip())
+    return _api_key() is not None
 
 
 async def create_domain(subdomain: str) -> Optional[ResendProvisionResult]:
@@ -50,9 +68,9 @@ async def create_domain(subdomain: str) -> Optional[ResendProvisionResult]:
     Returns None (and logs) when the API key isn't configured or the
     request fails. Never raises — tenant creation is the primary action.
     """
-    api_key = (os.environ.get("RESEND_API_KEY") or "").strip()
+    api_key = _api_key()
     if not api_key:
-        log.info("resend domain skipped — RESEND_API_KEY not set")
+        log.info("resend domain skipped — neither PLATFORM_RESEND_API_KEY nor RESEND_API_KEY set")
         return None
 
     name = f"{subdomain}.leadprospector.ai"
@@ -91,7 +109,7 @@ async def create_domain(subdomain: str) -> Optional[ResendProvisionResult]:
 async def get_domain_status(domain_id: str) -> Optional[dict]:
     """Fetch the current verification status + records for a domain.
     Used by the admin UI to display whether DNS has propagated yet."""
-    api_key = (os.environ.get("RESEND_API_KEY") or "").strip()
+    api_key = _api_key()
     if not api_key:
         return None
     headers = {"Authorization": f"Bearer {api_key}"}
