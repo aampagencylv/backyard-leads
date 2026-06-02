@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
 
-from app.database import get_db
+from app.tenancy import get_tenant_db
 from app.models import User, Company, Deal, Activity
 from app.auth import get_current_user
 from app.services import pipeline_config as pipeline_cfg
@@ -74,7 +74,7 @@ class UpdateDealRequest(BaseModel):
 
 @router.get("/packages")
 async def list_packages(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """List available BMP packages with pricing + current stage probabilities."""
@@ -91,7 +91,7 @@ async def list_packages(
 
 @router.get("/autopilot/send-window")
 async def get_send_window_endpoint(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Returns the full autopilot config — per-channel windows, basis,
@@ -135,7 +135,7 @@ class UpdateSendWindowRequest(BaseModel):
 async def update_send_window(
     req: UpdateSendWindowRequest,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Update the autopilot config. Admin/super_admin only.
@@ -209,7 +209,7 @@ async def update_send_window(
 async def autopilot_preview(
     contact_id: int,
     channel: str = "email",
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Live preview for the Settings page — given a sample contact +
@@ -242,7 +242,7 @@ async def autopilot_preview(
 
 @router.get("/pipeline/config")
 async def get_pipeline_config_endpoint(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Read the full pipeline config. Available to every signed-in user
@@ -259,7 +259,7 @@ class UpdatePipelineConfigRequest(BaseModel):
 async def update_pipeline_config(
     req: UpdatePipelineConfigRequest,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Replace the editable middle stages. Admin / super_admin only.
@@ -299,7 +299,7 @@ async def update_pipeline_config(
 @router.get("/companies/{company_id}/deals")
 async def list_company_deals(
     company_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     result = await db.execute(
@@ -312,7 +312,7 @@ async def list_company_deals(
 async def create_deal(
     company_id: int,
     req: CreateDealRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     if not await pipeline_cfg.is_valid_stage(db, req.stage):
@@ -358,7 +358,7 @@ async def create_deal(
 @router.get("/deals/{deal_id}")
 async def get_deal(
     deal_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     deal = (await db.execute(select(Deal).where(Deal.id == deal_id))).scalar_one_or_none()
@@ -374,7 +374,7 @@ async def get_deal(
 async def update_deal(
     deal_id: int,
     req: UpdateDealRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     deal = (await db.execute(select(Deal).where(Deal.id == deal_id))).scalar_one_or_none()
@@ -457,7 +457,7 @@ async def update_deal(
 @router.delete("/deals/{deal_id}")
 async def delete_deal(
     deal_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     deal = (await db.execute(select(Deal).where(Deal.id == deal_id))).scalar_one_or_none()
@@ -502,7 +502,7 @@ async def delete_deal(
 async def pipeline_view(
     pipeline: str = "default",
     owner: Optional[int] = None,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Return deals grouped by stage for the kanban — scoped by user role."""
@@ -577,7 +577,7 @@ async def pipeline_view(
 @router.get("/forecast")
 async def forecast(
     pipeline: str = "default",
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Forecast scoped by user role. Reps see their forecast only."""
@@ -708,7 +708,7 @@ class SnoozeDealRequest(BaseModel):
 async def snooze_deal(
     deal_id: int,
     req: SnoozeDealRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Snooze a deal — pause sequence, set wake date, log reason."""
@@ -774,7 +774,7 @@ async def snooze_deal(
 @router.post("/deals/{deal_id}/wake")
 async def wake_deal(
     deal_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Manually wake a snoozed deal before its scheduled date."""

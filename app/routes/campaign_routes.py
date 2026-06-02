@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, text
 from pydantic import BaseModel
 
-from app.database import get_db
+from app.tenancy import get_tenant_db
 from app.models import (
     User, Company, Contact, Deal, Campaign, CampaignLog, CampaignTarget, CampaignRun,
     GeneratedEmail, Activity, Task, campaign_members,
@@ -109,7 +109,7 @@ class CreateCampaignRequest(BaseModel):
 @router.get("/")
 async def list_campaigns(
     include_archived: bool = False,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """List campaigns. Archived campaigns are hidden by default; pass
@@ -189,7 +189,7 @@ async def expand_locations(
 @router.post("/")
 async def create_campaign(
     req: CreateCampaignRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     # Expand metro areas if requested
@@ -237,7 +237,7 @@ async def create_campaign(
 @router.post("/{campaign_id}/start")
 async def start_campaign(
     campaign_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     campaign = (await db.execute(select(Campaign).where(Campaign.id == campaign_id))).scalar_one_or_none()
@@ -260,7 +260,7 @@ class ScheduleCampaignRequest(BaseModel):
 async def schedule_campaign(
     campaign_id: int,
     req: ScheduleCampaignRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Schedule a campaign to start at a future time. The activation loop
@@ -292,7 +292,7 @@ async def schedule_campaign(
 @router.post("/{campaign_id}/unschedule")
 async def unschedule_campaign(
     campaign_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Cancel a pending schedule — returns the campaign to draft."""
@@ -311,7 +311,7 @@ async def unschedule_campaign(
 @router.post("/{campaign_id}/pause")
 async def pause_campaign(
     campaign_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     campaign = (await db.execute(select(Campaign).where(Campaign.id == campaign_id))).scalar_one_or_none()
@@ -343,7 +343,7 @@ class UpdateCampaignRequest(BaseModel):
 async def update_campaign(
     campaign_id: int,
     req: UpdateCampaignRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Edit a campaign — works on running, paused, or draft campaigns.
@@ -404,7 +404,7 @@ async def update_campaign(
 @router.post("/{campaign_id}/stop")
 async def stop_campaign(
     campaign_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Full stop — no searching, no enriching, nothing."""
@@ -420,7 +420,7 @@ async def stop_campaign(
 @router.post("/{campaign_id}/archive")
 async def archive_campaign(
     campaign_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Archive a campaign — removes it from the active Auto Pilot list
@@ -439,7 +439,7 @@ async def archive_campaign(
 @router.post("/{campaign_id}/unarchive")
 async def unarchive_campaign(
     campaign_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Bring a previously-archived campaign back to the active list."""
@@ -454,7 +454,7 @@ async def unarchive_campaign(
 @router.delete("/{campaign_id}")
 async def delete_campaign(
     campaign_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Permanently delete a campaign. Only allowed for campaigns that
@@ -490,7 +490,7 @@ async def delete_campaign(
 @router.get("/{campaign_id}/targets")
 async def get_campaign_targets(
     campaign_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Per-target portfolio for a campaign — what God Mode is producing
@@ -524,7 +524,7 @@ async def update_campaign_target(
     campaign_id: int,
     target_id: int,
     req: dict,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Manual control over a single target — pause / resume / re-weight.
@@ -567,7 +567,7 @@ async def update_campaign_target(
 async def get_campaign_logs(
     campaign_id: int,
     limit: int = 50,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     result = await db.execute(
@@ -597,7 +597,7 @@ async def get_campaign_logs(
 @router.post("/{campaign_id}/run-batch")
 async def run_campaign_batch(
     campaign_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """
@@ -1418,7 +1418,7 @@ from fastapi import Request
 async def run_campaign_batch_internal(
     campaign_id: int,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
     """
     Same as run-batch but without auth. Only accessible from localhost (cron).

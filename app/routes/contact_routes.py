@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from pydantic import BaseModel
 
-from app.database import get_db
+from app.tenancy import get_tenant_db
 from app.models import User, Company, Contact, GeneratedEmail, Activity
 from app.auth import get_current_user
 from app.services.email_generator import generate_cold_email, generate_follow_up
@@ -50,7 +50,7 @@ async def list_all_contacts(
     tag_id: Optional[int] = None,        # any tag on the contact's company
     sort_by: str = "updated",            # updated | name | company | created | email_status
     sort_dir: str = "desc",              # asc | desc
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """List contacts with multi-tenant scoping and advanced filters/sorts."""
@@ -205,7 +205,7 @@ class CreateContactRequest(BaseModel):
 @router.get("/companies/{company_id}/contacts")
 async def list_contacts(
     company_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     result = await db.execute(
@@ -220,7 +220,7 @@ async def list_contacts(
 async def create_contact(
     company_id: int,
     req: CreateContactRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     company = (await db.execute(select(Company).where(Company.id == company_id))).scalar_one_or_none()
@@ -302,7 +302,7 @@ class UpdateContactRequest(BaseModel):
 @router.get("/contacts/{contact_id}")
 async def get_contact(
     contact_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     contact = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()
@@ -318,7 +318,7 @@ async def get_contact(
 async def update_contact(
     contact_id: int,
     req: UpdateContactRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     contact = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()
@@ -353,7 +353,7 @@ async def update_contact(
 @router.delete("/contacts/{contact_id}")
 async def delete_contact(
     contact_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     contact = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()
@@ -397,7 +397,7 @@ class BatchContactAction(BaseModel):
 @router.post("/contacts/batch")
 async def batch_contact_action(
     req: BatchContactAction,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Batch actions on contacts: delete."""
@@ -428,7 +428,7 @@ CONTACT_SEQUENCE_SCHEDULE = [
 @router.post("/contacts/{contact_id}/generate-sequence")
 async def generate_contact_sequence(
     contact_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Generate a 4-email sequence for THIS contact (e.g. a second decision-maker at the same company)."""
@@ -591,7 +591,7 @@ def _contact_summary(c: Contact) -> dict:
 @router.post("/contacts/{contact_id}/refresh-posts")
 async def refresh_contact_posts(
     contact_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Pull recent LinkedIn posts for personalization context (1 credit)."""
@@ -616,7 +616,7 @@ async def refresh_contact_posts(
 @router.post("/contacts/{contact_id}/refresh-linkedin-profile")
 async def refresh_contact_linkedin_profile(
     contact_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Pull a full LinkedIn profile via Netrows /people/profile-by-url
@@ -697,7 +697,7 @@ class LookupEmailRequest(BaseModel):
 async def lookup_contact_email(
     contact_id: int,
     req: LookupEmailRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """
@@ -751,7 +751,7 @@ async def lookup_contact_email(
 @router.post("/contacts/{contact_id}/verify-email")
 async def verify_contact_email(
     contact_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Verify a contact's email via Hunter's email verifier."""
@@ -811,7 +811,7 @@ _CONTACT_MERGE_REPOINT_TABLES = ["activities", "generated_emails", "tasks", "tra
 @router.post("/contacts/merge")
 async def merge_contacts(
     req: MergeContactsRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Merge duplicate contacts into a kept contact.

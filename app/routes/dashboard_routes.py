@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
 
-from app.database import get_db
+from app.tenancy import get_tenant_db
 from app.models import User, Company, Contact, Deal, GeneratedEmail, Activity, Task
 from app.auth import get_current_user, mint_recording_token
 
@@ -66,7 +66,7 @@ def _aware(dt):
 @router.get("/dashboard")
 async def get_dashboard(
     rep_id: Optional[int] = None,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     # Admin/super_admin can view any BDR's dashboard by passing rep_id.
@@ -342,7 +342,7 @@ async def get_dashboard(
 @router.get("/activity/feed")
 async def activity_feed(
     limit: int = 50,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     from app.scoping import scope_companies
@@ -379,7 +379,7 @@ async def activity_feed(
 async def dashboard_calls(
     days: int = 7,
     user_id: Optional[int] = None,  # admin can scope to a specific rep; null = all (admin) or self (rep)
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """
@@ -486,7 +486,7 @@ async def dashboard_calls(
 @router.get("/dashboard/bdr-activity")
 async def bdr_activity_report(
     days: int = 7,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Admin-only comprehensive BDR activity report. Shows all actions per rep."""
@@ -599,7 +599,7 @@ async def bdr_activity_report(
 @router.get("/dashboard/recent-calls")
 async def recent_calls(
     limit: int = 20,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Recent calls with recordings, transcripts, ratings. Scoped by role."""
@@ -673,7 +673,7 @@ class RateCallRequest(_BaseModel):
 async def rate_call(
     activity_id: int,
     req: RateCallRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Rate a call 1-5 stars with optional written feedback."""
@@ -722,7 +722,7 @@ async def rate_call(
 
 @router.get("/dashboard/team")
 async def team_dashboard(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     if user.role not in ("admin", "super_admin"):
