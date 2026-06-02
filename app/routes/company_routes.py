@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, and_
 from pydantic import BaseModel
 
-from app.database import get_db
+from app.tenancy import get_tenant_db
 from app.models import User, Company, Contact, Deal, GeneratedEmail, Activity, Task, Tag, company_tags, CustomFieldDefinition
 from app.auth import get_current_user, mint_recording_token
 from app.services import pipeline_config as _pipeline_cfg_pursue
@@ -56,7 +56,7 @@ async def list_companies(
     tag_id: Optional[int] = None,          # Filter to companies with this tag
     business_type_contains: Optional[str] = None,  # Substring match on business_type
     sort_by: str = "reviews",
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     from app.scoping import scope_companies
@@ -170,7 +170,7 @@ async def list_companies(
 
 @router.get("/stalled-sequences")
 async def get_stalled_sequences(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Return all sequence steps that are stalled, grouped by company.
@@ -293,7 +293,7 @@ async def get_stalled_sequences(
 @router.post("/{company_id}/unstall-sequences")
 async def unstall_sequences(
     company_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Re-anchor all overdue auto-execute steps for this company to fire ASAP.
@@ -344,7 +344,7 @@ async def unstall_sequences(
 
 @router.get("/paused-forgotten")
 async def get_paused_forgotten(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Companies with paused sequences that have no auto-pause trigger —
@@ -474,7 +474,7 @@ class DisqualifyRequest(BaseModel):
 async def disqualify_company(
     company_id: int,
     req: DisqualifyRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Mark a company as unqualified, pause all active sequence steps,
@@ -526,7 +526,7 @@ async def disqualify_company(
 @router.post("/{company_id}/restore-disqualify")
 async def restore_disqualified_company(
     company_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Admin-only: restore a disqualified company back to active pursuit.
@@ -557,7 +557,7 @@ async def restore_disqualified_company(
 
 @router.get("/pending-review")
 async def get_pending_review(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Admin-only: companies disqualified in the last 30 days, with the
@@ -631,7 +631,7 @@ class CreateCompanyRequest(BaseModel):
 @router.post("/")
 async def create_company(
     req: CreateCompanyRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Manually add a company with optional first contact. Auto-enriches if website provided.
@@ -785,7 +785,7 @@ class CSVUploadRequest(BaseModel):
 @router.post("/upload")
 async def upload_contacts(
     req: CSVUploadRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """
@@ -1032,7 +1032,7 @@ async def upload_contacts(
 @router.get("/{company_id}/full")
 async def get_company_full(
     company_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Full company record: contacts (with their email sequences), deals, activities, tags."""
@@ -1324,7 +1324,7 @@ class UpdateStatusRequest(BaseModel):
 async def update_company_status(
     company_id: int,
     req: UpdateStatusRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     valid = {"new", "pursuing", "sequencing", "contacted", "replied", "qualified", "converted", "not_interested"}
@@ -1349,7 +1349,7 @@ async def update_company_status(
 @router.post("/{company_id}/enrich")
 async def enrich_company(
     company_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Crawl website, log marketing problems, look up contacts."""
@@ -1843,7 +1843,7 @@ SEQUENCE_SCHEDULE = [
 @router.post("/pursue")
 async def pursue_companies(
     req: PursueRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """
@@ -2321,7 +2321,7 @@ def _email_to_dict(e: GeneratedEmail) -> dict:
 @router.post("/{company_id}/refresh-reviews")
 async def refresh_reviews(
     company_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     company = (await db.execute(select(Company).where(Company.id == company_id))).scalar_one_or_none()
@@ -2356,7 +2356,7 @@ async def refresh_reviews(
 @router.post("/{company_id}/clear-enrichment")
 async def clear_company_enrichment(
     company_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Clear Netrows-derived company-level enrichment fields so the next
@@ -2393,7 +2393,7 @@ async def clear_company_enrichment(
 @router.post("/{company_id}/refresh-instagram-posts")
 async def refresh_instagram_posts(
     company_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Force-refresh Instagram posts for a company. Skips the 7-day TTL
@@ -2443,7 +2443,7 @@ async def refresh_instagram_posts(
 @router.post("/{company_id}/refresh-insights")
 async def refresh_company_insights(
     company_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Force-refresh Netrows /companies/insights for a company. Premium
@@ -2491,7 +2491,7 @@ async def refresh_company_insights(
 @router.post("/{company_id}/refresh-yelp")
 async def refresh_company_yelp(
     company_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Pull Yelp profile + recent reviews for a company. Two-step:
@@ -2574,7 +2574,7 @@ async def refresh_company_yelp(
 @router.post("/{company_id}/refresh-indeed")
 async def refresh_company_indeed(
     company_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Indeed jobs for a company. Hiring activity = budget signal.
@@ -2653,7 +2653,7 @@ _MERGE_REPOINT_TABLES = ["activities", "contacts", "deals", "generated_emails", 
 @router.post("/merge")
 async def merge_companies(
     req: MergeCompaniesRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Merge one or more companies into a kept company.
@@ -2823,7 +2823,7 @@ class BulkCompanyActionRequest(BaseModel):
 @router.post("/batch")
 async def bulk_company_action(
     req: BulkCompanyActionRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Apply an action to many companies in one call. Admin/super_admin only.
