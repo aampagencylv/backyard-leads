@@ -589,6 +589,31 @@
         /* Quieter engagement signals — opens, clicks. Used to be off-by-default
            because of prefetcher inflation; now per-email deduped at the source. */
         .toast.engagement { background: #5b8def; font-size: 13px; padding: 10px 16px; }
+        /* "Live engagement" — email opens and clicks pinned to top-right so
+           reps see them while they're working other accounts (a fresh open is a
+           strong moment to pick up the phone). Larger, attention-grabbing
+           color with a one-second pulse on arrival. */
+        .toast.engagement-top {
+            top: 20px;
+            bottom: auto;
+            right: 20px;
+            background: linear-gradient(135deg, #1B5E20 0%, #2E7D32 100%);
+            color: #fff;
+            font-size: 16px;
+            font-weight: 600;
+            padding: 16px 24px;
+            max-width: 460px;
+            border-left: 4px solid #66BB6A;
+            animation: slideDownPulse 0.5s ease-out;
+            box-shadow: 0 8px 24px rgba(27,94,32,0.35);
+        }
+        .toast.engagement-top + .toast.engagement-top { top: calc(20px + 80px); bottom: auto; }
+        @keyframes slideDownPulse {
+            0%   { transform: translateY(-30px); opacity: 0; }
+            60%  { transform: translateY(4px);  opacity: 1; }
+            80%  { transform: translateY(-2px); }
+            100% { transform: translateY(0);    opacity: 1; }
+        }
         /* Clickable toasts — for notifications that link to a company. */
         .toast.clickable { cursor: pointer; }
         .toast.clickable:hover { filter: brightness(1.1); }
@@ -3658,11 +3683,18 @@ function verify(secret, rawBody, header) {
             const title = `${tag} — ${who}`;
             const body = n.content || '';
 
-            // 1. In-tab toast — always. Quiet variants get distinct styling so
-            //    a flurry of opens doesn't visually drown out a reply.
+            // 1. In-tab toast — always.
+            //    - Loud signals (replies / hot leads / meetings / bounces) stay
+            //      bottom-right in orange, 6s linger, longest dwell.
+            //    - Engagement signals (opens, clicks) pin to TOP-right, larger
+            //      and brand-green with a pulse animation, 7s linger. This is
+            //      the "someone is reading your email RIGHT NOW" moment — reps
+            //      should be able to pivot calls in real time.
+            const variant = isQuiet ? 'engagement-top' : 'hot';
+            const durationMs = isQuiet ? 7000 : 6000;
             toast(`${title}: ${body}`, {
-                variant: isQuiet ? 'engagement' : 'hot',
-                durationMs: isQuiet ? 3500 : 6000,
+                variant,
+                durationMs,
                 onClick: n.company_id ? () => openCompanyDetail(n.company_id) : undefined,
             });
 
