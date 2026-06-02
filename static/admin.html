@@ -119,6 +119,38 @@
   <div class="container">
 
     <div class="panel">
+      <h2>Platform costs</h2>
+      <div style="font-size:12px;color:var(--text-dim);margin-bottom:16px">True cost of goods — what we actually pay vendors. From <code>credit_ledger.raw_cost_usd</code>. Updated in real time.</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
+        <div class="stat" style="display:block">
+          <div class="label">Today</div>
+          <div class="value" id="cost-today">$—</div>
+          <div style="font-size:11px;color:var(--text-dim)" id="cost-today-events">—</div>
+        </div>
+        <div class="stat" style="display:block">
+          <div class="label">Last 7 days</div>
+          <div class="value" id="cost-7d">$—</div>
+          <div style="font-size:11px;color:var(--text-dim)" id="cost-7d-events">—</div>
+        </div>
+        <div class="stat" style="display:block">
+          <div class="label">Last 30 days</div>
+          <div class="value" id="cost-30d">$—</div>
+          <div style="font-size:11px;color:var(--text-dim)" id="cost-30d-events">—</div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div>
+          <h3 style="font-size:12px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">By vendor (30d)</h3>
+          <table id="cost-vendor-table"><tbody></tbody></table>
+        </div>
+        <div>
+          <h3 style="font-size:12px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">By tenant (30d)</h3>
+          <table id="cost-tenant-table"><tbody></tbody></table>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
       <h2>Tenants</h2>
       <div class="row" style="margin-bottom: 16px;">
         <button class="btn btn-primary" onclick="showCreateTenant()">+ New tenant</button>
@@ -187,6 +219,22 @@
 
       <h2 style="margin-top: 24px;">Voice (Twilio)</h2>
       <div id="voice-status" style="font-size:13px;color:var(--text-dim);margin-bottom:24px">—</div>
+
+      <h2 style="margin-top: 24px;">Costs (last 30 days)</h2>
+      <div style="display:flex;gap:24px;margin-bottom:14px">
+        <div><div style="font-size:11px;color:var(--text-dim);text-transform:uppercase">Total</div><div style="font-size:22px;font-weight:600" id="tenant-cost-total">$—</div></div>
+        <div><div style="font-size:11px;color:var(--text-dim);text-transform:uppercase">Events</div><div style="font-size:22px;font-weight:600" id="tenant-cost-events">—</div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px">
+        <div>
+          <h3 style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">By vendor</h3>
+          <table id="tenant-cost-vendor-table"><tbody></tbody></table>
+        </div>
+        <div>
+          <h3 style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">By action</h3>
+          <table id="tenant-cost-action-table"><tbody></tbody></table>
+        </div>
+      </div>
 
       <h2 style="margin-top: 24px;">API Keys vault</h2>
       <div style="font-size:12px;color:var(--text-dim);margin-bottom:12px">All integration credentials for this tenant. Masked — full values never leave the database. Use the existing tenant /api/runtime-config endpoints to rotate.</div>
@@ -303,6 +351,62 @@ async function bootApp() {
   show("app-view");
   document.getElementById("actor-email").textContent = actor.email;
   await loadTenants();
+  loadPlatformCosts().catch(() => {});
+}
+
+function fmtUSD(n) {
+  const v = Number(n) || 0;
+  if (v < 1) return "$" + v.toFixed(3);
+  if (v < 100) return "$" + v.toFixed(2);
+  return "$" + Math.round(v).toLocaleString();
+}
+
+async function loadPlatformCosts() {
+  try {
+    const c = await api("GET", "/api/admin/costs?days=30");
+    document.getElementById("cost-today").textContent = fmtUSD(c.today.total_usd);
+    document.getElementById("cost-today-events").textContent = `${c.today.events.toLocaleString()} events`;
+    document.getElementById("cost-7d").textContent = fmtUSD(c.seven_day.total_usd);
+    document.getElementById("cost-7d-events").textContent = `${c.seven_day.events.toLocaleString()} events`;
+    document.getElementById("cost-30d").textContent = fmtUSD(c.window.total_usd);
+    document.getElementById("cost-30d-events").textContent = `${c.window.events.toLocaleString()} events`;
+
+    const vt = document.querySelector("#cost-vendor-table tbody");
+    vt.innerHTML = c.window.by_vendor.length
+      ? c.window.by_vendor.map(v => `
+          <tr>
+            <td style="font-size:13px"><strong>${escapeHtml(v.vendor)}</strong></td>
+            <td style="text-align:right;font-family:ui-monospace,monospace">${fmtUSD(v.usd)}</td>
+            <td style="text-align:right;color:var(--text-dim);font-size:11px">${v.events.toLocaleString()}</td>
+          </tr>`).join("")
+      : `<tr><td colspan="3" class="empty">No spend in this window.</td></tr>`;
+
+    const tt = document.querySelector("#cost-tenant-table tbody");
+    tt.innerHTML = c.window.by_tenant.length
+      ? c.window.by_tenant.map(t => `
+          <tr>
+            <td style="font-size:13px">${escapeHtml(t.tenant_name)}</td>
+            <td style="text-align:right;font-family:ui-monospace,monospace">${fmtUSD(t.usd)}</td>
+            <td style="text-align:right;color:var(--text-dim);font-size:11px">${t.events.toLocaleString()}</td>
+          </tr>`).join("")
+      : `<tr><td colspan="3" class="empty">No spend in this window.</td></tr>`;
+  } catch (e) { /* swallow — panel shows dashes */ }
+}
+
+async function loadTenantCosts(tenantId) {
+  try {
+    const c = await api("GET", `/api/admin/tenants/${tenantId}/costs?days=30`);
+    document.getElementById("tenant-cost-total").textContent = fmtUSD(c.total_usd);
+    document.getElementById("tenant-cost-events").textContent = c.events.toLocaleString();
+    const vt = document.querySelector("#tenant-cost-vendor-table tbody");
+    vt.innerHTML = c.by_vendor.length
+      ? c.by_vendor.map(v => `<tr><td style="font-size:12px">${escapeHtml(v.vendor)}</td><td style="text-align:right;font-family:ui-monospace,monospace;font-size:12px">${fmtUSD(v.usd)}</td></tr>`).join("")
+      : `<tr><td colspan="2" class="empty" style="font-size:11px">—</td></tr>`;
+    const at = document.querySelector("#tenant-cost-action-table tbody");
+    at.innerHTML = c.by_action.length
+      ? c.by_action.map(a => `<tr><td style="font-size:12px">${escapeHtml(a.action_type)}</td><td style="text-align:right;font-family:ui-monospace,monospace;font-size:12px">${fmtUSD(a.usd)}</td></tr>`).join("")
+      : `<tr><td colspan="2" class="empty" style="font-size:11px">—</td></tr>`;
+  } catch (e) { /* swallow */ }
 }
 
 async function loadTenants() {
@@ -368,9 +472,10 @@ async function openTenant(tenantId) {
   renderDomains(data.domains || []);
   show("tenant-detail");
   document.getElementById("tenant-detail").scrollIntoView({ behavior: "smooth" });
-  // Load + render the API Keys vault separately so a slow keys fetch
-  // doesn't block the rest of the panel from rendering.
+  // Load API Keys + Cost panels separately so slow fetches don't block
+  // the rest of the tenant-detail render.
   loadKeys(tenantId).catch(() => {});
+  loadTenantCosts(tenantId).catch(() => {});
 }
 
 async function loadKeys(tenantId) {

@@ -290,6 +290,169 @@ async def tenant_detail(
     }
 
 
+@router.get("/costs")
+async def platform_costs(
+    days: int = 30,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_super_admin),
+):
+    """Platform-wide cost summary from credit_ledger.raw_cost_usd.
+
+    Returns totals for three windows (today, 7-day, N-day where N is the
+    `days` param, default 30), each broken down by vendor and by tenant.
+
+    raw_cost_usd is what the platform actually pays the vendor (Anthropic,
+    Twilio, Resend, Netrows, etc.) — the "true cost of goods" view. Different
+    from credits_debited which is what we'd bill customers.
+    """
+    from datetime import datetime, timezone, timedelta
+    from sqlalchemy import func as _func
+    from app.models import CreditLedger
+
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    seven_d_start = now - timedelta(days=7)
+    window_start = now - timedelta(days=max(1, min(days, 365)))
+
+    async def aggregate(since):
+        # Returns three rollups for the window: total, by-vendor, by-tenant.
+        total_row = (await db.execute(
+            select(
+                _func.coalesce(_func.sum(CreditLedger.raw_cost_usd), 0.0).label("usd"),
+                _func.count().label("events"),
+            ).where(CreditLedger.created_at >= since)
+        )).one()
+
+        vendor_rows = (await db.execute(
+            select(
+                CreditLedger.vendor,
+                _func.coalesce(_func.sum(CreditLedger.raw_cost_usd), 0.0).label("usd"),
+                _func.count().label("events"),
+            )
+            .where(CreditLedger.created_at >= since)
+            .group_by(CreditLedger.vendor)
+            .order_by(_func.sum(CreditLedger.raw_cost_usd).desc())
+        )).all()
+
+        tenant_rows = (await db.execute(
+            select(
+                CreditLedger.tenant_id,
+                _func.coalesce(_func.sum(CreditLedger.raw_cost_usd), 0.0).label("usd"),
+                _func.count().label("events"),
+            )
+            .where(CreditLedger.created_at >= since)
+            .group_by(CreditLedger.tenant_id)
+            .order_by(_func.sum(CreditLedger.raw_cost_usd).desc())
+        )).all()
+
+        return {
+            "total_usd": float(total_row.usd),
+            "events": int(total_row.events),
+            "by_vendor": [
+                {"vendor": (r.vendor or "internal"), "usd": float(r.usd), "events": int(r.events)}
+                for r in vendor_rows
+            ],
+            "by_tenant": [
+                {"tenant_id": r.tenant_id, "usd": float(r.usd), "events": int(r.events)}
+                for r in tenant_rows
+            ],
+        }
+
+    today = await aggregate(today_start)
+    week  = await aggregate(seven_d_start)
+    win   = await aggregate(window_start)
+
+    # Hydrate tenant names so the UI doesn't have to do an N+1.
+    tenant_ids = list({t["tenant_id"] for t in win["by_tenant"] if t["tenant_id"]})
+    tenant_names: dict[int, str] = {}
+    if tenant_ids:
+        rows = (await db.execute(
+            select(Tenant.id, Tenant.name).where(Tenant.id.in_(tenant_ids))
+        )).all()
+        tenant_names = {row.id: row.name for row in rows}
+    for window in (today, week, win):
+        for t in window["by_tenant"]:
+            t["tenant_name"] = tenant_names.get(t["tenant_id"], f"#{t['tenant_id']}")
+
+    return {
+        "today": today,
+        "seven_day": week,
+        "window_days": days,
+        "window": win,
+        "generated_at": now.isoformat(),
+    }
+
+
+@router.get("/tenants/{tenant_id}/costs")
+async def tenant_costs(
+    tenant_id: int,
+    days: int = 30,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_super_admin),
+):
+    """Cost breakdown for a single tenant — used by the tenant detail
+    panel. Same shape as /api/admin/costs but scoped to one tenant_id."""
+    from datetime import datetime, timezone, timedelta
+    from sqlalchemy import func as _func
+    from app.models import CreditLedger
+
+    now = datetime.now(timezone.utc)
+    window_start = now - timedelta(days=max(1, min(days, 365)))
+
+    total = (await db.execute(
+        select(
+            _func.coalesce(_func.sum(CreditLedger.raw_cost_usd), 0.0).label("usd"),
+            _func.count().label("events"),
+        ).where(
+            CreditLedger.tenant_id == tenant_id,
+            CreditLedger.created_at >= window_start,
+        )
+    )).one()
+
+    by_vendor = (await db.execute(
+        select(
+            CreditLedger.vendor,
+            _func.coalesce(_func.sum(CreditLedger.raw_cost_usd), 0.0).label("usd"),
+            _func.count().label("events"),
+        )
+        .where(
+            CreditLedger.tenant_id == tenant_id,
+            CreditLedger.created_at >= window_start,
+        )
+        .group_by(CreditLedger.vendor)
+        .order_by(_func.sum(CreditLedger.raw_cost_usd).desc())
+    )).all()
+
+    by_action = (await db.execute(
+        select(
+            CreditLedger.action_type,
+            _func.coalesce(_func.sum(CreditLedger.raw_cost_usd), 0.0).label("usd"),
+            _func.count().label("events"),
+        )
+        .where(
+            CreditLedger.tenant_id == tenant_id,
+            CreditLedger.created_at >= window_start,
+        )
+        .group_by(CreditLedger.action_type)
+        .order_by(_func.sum(CreditLedger.raw_cost_usd).desc())
+    )).all()
+
+    return {
+        "tenant_id": tenant_id,
+        "window_days": days,
+        "total_usd": float(total.usd),
+        "events": int(total.events),
+        "by_vendor": [
+            {"vendor": (r.vendor or "internal"), "usd": float(r.usd), "events": int(r.events)}
+            for r in by_vendor
+        ],
+        "by_action": [
+            {"action_type": r.action_type, "usd": float(r.usd), "events": int(r.events)}
+            for r in by_action
+        ],
+    }
+
+
 @router.get("/tenants/{tenant_id}/keys")
 async def tenant_api_keys(
     tenant_id: int,
