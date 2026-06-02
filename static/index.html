@@ -59,6 +59,20 @@
         .btn-xs { padding: 3px 8px; font-size: 11px; }
         .auth-toggle { text-align: center; margin-top: 16px; font-size: 14px; color: #666; }
         .auth-toggle a { color: var(--bmp-orange); cursor: pointer; text-decoration: none; font-weight: 500; }
+        /* Onboarding wizard */
+        .ob-dot { flex: 1; height: 4px; background: #e0e0e0; border-radius: 2px; transition: background 0.2s; }
+        .ob-dot.active { background: var(--bmp-orange); }
+        .ob-dot.done { background: var(--bmp-green); }
+        .ob-step .form-group { margin-bottom: 16px; }
+        .ob-step .form-group label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: #333; }
+        .ob-step .form-group input,
+        .ob-step .form-group select,
+        .ob-step .form-group textarea { width: 100%; padding: 10px 14px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; font-family: inherit; }
+        .ob-step .form-group input:focus,
+        .ob-step .form-group select:focus,
+        .ob-step .form-group textarea:focus { outline: none; border-color: var(--bmp-orange); }
+        .ob-step .form-group input[type=color] { padding: 2px; }
+        .ob-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 28px; gap: 8px; }
         .auth-error { background: #fde8e8; color: #c0392b; padding: 8px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 12px; display: none; }
 
         /* App layout */
@@ -800,6 +814,121 @@
                 <div class="form-group"><label>Password</label><input type="password" id="reg-password" placeholder="Choose a password" onkeydown="if(event.key==='Enter')register()"></div>
                 <button class="btn btn-primary" onclick="register()">Create Account</button>
                 <div class="auth-toggle">Already have an account? <a onclick="showLogin()">Sign in</a></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===================== ONBOARDING WIZARD =====================
+         Shown post-login when the tenant's onboarding_step != 'done'.
+         Captures brand basics → colors → strategic direction in 4 steps;
+         persists to RuntimeConfig via PATCH /api/runtime-config + advances
+         the tenant onboarding_step machine to 'done' on finish. -->
+    <div id="onboard-screen" class="hidden" style="position:fixed;inset:0;background:linear-gradient(135deg,#0d3b13 0%,#1B5E20 50%,#2E7D32 100%);z-index:9000;overflow-y:auto;padding:48px 20px;">
+        <div style="max-width:640px;margin:0 auto;background:white;border-radius:16px;padding:36px 40px;box-shadow:0 24px 80px rgba(0,0,0,0.4);">
+            <!-- Step indicator -->
+            <div id="ob-progress" style="display:flex;gap:6px;margin-bottom:24px">
+                <div class="ob-dot active" data-step="1"></div>
+                <div class="ob-dot" data-step="2"></div>
+                <div class="ob-dot" data-step="3"></div>
+                <div class="ob-dot" data-step="4"></div>
+            </div>
+
+            <!-- STEP 1: agency basics -->
+            <div id="ob-step-1" class="ob-step">
+                <h2 style="font-size:24px;margin-bottom:6px;color:var(--bmp-green)">Welcome to LeadProspector 👋</h2>
+                <p style="color:#666;margin-bottom:24px;font-size:14px">Let's get your agency set up. Takes about 2 minutes.</p>
+                <div class="form-group">
+                    <label>Agency name</label>
+                    <input id="ob-name" placeholder="Acme Marketing" maxlength="120">
+                </div>
+                <div class="form-group">
+                    <label>Website</label>
+                    <input id="ob-website" placeholder="https://www.acmemarketing.com" maxlength="500">
+                </div>
+                <div class="form-group">
+                    <label>Logo URL <span style="color:#888;font-weight:400;font-size:11px">(optional — paste a hosted image URL, or skip)</span></label>
+                    <input id="ob-logo" placeholder="https://..." maxlength="500">
+                </div>
+                <div class="ob-actions">
+                    <span></span>
+                    <button class="btn btn-primary" onclick="obNext(1)">Continue →</button>
+                </div>
+            </div>
+
+            <!-- STEP 2: brand colors -->
+            <div id="ob-step-2" class="ob-step hidden">
+                <h2 style="font-size:24px;margin-bottom:6px;color:var(--bmp-green)">Your brand colors</h2>
+                <p style="color:#666;margin-bottom:24px;font-size:14px">These drive your dashboard, emails, audit reports, and booking pages.</p>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:8px">
+                    <div class="form-group">
+                        <label>Primary (main CTA)</label>
+                        <div style="display:flex;gap:8px;align-items:center">
+                            <input type="color" id="ob-color-primary" value="#E65100" style="width:48px;height:38px;padding:2px;border:1px solid #ddd;border-radius:6px">
+                            <input id="ob-color-primary-hex" value="#E65100" maxlength="7" style="flex:1;font-family:monospace">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Secondary (accent + sidebar)</label>
+                        <div style="display:flex;gap:8px;align-items:center">
+                            <input type="color" id="ob-color-secondary" value="#1B5E20" style="width:48px;height:38px;padding:2px;border:1px solid #ddd;border-radius:6px">
+                            <input id="ob-color-secondary-hex" value="#1B5E20" maxlength="7" style="flex:1;font-family:monospace">
+                        </div>
+                    </div>
+                </div>
+                <div id="ob-color-preview" style="padding:16px;border-radius:8px;margin-top:12px;border:1px solid #eee">
+                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+                        <div id="ob-preview-primary" style="width:24px;height:24px;border-radius:4px;background:#E65100"></div>
+                        <strong>Preview</strong>
+                        <button id="ob-preview-btn" style="margin-left:auto;background:#E65100;color:white;border:0;padding:8px 14px;border-radius:6px;font-size:13px">Sample button</button>
+                    </div>
+                    <div id="ob-preview-bar" style="height:6px;background:#1B5E20;border-radius:3px;margin-top:4px"></div>
+                </div>
+                <div class="ob-actions">
+                    <button class="btn btn-secondary" onclick="obBack(2)">← Back</button>
+                    <button class="btn btn-primary" onclick="obNext(2)">Continue →</button>
+                </div>
+            </div>
+
+            <!-- STEP 3: strategic direction -->
+            <div id="ob-step-3" class="ob-step hidden">
+                <h2 style="font-size:24px;margin-bottom:6px;color:var(--bmp-green)">Your strategic angle</h2>
+                <p style="color:#666;margin-bottom:24px;font-size:14px">This is the most important step. It drives every AI-generated email, every audit report, every prospect outreach. The more specific, the better the results.</p>
+                <div class="form-group">
+                    <label>What's your agency's primary marketing focus?</label>
+                    <select id="ob-focus" onchange="onObFocusChange()" style="font-size:14px">
+                        <option value="">— Choose one —</option>
+                        <option value="ai_findability">AI findability / Generative Engine Optimization (GEO)</option>
+                        <option value="local_seo">Local SEO + Google Maps optimization</option>
+                        <option value="content_marketing">Content marketing + organic growth</option>
+                        <option value="paid_ads">Paid ads (Google / Meta / TikTok)</option>
+                        <option value="email_marketing">Email marketing + lifecycle</option>
+                        <option value="full_service">Full-service marketing</option>
+                        <option value="other">Other (describe below)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Who do you typically serve?</label>
+                    <input id="ob-icp" placeholder="e.g. Local home-service contractors · B2B SaaS startups · Real estate teams" maxlength="200">
+                </div>
+                <div class="form-group">
+                    <label>Describe your unique angle <span style="color:#888;font-weight:400;font-size:11px">(2-5 sentences — what's the hook you lead with?)</span></label>
+                    <textarea id="ob-angle" rows="5" placeholder="e.g. We help backyard pros (pool builders, landscapers, deck builders) get found by AI search — ChatGPT, Perplexity, Google AI Overviews. The same signals that help with AI search also help with local SEO. We lead with a free audit that shows where their site is missing schema, FAQ, and llms.txt — the things AI engines look for to cite a business." style="resize:vertical;font-family:inherit;font-size:13px;line-height:1.5"></textarea>
+                </div>
+                <div class="ob-actions">
+                    <button class="btn btn-secondary" onclick="obBack(3)">← Back</button>
+                    <button class="btn btn-primary" onclick="obNext(3)">Continue →</button>
+                </div>
+            </div>
+
+            <!-- STEP 4: review + finish -->
+            <div id="ob-step-4" class="ob-step hidden">
+                <h2 style="font-size:24px;margin-bottom:6px;color:var(--bmp-green)">Review and finish</h2>
+                <p style="color:#666;margin-bottom:24px;font-size:14px">Looks right? You can change everything later in Settings.</p>
+                <div id="ob-review" style="background:#f8f9fa;border-radius:8px;padding:18px;font-size:13px;line-height:1.8;margin-bottom:16px"></div>
+                <div class="ob-actions">
+                    <button class="btn btn-secondary" onclick="obBack(4)">← Back</button>
+                    <button class="btn btn-primary" onclick="obFinish()" id="ob-finish-btn">Start prospecting →</button>
+                </div>
             </div>
         </div>
     </div>
@@ -3535,6 +3664,168 @@ function verify(secret, rawBody, header) {
             });
         }
 
+        // ============ Onboarding wizard ============
+        // State accumulated across the 4 steps. Each step also writes the
+        // partial value to the server immediately on advance, so a bailed
+        // wizard leaves the partial brand_*/messaging_direction in place
+        // for the next session.
+        const _ob = { name: "", website: "", logo: "", primaryColor: "#E65100", secondaryColor: "#1B5E20", focus: "", icp: "", angle: "" };
+
+        async function maybeShowOnboarding() {
+            // Called from checkAuth after currentUser is set. Hits
+            // /api/onboard/status — if the tenant onboarding_step is
+            // not 'done', show the wizard. Otherwise no-op.
+            try {
+                const status = await api('/api/onboard/status');
+                if (!status || status.is_complete) return false;
+                // Pre-seed step 1 with whatever we know about the tenant
+                _ob.name = status.tenant_name || "";
+                document.getElementById('ob-name').value = _ob.name;
+                document.getElementById('onboard-screen').classList.remove('hidden');
+                document.getElementById('app-screen').classList.add('hidden');
+                return true;
+            } catch (e) {
+                // /api/onboard/status only works for admin+ — if the user is a
+                // sales rep, status will 401/403 and we silently skip the wizard.
+                return false;
+            }
+        }
+
+        function obShowStep(n) {
+            for (let i = 1; i <= 4; i++) {
+                document.getElementById('ob-step-' + i).classList.toggle('hidden', i !== n);
+            }
+            document.querySelectorAll('#ob-progress .ob-dot').forEach(d => {
+                const dn = parseInt(d.dataset.step);
+                d.classList.toggle('active', dn === n);
+                d.classList.toggle('done', dn < n);
+            });
+        }
+
+        async function obSaveStep1() {
+            _ob.name = document.getElementById('ob-name').value.trim();
+            _ob.website = document.getElementById('ob-website').value.trim();
+            _ob.logo = document.getElementById('ob-logo').value.trim();
+            if (!_ob.name) { toast('Agency name is required', { variant: 'hot' }); return false; }
+            // Save brand basics to RuntimeConfig
+            const body = { brand_company_name: _ob.name };
+            if (_ob.website) body.brand_website_url = _ob.website;
+            if (_ob.logo) body.brand_logo_url = _ob.logo;
+            await api('/api/runtime-config', { method: 'PATCH', body: JSON.stringify(body) });
+            return true;
+        }
+
+        async function obSaveStep2() {
+            _ob.primaryColor = document.getElementById('ob-color-primary').value;
+            _ob.secondaryColor = document.getElementById('ob-color-secondary').value;
+            await api('/api/runtime-config', { method: 'PATCH', body: JSON.stringify({
+                brand_primary_color: _ob.primaryColor,
+                brand_secondary_color: _ob.secondaryColor,
+            }) });
+            return true;
+        }
+
+        async function obSaveStep3() {
+            _ob.focus = document.getElementById('ob-focus').value;
+            _ob.icp = document.getElementById('ob-icp').value.trim();
+            _ob.angle = document.getElementById('ob-angle').value.trim();
+            if (!_ob.angle) { toast('Tell us about your angle — this drives every AI email', { variant: 'hot' }); return false; }
+            const focusLabel = {
+                ai_findability: "AI findability / Generative Engine Optimization (GEO)",
+                local_seo: "Local SEO + Google Maps optimization",
+                content_marketing: "Content marketing + organic growth",
+                paid_ads: "Paid ads (Google / Meta / TikTok)",
+                email_marketing: "Email marketing + lifecycle",
+                full_service: "Full-service marketing",
+                other: "Custom focus",
+            }[_ob.focus] || "Marketing services";
+            // Compose a structured messaging_direction the email_generator
+            // will inject as STRATEGIC DIRECTION on every AI prompt.
+            const direction = `PRIMARY ANGLE — ${focusLabel}.\n\n${_ob.angle}\n\nWHO YOU SERVE: ${_ob.icp || "B2B businesses across multiple industries"}.\n\nTONE:\n  - Specific. Reference real data when you can.\n  - Curious, not pitchy. A friend who works in marketing flagging something useful.\n  - Don't lead with "Are you the right person?" or "I came across your business".\n  - Avoid "synergy", "leverage", "optimize", "ROI", "scale".`;
+            await api('/api/runtime-config', { method: 'PATCH', body: JSON.stringify({ messaging_direction: direction }) });
+            return true;
+        }
+
+        async function obNext(currentStep) {
+            const ok = (
+                currentStep === 1 ? await obSaveStep1() :
+                currentStep === 2 ? await obSaveStep2() :
+                currentStep === 3 ? await obSaveStep3() :
+                false
+            );
+            if (!ok) return;
+            if (currentStep === 3) obRenderReview();
+            obShowStep(currentStep + 1);
+        }
+
+        function obBack(currentStep) { if (currentStep > 1) obShowStep(currentStep - 1); }
+
+        function obRenderReview() {
+            const focusLabels = {
+                ai_findability: "AI findability / GEO",
+                local_seo: "Local SEO + Google Maps",
+                content_marketing: "Content marketing",
+                paid_ads: "Paid ads",
+                email_marketing: "Email marketing",
+                full_service: "Full-service",
+                other: "Custom",
+            };
+            const html = `
+                <div><strong>Agency:</strong> ${escapeHtml(_ob.name)}</div>
+                ${_ob.website ? `<div><strong>Website:</strong> ${escapeHtml(_ob.website)}</div>` : ""}
+                ${_ob.logo ? `<div><strong>Logo:</strong> <img src="${escapeHtml(_ob.logo)}" style="height:18px;vertical-align:middle"></div>` : ""}
+                <div><strong>Brand colors:</strong>
+                    <span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:${_ob.primaryColor};vertical-align:middle"></span>
+                    <span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:${_ob.secondaryColor};vertical-align:middle"></span>
+                </div>
+                <div><strong>Focus:</strong> ${escapeHtml(focusLabels[_ob.focus] || "—")}</div>
+                ${_ob.icp ? `<div><strong>Customers:</strong> ${escapeHtml(_ob.icp)}</div>` : ""}
+                <div style="margin-top:6px"><strong>Angle:</strong> <em style="color:#444">${escapeHtml(_ob.angle).slice(0, 220)}${_ob.angle.length > 220 ? "…" : ""}</em></div>
+            `;
+            document.getElementById('ob-review').innerHTML = html;
+        }
+
+        async function obFinish() {
+            const btn = document.getElementById('ob-finish-btn');
+            btn.disabled = true;
+            btn.textContent = 'Saving…';
+            try {
+                await api('/api/onboard/advance', { method: 'POST', body: JSON.stringify({ step: 'done' }) });
+                // Reload to pick up the brand bootstrap with the new values.
+                window.location.reload();
+            } catch (e) {
+                btn.disabled = false;
+                btn.textContent = 'Start prospecting →';
+                toast('Could not finish onboarding: ' + e.message, { variant: 'hot' });
+            }
+        }
+
+        function onObFocusChange() { /* placeholder for any focus-dependent UI */ }
+
+        // Wire color picker hex ↔ swatch sync + live preview
+        document.addEventListener('DOMContentLoaded', () => {
+            const syncColor = (picker, hex, previewElId, isPrimary) => {
+                const p = document.getElementById(picker);
+                const h = document.getElementById(hex);
+                const update = (v) => {
+                    if (isPrimary) {
+                        document.getElementById('ob-preview-primary').style.background = v;
+                        document.getElementById('ob-preview-btn').style.background = v;
+                    } else {
+                        document.getElementById('ob-preview-bar').style.background = v;
+                    }
+                };
+                if (p) p.addEventListener('input', () => { h.value = p.value.toUpperCase(); update(p.value); });
+                if (h) h.addEventListener('input', () => {
+                    const v = h.value.trim();
+                    if (/^#[0-9a-fA-F]{6}$/.test(v)) { p.value = v; update(v); }
+                });
+            };
+            syncColor('ob-color-primary', 'ob-color-primary-hex', null, true);
+            syncColor('ob-color-secondary', 'ob-color-secondary-hex', null, false);
+        });
+
+
         // ============ Auth ============
         async function checkAuth() {
             try {
@@ -3542,6 +3833,11 @@ function verify(secret, rawBody, header) {
                 if (user) {
                     currentUser = user;
                     document.getElementById('auth-screen').classList.add('hidden');
+                    // Run the tenant onboarding wizard if not done. The wizard
+                    // hides app-screen and shows onboard-screen until finished;
+                    // it reloads the page on completion so the brand bootstrap
+                    // picks up the new RuntimeConfig values.
+                    if (await maybeShowOnboarding()) return;
                     document.getElementById('app-screen').classList.remove('hidden');
                     document.getElementById('user-name').textContent = user.name;
                     // AI chatbot launcher — visible only to logged-in users
