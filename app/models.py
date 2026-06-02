@@ -4,16 +4,46 @@ from datetime import datetime, timezone
 from app.database import Base
 
 
+class Tenant(Base):
+    """A tenant (agency customer) in the multi-tenant deployment.
+    Tenant #1 = Backyard Marketing Pros (the original single-tenant install).
+    """
+    __tablename__ = "tenants"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(255), nullable=False)
+    slug = Column(String(64), nullable=False, unique=True)
+    status = Column(String(32), nullable=False, default="active")
+    plan = Column(String(32), nullable=False, default="starter")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class TenantMixin:
+    """Adds tenant_id to a model. default=1 mirrors the DB-side DEFAULT 1,
+    so any code path that hasn't been updated to set tenant_id explicitly
+    keeps writing rows under tenant #1 (BMP) without erroring."""
+    tenant_id = Column(
+        Integer,
+        ForeignKey("tenants.id"),
+        nullable=False,
+        default=1,
+        server_default="1",
+        index=True,
+    )
+
+
 # Many-to-many: companies <-> tags
 company_tags = Table(
     "company_tags",
     Base.metadata,
     Column("company_id", Integer, ForeignKey("companies.id"), primary_key=True),
     Column("tag_id", Integer, ForeignKey("tags.id"), primary_key=True),
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False, server_default="1"),
 )
 
 
-class User(Base):
+class User(TenantMixin, Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -99,7 +129,7 @@ class User(Base):
         return f"{self.first_name} {self.last_name}".strip()
 
 
-class Search(Base):
+class Search(TenantMixin, Base):
     __tablename__ = "searches"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -113,7 +143,7 @@ class Search(Base):
     companies = relationship("Company", back_populates="search")
 
 
-class Company(Base):
+class Company(TenantMixin, Base):
     """A business we discovered/imported. Holds firmographic + enrichment data."""
     __tablename__ = "companies"
 
@@ -246,7 +276,7 @@ class Company(Base):
     assigned_user = relationship("User", foreign_keys=[assigned_to])
 
 
-class Contact(Base):
+class Contact(TenantMixin, Base):
     """A person at a Company. Multiple contacts per company supported."""
     __tablename__ = "contacts"
 
@@ -314,7 +344,7 @@ class Contact(Base):
         return f"{self.first_name or ''} {self.last_name or ''}".strip()
 
 
-class Deal(Base):
+class Deal(TenantMixin, Base):
     """A revenue opportunity at a Company. Multiple deals per company supported."""
     __tablename__ = "deals"
 
@@ -348,7 +378,7 @@ class Deal(Base):
     assigned_user = relationship("User", foreign_keys=[assigned_to])
 
 
-class GeneratedEmail(Base):
+class GeneratedEmail(TenantMixin, Base):
     """
     A step in a multi-channel outreach sequence.
     Despite the table name, this now handles emails, LinkedIn messages, calls, texts, and custom tasks.
@@ -417,7 +447,7 @@ class GeneratedEmail(Base):
     company = relationship("Company")
 
 
-class Activity(Base):
+class Activity(TenantMixin, Base):
     """Timeline entry on a Company (and optionally a Contact or Deal)."""
     __tablename__ = "activities"
 
@@ -474,7 +504,7 @@ class Activity(Base):
     user = relationship("User", back_populates="activities", foreign_keys=[user_id])
 
 
-class RuntimeConfig(Base):
+class RuntimeConfig(TenantMixin, Base):
     """Single-row org-level config that can be updated from the Settings UI.
     Keys here override env-var defaults (so users can rotate API keys without
     SSHing into the server).
@@ -635,7 +665,7 @@ class RuntimeConfig(Base):
                         onupdate=lambda: datetime.now(timezone.utc))
 
 
-class TrackingLink(Base):
+class TrackingLink(TenantMixin, Base):
     """One-shot URL wrapper for tracking email click-throughs (and later,
     site visits via the bmp_visitor cookie). Each <a href> in an outgoing
     email is rewritten to /t/{token} which 302s to destination_url after
@@ -655,7 +685,7 @@ class TrackingLink(Base):
     click_count = Column(Integer, default=0, nullable=False)
 
 
-class PageView(Base):
+class PageView(TenantMixin, Base):
     """A page on backyardmarketingpros.com that a tracked visitor loaded.
     Phase 2 of Website Visitor Tracking. Visitor is identified by the
     bmp_visitor cookie that we drop when they click /t/{token}.
@@ -691,7 +721,7 @@ class PageView(Base):
     event_value = Column(Text, nullable=True)         # destination URL, form action, etc.
 
 
-class SiteVisitorSession(Base):
+class SiteVisitorSession(TenantMixin, Base):
     """An anonymous (or to-be-resolved) website visitor.
 
     Created when /api/track/pageview receives a beacon from a browser
@@ -734,7 +764,7 @@ class SiteVisitorSession(Base):
     last_seen_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
 
 
-class Tag(Base):
+class Tag(TenantMixin, Base):
     __tablename__ = "tags"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -744,7 +774,7 @@ class Tag(Base):
     companies = relationship("Company", secondary=company_tags, back_populates="tags")
 
 
-class Task(Base):
+class Task(TenantMixin, Base):
     __tablename__ = "tasks"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -763,7 +793,7 @@ class Task(Base):
     user = relationship("User", back_populates="tasks")
 
 
-class SavedView(Base):
+class SavedView(TenantMixin, Base):
     """User-saved filter presets for Companies and Pipeline pages."""
     __tablename__ = "saved_views"
 
@@ -781,10 +811,11 @@ campaign_members = Table(
     Base.metadata,
     Column("campaign_id", Integer, ForeignKey("campaigns.id"), primary_key=True),
     Column("user_id", Integer, ForeignKey("users.id"), primary_key=True),
+    Column("tenant_id", Integer, ForeignKey("tenants.id"), nullable=False, server_default="1"),
 )
 
 
-class Campaign(Base):
+class Campaign(TenantMixin, Base):
     """
     Auto Pilot campaign. Defines target criteria, locations, and qualification rules.
     Runs autonomously: search → enrich → qualify → generate sequence.
@@ -853,7 +884,7 @@ class Campaign(Base):
     members = relationship("User", secondary=campaign_members)
 
 
-class CampaignLog(Base):
+class CampaignLog(TenantMixin, Base):
     """Log of every action Auto Pilot takes — full audit trail."""
     __tablename__ = "campaign_logs"
 
@@ -866,7 +897,7 @@ class CampaignLog(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
-class SoSLookup(Base):
+class SoSLookup(TenantMixin, Base):
     """Cache for Secretary-of-State lookups (Phase 2 of the enrichment
     chain). Free public records, but each scrape costs latency + we want
     to be polite to the state's site, so cache aggressively. 30-day TTL
@@ -888,7 +919,7 @@ class SoSLookup(Base):
     expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
 
 
-class CustomFieldDefinition(Base):
+class CustomFieldDefinition(TenantMixin, Base):
     """User-defined custom fields on Companies + Contacts.
 
     Schema is intentionally simple: a flat list of field definitions
@@ -930,7 +961,7 @@ class CustomFieldDefinition(Base):
                         onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
 
-class CampaignTarget(Base):
+class CampaignTarget(TenantMixin, Base):
     """One (vertical, geo) pair inside a Campaign. God Mode treats every
     pair as its own concurrent producer with its own scrape cursor,
     pacing, weights, and counters — instead of marching through a single
@@ -982,7 +1013,7 @@ class CampaignTarget(Base):
                         onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
 
-class CampaignRun(Base):
+class CampaignRun(TenantMixin, Base):
     """One row per cron tick — what God Mode did during this batch.
     Drives the morning brief: 'while you slept, X targets ran, Y contacts
     enrolled, Z credits spent.' Also useful for debugging slow ticks."""
@@ -1004,7 +1035,7 @@ class CampaignRun(Base):
     summary_json = Column(Text, nullable=True)  # Per-target breakdown for the brief
 
 
-class ApiKey(Base):
+class ApiKey(TenantMixin, Base):
     """Personal API key — one per integration / external system. Owner
     is the User who created it; calls authenticated with this key act
     as that user (inheriting their role + scoping). Plaintext key is
@@ -1037,7 +1068,7 @@ class ApiKey(Base):
     scope = Column(String(20), default="read", nullable=False)
 
 
-class Webhook(Base):
+class Webhook(TenantMixin, Base):
     """Outbound webhook subscription. When a subscribed event fires,
     the platform POSTs the event payload to `url` with HMAC-SHA256
     signature in X-Webhook-Signature header.
@@ -1065,7 +1096,7 @@ class Webhook(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
-class AuditLogEntry(Base):
+class AuditLogEntry(TenantMixin, Base):
     """Immutable record of privileged actions across the platform.
 
     Captured for security review + SOC2 / enterprise compliance:
@@ -1114,7 +1145,7 @@ class AuditLogEntry(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
 
 
-class CreditLedger(Base):
+class CreditLedger(TenantMixin, Base):
     """Per-action ledger of every billable thing we do.
 
     Two layers, one table:
@@ -1150,7 +1181,7 @@ class CreditLedger(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
 
 
-class AuditReportModel(Base):
+class AuditReportModel(TenantMixin, Base):
     """Stored AI Findability Audit report for a company."""
     __tablename__ = "audit_reports"
 
@@ -1182,7 +1213,7 @@ class AuditReportModel(Base):
     booked_email = Column(String(255), nullable=True)
 
 
-class SchedulingConfig(Base):
+class SchedulingConfig(TenantMixin, Base):
     """Per-user availability rules + display preferences for the native
     scheduler. One row per User; created lazily on first access.
 
@@ -1261,7 +1292,7 @@ class SchedulingConfig(Base):
                         onupdate=lambda: datetime.now(timezone.utc))
 
 
-class Booking(Base):
+class Booking(TenantMixin, Base):
     """A confirmed booking made through the native scheduler.
 
     Persisted independently of Google so we can rebuild state if the
@@ -1307,7 +1338,7 @@ class Booking(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
 
 
-class Feedback(Base):
+class Feedback(TenantMixin, Base):
     """Team feedback / bug reports submitted via the in-app form."""
     __tablename__ = "feedback"
 
@@ -1321,7 +1352,7 @@ class Feedback(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
 
 
-class SequenceTemplate(Base):
+class SequenceTemplate(TenantMixin, Base):
     """Editable sequence templates — replaces the hard-coded
     DEFAULT_30DAY_TEMPLATE constant in sequence_engine.py.
 
@@ -1349,7 +1380,7 @@ class SequenceTemplate(Base):
                         onupdate=lambda: datetime.now(timezone.utc))
 
 
-class PendingDeletion(Base):
+class PendingDeletion(TenantMixin, Base):
     """Soft-delete holding area. BDR deletions land here for admin approval."""
     __tablename__ = "pending_deletions"
 
