@@ -115,53 +115,15 @@ def _tenant_payload(rc, settings_obj) -> dict:
             "custom_url":      (getattr(rc, "audit_custom_url", None) or ""),
         },
         # Provisioning status — tenant admin sees high-level readiness for
-        # their outbound channels (without seeing the underlying DKIM keys,
-        # which stay platform-tier).
+        # their outbound channels (without seeing the underlying DKIM keys
+        # or sub-account auth_token, which stay platform-tier).
         "sending_domain": {
             "configured": bool((getattr(rc, "resend_domain_id", None) or "").strip()),
             "name":   (getattr(rc, "resend_domain_name", None) or ""),
             "status": (getattr(rc, "resend_domain_status", None) or ""),
         },
-        # Per-tenant Twilio sub-account credentials. Each tenant has their
-        # own provisioned at create_tenant time. Admin tier sees these so
-        # they can wire up Voice SDK, buy phone numbers, etc.
-        # `masked` shape mirrors the platform-tier shape so the existing
-        # Settings UI rendering keeps working.
-        "twilio": {
-            "account_sid":    _mask_field(rc.twilio_account_sid),
-            "auth_token":     _mask_field(rc.twilio_auth_token),
-            "api_key_sid":    _mask_field(rc.twilio_api_key_sid),
-            "api_key_secret": _mask_field(rc.twilio_api_key_secret),
-            "twiml_app_sid":  _mask_field(rc.twilio_twiml_app_sid),
-            "minimally_configured": bool((rc.twilio_account_sid or "").strip() and (rc.twilio_auth_token or "").strip()),
-            "voice_sdk_ready": all([(rc.twilio_account_sid or "").strip(),
-                                    (rc.twilio_auth_token or "").strip(),
-                                    (rc.twilio_api_key_sid or "").strip(),
-                                    (rc.twilio_api_key_secret or "").strip(),
-                                    (rc.twilio_twiml_app_sid or "").strip()]),
-        },
         "voice_account": {
             "configured": bool((getattr(rc, "twilio_account_sid", None) or "").strip()),
-        },
-        # Per-tenant Blooio (iMessage). Tenants who use iMessage bring
-        # their own Blooio account. BMP shares the platform's Blooio
-        # account today; new tenants register their own.
-        "blooio": {
-            "set": bool((rc.blooio_api_key or "").strip()),
-            "masked": mask_key(rc.blooio_api_key),
-            "signing_secret_set": bool((rc.blooio_signing_secret or "").strip()),
-            "signing_secret_masked": mask_key(rc.blooio_signing_secret),
-        },
-        # Google Maps API key — used for /find-leads. Platform-brokered
-        # today (tenants share the platform's key), but exposed at tenant
-        # tier so an admin can BYO their own if they hit their quota or
-        # want isolated billing. Falls back to env when unset.
-        "google_maps": {
-            "set": bool((rc.google_maps_api_key or "").strip() or (settings_obj.google_maps_api_key or "").strip()),
-            "source":
-                "database" if (rc.google_maps_api_key or "").strip()
-                else ("env" if (settings_obj.google_maps_api_key or "").strip() else "none"),
-            "masked": mask_key((rc.google_maps_api_key or "").strip() or settings_obj.google_maps_api_key),
         },
     }
 
@@ -169,13 +131,12 @@ def _tenant_payload(rc, settings_obj) -> dict:
 def _platform_payload(rc, settings_obj) -> dict:
     """Platform-tier config — super_admin only.
 
-    Truly platform-shared services that no tenant owns or rotates
-    independently: enrichment (Netrows, Google Maps), telephony
-    transcription (Deepgram), inbound-email webhook auth (Resend).
-    Twilio / Blooio used to live here but were per-tenant data masquerading
-    as platform config — moved to tenant-tier in the May refactor so
-    each tenant's admin manages their own sub-account creds + iMessage
-    account.
+    Every integration credential lives here. Tenant admins should not
+    see API keys / Twilio creds / Blooio keys in their Settings UI;
+    they use these services (phone-number purchase, sending, dialing)
+    via API endpoints that read the credentials internally without
+    exposing them. The platform admin manages keys from /admin's
+    per-tenant API Keys vault.
     """
     def t(field: str | None) -> dict:
         v = (field or "").strip()
@@ -192,9 +153,28 @@ def _platform_payload(rc, settings_obj) -> dict:
             "masked": mask_key(netrows_eff),
             "updated_at": rc.updated_at.isoformat() if rc.updated_at else None,
         },
+        "twilio": {
+            "account_sid":    t(rc.twilio_account_sid),
+            "auth_token":     t(rc.twilio_auth_token),
+            "api_key_sid":    t(rc.twilio_api_key_sid),
+            "api_key_secret": t(rc.twilio_api_key_secret),
+            "twiml_app_sid":  t(rc.twilio_twiml_app_sid),
+            "minimally_configured": bool((rc.twilio_account_sid or "").strip() and (rc.twilio_auth_token or "").strip()),
+            "voice_sdk_ready": all([(rc.twilio_account_sid or "").strip(),
+                                    (rc.twilio_auth_token or "").strip(),
+                                    (rc.twilio_api_key_sid or "").strip(),
+                                    (rc.twilio_api_key_secret or "").strip(),
+                                    (rc.twilio_twiml_app_sid or "").strip()]),
+        },
         "deepgram": {
             "set": bool((rc.deepgram_api_key or "").strip()),
             "masked": mask_key(rc.deepgram_api_key),
+        },
+        "blooio": {
+            "set": bool((rc.blooio_api_key or "").strip()),
+            "masked": mask_key(rc.blooio_api_key),
+            "signing_secret_set": bool((rc.blooio_signing_secret or "").strip()),
+            "signing_secret_masked": mask_key(rc.blooio_signing_secret),
         },
         "resend": {
             "webhook_secret_db_set": bool((rc.resend_webhook_secret or "").strip()),
@@ -203,6 +183,13 @@ def _platform_payload(rc, settings_obj) -> dict:
                 "database" if (rc.resend_webhook_secret or "").strip()
                 else ("env" if (settings_obj.resend_webhook_secret or "").strip() else "none"),
             "webhook_secret_masked": mask_key((rc.resend_webhook_secret or "").strip() or settings_obj.resend_webhook_secret),
+        },
+        "google_maps": {
+            "set": bool((rc.google_maps_api_key or "").strip() or (settings_obj.google_maps_api_key or "").strip()),
+            "source":
+                "database" if (rc.google_maps_api_key or "").strip()
+                else ("env" if (settings_obj.google_maps_api_key or "").strip() else "none"),
+            "masked": mask_key((rc.google_maps_api_key or "").strip() or settings_obj.google_maps_api_key),
         },
     }
 
@@ -295,18 +282,17 @@ async def update_runtime_config(
     user: User = Depends(get_current_user),
 ):
     """Update runtime config. Per-field role gating:
-       - tenant-tier (admin + super_admin): Twilio sub-account credentials,
-         Blooio (per-tenant iMessage), Google Maps (BYO override), Apollo,
+       - tenant-tier (admin + super_admin): apollo_api_key,
          messaging_direction, brand_*, audit_branding, pipeline_stages
-       - platform-tier (super_admin only): netrows_api_key, deepgram_api_key,
-         resend_webhook_secret (genuinely platform-shared services)
+       - platform-tier (super_admin only): netrows, twilio_*, deepgram,
+         blooio, resend_webhook_secret, google_maps
 
-    Twilio + Blooio were tightened from platform-tier to tenant-tier so
-    each tenant's admin can rotate their own sub-account auth token,
-    wire up the Voice SDK, manage iMessage themselves — without
-    escalating to super_admin every time. Netrows stays super_admin-only
-    because it's proprietary platform infrastructure (Steve's call:
-    "we keep the crawling/data scraping confidential").
+    Integration credentials (Twilio, Netrows, Blooio, etc.) are managed
+    centrally by the platform admin from /admin's API Keys vault, not
+    by tenant admins in their own Settings UI. Phone-number purchases +
+    voice/SMS sending still work for tenant admins via the routes that
+    read the credentials internally; the creds are just not visible to
+    them.
     """
     from fastapi import HTTPException
     if user.role not in ("admin", "super_admin"):
@@ -314,13 +300,17 @@ async def update_runtime_config(
 
     is_super = (user.role == "super_admin")
 
-    # Platform-tier fields rejected for tenant admins.
-    platform_only_changes = (
+    # Platform-tier fields rejected for admins.
+    platform_changes = (
         req.netrows_api_key,
+        req.twilio_account_sid, req.twilio_auth_token,
+        req.twilio_api_key_sid, req.twilio_api_key_secret, req.twilio_twiml_app_sid,
         req.deepgram_api_key,
+        req.blooio_api_key, req.blooio_signing_secret,
         req.resend_webhook_secret,
+        req.google_maps_api_key,
     )
-    if any(v is not None for v in platform_only_changes) and not is_super:
+    if any(v is not None for v in platform_changes) and not is_super:
         raise HTTPException(status_code=403, detail="Only super admins can modify platform credentials")
 
     # Tenant-tier writes (admin + super_admin):

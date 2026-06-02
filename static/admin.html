@@ -119,33 +119,6 @@
   <div class="container">
 
     <div class="panel">
-      <h2>Platform activity</h2>
-      <div class="row" style="margin-bottom: 12px;">
-        <select id="activity-filter-tenant" onchange="loadActivity()" style="font-size:13px">
-          <option value="">All tenants</option>
-        </select>
-        <select id="activity-filter-action" onchange="loadActivity()" style="font-size:13px">
-          <option value="">All actions</option>
-          <option value="tenant_created">tenant_created</option>
-          <option value="tenant_updated">tenant_updated</option>
-          <option value="tenant_user_provisioned">tenant_user_provisioned</option>
-          <option value="tenant_impersonate_start">tenant_impersonate_start</option>
-          <option value="tenant_impersonate_end">tenant_impersonate_end</option>
-          <option value="tenant_domain_added">tenant_domain_added</option>
-          <option value="tenant_domain_verified">tenant_domain_verified</option>
-          <option value="tenant_domain_removed">tenant_domain_removed</option>
-        </select>
-        <div class="grow"></div>
-        <button class="btn btn-sm" onclick="loadActivity()">↻ Refresh</button>
-      </div>
-      <table>
-        <thead><tr><th>When</th><th>Tenant</th><th>Actor</th><th>Action</th><th>Target</th><th>Details</th></tr></thead>
-        <tbody id="activity-tbody"></tbody>
-      </table>
-      <div id="activity-empty" class="empty hidden">No activity yet.</div>
-    </div>
-
-    <div class="panel">
       <h2>Tenants</h2>
       <div class="row" style="margin-bottom: 16px;">
         <button class="btn btn-primary" onclick="showCreateTenant()">+ New tenant</button>
@@ -323,47 +296,6 @@ async function bootApp() {
   show("app-view");
   document.getElementById("actor-email").textContent = actor.email;
   await loadTenants();
-  await loadActivity();
-}
-
-async function loadActivity() {
-  const tenantFilter = document.getElementById("activity-filter-tenant").value;
-  const actionFilter = document.getElementById("activity-filter-action").value;
-  const params = new URLSearchParams({ limit: "100" });
-  if (tenantFilter) params.set("tenant_id", tenantFilter);
-  if (actionFilter) params.set("action", actionFilter);
-  try {
-    const data = await api("GET", "/api/admin/activity?" + params.toString());
-    renderActivity(data.items || []);
-  } catch (e) {
-    document.getElementById("activity-empty").textContent = "Could not load: " + e.message;
-    document.getElementById("activity-empty").classList.remove("hidden");
-  }
-}
-
-function renderActivity(items) {
-  const tbody = document.getElementById("activity-tbody");
-  const empty = document.getElementById("activity-empty");
-  tbody.innerHTML = "";
-  if (!items.length) { empty.classList.remove("hidden"); empty.textContent = "No activity yet."; return; }
-  empty.classList.add("hidden");
-  for (const a of items) {
-    const ts = new Date(a.created_at);
-    const when = isNaN(ts.getTime()) ? "—" : ts.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-    const meta = a.metadata || {};
-    const detailKeys = Object.keys(meta).filter(k => k !== "ip");
-    const details = detailKeys.length === 0 ? "—" : detailKeys.map(k => `<code>${escapeHtml(k)}</code>: ${escapeHtml(JSON.stringify(meta[k]).slice(0, 60))}`).join(" · ");
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td style="white-space:nowrap;color:var(--text-dim);font-size:12px">${escapeHtml(when)}</td>
-      <td>${a.tenant_name ? escapeHtml(a.tenant_name) : '<span style="color:var(--text-dim)">#' + (a.tenant_id || '?') + '</span>'}</td>
-      <td style="font-size:12px">${escapeHtml(a.actor_email || '—')}</td>
-      <td><span class="pill pill-dim" style="font-family:ui-monospace,monospace">${escapeHtml(a.action)}</span></td>
-      <td style="font-size:12px">${a.target_type ? `${escapeHtml(a.target_type)}${a.target_id ? '#' + a.target_id : ''}` : '—'}${a.target_label ? ` <span style="color:var(--text-dim)">(${escapeHtml(a.target_label)})</span>` : ''}</td>
-      <td style="font-size:11px;color:var(--text-dim);max-width:280px">${details}</td>
-    `;
-    tbody.appendChild(tr);
-  }
 }
 
 async function loadTenants() {
@@ -371,15 +303,6 @@ async function loadTenants() {
   document.getElementById("tenants-count").textContent = `${rows.length} tenant${rows.length === 1 ? "" : "s"}`;
   const tbody = document.getElementById("tenants-tbody");
   tbody.innerHTML = "";
-  // Mirror the tenant list into the Activity filter dropdown so the
-  // operator can scope the feed without remembering ids.
-  const filter = document.getElementById("activity-filter-tenant");
-  if (filter) {
-    const current = filter.value;
-    filter.innerHTML = '<option value="">All tenants</option>' +
-      rows.map(t => `<option value="${t.id}">${escapeHtml(t.name)} (#${t.id})</option>`).join("");
-    filter.value = current;
-  }
   for (const t of rows) {
     const tr = document.createElement("tr");
     tr.className = "clickable";
