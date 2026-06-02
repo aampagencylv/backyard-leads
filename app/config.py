@@ -69,6 +69,11 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+        # Allow runtime-only env vars that don't need a Settings attribute
+        # (SENTRY_TRACES_SAMPLE_RATE, BMP_ENV, BMP_RELEASE, etc.) to live
+        # in .env without crashing startup. The observability layer reads
+        # these directly from os.environ.
+        extra = "ignore"
 
 
 @lru_cache
