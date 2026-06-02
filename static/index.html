@@ -885,6 +885,13 @@
                             <h3>Stuck Deals <span id="stuck-deals-count" style="color:#888;font-size:12px;font-weight:400"></span></h3>
                             <div id="stuck-deals-list"></div>
                         </div>
+                        <div class="panel" style="border-left:3px solid #e67e22">
+                            <h3 style="display:flex;align-items:center;gap:6px">
+                                ⏸ Paused &amp; Forgotten <span id="paused-forgotten-count" style="color:#888;font-size:12px;font-weight:400"></span>
+                            </h3>
+                            <p style="font-size:12px;color:#888;margin-bottom:8px">Companies you paused mid-sequence with no reply/bounce trigger. Decide: <strong>resume</strong> or <strong>unqualify</strong>.</p>
+                            <div id="paused-forgotten-list"></div>
+                        </div>
                     </div>
                     <!-- Hot leads -->
                     <div>
@@ -5258,6 +5265,11 @@ function verify(secret, rawBody, header) {
             // Call activity stats
             loadCallActivity();
 
+            // Paused & Forgotten — companies the rep paused mid-sequence
+            // with no auto-pause trigger (reply / bounce / opt-out). Async
+            // so it doesn't block the main dashboard render.
+            loadPausedForgotten();
+
             // BDR Activity Report (admin only)
             if (currentUser && (currentUser.role === 'admin' || currentUser.role === 'super_admin')) {
                 const bdrPanel = document.getElementById('bdr-activity-panel');
@@ -5439,6 +5451,30 @@ function verify(secret, rawBody, header) {
                     </tbody>
                 </table>
             `;
+        }
+
+        async function loadPausedForgotten() {
+            const list = document.getElementById('paused-forgotten-list');
+            const countEl = document.getElementById('paused-forgotten-count');
+            if (!list) return;
+            const data = await api('/api/companies/paused-forgotten');
+            if (!data) { list.innerHTML = '<p style="font-size:12px;color:#888">Failed to load.</p>'; return; }
+            if (countEl) countEl.textContent = data.length ? `(${data.length})` : '';
+            if (!data.length) {
+                list.innerHTML = '<p style="font-size:12px;color:#27ae60">✅ No forgotten pauses. Clean pipeline.</p>';
+                return;
+            }
+            list.innerHTML = data.slice(0, 10).map(item => `
+                <div class="dash-row" onclick="openCompanyDetail(${item.company_id})">
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+                        <strong>${escapeHtml(item.company_name)}</strong>
+                        <span style="font-size:11px;color:#e67e22;font-weight:600">${item.paused_step_count} step${item.paused_step_count===1?'':'s'} paused</span>
+                    </div>
+                    <div class="dash-meta">
+                        ${item.primary_contact_name ? '→ '+escapeHtml(item.primary_contact_name)+' · ' : ''}paused ${fmtRelative(item.oldest_paused_at)}${item.assigned_name ? ' · 👤 '+escapeHtml(item.assigned_name) : ''}
+                    </div>
+                </div>
+            `).join('') + (data.length > 10 ? `<p style="font-size:11px;color:#888;text-align:center;margin-top:6px">+${data.length - 10} more — click any to act</p>` : '');
         }
 
         async function loadCallActivity() {

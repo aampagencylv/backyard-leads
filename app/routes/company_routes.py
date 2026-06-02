@@ -178,14 +178,22 @@ async def get_stalled_sequences(
     Stall categories:
       critical     — auto_execute step past due >2 h (engine missed it)
       needs_action — manual step (call/linkedin) past due (BDR hasn't acted)
-      paused       — paused_at set (someone manually paused)
+      paused       — paused_at set on an active sequence
+
+    Companies in terminal states (not_interested, qualified, converted) are
+    excluded entirely: any paused steps on those were correctly halted by
+    the disqualify / win flows — not stalled. Including them inflated this
+    view by 60%+ and diluted the signal (found 2026-06-02: 615 of 1,008
+    paused steps belonged to already-disqualified companies).
     """
     from app.scoping import scope_companies
     now = datetime.now(timezone.utc)
     grace = timedelta(hours=2)
 
-    # Scope to companies this user can see
+    # Scope to companies this user can see, AND drop companies whose status
+    # already represents a final outcome.
     scoped_ids_q = scope_companies(select(Company.id), user, None)
+    TERMINAL_STATUSES = ("not_interested", "qualified", "converted")
 
     rows = (await db.execute(
         select(GeneratedEmail, Contact, Company)
@@ -195,6 +203,7 @@ async def get_stalled_sequences(
             GeneratedEmail.is_sent == False,
             GeneratedEmail.skipped_at.is_(None),
             GeneratedEmail.company_id.in_(scoped_ids_q),
+            Company.status.notin_(TERMINAL_STATUSES),
             or_(
                 # Critical: auto step engine missed
                 and_(
@@ -331,6 +340,111 @@ async def unstall_sequences(
 
     await db.commit()
     return {"reanchored": len(stalled), "message": f"Re-anchored {len(stalled)} step(s) to send ASAP"}
+
+
+@router.get("/paused-forgotten")
+async def get_paused_forgotten(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Companies with paused sequences that have no auto-pause trigger —
+    a BDR manually paused them and never came back to either resume or
+    disqualify. These are decision-debt: each one needs a yes/no from
+    the assigned rep.
+
+    A 'forgotten pause' is one where:
+      - The company is still in 'sequencing' (not disqualified / won)
+      - At least one unsent step has paused_at set
+      - The contact has NO reply / bounce / unsubscribe / archive trigger
+        that would explain why the auto-pause logic halted the sequence
+
+    Scoped to the current user's companies (admins see all). One row per
+    company, sorted by oldest pause first so the most-forgotten surface.
+    """
+    from app.scoping import scope_companies
+    scoped_ids_q = scope_companies(select(Company.id), user, None)
+
+    # Pull every paused step on an active company. We classify in Python
+    # (rather than a complex SQL EXISTS chain) so it stays readable.
+    rows = (await db.execute(
+        select(GeneratedEmail, Contact, Company)
+        .join(Contact, GeneratedEmail.contact_id == Contact.id)
+        .join(Company, GeneratedEmail.company_id == Company.id)
+        .where(
+            GeneratedEmail.is_sent == False,
+            GeneratedEmail.skipped_at.is_(None),
+            GeneratedEmail.paused_at.is_not(None),
+            GeneratedEmail.company_id.in_(scoped_ids_q),
+            Company.status == "sequencing",
+        )
+        .order_by(GeneratedEmail.paused_at)
+    )).all()
+    if not rows:
+        return []
+
+    # Bulk-load reply Activities for these contacts (one query, not N)
+    contact_ids = list({contact.id for _ge, contact, _co in rows})
+    replied_set: set[int] = set()
+    if contact_ids:
+        reply_rows = (await db.execute(
+            select(Activity.contact_id).where(
+                Activity.contact_id.in_(contact_ids),
+                Activity.activity_type.in_(
+                    ["email_replied", "email_auto_response",
+                     "imessage_received", "reply_received"]
+                ),
+            ).distinct()
+        )).all()
+        replied_set = {r[0] for r in reply_rows}
+
+    # Bulk-load BDR names for assigned_to
+    bdr_ids = list({co.assigned_to for _ge, _ct, co in rows if co.assigned_to})
+    bdr_map: dict[int, str] = {}
+    if bdr_ids:
+        for uid, fn, ln, email in (await db.execute(
+            select(User.id, User.first_name, User.last_name, User.email)
+            .where(User.id.in_(bdr_ids))
+        )).all():
+            bdr_map[uid] = (f"{fn or ''} {ln or ''}".strip() or email)
+
+    # Group by company; skip steps whose pause has an explainable trigger
+    by_company: dict[int, dict] = {}
+    for ge, contact, company in rows:
+        # Skip steps where the pause has an obvious auto-pause trigger.
+        if contact.id in replied_set: continue
+        if (contact.email_status or "") == "bounced": continue
+        if contact.unsubscribed_at: continue
+        if contact.is_archived: continue
+        if ge.step_type == "imessage" and contact.do_not_text: continue
+
+        d = by_company.setdefault(company.id, {
+            "company_id": company.id,
+            "company_name": company.name,
+            "company_city": company.city,
+            "company_state": company.state,
+            "company_status": company.status,
+            "assigned_to": company.assigned_to,
+            "assigned_name": bdr_map.get(company.assigned_to) if company.assigned_to else None,
+            "paused_step_count": 0,
+            "oldest_paused_at": None,
+            "primary_contact_name": None,
+        })
+        d["paused_step_count"] += 1
+        paused_iso = ge.paused_at.isoformat() if ge.paused_at else None
+        if paused_iso and (d["oldest_paused_at"] is None or paused_iso < d["oldest_paused_at"]):
+            d["oldest_paused_at"] = paused_iso
+        # Record the first contact name encountered (the rows are ordered
+        # by paused_at, so this is stable enough for a list view).
+        if not d["primary_contact_name"]:
+            d["primary_contact_name"] = (
+                f"{contact.first_name or ''} {contact.last_name or ''}".strip()
+                or contact.email or "(no name)"
+            )
+
+    # Return oldest-pause-first so the longest-ignored surface
+    result = list(by_company.values())
+    result.sort(key=lambda x: x["oldest_paused_at"] or "")
+    return result
 
 
 # ============================================================
