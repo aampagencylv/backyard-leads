@@ -30,6 +30,8 @@ class TenantDomain(Base):
     tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     domain = Column(String(255), nullable=False, unique=True)
     is_primary = Column(Boolean, nullable=False, default=False, server_default=sa_text("false"))
+    is_verified = Column(Boolean, nullable=False, default=False, server_default=sa_text("false"))
+    verified_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), server_default=sa_text("NOW()"))
 
 

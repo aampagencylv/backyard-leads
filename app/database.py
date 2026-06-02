@@ -115,6 +115,7 @@ async def init_db():
         "scripts.migrate_rls_policies",
         "scripts.migrate_tenant_secrets",
         "scripts.migrate_tenant_onboarding",
+        "scripts.migrate_tenant_domain_verified",
     ):
         try:
             mod = __import__(_migration_module, fromlist=["main"])

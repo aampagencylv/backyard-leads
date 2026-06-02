@@ -316,6 +316,8 @@ class DomainOut(BaseModel):
     tenant_id: int
     domain: str
     is_primary: bool
+    is_verified: bool = False
+    verified_at: Optional[datetime] = None
     created_at: datetime
 
 
@@ -428,6 +430,7 @@ class DomainVerifyOut(BaseModel):
     a_records: list[str] = []
     txt_records: list[str] = []
     verified: bool
+    is_verified_db: bool
     reason: str
 
 
@@ -441,16 +444,18 @@ def _expected_a_records() -> set[str]:
 async def verify_domain(
     domain_id: int,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_super_admin),
+    actor: User = Depends(require_super_admin),
 ):
-    """Live DNS check. Returns what we resolved + whether it qualifies.
+    """Live DNS check; flips tenant_domains.is_verified on success.
 
-    Does NOT mutate the row's is_verified flag yet — wait until the
-    `tenant_domains.is_verified` column lands. Today the response is
-    advisory; the operator decides whether the domain is good to use.
+    Caddy will only issue a cert for a domain whose row has
+    is_verified=TRUE (see /caddy/ask). Once verified, demoting the
+    DNS later doesn't auto-revoke — an operator must DELETE the
+    domain row to disable the cert.
     """
     import dns.resolver
     import dns.exception
+    from datetime import datetime as _dt, timezone as _tz
 
     td = (await db.execute(select(TenantDomain).where(TenantDomain.id == domain_id))).scalar_one_or_none()
     if not td:
@@ -461,7 +466,7 @@ async def verify_domain(
     a_records: list[str] = []
     txt_records: list[str] = []
     resolver = dns.resolver.Resolver()
-    resolver.lifetime = 5  # 5s total budget
+    resolver.lifetime = 5
 
     try:
         ans = resolver.resolve(domain, "CNAME")
@@ -487,6 +492,13 @@ async def verify_domain(
     verified = cname_ok or a_ok
     if verified:
         reason = "CNAME ok" if cname_ok else "A record ok"
+        if not td.is_verified:
+            td.is_verified = True
+            td.verified_at = _dt.now(_tz.utc)
+            await db.commit()
+            await record_audit(db, actor=actor, action="tenant_domain_verified",
+                               target_type="tenant", target_id=td.tenant_id,
+                               metadata={"domain": domain, "reason": reason})
     elif cname_target:
         reason = f"CNAME points to {cname_target}, expected {EDGE_HOSTNAME}"
     elif a_records:
@@ -500,6 +512,7 @@ async def verify_domain(
         a_records=a_records,
         txt_records=txt_records,
         verified=verified,
+        is_verified_db=td.is_verified,
         reason=reason,
     )
 
@@ -535,8 +548,12 @@ async def caddy_ask(domain: str, db: AsyncSession = Depends(get_db)):
     )).scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=403, detail="domain not registered")
+    if not row.is_verified:
+        # DNS not yet pointed at us → refuse to issue a cert. Prevents
+        # an attacker from CNAMEing arbitrary domains to us, registering
+        # them, and exhausting our Let's Encrypt rate limit.
+        raise HTTPException(status_code=403, detail="domain not verified")
 
-    # Also reject if the owning tenant is suspended.
     tenant = (await db.execute(select(Tenant).where(Tenant.id == row.tenant_id))).scalar_one_or_none()
     if not tenant or tenant.status != "active":
         raise HTTPException(status_code=403, detail="tenant inactive")
