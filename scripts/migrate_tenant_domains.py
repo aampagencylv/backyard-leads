@@ -1,7 +1,7 @@
 """Phase A: tenant_domains table for custom-domain → tenant routing.
 
 Stores the host header → tenant_id mapping for white-labeled / custom
-domains. Subdomain routing ({slug}.agencyprospector.com) is handled in
+domains. Subdomain routing ({slug}.leadprospector.ai) is handled in
 code via the tenants.slug column and does NOT need a row here.
 
 Seeds the existing BMP hosts as tenant #1 so the resolver immediately

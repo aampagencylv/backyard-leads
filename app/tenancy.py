@@ -4,7 +4,7 @@ Multi-tenant request context resolution.
 Resolution order (first hit wins):
   1. JWT `tenant_id` claim (set at login; the user's home tenant)
   2. Host header → tenant_domains lookup (custom / white-label domain)
-  3. Host header → `{slug}.agencyprospector.com` → tenants.slug
+  3. Host header → `{slug}.leadprospector.ai` → tenants.slug
   4. Fall back to tenant 1 (BMP) — preserves single-tenant behavior so
      legacy hosts (prospector.backyardmarketingpros.com etc) keep working
 
@@ -32,8 +32,8 @@ from app.models import Tenant, TenantDomain, TenantMixin
 log = logging.getLogger("bmp.tenancy")
 
 # Subdomain suffix used for first-party platform hosting:
-#   acmeagency.agencyprospector.com  →  slug='acmeagency'
-PLATFORM_DOMAIN_SUFFIX = ".agencyprospector.com"
+#   acmeagency.leadprospector.ai  →  slug='acmeagency'
+PLATFORM_DOMAIN_SUFFIX = ".leadprospector.ai"
 
 # Hosts considered "BMP legacy" — they fall back to tenant 1 explicitly
 # even before tenant_domains is consulted (defense in depth in case the
@@ -89,7 +89,7 @@ async def _resolve_tenant_id(request: Request, db: AsyncSession) -> int:
         except Exception:
             log.exception("tenant_domains lookup failed for host=%s", host)
 
-        # {slug}.agencyprospector.com
+        # {slug}.leadprospector.ai
         if host.endswith(PLATFORM_DOMAIN_SUFFIX):
             slug = host[: -len(PLATFORM_DOMAIN_SUFFIX)].strip()
             if slug:

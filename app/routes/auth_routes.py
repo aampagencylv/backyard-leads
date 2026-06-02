@@ -81,7 +81,7 @@ async def login(
     db: AsyncSession = Depends(get_tenant_db),
 ):
     # User lookup is auto-scoped to the resolved tenant by the ORM filter,
-    # so a user logging in via tenantA.agencyprospector.com only matches
+    # so a user logging in via tenantA.leadprospector.ai only matches
     # users belonging to tenantA — even if another tenant has the same email.
     result = await db.execute(select(User).where(User.email == form_data.username.lower()))
     user = result.scalar_one_or_none()

@@ -22,7 +22,7 @@ class Tenant(Base):
 
 class TenantDomain(Base):
     """Custom-domain → tenant mapping. Subdomain routing
-    ({slug}.agencyprospector.com) does NOT need a row here — it's resolved
+    ({slug}.leadprospector.ai) does NOT need a row here — it's resolved
     via tenants.slug. Use this table for tenants on their own hostname."""
     __tablename__ = "tenant_domains"
 

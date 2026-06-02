@@ -51,7 +51,7 @@ class TenantOut(BaseModel):
 class TenantCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     slug: str = Field(min_length=2, max_length=64,
-                      description="URL-safe identifier, becomes {slug}.agencyprospector.com")
+                      description="URL-safe identifier, becomes {slug}.leadprospector.ai")
     plan: str = "starter"
 
 
@@ -422,7 +422,7 @@ async def remove_domain(
 # Today we check two signals:
 #
 #   1. CNAME or A record resolves to our expected target. For now we
-#      require CNAME → edge.agencyprospector.com OR an A record matching
+#      require CNAME → edge.leadprospector.ai OR an A record matching
 #      our VPS IP (env: PLATFORM_EDGE_IP).
 #   2. Optional ownership TXT _acmeagency-verify.<domain> = <expected>
 #      where <expected> is derived from the tenant id + a salt. Lets
@@ -432,7 +432,7 @@ async def remove_domain(
 # (the /caddy/ask endpoint below returns 403 unless the domain is in
 # tenant_domains AND its is_verified flag is true).
 
-EDGE_HOSTNAME = "edge.agencyprospector.com"
+EDGE_HOSTNAME = "edge.leadprospector.ai"
 
 
 class DomainVerifyOut(BaseModel):
@@ -492,7 +492,7 @@ async def verify_domain(
         pass
 
     try:
-        ans = resolver.resolve(f"_agencyprospector.{domain}", "TXT")
+        ans = resolver.resolve(f"_leadprospector.{domain}", "TXT")
         txt_records = [b"".join(r.strings).decode("utf-8", errors="replace") for r in ans]
     except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.exception.DNSException):
         pass

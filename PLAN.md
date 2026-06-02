@@ -1,4 +1,4 @@
-# Multi-tenant SaaS Plan — AgencyProspector
+# Multi-tenant SaaS Plan — LeadProspector
 
 **Status:** Draft for sign-off · **Author:** Claude (Opus 4.7) + Steve · **Date:** 2026-06-02
 **Goal:** Convert the single-tenant Prospector platform that currently serves Backyard Marketing Pros into a multi-tenant SaaS sold to other BDR-driven agencies, while keeping BMP running as tenant #1 with zero downtime.
@@ -9,7 +9,7 @@ This document is the contract for the build. Phase A starts once Steve signs off
 
 ## 1. Product in one line
 
-**AgencyProspector** is a multi-tenant cold-outreach + CRM platform that agencies white-label. Each tenant brings their own Twilio, Resend, and Apollo accounts; the platform wraps proprietary enrichment, AI sequence generation, and audit services that customers can't trivially replace.
+**LeadProspector** is a multi-tenant cold-outreach + CRM platform that agencies white-label. Each tenant brings their own Twilio, Resend, and Apollo accounts; the platform wraps proprietary enrichment, AI sequence generation, and audit services that customers can't trivially replace.
 
 ---
 
@@ -21,7 +21,7 @@ This document is the contract for the build. Phase A starts once Steve signs off
 | Database | One Supabase Postgres, ~30 tables | Same DB, every tenant-owned table gets a `tenant_id` column + RLS |
 | Tenant scoping | Implicit (all data is BMP) | `tenant_id` carried in JWT, enforced in app *and* in RLS |
 | Reverse proxy | nginx + manual Let's Encrypt | **Caddy** with auto-SSL for any domain pointed at us |
-| Domains | `prospector.backyardmarketingpros.com` | `agencyprospector.com` (platform) + `<tenant>.agencyprospector.com` (default) + customer custom domains |
+| Domains | `prospector.backyardmarketingpros.com` | `leadprospector.ai` (platform) + `<tenant>.leadprospector.ai` (default) + customer custom domains |
 | Runtime config | One singleton row | Per-tenant config row |
 | API keys | Plain TEXT in DB | Encrypted at the column level (Fernet, master key in `.env`) |
 | Sending | Single Resend account, single `go.bymp.com` domain | Each tenant's own Resend, own `send_domain` |
@@ -55,10 +55,10 @@ Tables that are NOT tenant-scoped (global): `tenants`, `plans`, `domains` (looku
 3. **Platform-admin impersonation** — JWT can carry both `actor_id` (you) and `acting_as_tenant_id` (the customer). Audit-logged on every action.
 
 **Login URLs:**
-- Marketing/signup: `agencyprospector.com`
-- Tenant login (default subdomain): `<tenant>.agencyprospector.com/login`
+- Marketing/signup: `leadprospector.ai`
+- Tenant login (default subdomain): `<tenant>.leadprospector.ai/login`
 - Tenant login (custom domain): `prospector.theiragency.com/login`
-- Platform admin: `admin.agencyprospector.com` (super-super-admin only)
+- Platform admin: `admin.leadprospector.ai` (super-super-admin only)
 
 **Cookies / JWT:** issued for the tenant's host. Cross-domain not needed since each tenant lives at one host.
 
@@ -66,11 +66,11 @@ Tables that are NOT tenant-scoped (global): `tenants`, `plans`, `domains` (looku
 
 ## 5. Custom domains + SSL (Caddy)
 
-**Default:** wildcard A record `*.agencyprospector.com → VPS IP`. New tenants get `<slug>.agencyprospector.com` instantly with no DNS work.
+**Default:** wildcard A record `*.leadprospector.ai → VPS IP`. New tenants get `<slug>.leadprospector.ai` instantly with no DNS work.
 
 **Custom domain flow:**
 1. Customer enters their domain in Settings: `prospector.theiragency.com`
-2. Platform shows: "Add CNAME `prospector.theiragency.com → app.agencyprospector.com` and TXT `_agencyprospector-verify=<random>` to prove ownership"
+2. Platform shows: "Add CNAME `prospector.theiragency.com → edge.leadprospector.ai` and TXT `_leadprospector-verify=<random>` to prove ownership"
 3. Customer adds records; clicks "Verify"
 4. We resolve the CNAME + read the TXT; on success, insert into `domains` table with `tenant_id`
 5. Caddy is configured to use the on-demand TLS module that asks our app "should I provision a cert for this host?" → app says yes if it's in `domains`. Cert provisioned automatically.
@@ -78,7 +78,7 @@ Tables that are NOT tenant-scoped (global): `tenants`, `plans`, `domains` (looku
 
 **Cert ops:** zero. Caddy handles issuance + renewal. We just authorize which hostnames are permitted.
 
-**Webhooks** stay on the canonical `app.agencyprospector.com` regardless of custom domain. Resend, Twilio, Stripe webhooks always hit the platform URL — never a tenant's white-label domain.
+**Webhooks** stay on the canonical `app.leadprospector.ai` regardless of custom domain. Resend, Twilio, Stripe webhooks always hit the platform URL — never a tenant's white-label domain.
 
 ---
 
@@ -87,7 +87,7 @@ Tables that are NOT tenant-scoped (global): `tenants`, `plans`, `domains` (looku
 `runtime_config` becomes a per-tenant table (one row per tenant). The platform brings all API keys (see §7), so this table now holds **per-tenant configuration**, not per-tenant credentials.
 
 Per-tenant fields:
-- Sending: `send_subdomain` (e.g., `go.<tenant>.agencyprospector.com`), `reply_subdomain`, `inbound_reply_subdomain` — auto-provisioned on tenant creation
+- Sending: `send_subdomain` (e.g., `go.<tenant>.leadprospector.ai`), `reply_subdomain`, `inbound_reply_subdomain` — auto-provisioned on tenant creation
 - Twilio identity: assigned phone numbers, A2P brand registration ID, Trust Hub customer profile ID
 - Brand: org name, postal address (CAN-SPAM footer), sender display defaults, logo URL, color palette
 - Behavior: messaging direction defaults, send window, pipeline stages, notification preferences
@@ -106,7 +106,7 @@ Per-tenant fields:
 | Service | Model | Notes |
 |---|---|---|
 | Twilio (voice + SMS) | **Platform-controlled** | Single Twilio account; each tenant = Trust Hub Customer Profile + A2P brand. We provision phone numbers from our inventory or port the tenant's existing number. |
-| Resend (email) | **Platform-controlled** | Single Resend account; each tenant gets an auto-provisioned subdomain `go.<tenant>.agencyprospector.com` registered as a separate Resend domain (independent DKIM/SPF/DMARC → independent reputation). BYO domain available as upgrade. |
+| Resend (email) | **Platform-controlled** | Single Resend account; each tenant gets an auto-provisioned subdomain `go.<tenant>.leadprospector.ai` registered as a separate Resend domain (independent DKIM/SPF/DMARC → independent reputation). BYO domain available as upgrade. |
 | Anthropic (Claude) | **Platform-controlled** | Single Anthropic account, prompt caching + model tiering enforced (see §8). Customer's AI usage metered against bundle. |
 | OpenAI | **Platform-controlled** | Same — pluggable behind the model abstraction; not used today but supported for future model choice. |
 | Apollo / Hunter / ZoomInfo | **Platform-controlled** | Single keys; enrichment lookups metered against bundle. |
@@ -189,7 +189,7 @@ Per-seat pricing. Bundles include the most realistic per-seat-per-month usage; p
 
 ## 10. Platform admin console (the "GHL-like" layer)
 
-Lives at `admin.agencyprospector.com`. Only the platform owner (super-super-admin role) sees it.
+Lives at `admin.leadprospector.ai`. Only the platform owner (super-super-admin role) sees it.
 
 **Must-have at launch:**
 - Tenants list (name, plan, MRR, # users, last activity, % bundle used, status)
@@ -217,10 +217,10 @@ Radically simpler than the BYO-keys version. Customer never enters an API key �
 When a new tenant signs up (or platform admin creates one):
 
 1. **Create tenant + first super_admin user**, send invite email
-2. New super_admin lands at `<tenant>.agencyprospector.com/onboard`
+2. New super_admin lands at `<tenant>.leadprospector.ai/onboard`
 3. **Step 1: Brand** — agency name, logo upload, brand colors, postal address (CAN-SPAM footer), default sender display name
 4. **Step 2: Pick a phone number** — choose by area code from our Twilio inventory (instantly assigned), OR port an existing number (10-business-day process). Voice calling is **live immediately** with a fresh number.
-5. **Step 3: Sending email — auto-provisioned** — platform spins up `go.<tenant>.agencyprospector.com` as a new Resend domain in our account. SPF/DKIM/DMARC auto-configured (we control the parent DNS). **Live in 60 seconds.** Optional: upgrade later to BYO domain.
+5. **Step 3: Sending email — auto-provisioned** — platform spins up `go.<tenant>.leadprospector.ai` as a new Resend domain in our account. SPF/DKIM/DMARC auto-configured (we control the parent DNS). **Live in 60 seconds.** Optional: upgrade later to BYO domain.
 6. **Step 4: A2P 10DLC registration** — collect EIN, legal business name, sample message use case, opt-in language source. We submit Trust Hub registration on the tenant's behalf. **SMS goes live 2-3 weeks later** when carriers approve; UI clearly states the timeline.
 7. **Step 5: Invite team** — add seats (each = a user with a role)
 8. **Step 6: Confirm plan** — Starter / Growth / Scale; trial period applies if friendly
@@ -241,7 +241,7 @@ Onboarding state is persisted; the customer can resume from where they left off.
 - [x] Migration: add `tenant_id` to every tenant-owned table (32 tables), backfill to 1 via DEFAULT, NOT NULL enforced — `2d9a8f6`
 - [x] `Tenant` model + `TenantMixin` applied to 30 mapped classes + 2 association tables — `36d8c26`
 - [x] `tenant_domains` table seeded with BMP's 3 hosts → tenant 1 — `69ee6c1` / `e57b69b`
-- [x] Tenant resolver `app/tenancy.py` (JWT claim → custom domain → `{slug}.agencyprospector.com` → tenant 1 fallback) — `69ee6c1`
+- [x] Tenant resolver `app/tenancy.py` (JWT claim → custom domain → `{slug}.leadprospector.ai` → tenant 1 fallback) — `69ee6c1`
 - [x] Postgres RLS `tenant_isolation` policy on all 32 tables (dormant; activates when we migrate off the BYPASSRLS `postgres` role) — `60480f8`
 - [x] `get_tenant_db` FastAPI dependency that stamps `session.info["tenant_id"]` + sets the GUC — `f3b5bce`
 - [x] ORM auto-tenant-filter via `do_orm_execute` hook (real enforcement today) — `f726ec4`
@@ -296,7 +296,7 @@ Onboarding state is persisted; the customer can resume from where they left off.
 
 - [ ] White-label theming controls (logo + 2 color picks per tenant)
 - [ ] Cross-tenant isolation test suite (automated, must pass before any deploy)
-- [ ] Marketing site at `agencyprospector.com` (one-pager → signup)
+- [ ] Marketing site at `leadprospector.ai` (one-pager → signup)
 - [ ] Customer-facing docs (onboarding, integrations, billing)
 - [ ] Internal support process (Linear/Email/Slack-with-customer pattern)
 - [ ] Migrate BMP officially to tenant #1 (sanity check; should be a no-op)
@@ -313,7 +313,7 @@ Zero-downtime. Phases A-D each deploy independently.
 1. Phase A backfill: every BMP row gets `tenant_id=1`. The app code is updated to read `tenant_id` from the JWT (defaulting to 1 if missing, with a deprecation warning) and write `tenant_id=1` on new rows. BMP continues running. **No user-visible change.**
 2. Phase B brings Caddy + subdomain routing online. `prospector.backyardmarketingpros.com` becomes a custom domain attached to tenant #1. BMP keeps logging in at their existing URL. **No user-visible change.**
 3. Phase C activates Stripe. BMP gets a placeholder $0 subscription as tenant #1; we'll decide later whether to bill ourselves.
-4. Phase D: marketing site goes live at `agencyprospector.com`. Agency #2 signs up.
+4. Phase D: marketing site goes live at `leadprospector.ai`. Agency #2 signs up.
 
 **Rollback plan:** every phase is a git revert + redeploy. Migrations are additive (we never drop the old single-tenant columns until Phase D + a 30-day cooldown).
 
@@ -343,8 +343,8 @@ Zero-downtime. Phases A-D each deploy independently.
 | 6 | Per-seat tiered pricing ($197 / $297 / $497) with bundled usage across 8 metered services. Numbers tuned after 60d real-usage data. | 2026-06-02 |
 | 7 | Tenant resolution: Host header primary, JWT claim secondary, impersonation via combined claims. | 2026-06-02 |
 | 8 | First customer = friendly trial, treated like a paid Growth-tier customer with 90-day free period. | 2026-06-02 |
-| 9 | Marketing/platform admin at `agencyprospector.com`; tenants at `<slug>.agencyprospector.com` or custom domains. | 2026-06-02 |
-| 10 | **Sending: auto-provisioned subdomain** `go.<tenant>.agencyprospector.com` on tenant creation. BYO sending domain available as upgrade (path BMP will take). | 2026-06-02 |
+| 9 | Marketing/platform admin at `leadprospector.ai`; tenants at `<slug>.leadprospector.ai` or custom domains. | 2026-06-02 |
+| 10 | **Sending: auto-provisioned subdomain** `go.<tenant>.leadprospector.ai` on tenant creation. BYO sending domain available as upgrade (path BMP will take). | 2026-06-02 |
 | 11 | **SMS: A2P 10DLC registration per tenant via Twilio Trust Hub**. Voice live immediately, SMS live 2-3 weeks after tenant signup. | 2026-06-02 |
 
 ---
@@ -369,7 +369,7 @@ Zero-downtime. Phases A-D each deploy independently.
 - **Branding:** logo, marketing site copy, screenshots, demo video
 - **First customer:** identified? Outreach started?
 - **Support tooling:** Help Scout / Front / Intercom / just email + Notion docs?
-- **Domain:** `agencyprospector.com` purchased + DNS configured? Wildcard `*.agencyprospector.com` pointed at VPS?
+- **Domain:** `leadprospector.ai` purchased + DNS configured? Wildcard `*.leadprospector.ai` pointed at VPS?
 - **Twilio Trust Hub ISV account:** since we'll register every customer as a Trust Hub Customer Profile + A2P brand, we need our own ISV-tier account set up with Twilio. Apply early — takes ~1 week. Determines whether SMS will be ready by Phase D.
 - **Anthropic volume / Build tier:** at scale we can negotiate Anthropic pricing down further (pure margin). Worth a conversation once we have ~10 paying customers' usage data.
 - **Stripe Connect or Stripe SaaS billing setup:** which model? Subscription + metered usage is the v1 plan; configure now so it's ready for Phase C.
