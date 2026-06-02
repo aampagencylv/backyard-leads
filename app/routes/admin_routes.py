@@ -425,6 +425,37 @@ async def create_tenant_user(
     await record_audit(db, actor=actor, action="tenant_user_provisioned",
                        target_type="user", target_id=user.id,
                        metadata={"tenant_id": tenant_id, "email": user.email, "role": user.role})
+
+    # Send the invite email through the LeadProspector platform Resend
+    # account. Best-effort: if PLATFORM_RESEND_API_KEY isn't set, the
+    # mailer logs and returns None — the API response still includes the
+    # temp password so the operator can deliver it manually.
+    try:
+        from app.services.platform_mailer import send_platform_email
+        # Find each tenant's slug subdomain to use as the login URL when set.
+        primary = (await db.execute(
+            select(TenantDomain).where(
+                TenantDomain.tenant_id == tenant_id,
+                TenantDomain.is_primary == True,
+            )
+        )).scalar_one_or_none()
+        login_url = f"https://{primary.domain}" if primary else "https://app.leadprospector.ai"
+        await send_platform_email(
+            to=user.email,
+            template="user_invite",
+            vars={
+                "first_name": user.first_name or user.email.split("@")[0],
+                "email": user.email,
+                "tenant_name": tenant.name,
+                "actor_name": (actor.first_name or "Your platform admin"),
+                "login_url": login_url,
+                "temp_password": req.temp_password,
+            },
+        )
+    except Exception:
+        # Mailer is best-effort; never block user provisioning on email delivery.
+        pass
+
     return TenantUserOut(id=user.id, tenant_id=tenant_id, email=user.email, role=user.role)
 
 
