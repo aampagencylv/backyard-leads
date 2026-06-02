@@ -296,6 +296,12 @@ async def _wake_snoozed_deals():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    # Install the global ORM auto-tenant-filter hook. Idempotent.
+    # Sessions opened via get_db are unaffected; only sessions opened
+    # via get_tenant_db (which stamps session.info["tenant_id"]) get
+    # auto-scoped queries.
+    from app.tenancy import install_tenant_filter
+    install_tenant_filter()
     task = asyncio.create_task(_sequence_engine_loop())
     try:
         yield
