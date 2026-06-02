@@ -57,150 +57,155 @@ from app.routes import (
 log = logging.getLogger("bmp")
 
 
+async def _list_active_tenant_ids() -> list[int]:
+    """Return ids of all tenants with status='active'.
+
+    Cross-tenant lookup — the session is not scoped, so the ORM
+    auto-filter doesn't apply (Tenant model itself isn't a TenantMixin).
+    """
+    from sqlalchemy import select as _select
+    from app.models import Tenant as _Tenant
+    async with async_session() as db:
+        rows = (await db.execute(
+            _select(_Tenant.id).where(_Tenant.status == "active")
+        )).scalars().all()
+    return list(rows) or [1]  # fallback to BMP if the tenants table is empty
+
+
 async def _sequence_engine_loop():
-    """Background tick. Every 60s:
+    """Background tick. Every 60s, per active tenant:
        - sequence engine (fire ready email/iMessage steps)
        - every 5 min: advance any running full_auto campaigns by one batch
        - every 10 min: wake snoozed deals
        - every 15 min: morning brief check
+
+    Every per-tenant pass runs inside `tenant_scope(db, tid)`, which
+    activates the ORM auto-filter. Per-tenant processing means a new
+    tenant's queue isn't touched until we reach their iteration this
+    tick — fair across tenants, and no cross-tenant data leak.
     """
     from app.services.sequence_engine import process_pending_steps
+    from app.tenancy import tenant_scope
     tick_count = 0
     while True:
         try:
-            async with async_session() as db:
-                try:
-                    counters = await process_pending_steps(db)
-                except Exception:
-                    await db.rollback()
-                    raise
-            if any(counters[k] for k in ("sent", "skipped", "tasks_created", "errors")):
-                log.info(f"sequence_engine tick: {counters}")
+            tenant_ids = await _list_active_tenant_ids()
         except Exception as e:
-            log.exception(f"sequence_engine tick failed: {e}")
+            log.exception(f"tenant enumeration failed: {e}")
+            tenant_ids = [1]  # don't lose a tick on a transient lookup error
+
+        for tid in tenant_ids:
+            try:
+                async with async_session() as db:
+                    with tenant_scope(db, tid):
+                        try:
+                            counters = await process_pending_steps(db)
+                        except Exception:
+                            await db.rollback()
+                            raise
+                if any(counters[k] for k in ("sent", "skipped", "tasks_created", "errors")):
+                    log.info(f"sequence_engine tick (tenant={tid}): {counters}")
+            except Exception as e:
+                log.exception(f"sequence_engine tick failed (tenant={tid}): {e}")
 
         tick_count += 1
 
-        # Scheduled-campaign activation — every tick (60s). Flips any
-        # 'scheduled' campaign whose scheduled_start_at has passed over to
-        # 'running' so the auto-advance pass below picks it up the same tick.
-        try:
-            await _activate_scheduled_campaigns()
-        except Exception as e:
-            log.exception(f"scheduled-campaign activation failed: {e}")
+        # Scheduled-campaign activation — every tick (60s) per tenant.
+        for tid in tenant_ids:
+            try:
+                await _activate_scheduled_campaigns(tid)
+            except Exception as e:
+                log.exception(f"scheduled-campaign activation failed (tenant={tid}): {e}")
 
-        # Campaign auto-advance — every tick (60s). Each batch takes
-        # 1-2 min internally (Google Maps + enrichment + Claude email
+        # Campaign auto-advance — every tick (60s) per tenant. Each batch
+        # takes 1-2 min internally (Google Maps + enrichment + Claude email
         # generation), so back-to-back firing produces continuous
-        # throughput rather than artificially throttled spacing. The
-        # batch handler self-exits on daily cap / completion, and runs
-        # are guarded by status='running' + mode='full_auto' so paused
-        # campaigns aren't touched.
-        try:
-            await _advance_full_auto_campaigns()
-        except Exception as e:
-            log.exception(f"campaign auto-advance failed: {e}")
+        # throughput rather than artificially throttled spacing.
+        for tid in tenant_ids:
+            try:
+                await _advance_full_auto_campaigns(tid)
+            except Exception as e:
+                log.exception(f"campaign auto-advance failed (tenant={tid}): {e}")
 
-        # Call reconciliation every 5 ticks (5 min). Catches calls
-        # placed through the dialer where the modal didn't fire log_call
-        # (browser navigated away, crashed, user skipped outcome) and
-        # creates stub Activity rows from Twilio's API truth.
-        #
-        # 24h lookback (not 2h): reconciliation is idempotent on
-        # twilio_call_sid, so re-scanning the day is cheap (one parent-leg
-        # page per rep; child-leg fetches happen only for still-missing
-        # calls, which is ~0 in steady state). The wide window is what makes
-        # recovery robust — if a call is missed on its first pass (a deploy
-        # restart, a transient Twilio error, leg-timing), a 2h window let it
-        # age out and vanish forever. 24h guarantees same-day calls are
-        # always recoverable. (Found 2026-05-28: 10 of Sebastian's calls
-        # lost this way during a day of deploy restarts.)
+        # Call reconciliation every 5 ticks (5 min). Per tenant.
+        # 24h lookback is idempotent on twilio_call_sid (cheap to re-scan).
         if tick_count % 5 == 0:
-            try:
-                from app.services.call_reconciliation import reconcile_calls
-                async with async_session() as db:
-                    rc = await reconcile_calls(db, hours=24)
-                if rc.get("stubs_created"):
-                    log.info(f"call_recon tick: {rc}")
-            except Exception as e:
-                log.exception(f"call_recon tick failed: {e}")
+            from app.services.call_reconciliation import reconcile_calls
+            for tid in tenant_ids:
+                try:
+                    async with async_session() as db:
+                        with tenant_scope(db, tid):
+                            rc = await reconcile_calls(db, hours=24)
+                    if rc.get("stubs_created"):
+                        log.info(f"call_recon tick (tenant={tid}): {rc}")
+                except Exception as e:
+                    log.exception(f"call_recon tick failed (tenant={tid}): {e}")
 
-        # Snoozed-deal wake check every 10 ticks (10 min)
+        # Snoozed-deal wake check every 10 ticks (10 min) per tenant.
         if tick_count % 10 == 0:
-            try:
-                await _wake_snoozed_deals()
-            except Exception as e:
-                log.exception(f"snooze wake check failed: {e}")
+            for tid in tenant_ids:
+                try:
+                    await _wake_snoozed_deals(tid)
+                except Exception as e:
+                    log.exception(f"snooze wake check failed (tenant={tid}): {e}")
 
-        # Morning-brief tick every 15 ticks (15 min). The tick itself
-        # iterates active users and only sends to those whose local time
-        # has just crossed their configured brief_hour.
+        # Morning-brief tick every 15 ticks (15 min) per tenant.
         if tick_count % 15 == 0:
-            try:
-                from app.services.morning_brief import run_morning_brief_tick
-                async with async_session() as db:
-                    sent_count = await run_morning_brief_tick(db)
-                if sent_count:
-                    log.info(f"morning_brief tick: {sent_count} brief(s) sent")
-            except Exception as e:
-                log.exception(f"morning_brief tick failed: {e}")
+            from app.services.morning_brief import run_morning_brief_tick
+            for tid in tenant_ids:
+                try:
+                    async with async_session() as db:
+                        with tenant_scope(db, tid):
+                            sent_count = await run_morning_brief_tick(db)
+                    if sent_count:
+                        log.info(f"morning_brief tick (tenant={tid}): {sent_count} brief(s) sent")
+                except Exception as e:
+                    log.exception(f"morning_brief tick failed (tenant={tid}): {e}")
 
         await asyncio.sleep(60)
 
 
-async def _activate_scheduled_campaigns():
+async def _activate_scheduled_campaigns(tenant_id: int):
     """Flip 'scheduled' campaigns to 'running' once their start time passes.
-
-    Linda (and team) can schedule an autopilot campaign to begin on a
-    future date. We store scheduled_start_at (UTC) and set status to
-    'scheduled'. This pass — run every tick — promotes any whose time has
-    arrived. The scheduled_start_at is left in place as a record of when
-    it kicked off; the status change is what gates execution."""
+    Scoped to the given tenant via the ORM auto-filter."""
     from datetime import datetime as _dt, timezone as _tz
     from sqlalchemy import select as _select
     from app.models import Campaign as _Campaign
+    from app.tenancy import tenant_scope
 
     now = _dt.now(_tz.utc)
     async with async_session() as db:
-        due = (await db.execute(
-            _select(_Campaign).where(
-                _Campaign.status == "scheduled",
-                _Campaign.scheduled_start_at.isnot(None),
-                _Campaign.scheduled_start_at <= now,
-            )
-        )).scalars().all()
-        for camp in due:
-            camp.status = "running"
-            log.info(f"campaign #{camp.id} '{camp.name}' activated on schedule "
-                     f"(was due {camp.scheduled_start_at.isoformat()})")
-        if due:
-            await db.commit()
+        with tenant_scope(db, tenant_id):
+            due = (await db.execute(
+                _select(_Campaign).where(
+                    _Campaign.status == "scheduled",
+                    _Campaign.scheduled_start_at.isnot(None),
+                    _Campaign.scheduled_start_at <= now,
+                )
+            )).scalars().all()
+            for camp in due:
+                camp.status = "running"
+                log.info(f"campaign #{camp.id} '{camp.name}' activated on schedule "
+                         f"(was due {camp.scheduled_start_at.isoformat()})")
+            if due:
+                await db.commit()
 
 
-async def _advance_full_auto_campaigns():
-    """Run one batch per active full_auto campaign. Each batch advances
-    the cursor by one (business_type, location) pair, hits Netrows/Maps
-    to discover prospects in that slice, qualifies + creates sequences
-    for the ones that pass criteria, and updates the campaign's daily
-    counters. The handler stops itself when:
-      - daily cap reached (prospects_today >= max_prospects_per_day)
-      - all combos searched (current_location_index >= len(locations))
-        → status flips to 'completed'
-
-    Runs every 5 min while campaigns are active. With ~12 business
-    types × 3 locations = 36 batches per campaign, this means a
-    typical campaign finishes its discovery in ~3 hours."""
+async def _advance_full_auto_campaigns(tenant_id: int):
+    """Run one batch per active full_auto campaign for this tenant."""
     from sqlalchemy import select as _select
     from app.models import Campaign as _Campaign
     from app.routes.campaign_routes import _execute_batch
+    from app.tenancy import tenant_scope
 
     async with async_session() as db:
-        rows = (await db.execute(
-            _select(_Campaign).where(
-                _Campaign.status == "running",
-                _Campaign.mode == "full_auto",
-            )
-        )).scalars().all()
+        with tenant_scope(db, tenant_id):
+            rows = (await db.execute(
+                _select(_Campaign).where(
+                    _Campaign.status == "running",
+                    _Campaign.mode == "full_auto",
+                )
+            )).scalars().all()
 
     if not rows:
         return
@@ -211,86 +216,89 @@ async def _advance_full_auto_campaigns():
     for camp in rows:
         try:
             async with async_session() as db:
-                actor = (await db.execute(
-                    _select(_User).where(_User.id == camp.created_by)
-                )).scalar_one_or_none()
-                if not actor:
-                    log.warning(f"campaign {camp.id} has no creator — skipping batch")
-                    continue
-                result = await _execute_batch(camp.id, db, actor)
-                status = (result or {}).get("status", "ok")
-                # Log meaningful results only; "daily_cap_reached" /
-                # "completed" are normal terminal states.
-                if status in ("ok", "no_results"):
-                    log.info(f"campaign #{camp.id} auto-batch: {status} · "
-                             f"new={result.get('new_companies', 0)} "
-                             f"qualified={result.get('qualified', 0)} "
-                             f"sequences={result.get('sequences_created', 0)}")
-                elif status == "completed":
-                    log.info(f"campaign #{camp.id} auto-batch: COMPLETED")
-                elif status == "daily_cap_reached":
-                    log.info(f"campaign #{camp.id} auto-batch: daily cap reached "
-                             f"({result.get('prospects_today')} of cap)")
+                with tenant_scope(db, tenant_id):
+                    actor = (await db.execute(
+                        _select(_User).where(_User.id == camp.created_by)
+                    )).scalar_one_or_none()
+                    if not actor:
+                        log.warning(f"campaign {camp.id} has no creator — skipping batch")
+                        continue
+                    result = await _execute_batch(camp.id, db, actor)
+                    status = (result or {}).get("status", "ok")
+                    # Log meaningful results only; "daily_cap_reached" /
+                    # "completed" are normal terminal states.
+                    if status in ("ok", "no_results"):
+                        log.info(f"campaign #{camp.id} auto-batch: {status} · "
+                                 f"new={result.get('new_companies', 0)} "
+                                 f"qualified={result.get('qualified', 0)} "
+                                 f"sequences={result.get('sequences_created', 0)}")
+                    elif status == "completed":
+                        log.info(f"campaign #{camp.id} auto-batch: COMPLETED")
+                    elif status == "daily_cap_reached":
+                        log.info(f"campaign #{camp.id} auto-batch: daily cap reached "
+                                 f"({result.get('prospects_today')} of cap)")
         except Exception as e:
             log.exception(f"campaign #{camp.id} batch failed: {e}")
 
 
-async def _wake_snoozed_deals():
-    """Auto-wake deals whose snooze date has passed. Creates follow-up tasks."""
+async def _wake_snoozed_deals(tenant_id: int):
+    """Auto-wake deals (scoped to tenant) whose snooze date has passed."""
     from datetime import datetime, timezone
     from sqlalchemy import select
     from app.models import Deal, Activity, Task, Company
+    from app.tenancy import tenant_scope
 
     async with async_session() as db:
-        now = datetime.now(timezone.utc)
-        deals = (await db.execute(
-            select(Deal).where(
-                Deal.stage == "snoozed",
-                Deal.snoozed_until.isnot(None),
-                Deal.snoozed_until <= now,
-            )
-        )).scalars().all()
+        with tenant_scope(db, tenant_id):
+            now = datetime.now(timezone.utc)
+            deals = (await db.execute(
+                select(Deal).where(
+                    Deal.stage == "snoozed",
+                    Deal.snoozed_until.isnot(None),
+                    Deal.snoozed_until <= now,
+                )
+            )).scalars().all()
 
-        from app.services import pipeline_config as _pc
-        from app.routes.deal_routes import package_monthly_value
-        for deal in deals:
-            restore = deal.stage_before_snooze or "in_sequence"
-            # If admin deleted the stage while this deal was asleep,
-            # fall back to in_sequence rather than stranding it.
-            if not await _pc.is_valid_stage(db, restore):
-                restore = "in_sequence"
-            deal.stage = restore
-            deal.probability = await _pc.get_stage_probability(db, restore)
-            if deal.value == 0 and deal.package:
-                deal.value = package_monthly_value(deal.package)
+            from app.services import pipeline_config as _pc
+            from app.routes.deal_routes import package_monthly_value
+            for deal in deals:
+                restore = deal.stage_before_snooze or "in_sequence"
+                # If admin deleted the stage while this deal was asleep,
+                # fall back to in_sequence rather than stranding it.
+                if not await _pc.is_valid_stage(db, restore):
+                    restore = "in_sequence"
+                deal.stage = restore
+                deal.probability = await _pc.get_stage_probability(db, restore)
+                if deal.value == 0 and deal.package:
+                    deal.value = package_monthly_value(deal.package)
 
-            reason = deal.snooze_reason or "Scheduled follow-up"
-            deal.snoozed_until = None
-            deal.stage_before_snooze = None
-            deal.snooze_reason = None
+                reason = deal.snooze_reason or "Scheduled follow-up"
+                deal.snoozed_until = None
+                deal.stage_before_snooze = None
+                deal.snooze_reason = None
 
-            company = (await db.execute(select(Company).where(Company.id == deal.company_id))).scalar_one_or_none()
-            company_name = company.name if company else "Unknown"
+                company = (await db.execute(select(Company).where(Company.id == deal.company_id))).scalar_one_or_none()
+                company_name = company.name if company else "Unknown"
 
-            # Create follow-up task
-            if deal.assigned_to:
-                db.add(Task(
-                    company_id=deal.company_id,
-                    user_id=deal.assigned_to,
-                    description=f"FOLLOW UP: {company_name} — snoozed reason: {reason}",
-                    due_date=now,
+                # Create follow-up task
+                if deal.assigned_to:
+                    db.add(Task(
+                        company_id=deal.company_id,
+                        user_id=deal.assigned_to,
+                        description=f"FOLLOW UP: {company_name} — snoozed reason: {reason}",
+                        due_date=now,
+                    ))
+
+                db.add(Activity(
+                    company_id=deal.company_id, deal_id=deal.id,
+                    activity_type="deal_woken",
+                    content=f"Deal auto-reactivated from snooze — restored to {restore}. Reason was: {reason}",
                 ))
 
-            db.add(Activity(
-                company_id=deal.company_id, deal_id=deal.id,
-                activity_type="deal_woken",
-                content=f"Deal auto-reactivated from snooze — restored to {restore}. Reason was: {reason}",
-            ))
+                log.info(f"Woke snoozed deal {deal.id} for {company_name}")
 
-            log.info(f"Woke snoozed deal {deal.id} for {company_name}")
-
-        if deals:
-            await db.commit()
+            if deals:
+                await db.commit()
 
 
 @asynccontextmanager

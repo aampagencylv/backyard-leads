@@ -235,6 +235,36 @@ def install_tenant_filter() -> None:
     log.info("tenant auto-filter installed (do_orm_execute + before_flush hooks)")
 
 
+from contextlib import contextmanager
+
+
+@contextmanager
+def tenant_scope(session, tenant_id: int):
+    """Stamp session.info["tenant_id"] for the duration of the block.
+
+    Use this in background tasks (the sequence engine loop, scheduled
+    activations) which run outside any request context and therefore
+    have no `get_tenant_db` to set the scope. The same auto-filter /
+    auto-stamp hooks apply once `session.info["tenant_id"]` is set.
+
+    Restores the previous value on exit so you can nest these safely.
+
+        async with async_session() as db:
+            for tid in active_tenant_ids:
+                with tenant_scope(db, tid):
+                    await process_pending_steps(db)
+    """
+    prev = session.info.get("tenant_id")
+    session.info["tenant_id"] = int(tenant_id)
+    try:
+        yield
+    finally:
+        if prev is None:
+            session.info.pop("tenant_id", None)
+        else:
+            session.info["tenant_id"] = prev
+
+
 def scope_to_tenant(query, model, tenant_id: int):
     """Add `WHERE Model.tenant_id = :tid` to a select() query.
 
