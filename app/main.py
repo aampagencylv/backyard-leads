@@ -465,9 +465,16 @@ async def serve_app(request: Request):
 
 @app.get("/admin", response_class=HTMLResponse)
 async def serve_admin():
-    """Platform admin console (tenants, domains, impersonation).
-    Auth is enforced by the API endpoints the page calls — page itself
-    is a static shell and safe to serve unauthenticated.
+    """Platform admin console (tenants, domains, impersonation, activity).
+    The page is a static shell — actual authorization happens at two
+    layers:
+
+      1. Every API endpoint under /api/admin/* is gated by
+         require_super_admin (returns 403 to any non-super_admin token).
+      2. The admin.html frontend, on first load, calls /api/auth/me
+         after login and rejects + logs out any user whose role is
+         not 'super_admin'. So a regular tenant admin who navigates
+         to /admin sees the login page but cannot proceed past it.
 
     Reachable at https://app.leadprospector.ai/ (host-routed via /)
     or directly via /admin on any host."""

@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import create_access_token, require_super_admin
 from app.database import get_db
-from app.models import Tenant, TenantDomain, User, Company, Contact, Campaign, RuntimeConfig
+from app.models import Tenant, TenantDomain, User, Company, Contact, Campaign, RuntimeConfig, AuditLogEntry
 from app.services.audit_log import record_audit
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -288,6 +288,67 @@ async def tenant_detail(
         ],
         "provisioning": provisioning,
     }
+
+
+@router.get("/activity")
+async def platform_activity(
+    limit: int = 100,
+    offset: int = 0,
+    tenant_id: Optional[int] = None,
+    action: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_super_admin),
+):
+    """Cross-tenant audit-log feed for the platform admin console.
+
+    Reads audit_log without the ORM auto-filter (uses get_db, not
+    get_tenant_db) so super_admin sees everything across every tenant.
+    Per-tenant scoping for tenant admins lives at /api/auth/audit-log.
+
+    Filters:
+      tenant_id — narrow to one tenant
+      action    — exact-match (e.g. "tenant_created", "tenant_user_provisioned")
+    """
+    import json as _json
+    q = select(AuditLogEntry)
+    if tenant_id is not None:
+        q = q.where(AuditLogEntry.tenant_id == tenant_id)
+    if action:
+        q = q.where(AuditLogEntry.action == action)
+    q = q.order_by(AuditLogEntry.created_at.desc()).limit(min(limit, 500)).offset(offset)
+    rows = (await db.execute(q)).scalars().all()
+
+    # Resolve tenant_id → name in one extra query for the UI
+    tenant_ids = list({r.tenant_id for r in rows if r.tenant_id})
+    tenant_names: dict[int, str] = {}
+    if tenant_ids:
+        t_rows = (await db.execute(
+            select(Tenant.id, Tenant.name).where(Tenant.id.in_(tenant_ids))
+        )).all()
+        tenant_names = {row.id: row.name for row in t_rows}
+
+    out: list[dict] = []
+    for r in rows:
+        try:
+            meta = _json.loads(r.metadata_json) if r.metadata_json else {}
+        except Exception:
+            meta = {}
+        out.append({
+            "id": r.id,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "tenant_id": r.tenant_id,
+            "tenant_name": tenant_names.get(r.tenant_id, ""),
+            "actor_user_id": r.actor_user_id,
+            "actor_email": r.actor_email,
+            "actor_role": r.actor_role,
+            "action": r.action,
+            "target_type": r.target_type,
+            "target_id": r.target_id,
+            "target_label": r.target_label,
+            "metadata": meta,
+            "ip_address": r.ip_address,
+        })
+    return {"items": out, "count": len(out), "offset": offset, "limit": limit}
 
 
 @router.post("/tenants/{tenant_id}/refresh-email-status")
