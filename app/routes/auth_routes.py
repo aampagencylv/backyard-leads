@@ -5,6 +5,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from pydantic import BaseModel
+from app.database import get_db
 from app.tenancy import get_tenant_db, get_current_tenant_id
 from app.models import User
 from app.services.audit_log import record_audit
