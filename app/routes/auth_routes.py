@@ -5,7 +5,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from pydantic import BaseModel
-from app.database import get_db
+from app.tenancy import get_tenant_db, get_current_tenant_id
 from app.models import User
 from app.services.audit_log import record_audit
 from app.auth import (
@@ -32,19 +32,25 @@ class TokenResponse(BaseModel):
 
 
 @router.post("/register", response_model=TokenResponse)
-async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
+async def register(
+    req: RegisterRequest,
+    db: AsyncSession = Depends(get_tenant_db),
+    tenant_id: int = Depends(get_current_tenant_id),
+):
     # Restrict registration to company emails
     allowed_domains = ["backyardmarketingpros.com", "aamp.agency"]
     email_domain = req.email.strip().lower().split("@")[-1]
     if email_domain not in allowed_domains:
         raise HTTPException(status_code=403, detail="Registration is restricted to Backyard Marketing Pros team members.")
 
-    # Check if email already exists
+    # Email uniqueness is scoped to tenant by the ORM auto-filter — two
+    # tenants can each have their own steve@example.com.
     result = await db.execute(select(User).where(User.email == req.email.lower()))
     if result.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    # First user gets admin role
+    # First user (of this tenant) gets admin role. count() is also scoped
+    # to the resolved tenant via the auto-filter.
     count_result = await db.execute(select(func.count()).select_from(User))
     user_count = count_result.scalar()
     role = "admin" if user_count == 0 else "sales_rep"
@@ -55,12 +61,13 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
         last_name=req.last_name.strip(),
         hashed_password=hash_password(req.password),
         role=role,
+        tenant_id=tenant_id,
     )
     db.add(user)
     await db.commit()
     await db.refresh(user)
 
-    token = create_access_token({"sub": str(user.id)})
+    token = create_access_token({"sub": str(user.id), "tenant_id": user.tenant_id})
     return TokenResponse(
         access_token=token,
         user_name=user.full_name,
@@ -71,15 +78,20 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
 @router.post("/login", response_model=TokenResponse)
 async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
+    # User lookup is auto-scoped to the resolved tenant by the ORM filter,
+    # so a user logging in via tenantA.agencyprospector.com only matches
+    # users belonging to tenantA — even if another tenant has the same email.
     result = await db.execute(select(User).where(User.email == form_data.username.lower()))
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    token = create_access_token({"sub": str(user.id)})
+    # Stamp tenant_id into the JWT so subsequent requests can resolve the
+    # tenant without re-doing host lookup. The resolver checks JWT claim first.
+    token = create_access_token({"sub": str(user.id), "tenant_id": user.tenant_id})
     return TokenResponse(
         access_token=token,
         user_name=user.full_name,
@@ -125,7 +137,7 @@ class UpdateBriefSettingsRequest(BaseModel):
 @router.patch("/me/brief-settings")
 async def update_brief_settings(
     req: UpdateBriefSettingsRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Update the current user's morning brief preferences."""
@@ -153,7 +165,7 @@ async def update_brief_settings(
 
 @router.post("/me/brief/test-send")
 async def test_send_brief(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Force-send a morning brief to the current user, ignoring the
@@ -174,7 +186,7 @@ class UpdateOnboardingRequest(BaseModel):
 @router.patch("/me/onboarding")
 async def update_onboarding(
     req: UpdateOnboardingRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Save the user's progress through the 10-step product tour.
@@ -188,7 +200,7 @@ async def update_onboarding(
 
 @router.post("/me/onboarding/restart")
 async def restart_onboarding(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Reset onboarding so the tour fires again next login (or immediately if
@@ -202,7 +214,7 @@ async def restart_onboarding(
 
 @router.get("/users")
 async def list_users(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(require_admin),
 ):
     """List all users (admin only).
@@ -242,7 +254,7 @@ async def update_user_role(
     user_id: int,
     req: UpdateUserRoleRequest,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(require_admin),
 ):
     """Change a user's role.
@@ -295,7 +307,7 @@ class InviteUserRequest(BaseModel):
 async def invite_user(
     req: InviteUserRequest,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(require_admin),
 ):
     """
@@ -414,7 +426,7 @@ async def update_user(
     user_id: int,
     req: UpdateUserRequest,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(require_admin),
 ):
     """Update any user's profile.
@@ -507,7 +519,7 @@ class ChangePasswordRequest(BaseModel):
 @router.post("/change-password")
 async def change_password(
     req: ChangePasswordRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
     """Change your own password (requires current password)."""
@@ -528,7 +540,7 @@ class ForgotPasswordRequest(BaseModel):
 @router.post("/forgot-password")
 async def forgot_password(
     req: ForgotPasswordRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
 ):
     """Send a password reset email with a temporary new password."""
     result = await db.execute(select(User).where(User.email == req.email.strip().lower()))
@@ -586,7 +598,7 @@ async def list_audit_log(
     actor_user_id: Optional[int] = None,
     action: Optional[str] = None,
     target_type: Optional[str] = None,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(require_admin),
 ):
     """List audit log entries, newest first. Admin+ only.
@@ -633,7 +645,7 @@ class ReassignRequest(BaseModel):
 async def reassign_user(
     req: ReassignRequest,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(require_admin),
 ):
     """Bulk reassign all companies, deals, and tasks from one user to another."""
