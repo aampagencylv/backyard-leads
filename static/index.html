@@ -2422,6 +2422,32 @@ function verify(secret, rawBody, header) {
                     </div>
                     <button class="btn btn-primary" onclick="saveProfile()">Save Profile</button>
                 </div>
+
+                <!-- Platform setup status — only shown to admins / super_admins.
+                     Surfaces email + voice provisioning state without leaking the
+                     raw DNS records (those are operator-only in /admin). -->
+                <div id="settings-setup-status" class="search-box hidden" style="max-width:600px;margin-top:16px">
+                    <h3>Platform setup</h3>
+                    <p style="font-size:13px;color:#666;margin-bottom:16px">Your outbound channels — managed by your platform admin. Refresh if you just signed up; setup usually completes within a few minutes.</p>
+                    <div style="display:flex;flex-direction:column;gap:10px">
+                        <div id="setup-row-email" style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:#fff;border:1px solid #e5e7eb;border-radius:8px">
+                            <div style="font-size:18px">✉️</div>
+                            <div style="flex:1">
+                                <div style="font-weight:600;font-size:14px">Email sending</div>
+                                <div id="setup-email-detail" style="font-size:12px;color:#666;margin-top:2px">Checking…</div>
+                            </div>
+                            <div id="setup-email-badge"></div>
+                        </div>
+                        <div id="setup-row-voice" style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:#fff;border:1px solid #e5e7eb;border-radius:8px">
+                            <div style="font-size:18px">📞</div>
+                            <div style="flex:1">
+                                <div style="font-weight:600;font-size:14px">Voice + SMS</div>
+                                <div id="setup-voice-detail" style="font-size:12px;color:#666;margin-top:2px">Checking…</div>
+                            </div>
+                            <div id="setup-voice-badge"></div>
+                        </div>
+                    </div>
+                </div>
                 <div class="search-box" style="max-width:600px;margin-top:16px">
                     <h3>Email Signature Preview</h3>
                     <p style="font-size:13px;color:#666;margin-bottom:16px">This is what your signature looks like. Edit your profile fields above to update it.</p>
@@ -12347,9 +12373,68 @@ hmac.compare_digest(expected, header)</pre>
             }
         }
 
+        function _setupBadge(state) {
+            const colors = {
+                ready:    'background:#e8f5e9;color:#1B5E20;border:1px solid #c8e6c9',
+                pending:  'background:#fff8e1;color:#a36400;border:1px solid #ffe082',
+                missing:  'background:#fdecea;color:#a92e22;border:1px solid #f5c6cb',
+            };
+            const labels = { ready: 'Ready', pending: 'Setting up', missing: 'Not configured' };
+            return `<span style="padding:4px 10px;border-radius:12px;font-size:11px;font-weight:600;${colors[state] || colors.missing}">${labels[state] || state}</span>`;
+        }
+
+        async function loadSetupStatus() {
+            // Only admins/super_admins see the status panel.
+            const wrap = document.getElementById('settings-setup-status');
+            if (!currentUser || !(currentUser.role === 'admin' || currentUser.role === 'super_admin')) {
+                if (wrap) wrap.classList.add('hidden');
+                return;
+            }
+            if (wrap) wrap.classList.remove('hidden');
+            try {
+                const cfg = await api('/api/runtime-config');
+                if (!cfg) return;
+
+                // Email — read from the tenant-tier sending_domain block.
+                const sd = cfg.sending_domain || {};
+                const resendStatus = (sd.status || '').toLowerCase();
+                const resendName   = sd.name || '';
+                let eState = 'missing', eDetail = 'Email sending isn\'t set up yet. Contact your platform admin.';
+                if (!sd.configured) {
+                    eState = 'missing';
+                    eDetail = 'Email sending hasn\'t been provisioned yet. Contact your platform admin to start sending.';
+                } else if (resendStatus === 'verified') {
+                    eState = 'ready';
+                    eDetail = `Sending from <code>${escapeHtml(resendName)}</code> — ready to go.`;
+                } else if (resendStatus && resendStatus !== 'failed') {
+                    eState = 'pending';
+                    eDetail = `Waiting on DNS for <code>${escapeHtml(resendName)}</code>. Usually under 10 minutes after your platform admin adds the records.`;
+                } else if (resendStatus === 'failed') {
+                    eState = 'missing';
+                    eDetail = `DNS verification failed for <code>${escapeHtml(resendName)}</code>. Contact your platform admin.`;
+                }
+                document.getElementById('setup-email-badge').innerHTML = _setupBadge(eState);
+                document.getElementById('setup-email-detail').innerHTML = eDetail;
+
+                // Voice — read from voice_account.configured.
+                const va = cfg.voice_account || {};
+                let vState = 'missing', vDetail = 'No voice account provisioned yet. Contact your platform admin.';
+                if (va.configured) {
+                    vState = 'ready';
+                    vDetail = 'Voice + SMS account ready. Add a phone number in Voice settings to start dialing.';
+                }
+                document.getElementById('setup-voice-badge').innerHTML = _setupBadge(vState);
+                document.getElementById('setup-voice-detail').innerHTML = vDetail;
+            } catch (e) {
+                if (wrap) wrap.classList.add('hidden');  // hide on error rather than show stale info
+            }
+        }
+
         async function loadRuntimeConfig() {
             const cfg = await api('/api/runtime-config');
             if (!cfg) return;
+            // Surface the setup-status panel on this Settings load (no-op for non-admins).
+            loadSetupStatus().catch(() => {});
 
             // Org brand (tenant-tier)
             const b = cfg.brand || {};

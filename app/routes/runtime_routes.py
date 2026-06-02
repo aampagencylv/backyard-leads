@@ -107,6 +107,17 @@ def _tenant_payload(rc, settings_obj) -> dict:
             "native_user_id":  getattr(rc, "audit_native_user_id", None),
             "custom_url":      (getattr(rc, "audit_custom_url", None) or ""),
         },
+        # Provisioning status — tenant admin sees high-level readiness for
+        # their outbound channels (without seeing the underlying DKIM keys
+        # or sub-account auth_token, which stay platform-tier).
+        "sending_domain": {
+            "configured": bool((getattr(rc, "resend_domain_id", None) or "").strip()),
+            "name":   (getattr(rc, "resend_domain_name", None) or ""),
+            "status": (getattr(rc, "resend_domain_status", None) or ""),
+        },
+        "voice_account": {
+            "configured": bool((getattr(rc, "twilio_account_sid", None) or "").strip()),
+        },
     }
 
 
