@@ -21,11 +21,11 @@ from typing import Optional
 
 from fastapi import Depends, Request
 from jose import JWTError, jwt
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.database import get_db
+from app.database import async_session, get_db
 from app.models import Tenant, TenantDomain
 
 log = logging.getLogger("bmp.tenancy")
@@ -117,6 +117,46 @@ async def get_current_tenant_id(
     tid = await _resolve_tenant_id(request, db)
     request.state.tenant_id = tid
     return tid
+
+
+async def get_tenant_db(request: Request):
+    """FastAPI dependency: yields a tenant-scoped DB session.
+
+    Differs from `get_db` in two ways:
+      1. Resolves the tenant for this request and caches the id on
+         request.state.tenant_id.
+      2. Issues `SET app.current_tenant_id = N` on the underlying
+         connection, which activates the RLS `tenant_isolation` policy
+         on every tenant-owned table. Routes that adopt this dep get
+         DB-enforced tenant isolation automatically.
+
+    The GUC is session-scoped (not transaction-local) so it survives
+    a mid-handler `commit()`. Before the connection returns to the
+    pool, the GUC is RESET so the next request can't inherit it.
+
+    Routes migrate to this dep by replacing
+        db: AsyncSession = Depends(get_db)
+    with
+        db: AsyncSession = Depends(get_tenant_db)
+    """
+    async with async_session() as session:
+        tid = await _resolve_tenant_id(request, session)
+        # Cache so downstream deps (get_current_tenant_id) don't re-resolve.
+        request.state.tenant_id = tid
+
+        # tid is a server-side int — safe to f-string into SQL.
+        await session.execute(text(f"SET app.current_tenant_id = '{int(tid)}'"))
+        try:
+            yield session
+        finally:
+            # Best-effort RESET so the pooled connection comes back clean.
+            # If the session is already in a failed state, RESET will fail
+            # too — we just log and let SQLAlchemy close the connection,
+            # which discards all session state anyway.
+            try:
+                await session.execute(text("RESET app.current_tenant_id"))
+            except Exception:
+                log.exception("RESET app.current_tenant_id failed (tid=%s)", tid)
 
 
 def scope_to_tenant(query, model, tenant_id: int):
