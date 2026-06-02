@@ -120,13 +120,19 @@ Need help? Just reply to this email — it goes straight to us.
 # ----------------------------------------------------------------------
 
 def _config() -> Optional[dict]:
-    """Read platform Resend config from env. Returns None if not set."""
+    """Read platform Resend config from env. Returns None if not set.
+
+    Sending domain defaults to `leadprospector.ai` (apex) since the
+    LeadProspector Resend workspace verifies the apex directly — system
+    emails are low-volume notifications (invites, password resets) and
+    don't need a dedicated subdomain for deliverability isolation.
+    """
     key = (os.environ.get("PLATFORM_RESEND_API_KEY") or "").strip()
     if not key:
         return None
     return {
         "api_key": key,
-        "domain": (os.environ.get("PLATFORM_SENDING_DOMAIN") or "system.leadprospector.ai").strip(),
+        "domain": (os.environ.get("PLATFORM_SENDING_DOMAIN") or "leadprospector.ai").strip(),
         "from_name": (os.environ.get("PLATFORM_FROM_NAME") or "LeadProspector").strip(),
         "from_local": (os.environ.get("PLATFORM_FROM_LOCAL") or "hello").strip(),
         "login_url": (os.environ.get("PLATFORM_LOGIN_URL_BASE") or "https://app.leadprospector.ai").strip(),

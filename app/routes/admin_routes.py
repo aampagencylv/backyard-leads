@@ -125,9 +125,10 @@ async def create_tenant(
         pass
 
     # Provision a Resend sending domain for the tenant. Best-effort.
-    # On success we get back the SPF/DKIM/DMARC records that have to land
-    # in leadprospector.ai's DNS — surfaced in /api/admin/tenants/{id}
-    # for the operator to copy.
+    # On success we get back the SPF/DKIM/DMARC records — then we try to
+    # auto-add them to Cloudflare DNS so the domain self-verifies. If
+    # either step fails (creds missing, API timeout), the records still
+    # surface in /admin for manual copy.
     resend_domain_id = None
     resend_domain_name = None
     resend_records_json = None
@@ -141,6 +142,18 @@ async def create_tenant(
             resend_domain_name = result["domain_name"]
             resend_records_json = _json.dumps(result["records"])
             resend_status = result["status"]
+            # Auto-add to Cloudflare DNS if configured.
+            try:
+                from app.services.cloudflare_dns import add_resend_records, is_configured as cf_ok
+                if cf_ok():
+                    added = await add_resend_records(result["records"])
+                    if added:
+                        # Stamp a marker on the status so the admin UI can
+                        # show "DNS auto-added — waiting on Resend verification"
+                        # instead of "copy these records to DNS".
+                        resend_status = "dns_auto_added"
+            except Exception:
+                pass
     except Exception:
         pass
 
