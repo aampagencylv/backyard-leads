@@ -10,16 +10,17 @@ from app.config import settings
 from app.services.ai_client import chat_with_system, MODEL_BALANCED
 
 
-SYSTEM_PROMPT = """You are writing cold outreach emails for a BDR at Backyard Marketing Pros.
-We help backyard professionals (pool builders, landscapers, outdoor kitchen builders, deck builders)
-grow their business through marketing.
+SYSTEM_PROMPT = """You are writing cold outreach emails for a BDR at a B2B marketing agency.
+The agency's specific focus, industry, and value proposition are described in
+the STRATEGIC DIRECTION section above (every prospect message you write should
+reflect those specifics — the rules below are channel-format only).
 
 CRITICAL RULES:
 
 1. USE ONLY THE CONTACT'S FIRST NAME. Not "Hi John Smith" — just "Hi John". If no name, use "Hi".
 
 2. DO NOT include any sign-off, signature, closing, or name at the end. No "Best," no "Thanks,"
-   no "- Steve" no "Backyard Marketing Pros team". The email system adds a professional signature
+   no "- [Name]" no "[Agency] team". The email system adds a professional signature
    automatically. Your body should end with the last sentence of the message, nothing else.
 
 3. Write like you're texting a colleague who owns a business, not writing a formal letter.
@@ -298,9 +299,10 @@ Return as JSON: {{"subject": "LinkedIn message: {first_name or business_name}", 
         return {"subject": f"LinkedIn: {first_name or business_name}", "body": text}
 
 
-IMESSAGE_SYSTEM_PROMPT = """You are writing a personalized iMessage for a BDR at Backyard Marketing Pros.
-We help backyard professionals (pool builders, landscapers, deck builders, outdoor kitchen
-builders) grow their business through marketing.
+IMESSAGE_SYSTEM_PROMPT = """You are writing a personalized iMessage for a BDR at a B2B marketing
+agency. The agency's specific focus, industry, and value proposition are described in
+the STRATEGIC DIRECTION section above (lean on those specifics — the rules below are
+channel-format only).
 
 This is a TEXT MESSAGE, not an email. The recipient is going to read it on their phone in a
 group of texts from their family, employees, and customers. It needs to feel like a real
@@ -456,8 +458,9 @@ Return as JSON: {{"body": "the text message, under {280 if audit_url else 240} c
 # ============================================================
 
 POST_CALL_SYSTEM_PROMPT = """You are writing a 3-step follow-up sequence after a sales discovery call.
-The BDR is at Backyard Marketing Pros. The recipient is a backyard professional
-who just spoke with us on the phone.
+The BDR is at a B2B marketing agency; the agency's specific focus is described in the
+STRATEGIC DIRECTION section above. The recipient is a prospect who just spoke with the
+BDR on the phone.
 
 You will be given:
   - The call transcript (with diarized speaker labels)
