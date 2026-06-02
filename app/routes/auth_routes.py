@@ -37,41 +37,18 @@ async def register(
     db: AsyncSession = Depends(get_tenant_db),
     tenant_id: int = Depends(get_current_tenant_id),
 ):
-    # Restrict registration to company emails
-    allowed_domains = ["backyardmarketingpros.com", "aamp.agency"]
-    email_domain = req.email.strip().lower().split("@")[-1]
-    if email_domain not in allowed_domains:
-        raise HTTPException(status_code=403, detail="Registration is restricted to Backyard Marketing Pros team members.")
+    """Disabled — tenants are provisioned via the platform admin console
+    (POST /api/admin/tenants/{id}/users by a super_admin).
 
-    # Email uniqueness is scoped to tenant by the ORM auto-filter — two
-    # tenants can each have their own steve@example.com.
-    result = await db.execute(select(User).where(User.email == req.email.lower()))
-    if result.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Email already registered")
-
-    # First user (of this tenant) gets admin role. count() is also scoped
-    # to the resolved tenant via the auto-filter.
-    count_result = await db.execute(select(func.count()).select_from(User))
-    user_count = count_result.scalar()
-    role = "admin" if user_count == 0 else "sales_rep"
-
-    user = User(
-        email=req.email.lower(),
-        first_name=req.first_name.strip(),
-        last_name=req.last_name.strip(),
-        hashed_password=hash_password(req.password),
-        role=role,
-        tenant_id=tenant_id,
-    )
-    db.add(user)
-    await db.commit()
-    await db.refresh(user)
-
-    token = create_access_token({"sub": str(user.id), "tenant_id": user.tenant_id})
-    return TokenResponse(
-        access_token=token,
-        user_name=user.full_name,
-        user_email=user.email,
+    Self-service registration was a single-tenant artifact: anyone with
+    a @backyardmarketingpros.com or @aamp.agency email could create a
+    BMP user. In a multi-tenant world that doesn't make sense — every
+    tenant has its own user pool, and admission is gated by the
+    platform admin who knows which agency they're inviting.
+    """
+    raise HTTPException(
+        status_code=403,
+        detail="Self-service registration is disabled. Contact your platform admin to be invited.",
     )
 
 

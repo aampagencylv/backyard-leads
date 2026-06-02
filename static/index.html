@@ -717,13 +717,58 @@
         }
       }
     </script>
+
+    <!-- ===================== Per-tenant brand bootstrap =====================
+         Fires before the auth screen renders. Fetches /api/brand (public,
+         host-routed) and rewrites the document title, both logos, and the
+         CSS brand-color custom properties. BMP gets BMP. Tenant 2 gets
+         tenant 2. Fails silently — the hardcoded defaults stay if the
+         fetch errors. -->
+    <script>
+      (async function bootstrapBrand() {
+        try {
+          const r = await fetch("/api/brand", { credentials: "omit" });
+          if (!r.ok) return;
+          const brand = await r.json();
+          if (!brand) return;
+
+          // Title
+          const name = (brand.company_name || "").trim();
+          if (name) document.title = name + " · Prospector + CRM";
+
+          // Logos — only swap when the brand actually has its own logo url.
+          // Empty string falls back to the inline BMP image already in the DOM.
+          if (brand.logo_url) {
+            for (const id of ["auth-logo-img", "sidebar-logo-img"]) {
+              const img = document.getElementById(id);
+              if (img) {
+                img.src = brand.logo_url;
+                img.alt = name || "Logo";
+              }
+            }
+          }
+
+          // CSS custom properties — drive the existing --bmp-* tokens so
+          // every component that references them recolors automatically.
+          // The keys stay --bmp-* for backwards compat; the *values* are
+          // per-tenant.
+          const root = document.documentElement.style;
+          if (brand.primary_color)   root.setProperty("--bmp-orange", brand.primary_color);
+          if (brand.secondary_color) root.setProperty("--bmp-green", brand.secondary_color);
+          if (brand.accent_bg_color) root.setProperty("--bmp-cream", brand.accent_bg_color);
+        } catch (e) {
+          // Brand fetch failure is non-fatal — the hardcoded BMP values stay.
+        }
+      })();
+    </script>
 </head>
 <body>
     <!-- ===================== AUTH SCREEN ===================== -->
     <div id="auth-screen" class="auth-container">
         <div class="auth-card">
-            <div class="auth-logo">
-                <img src="https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz.png" alt="BMP">
+            <div class="auth-logo" id="auth-logo-wrap">
+                <!-- Logo populated at boot from /api/brand based on Host. -->
+                <img id="auth-logo-img" src="https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz.png" alt="">
             </div>
             <h1>Prospector + CRM</h1>
             <p>Sign in to your team account</p>
@@ -741,7 +786,7 @@
                 </div>
                 <button class="btn btn-primary" onclick="login()">Sign In</button>
                 <div style="text-align:center;margin-top:8px"><a onclick="showForgotPassword()" style="font-size:12px;color:var(--bmp-orange);cursor:pointer">Forgot password?</a></div>
-                <div class="auth-toggle">No account? <a onclick="showRegister()">Request access</a></div>
+                <div class="auth-toggle" style="font-size:12px;color:#888">No account? Contact your admin to be invited.</div>
             </div>
 
             <div id="register-form" class="hidden">
@@ -764,7 +809,8 @@
         <div id="sidebar-backdrop" class="sidebar-backdrop" onclick="closeSidebar()"></div>
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-brand">
-                <img src="https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz_white-text.png" alt="BMP" onerror="this.src='https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz.png'">
+                <!-- Logo populated at boot from /api/brand based on Host. -->
+                <img id="sidebar-logo-img" src="https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz_white-text.png" alt="">
                 <small>Prospector + CRM</small>
             </div>
             <nav class="sidebar-nav">
