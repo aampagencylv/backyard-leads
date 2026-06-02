@@ -429,6 +429,16 @@ async def serve_app():
     return HTMLResponse(html, headers={"Cache-Control": "no-store, max-age=0"})
 
 
+@app.get("/admin", response_class=HTMLResponse)
+async def serve_admin():
+    """Platform admin console (tenants, domains, impersonation).
+    Auth is enforced by the API endpoints the page calls — page itself
+    is a static shell and safe to serve unauthenticated."""
+    with open("static/admin.html") as f:
+        html = f.read()
+    return HTMLResponse(html, headers={"Cache-Control": "no-store, max-age=0"})
+
+
 # ============================================================
 # PWA — service worker + manifest must be served from root, not
 # /static/, so the SW scope can be "/" (a SW served from /static/sw.js
