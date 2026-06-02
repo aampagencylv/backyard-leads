@@ -43,6 +43,35 @@ def create_access_token(data: dict) -> str:
 # specific resource so it can't be reused elsewhere if exfiltrated.
 
 RECORDING_TOKEN_TTL_MINUTES = 30
+PASSWORD_RESET_TOKEN_TTL_MINUTES = 30
+
+
+def mint_password_reset_token(user_id: int) -> str:
+    """Short-lived signed token for the forgot-password → reset-link flow.
+    Scoped to "password_reset" so it can't be used elsewhere if intercepted.
+    30-min TTL — long enough for a user to find the email, short enough
+    that a leaked token expires fast."""
+    payload = {
+        "scope": "password_reset",
+        "sub": str(user_id),
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=PASSWORD_RESET_TOKEN_TTL_MINUTES),
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def verify_password_reset_token(token: str) -> Optional[int]:
+    """Verify a password-reset token. Returns the user_id on success, None
+    on failure (expired, malformed, wrong scope)."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError:
+        return None
+    if payload.get("scope") != "password_reset":
+        return None
+    try:
+        return int(payload.get("sub") or 0) or None
+    except (TypeError, ValueError):
+        return None
 
 
 def mint_recording_token(activity_id: int, user_id: int) -> str:

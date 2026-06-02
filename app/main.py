@@ -476,6 +476,19 @@ async def serve_admin():
     return HTMLResponse(html, headers={"Cache-Control": "no-store, max-age=0"})
 
 
+@app.get("/reset-password", response_class=HTMLResponse)
+async def serve_reset_password(request: Request):
+    """Password-reset landing. Serves the tenant app shell (index.html)
+    which sniffs ?token= from the URL and shows the reset form. The
+    actual token verification happens server-side via /api/auth/reset-password
+    — this route just delivers the HTML."""
+    # Use the tenant index.html so the brand bootstrap kicks in for the
+    # right tenant (Host-routed).
+    with open("static/index.html") as f:
+        html = f.read()
+    return HTMLResponse(html, headers={"Cache-Control": "no-store, max-age=0"})
+
+
 # ============================================================
 # PWA — service worker + manifest must be served from root, not
 # /static/, so the SW scope can be "/" (a SW served from /static/sw.js

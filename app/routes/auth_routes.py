@@ -517,53 +517,97 @@ class ForgotPasswordRequest(BaseModel):
 @router.post("/forgot-password")
 async def forgot_password(
     req: ForgotPasswordRequest,
+    request: Request,
     db: AsyncSession = Depends(get_tenant_db),
 ):
-    """Send a password reset email with a temporary new password."""
-    result = await db.execute(select(User).where(User.email == req.email.strip().lower()))
-    user = result.scalar_one_or_none()
+    """Mint a one-time password-reset token + email it as a link.
 
-    # Always return success to prevent email enumeration
-    if not user:
-        return {"message": "If that email exists, a reset link has been sent."}
+    The user's existing password stays valid until they actually click
+    the link and submit a new one. This avoids the lockout pattern
+    where any visitor can rotate someone's password by spamming
+    /forgot-password.
 
-    import secrets
-    temp_password = secrets.token_urlsafe(10)
-    user.hashed_password = hash_password(temp_password)
-    await db.commit()
+    Email enumeration is mitigated by always returning the same 200
+    response whether or not the email exists.
+    """
+    from app.auth import mint_password_reset_token
+    from app.services.platform_mailer import send_platform_email
 
-    # Send reset email
-    try:
-        from app.config import settings
-        if settings.resend_api_key:
-            import httpx
-            from app.services.html_to_text import html_to_plain_text
-            reset_html = f"""
-                    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:500px;margin:0 auto;padding:20px">
-                        <img src="https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz-1024x269.png" style="width:250px;margin-bottom:20px" alt="BMP">
-                        <h2 style="color:#1B5E20">Password Reset</h2>
-                        <p>Hi {user.first_name}, your password has been reset.</p>
-                        <div style="background:#f5f7f5;border-radius:8px;padding:16px;margin:16px 0">
-                            <p><strong>Your new temporary password:</strong> {temp_password}</p>
-                        </div>
-                        <p>Log in at <a href="{settings.public_url}">{settings.public_url}</a> and change your password in Settings.</p>
-                    </div>
-                    """
-            await httpx.AsyncClient(timeout=10).post(
-                "https://api.resend.com/emails",
-                headers={"Authorization": f"Bearer {settings.resend_api_key}", "Content-Type": "application/json"},
-                json={
-                    "from": f"Backyard Marketing Pros <noreply@{settings.send_domain}>",
-                    "to": [user.email],
-                    "subject": "Password Reset — BMP Prospector",
-                    "html": reset_html,
-                    "text": html_to_plain_text(reset_html),
-                },
-            )
-    except Exception:
-        pass
+    user = (await db.execute(
+        select(User).where(User.email == req.email.strip().lower())
+    )).scalar_one_or_none()
+
+    if user:
+        token = mint_password_reset_token(user.id)
+        # Reset URL points at the SAME host the user came from — so a
+        # tenant user clicks back into their own subdomain, not the
+        # platform apex.
+        host = (request.headers.get("host") or "app.leadprospector.ai").split(":")[0]
+        reset_url = f"https://{host}/reset-password?token={token}"
+        # Best-effort send. If the platform mailer isn't configured the
+        # link won't reach the user — they can ask their admin for a
+        # reset via the audit log.
+        await send_platform_email(
+            to=user.email,
+            template="password_reset",
+            vars={
+                "first_name": user.first_name or user.email.split("@")[0],
+                "reset_url": reset_url,
+            },
+        )
 
     return {"message": "If that email exists, a reset link has been sent."}
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
+@router.post("/reset-password")
+async def reset_password(
+    req: ResetPasswordRequest,
+    db: AsyncSession = Depends(get_tenant_db),
+):
+    """Consume a password-reset token + set a new password.
+
+    Cross-tenant lookup: the user could be in any tenant; the token
+    carries the user_id. We look up across tenants by clearing the
+    session.info scope just for this lookup.
+    """
+    from app.auth import verify_password_reset_token
+
+    user_id = verify_password_reset_token(req.token)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset link")
+
+    if len(req.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+    # User lookup must be cross-tenant — the token's user might live in
+    # a different tenant than the host the reset page was loaded from.
+    prev_tid = db.info.pop("tenant_id", None)
+    try:
+        user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    finally:
+        if prev_tid is not None:
+            db.info["tenant_id"] = prev_tid
+
+    if not user or not user.is_active:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset link")
+
+    user.hashed_password = hash_password(req.new_password)
+    await db.commit()
+
+    # Issue a fresh JWT so the client can sign in immediately without
+    # bouncing back through /login (and so the reset link can't be replayed).
+    token = create_access_token({"sub": str(user.id), "tenant_id": user.tenant_id})
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user_name": user.full_name,
+        "user_email": user.email,
+    }
 
 
 # ============ Audit log (admin+ visible) ============

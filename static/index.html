@@ -792,7 +792,7 @@
             <div id="login-form">
                 <div class="form-group">
                     <label>Email</label>
-                    <input type="email" id="login-email" placeholder="you@backyardmarketingpros.com">
+                    <input type="email" id="login-email" placeholder="you@example.com">
                 </div>
                 <div class="form-group">
                     <label>Password</label>
@@ -808,7 +808,7 @@
                 <div class="form-group"><label>Last Name</label><input type="text" id="reg-last-name" placeholder="Edwards"></div>
                 <div class="form-group">
                     <label>Email</label>
-                    <input type="email" id="reg-email" placeholder="you@backyardmarketingpros.com">
+                    <input type="email" id="reg-email" placeholder="you@example.com">
                     <small style="color:#888;font-size:11px">Must be a @backyardmarketingpros.com or @aamp.agency email</small>
                 </div>
                 <div class="form-group"><label>Password</label><input type="password" id="reg-password" placeholder="Choose a password" onkeydown="if(event.key==='Enter')register()"></div>
@@ -12116,9 +12116,9 @@ hmac.compare_digest(expected, header)</pre>
             loginForm.innerHTML = `
                 <div class="form-group">
                     <label>Email</label>
-                    <input type="email" id="reset-email" placeholder="you@backyardmarketingpros.com">
+                    <input type="email" id="reset-email" placeholder="you@example.com">
                 </div>
-                <button class="btn btn-primary" onclick="sendPasswordReset()">Send Reset Email</button>
+                <button class="btn btn-primary" onclick="sendPasswordReset()">Send Reset Link</button>
                 <div class="auth-toggle" style="margin-top:12px"><a onclick="location.reload()">Back to login</a></div>
             `;
         }
@@ -12127,19 +12127,78 @@ hmac.compare_digest(expected, header)</pre>
             const email = document.getElementById('reset-email').value;
             if (!email) { showAuthError('Enter your email'); return; }
 
-            const res = await fetch('/api/auth/forgot-password', {
+            await fetch('/api/auth/forgot-password', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ email }),
             });
-            const data = await res.json();
             showAuthError('');
             const errorEl = document.getElementById('auth-error');
             errorEl.style.display = 'block';
             errorEl.style.background = '#eafaf1';
             errorEl.style.color = '#1B5E20';
-            errorEl.textContent = 'If that email exists, a password reset has been sent. Check your inbox.';
+            errorEl.textContent = 'If that email exists, a reset link has been sent. Check your inbox — the link expires in 30 minutes.';
         }
+
+        // ============ Reset password landing (/reset-password?token=...) ============
+        // Detects the reset token in the URL on page load and replaces the
+        // standard login form with a new-password form. Token verification
+        // happens server-side on submit.
+        function showResetForm(token) {
+            const loginForm = document.getElementById('login-form');
+            if (!loginForm) return;
+            loginForm.innerHTML = `
+                <p style="font-size:13px;color:#555;margin-bottom:12px">Choose a new password (at least 8 characters).</p>
+                <div class="form-group">
+                    <label>New password</label>
+                    <input type="password" id="reset-new-pw" placeholder="At least 8 characters" autofocus onkeydown="if(event.key==='Enter')submitNewPassword('${token}')">
+                </div>
+                <div class="form-group">
+                    <label>Confirm new password</label>
+                    <input type="password" id="reset-confirm-pw" placeholder="Same as above" onkeydown="if(event.key==='Enter')submitNewPassword('${token}')">
+                </div>
+                <button class="btn btn-primary" onclick="submitNewPassword('${token}')">Set new password</button>
+            `;
+            // Hide the "Forgot password?" + "Contact your admin" lines —
+            // they don't belong on the reset screen.
+            document.querySelectorAll('.auth-card .auth-toggle, .auth-card a[onclick*="showForgotPassword"]').forEach(el => {
+                const parent = el.closest('div');
+                if (parent && parent.style) parent.style.display = 'none';
+            });
+        }
+
+        async function submitNewPassword(token) {
+            const pw = document.getElementById('reset-new-pw').value;
+            const confirm = document.getElementById('reset-confirm-pw').value;
+            if (pw !== confirm) { showAuthError('Passwords don\'t match'); return; }
+            if (pw.length < 8) { showAuthError('Password must be at least 8 characters'); return; }
+            const res = await fetch('/api/auth/reset-password', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token, new_password: pw }),
+            });
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                showAuthError(data.detail || 'Reset failed — the link may have expired.');
+                return;
+            }
+            const data = await res.json();
+            // Cache the JWT + drop the user straight into the app.
+            localStorage.setItem('token', data.access_token);
+            // Clean the token out of the URL before reload.
+            history.replaceState(null, '', location.pathname);
+            location.href = '/';
+        }
+
+        // Fire on initial page load if we landed on /reset-password
+        (function checkResetToken() {
+            if (location.pathname !== '/reset-password') return;
+            const params = new URLSearchParams(location.search);
+            const token = params.get('token');
+            if (!token) return;
+            // Wait one tick for the DOM to be ready (the login form needs to exist).
+            document.addEventListener('DOMContentLoaded', () => showResetForm(token));
+        })();
 
         // ============ Team Management ============
 
