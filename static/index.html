@@ -6825,19 +6825,20 @@ function verify(secret, rawBody, header) {
                         </div>
                     </div>
 
-                    <!-- CENTER: Sequence (the main workspace) -->
+                    <!-- CENTER: Activity (top for account-hopping), then Sequence, then Reviews -->
                     <div>
-                        <div class="panel" id="sequence-panel">
-                            ${renderSequencePanel(d, selectedContactId)}
-                        </div>
-
-                        <!-- Activity Timeline -->
+                        <!-- Activity Timeline — pinned to top so reps don't scroll past the
+                             sequence to see the last activity or add a note. -->
                         <div class="panel">
                             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
                                 <h3 style="margin:0;font-size:14px">Activity Timeline</h3>
                                 <button class="btn btn-secondary btn-xs" onclick="addNote(${d.id})">+ Note</button>
                             </div>
                             <div id="timeline-list">${renderTimeline(d.timeline)}</div>
+                        </div>
+
+                        <div class="panel" id="sequence-panel">
+                            ${renderSequencePanel(d, selectedContactId)}
                         </div>
 
                         <!-- Reviews -->
