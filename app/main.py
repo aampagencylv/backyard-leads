@@ -1,5 +1,14 @@
 import asyncio
 import logging
+# Load .env into os.environ so every module (not just pydantic-settings)
+# can read configuration. Pydantic-settings reads its own copy from the
+# file, but provisioning services (Cloudflare, Twilio, Resend platform
+# mailer) use os.environ.get() directly for keys that don't warrant a
+# typed Settings field. Calling load_dotenv() here, before any other
+# import, makes those env vars available app-wide.
+from dotenv import load_dotenv
+load_dotenv()
+
 # Configure observability before importing anything else that logs.
 # This way the very first log lines (route registration, etc.) carry
 # our format + rid placeholder.
