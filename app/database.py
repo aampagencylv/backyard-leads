@@ -135,6 +135,7 @@ async def init_db():
         "scripts.migrate_tenant_secrets",
         "scripts.migrate_tenant_onboarding",
         "scripts.migrate_tenant_domain_verified",
+        "scripts.migrate_runtime_config_sequence",
     )
 
     # Decide which actually need to run.
