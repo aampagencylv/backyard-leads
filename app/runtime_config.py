@@ -21,9 +21,16 @@ from app.services.twilio_voice import TwilioCredentials
 
 
 async def _get_or_create(db: AsyncSession) -> RuntimeConfig:
-    rc = (await db.execute(select(RuntimeConfig).where(RuntimeConfig.id == 1))).scalar_one_or_none()
+    """Return this session's RuntimeConfig row (one per tenant).
+
+    The ORM auto-filter narrows `select(RuntimeConfig)` to the active
+    tenant — no explicit WHERE needed here. On insert the
+    `before_flush` hook stamps `tenant_id` from session.info, so a
+    new tenant's first config row is created lazily on first access.
+    """
+    rc = (await db.execute(select(RuntimeConfig).limit(1))).scalar_one_or_none()
     if rc is None:
-        rc = RuntimeConfig(id=1)
+        rc = RuntimeConfig()
         db.add(rc)
         await db.commit()
         await db.refresh(rc)

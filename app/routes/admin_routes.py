@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import create_access_token, require_super_admin
 from app.database import get_db
-from app.models import Tenant, TenantDomain, User, Company, Contact, Campaign
+from app.models import Tenant, TenantDomain, User, Company, Contact, Campaign, RuntimeConfig
 from app.services.audit_log import record_audit
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -95,6 +95,17 @@ async def create_tenant(
         status="active",
     )
     db.add(tenant)
+    await db.flush()  # need tenant.id before seeding the RuntimeConfig
+
+    # Seed a RuntimeConfig row so every per-tenant accessor (Twilio creds,
+    # brand colors, send window, pipeline stages) finds something on first
+    # call instead of upserting a row at the wrong moment in a request.
+    # The brand_company_name defaults to the tenant's display name so the
+    # first cold email out the door for them already says their name.
+    db.add(RuntimeConfig(
+        tenant_id=tenant.id,
+        brand_company_name=tenant.name[:120],
+    ))
     await db.commit()
     await db.refresh(tenant)
     await record_audit(db, actor=actor, action="tenant_created",

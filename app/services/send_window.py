@@ -115,7 +115,7 @@ def _clamp_hours(start: int, end: int, defaults: tuple[int, int]) -> tuple[int, 
 
 
 async def get_autopilot_config(db: AsyncSession) -> AutopilotConfig:
-    rc = (await db.execute(select(RuntimeConfig).where(RuntimeConfig.id == 1))).scalar_one_or_none()
+    rc = (await db.execute(select(RuntimeConfig).limit(1))).scalar_one_or_none()
     if rc is None:
         return AutopilotConfig(
             basis="contact",

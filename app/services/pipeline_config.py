@@ -111,9 +111,9 @@ DEFAULT_MIDDLE_STAGES = [
 
 
 async def _load_rc(db: AsyncSession) -> RuntimeConfig:
-    rc = (await db.execute(select(RuntimeConfig).where(RuntimeConfig.id == 1))).scalar_one_or_none()
+    rc = (await db.execute(select(RuntimeConfig).limit(1))).scalar_one_or_none()
     if rc is None:
-        rc = RuntimeConfig(id=1)
+        rc = RuntimeConfig()
         db.add(rc)
         await db.flush()
     return rc

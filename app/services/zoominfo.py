@@ -101,7 +101,7 @@ class ZoomInfoCompany:
 # ============================================================
 
 async def _load_creds(db: AsyncSession) -> Optional[RuntimeConfig]:
-    rc = (await db.execute(select(RuntimeConfig).where(RuntimeConfig.id == 1))).scalar_one_or_none()
+    rc = (await db.execute(select(RuntimeConfig).limit(1))).scalar_one_or_none()
     if not rc:
         return None
     if not (rc.zoominfo_username or "").strip():

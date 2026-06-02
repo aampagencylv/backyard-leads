@@ -146,9 +146,9 @@ async def update_send_window(
         raise HTTPException(status_code=403, detail="Admin access required")
     import json as _json
     from app.models import RuntimeConfig
-    rc = (await db.execute(select(RuntimeConfig).where(RuntimeConfig.id == 1))).scalar_one_or_none()
+    rc = (await db.execute(select(RuntimeConfig).limit(1))).scalar_one_or_none()
     if rc is None:
-        rc = RuntimeConfig(id=1)
+        rc = RuntimeConfig()
         db.add(rc)
         await db.flush()
 

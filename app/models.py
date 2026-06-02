@@ -541,14 +541,18 @@ class Activity(TenantMixin, Base):
 
 
 class RuntimeConfig(TenantMixin, Base):
-    """Single-row org-level config that can be updated from the Settings UI.
+    """Per-tenant org-level config that can be updated from the Settings UI.
     Keys here override env-var defaults (so users can rotate API keys without
     SSHing into the server).
-    Always row id=1.
+
+    One row per tenant. Resolved via the ORM auto-filter — accessors query
+    `select(RuntimeConfig).limit(1)` and the active session's tenant scope
+    narrows to the right row. New tenants get a row seeded when their tenant
+    is created in the admin console.
     """
     __tablename__ = "runtime_config"
 
-    id = Column(Integer, primary_key=True, default=1)
+    id = Column(Integer, primary_key=True)
     netrows_api_key = Column(Text, nullable=True)
 
     # Twilio credentials — Account SID + Auth Token are required;
