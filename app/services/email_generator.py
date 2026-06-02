@@ -104,19 +104,22 @@ Start with "{greeting}" — remember, NO sign-off at the end. The signature is a
 Return as JSON: {{"subject": "...", "body": "..."}}
 """
 
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-
-    response = await client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=500,
+    # The composed system prompt is large (~1500 tokens) and fixed across
+    # all cold-email generations within a campaign — perfect for prompt
+    # caching. The first call pays full input price; subsequent calls
+    # within ~5 min pay 10% on the cached prefix, which is ~5-10x cheaper
+    # on the dominant cost in this code path.
+    from app.services.ai_client import chat_with_system, MODEL_BALANCED
+    text = await chat_with_system(
+        model=MODEL_BALANCED,
         system=_compose_system_prompt(SYSTEM_PROMPT, messaging_direction),
-        messages=[{"role": "user", "content": user_prompt}],
+        user=user_prompt,
+        max_tokens=500,
+        cacheable=True,
     )
     from app.services.credit_meter import meter_standalone as _meter_ai
     await _meter_ai(action_type="ai_email_gen", action_ref=f"cold_email:{business_name[:60]}",
                     metadata={"max_tokens": 500, "kind": "cold_email"})
-
-    text = response.content[0].text
     try:
         if "```json" in text:
             text = text.split("```json")[1].split("```")[0]

@@ -19,8 +19,8 @@ from __future__ import annotations
 import json
 import logging
 from typing import Optional
-import anthropic
 from app.config import settings
+from app.services.ai_client import chat_with_system, MODEL_FAST
 
 log = logging.getLogger("bmp.reply_classifier")
 
@@ -62,14 +62,15 @@ async def classify_reply(body_text: str, subject: str = "") -> Optional[dict]:
     user_prompt = f"Subject: {(subject or '').strip()[:200]}\n\nReply:\n{snippet}"
 
     try:
-        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-        response = await client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=120,
+        # Classification is a textbook Haiku fit — cheaper, faster, and
+        # the system prompt is fixed so it caches across calls.
+        text = (await chat_with_system(
+            model=MODEL_FAST,
             system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_prompt}],
-        )
-        text = response.content[0].text.strip()
+            user=user_prompt,
+            max_tokens=120,
+            cacheable=True,
+        )).strip()
         # Strip code fences if Claude added them despite instructions
         if "```json" in text:
             text = text.split("```json")[1].split("```")[0]
