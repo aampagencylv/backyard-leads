@@ -3537,6 +3537,47 @@ function verify(secret, rawBody, header) {
             `;
         }
 
+        // Legend for the progress strip — keyed by the same logic as
+        // renderSequenceProgressStrip(). Keep these two in sync.
+        const _SEQ_STRIP_LEGEND = [
+            { label: 'Sent',            sample: { bg:'#27ae60', border:'#27ae60', fg:'#fff' },     desc: 'Step fired successfully (email delivered, call logged, message sent).' },
+            { label: 'Skipped',         sample: { bg:'#e0e0e0', border:'#bbb',    fg:'#777' },     desc: 'Engine cleanly skipped this step — no email on the contact, opted out, iMessage disabled, etc. Hover the box for the exact reason.' },
+            { label: 'Paused',          sample: { bg:'#fff3cd', border:'#e6c84a', fg:'#7a5a00' },  desc: 'A pause was applied — reply landed, manual pause, or disqualified. Sequence will resume when un-paused.' },
+            { label: 'Snoozed',         sample: { bg:'#e3f2fd', border:'#90caf9', fg:'#1565c0' },  desc: 'The whole company is snoozed until a future date. On wake, a fresh re-engagement sequence dispatches automatically.' },
+            { label: 'STALLED',         sample: { bg:'#fde8e8', border:'#c0392b', fg:'#c0392b' },  desc: 'Auto step was supposed to fire >24h ago and the engine failed every retry. Investigate — usually a missing channel toggle or carrier error.' },
+            { label: 'Task awaiting',   sample: { bg:'#ffe9d4', border:'#e67e22', fg:'#a04a00' },  desc: 'Manual step (call, LinkedIn) is due now and a BDR Task needs to be completed.' },
+            { label: 'Up next',         sample: { bg:'#fff',    border:'#0b93f6', fg:'#0b93f6' },  desc: 'Scheduled to fire within the next 24 hours.' },
+            { label: 'Upcoming',        sample: { bg:'#fff',    border:'#ddd',    fg:'#aaa' },     desc: 'Scheduled for a future date — engine will pick it up when its time comes.' },
+        ];
+        function showSequenceStripLegend() {
+            const root = document.getElementById('modal-root');
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:560px">
+                        <h2 style="margin-top:0">Sequence Progress — Color Key</h2>
+                        <p style="font-size:13px;color:#666;margin-bottom:14px">Each contact's row of small boxes shows where every step of their 13-step sequence stands. The glyph inside each box is the channel: <strong>✉</strong> email · <strong>💬</strong> iMessage · <strong>📞</strong> call · <strong>in</strong> LinkedIn. Hover any box for full details (timestamp, skip reason, etc.).</p>
+                        <div style="display:flex;flex-direction:column;gap:10px">
+                            ${_SEQ_STRIP_LEGEND.map(L => `
+                                <div style="display:flex;align-items:flex-start;gap:10px">
+                                    <span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:1px solid ${L.sample.border};background:${L.sample.bg};color:${L.sample.fg};border-radius:3px;font-size:11px;line-height:1;font-weight:700;flex-shrink:0;margin-top:1px">✉</span>
+                                    <div>
+                                        <div style="font-weight:600;font-size:13px;color:#333">${escapeHtml(L.label)}</div>
+                                        <div style="font-size:12px;color:#666;line-height:1.45">${escapeHtml(L.desc)}</div>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                        <div style="margin-top:16px;padding:10px 12px;background:#f8f9fa;border-radius:6px;font-size:12px;color:#555;line-height:1.5">
+                            <strong>Tip:</strong> The <span style="color:#c0392b;font-weight:600">red STALLED</span> boxes are the most useful — they surface engine failures (carrier errors, missing toggles) within the first tick. Spot one and check the box's tooltip for the channel + reason.
+                        </div>
+                        <div class="modal-actions" style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">
+                            <button class="btn btn-primary" onclick="document.getElementById('modal-root').innerHTML=''">Got it</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
         function renderPhoneTypeBadge(c) {
             const t = c && c.phone_type;
             if (!t || t === 'unknown' || t === 'error') return '';
@@ -7471,7 +7512,10 @@ function verify(secret, rawBody, header) {
                     <div>
                         <div class="panel">
                             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-                                <h3 style="margin:0;font-size:14px">Contacts</h3>
+                                <div style="display:flex;align-items:center;gap:6px">
+                                    <h3 style="margin:0;font-size:14px">Contacts</h3>
+                                    <a onclick="showSequenceStripLegend()" style="font-size:11px;color:#1976d2;cursor:pointer;text-decoration:none;border-bottom:1px dotted #1976d2" title="What do the colored boxes mean?">ⓘ Legend</a>
+                                </div>
                                 <div style="display:flex;gap:4px">
                                     ${d.website ? `<button class="btn btn-secondary btn-xs" onclick="enrichContactsFromCompany(${d.id})">Enrich</button>` : ''}
                                     <button class="btn btn-primary btn-xs" onclick="addContact(${d.id})">+</button>

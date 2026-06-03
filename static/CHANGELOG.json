@@ -1,5 +1,21 @@
 [
   {
+    "version": "2.25.0",
+    "date": "2026-06-03",
+    "title": "Snooze Sequence + Sequence Progress Strip + iMessage Toggle",
+    "items": [
+      "💤 Snooze Sequence button on every company — pause the entire 30-day sequence for 30/60/90 days or a custom date. Common case: prospect says 'not interested at this time, check back later.' The company re-enters your workflow automatically on the wake date.",
+      "On the wake date, a fresh re-engagement sequence dispatches automatically. The first email references the agreed timeframe ('You asked me to circle back in 30 days — checking in as promised') so it doesn't feel like a generic cold restart.",
+      "Snoozed-until date appears on every company list row as a blue '💤 Snoozed until Jul 03, 2026' pill so you can see at a glance who's parked.",
+      "New '💤 Snoozed' filter chip on the Companies page — one click to see all your parked prospects.",
+      "Wake Up Now button on the snooze banner lets you wake a company early if circumstances change.",
+      "Per-contact sequence progress strip in the Contacts panel on every company detail — one tiny colored box per step (green=sent, gray=skipped, yellow=paused, blue=snoozed, red=STALLED, orange=task awaiting BDR, blue-outline=up next, white=upcoming). Hover any box for the exact channel + status. Glyphs show the channel (✉ email · 💬 iMessage · 📞 call · in LinkedIn).",
+      "Click 'ⓘ Legend' next to the Contacts header any time you need a refresher on what the colors mean.",
+      "iMessage channel toggle in Settings → Channels — flip OFF until Blooio is fully linked, and the engine cleanly skips iMessage steps instead of getting stuck. Cleared 1,067 previously-stuck iMessage steps across all tenants in this release.",
+      "Disqualify now automatically clears any active snooze on the company (disqualify is terminal and always wins)."
+    ]
+  },
+  {
     "version": "2.17.0",
     "date": "2026-05-15",
     "title": "Floating Dialer + Call Availability Toggle + Notifications",
