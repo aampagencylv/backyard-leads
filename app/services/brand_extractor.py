@@ -58,6 +58,40 @@ MAX_SITE_IMAGES = 20
 # Google Places photos
 # ============================================================
 
+async def resolve_google_place_id(name: str, city: str, state: str, api_key: str) -> Optional[str]:
+    """Find the real Google place_id via Find Place From Text API.
+
+    Important: companies.google_place_id stores Netrows feature_ids (0x...),
+    NOT Google native place_ids (ChIJ...). Photo API needs the latter.
+    We resolve on demand + cache in brand_assets_json so it's a one-time
+    cost per company.
+
+    Returns ChIJ-format place_id or None.
+    """
+    if not (name and api_key):
+        return None
+    query = " ".join(p for p in [name, city, state] if p).strip()
+    url = "https://maps.googleapis.com/maps/api/place/findplacefromtext/json"
+    params = {
+        "input": query,
+        "inputtype": "textquery",
+        "fields": "place_id,name",
+        "key": api_key,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(url, params=params)
+            data = r.json() or {}
+            candidates = data.get("candidates") or []
+            if candidates:
+                pid = candidates[0].get("place_id")
+                if pid and pid.startswith("ChIJ"):
+                    return pid
+    except Exception as e:
+        log.warning(f"resolve_google_place_id failed for '{query}': {e}")
+    return None
+
+
 async def _places_details(place_id: str, api_key: str) -> dict:
     """Call Place Details API requesting photos field. Returns the raw
     JSON `result` dict, or {} on failure."""
@@ -87,13 +121,27 @@ def _places_photo_url(photo_reference: str, api_key: str, max_width: int = 1600)
     )
 
 
-async def fetch_google_places_photos(company: Company, api_key: str) -> list[str]:
-    """Returns up to MAX_PLACES_PHOTOS photo URLs from the company's
-    Google Maps listing. Empty list if no place_id, no API key, or
-    Places returns no photos."""
-    if not company.google_place_id or not api_key:
-        return []
-    details = await _places_details(company.google_place_id, api_key)
+async def fetch_google_places_photos(
+    company: Company, api_key: str, *, cached_place_id: Optional[str] = None,
+) -> tuple[list[str], Optional[str]]:
+    """Returns (photo URLs, resolved Google native place_id).
+
+    Tries cached_place_id first, then resolves via Find Place From Text
+    using business name + city + state. The resolved place_id is returned
+    so the caller can stash it in brand_assets_json for next time.
+    """
+    if not api_key:
+        return [], cached_place_id
+
+    pid = cached_place_id if cached_place_id and cached_place_id.startswith("ChIJ") else None
+    if not pid:
+        pid = await resolve_google_place_id(
+            company.name or "", company.city or "", company.state or "", api_key
+        )
+    if not pid:
+        return [], None
+
+    details = await _places_details(pid, api_key)
     photos = (details.get("photos") or [])[:MAX_PLACES_PHOTOS]
     urls = []
     for p in photos:
@@ -101,7 +149,7 @@ async def fetch_google_places_photos(company: Company, api_key: str) -> list[str
         if not ref:
             continue
         urls.append(_places_photo_url(ref, api_key))
-    return urls
+    return urls, pid
 
 
 # ============================================================
@@ -146,24 +194,35 @@ def _absolutize(base_url: str, src: str) -> str:
 
 
 async def _fetch_homepage(url: str) -> Optional[str]:
-    """GET the company's homepage HTML. Returns None on failure."""
+    """GET the company's homepage HTML. Returns None on failure.
+
+    Uses a real-browser UA — small-business sites commonly 403 anything
+    that identifies as a bot. We're not crawling — one polite request
+    per company per month — so the real-browser UA is honest enough.
+    """
     if not url:
         return None
     # Normalize: ensure scheme
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
     try:
-        async with httpx.AsyncClient(
-            timeout=12.0,
-            follow_redirects=True,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; LeadProspectorBot/1.0; +https://leadprospector.ai)"},
-        ) as client:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, headers=headers) as client:
             r = await client.get(url)
             if r.status_code >= 400:
+                log.warning(f"Homepage fetch returned {r.status_code} for {url}")
                 return None
             return r.text
     except Exception as e:
-        log.warning(f"Homepage fetch failed for {url}: {e}")
+        log.warning(f"Homepage fetch failed for {url}: {type(e).__name__}: {e}")
         return None
 
 
@@ -361,11 +420,14 @@ async def ensure_brand_assets(
 
     # Cold path — fetch everything in parallel where possible.
     api_key = await get_google_maps_api_key(db)
+    cached_native_pid = (existing or {}).get("google_native_place_id")
 
-    places_task = asyncio.create_task(fetch_google_places_photos(company, api_key))
+    places_task = asyncio.create_task(
+        fetch_google_places_photos(company, api_key, cached_place_id=cached_native_pid)
+    )
     homepage_task = asyncio.create_task(_fetch_homepage(company.website or ""))
 
-    google_photos = await places_task
+    google_photos, resolved_pid = await places_task
     homepage_html = await homepage_task
 
     site_logo_url: Optional[str] = None
@@ -377,6 +439,7 @@ async def ensure_brand_assets(
 
     payload = {
         "google_photos": google_photos,
+        "google_native_place_id": resolved_pid,
         "site_images": site_images,
         "site_logo_url": site_logo_url,
         "site_brand_color": site_brand_color,
