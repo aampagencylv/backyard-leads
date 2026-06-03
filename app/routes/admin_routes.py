@@ -567,6 +567,80 @@ async def tenant_costs(
     }
 
 
+@router.get("/feedback")
+async def admin_feedback(
+    resolved: Optional[bool] = None,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_super_admin),
+):
+    """Cross-tenant team-feedback feed for the platform admin console.
+
+    Replaces the per-tenant feedback management UI in BMP Settings —
+    Steve sees every tenant's bug reports + feature requests + general
+    feedback in one place. Tenant admins no longer see this view; only
+    super_admin.
+
+    Submission still goes through POST /api/feedback in the tenant
+    app (any logged-in user can submit). This endpoint just lists.
+    """
+    from app.models import Feedback
+    q = select(Feedback, User).join(User, Feedback.user_id == User.id)
+    if resolved is not None:
+        q = q.where(Feedback.resolved == resolved)
+    q = q.order_by(Feedback.created_at.desc()).limit(min(limit, 500))
+    rows = (await db.execute(q)).all()
+
+    tenant_ids = list({u.tenant_id for _, u in rows})
+    tenant_names: dict[int, str] = {}
+    if tenant_ids:
+        t_rows = (await db.execute(
+            select(Tenant.id, Tenant.name).where(Tenant.id.in_(tenant_ids))
+        )).all()
+        tenant_names = {r.id: r.name for r in t_rows}
+
+    return {
+        "items": [{
+            "id": f.id,
+            "category": f.category,
+            "message": f.message,
+            "page": f.page,
+            "resolved": f.resolved,
+            "admin_notes": f.admin_notes,
+            "user_id": u.id,
+            "user_email": u.email,
+            "user_name": u.full_name,
+            "tenant_id": u.tenant_id,
+            "tenant_name": tenant_names.get(u.tenant_id, f"#{u.tenant_id}"),
+            "created_at": f.created_at.isoformat() if f.created_at else None,
+        } for f, u in rows],
+        "count": len(rows),
+    }
+
+
+@router.patch("/feedback/{feedback_id}")
+async def admin_update_feedback(
+    feedback_id: int,
+    resolved: Optional[bool] = None,
+    admin_notes: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(require_super_admin),
+):
+    """Resolve or annotate a feedback item from the platform admin console.
+    Cross-tenant — finds the feedback regardless of which tenant the
+    submitter belonged to."""
+    from app.models import Feedback
+    fb = (await db.execute(select(Feedback).where(Feedback.id == feedback_id))).scalar_one_or_none()
+    if not fb:
+        raise HTTPException(status_code=404, detail="feedback not found")
+    if resolved is not None:
+        fb.resolved = resolved
+    if admin_notes is not None:
+        fb.admin_notes = admin_notes.strip()[:500]
+    await db.commit()
+    return {"id": fb.id, "resolved": fb.resolved, "admin_notes": fb.admin_notes}
+
+
 @router.get("/platform-keys")
 async def platform_keys(
     db: AsyncSession = Depends(get_db),

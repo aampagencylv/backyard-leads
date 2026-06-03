@@ -956,10 +956,8 @@
                 <a data-page="sequence-templates" id="nav-sequence-templates" onclick="showPage('sequence-templates')" class="hidden">Sequence Templates</a>
                 <a href="#" onclick="event.preventDefault();openStandaloneDialer()" style="color:var(--bmp-orange)">Dial a Number</a>
                 <a data-page="developer" id="nav-developer" onclick="showPage('developer')" class="hidden">Developer</a>
-                <a data-page="dns-health" id="nav-dns-health" onclick="showPage('dns-health')" class="hidden">DNS Health</a>
                 <a data-page="reputation" id="nav-reputation" onclick="showPage('reputation')" class="hidden">Deliverability</a>
                 <a data-page="settings" onclick="showPage('settings')">Settings</a>
-                <a data-page="platform" id="nav-platform" onclick="showPage('platform')" class="hidden">Platform</a>
                 <a data-page="whats-new" onclick="showPage('whats-new')" style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.1);padding-top:8px">What's New <span id="whats-new-badge" class="hidden" style="background:#c0392b;color:white;font-size:9px;padding:1px 5px;border-radius:8px;margin-left:4px">NEW</span></a>
             </nav>
             <div class="sidebar-user">
@@ -1424,7 +1422,55 @@
             <div id="page-developer" class="hidden">
                 <div class="page-header" style="margin-bottom:16px">
                     <h1 style="margin:0">Developer</h1>
-                    <p style="font-size:13px;color:#666;margin-top:4px">Push data into Prospector via REST. Receive event notifications via signed webhooks. Set up keys + webhook subscriptions in <a href="#" onclick="showPage('settings');return false" style="color:var(--bmp-green)">Settings → 🔑 API Keys & Webhooks</a>.</p>
+                    <p style="font-size:13px;color:#666;margin-top:4px">Push data into Prospector via REST. Receive event notifications via signed webhooks. Connect AI assistants via MCP.</p>
+                </div>
+
+                <!-- API keys + webhooks + MCP — moved here from Settings. -->
+                <div id="integrations-section" class="search-box" style="max-width:900px;margin-bottom:16px">
+                    <h3 style="margin:0 0 6px">🔑 API Keys & Webhooks</h3>
+                    <p style="font-size:12px;color:#666;margin-bottom:12px">Push companies + contacts into Prospector via the public REST API. Receive event notifications via webhooks. Reference docs: <code>/api/v1/companies</code>, <code>/api/v1/contacts</code> with <code>X-API-Key: pk_live_...</code>.</p>
+
+                    <div style="margin-bottom:18px">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                            <strong style="font-size:13px">API Keys</strong>
+                            <button class="btn btn-primary btn-sm" onclick="showCreateApiKeyModal()">+ New Key</button>
+                        </div>
+                        <div id="api-keys-list" style="font-size:12px"></div>
+                    </div>
+
+                    <div>
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                            <strong style="font-size:13px">Webhooks</strong>
+                            <button class="btn btn-primary btn-sm" onclick="showCreateWebhookModal()">+ New Webhook</button>
+                        </div>
+                        <div style="font-size:11px;color:#888;margin-bottom:6px">Outbound POSTs to your URL when subscribed events fire. Body is signed with HMAC-SHA256 in <code>X-Webhook-Signature: sha256=&lt;hex&gt;</code>.</div>
+                        <div id="webhooks-list" style="font-size:12px"></div>
+                    </div>
+
+                    <!-- MCP — Model Context Protocol server. Lets external AI
+                         clients (Claude Desktop, Claude.ai, ChatGPT) talk to
+                         Prospector directly using the same API key as above. -->
+                    <div style="margin-top:24px;padding-top:18px;border-top:1px solid #eee">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                            <strong style="font-size:13px">🤖 Connect Claude / ChatGPT (MCP)</strong>
+                            <a href="/mcp" target="_blank" rel="noopener" style="font-size:11px;color:var(--bmp-green);text-decoration:none">View server info →</a>
+                        </div>
+                        <p style="font-size:12px;color:#666;margin:0 0 10px">Plug Prospector into any AI assistant that speaks Model Context Protocol — Claude Desktop, Claude.ai, ChatGPT (with MCP), Cursor. Your AI can search companies, look up contacts, surface hot leads, summarize prospects, and brief you before calls.</p>
+                        <div style="background:#f8f9fa;border:1px solid #e6e6e6;border-radius:6px;padding:10px;font-size:12px;line-height:1.7">
+                            <div><strong>Server URL:</strong> <code id="mcp-url-display"></code> <button class="btn btn-secondary btn-xs" style="margin-left:6px" onclick="copyMcpUrl()">📋 Copy</button></div>
+                            <div><strong>Auth:</strong> <code>X-API-Key: &lt;your-pk_live_… key from above&gt;</code></div>
+                            <div><strong>Available tools:</strong> <span id="mcp-tools-list" style="color:#666">loading…</span></div>
+                        </div>
+                        <details style="margin-top:8px">
+                            <summary style="cursor:pointer;font-size:12px;color:#666">How to add it in Claude Desktop / Claude.ai / ChatGPT</summary>
+                            <div style="margin-top:8px;font-size:12px;color:#444;line-height:1.65">
+                                <p style="margin:0 0 6px"><strong>Claude Desktop / Claude.ai (Connectors):</strong> Settings → Connectors → Add custom connector → paste the Server URL + your API key.</p>
+                                <p style="margin:0 0 6px"><strong>ChatGPT (with MCP enabled):</strong> Settings → Connectors → Add MCP server → paste the URL + key.</p>
+                                <p style="margin:0 0 6px"><strong>Cursor / other clients:</strong> they typically accept the same URL + <code>X-API-Key</code> header pair.</p>
+                                <p style="margin:0;color:#888">Once connected, ask: <em>"Show me hot leads in Phoenix I haven't called this week"</em> or <em>"Summarize Smith Pools and pull a few talking points"</em> — your AI will call the right tool automatically.</p>
+                            </div>
+                        </details>
+                    </div>
                 </div>
 
                 <!-- Docs nav tabs -->
@@ -2939,7 +2985,7 @@ function verify(secret, rawBody, header) {
                 </div>
 
                 <!-- Twilio Numbers (admin only) -->
-                <div id="twilio-numbers-panel" class="search-box hidden" style="max-width:600px;margin-top:16px">
+                <div id="twilio-numbers-panel" class="search-box" style="max-width:600px;margin-top:16px">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
                         <h3 style="margin:0">Twilio Phone Numbers</h3>
                         <button class="btn btn-secondary btn-sm" onclick="openBuyNumberModal()">+ Buy Number</button>
@@ -3045,72 +3091,21 @@ function verify(secret, rawBody, header) {
                     </div>
                 </div>
 
-                <!-- Team Feedback (admin only) -->
-                <div id="feedback-section" class="hidden" style="margin-top:16px">
-                    <div class="search-box" style="max-width:800px">
-                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-                            <h3 style="margin:0">Team Feedback</h3>
-                            <button class="btn btn-secondary btn-sm" onclick="loadFeedbackList()">Refresh</button>
-                        </div>
-                        <div id="feedback-list"><p style="font-size:12px;color:#888">Loading...</p></div>
-                    </div>
-                </div>
+                <!-- Team Feedback management UI moved to app.leadprospector.ai/admin
+                     (super_admin only). The floating "?" button in BMP still
+                     lets users SUBMIT feedback; the listing / triage view is
+                     now cross-tenant in the platform admin console. -->
+                <div id="feedback-section" class="hidden"></div>
 
-                <!-- Integrations: API keys + outbound webhooks.
-                     Visible to all logged-in users (each manages their own
-                     keys + hooks); admins additionally see everyone's. -->
-                <div id="integrations-section" class="search-box" style="max-width:900px;margin-top:16px">
-                    <h3 style="margin:0 0 6px">🔑 API Keys & Webhooks</h3>
-                    <p style="font-size:12px;color:#666;margin-bottom:12px">Push companies + contacts into Prospector via the public REST API. Receive event notifications via webhooks. Reference docs: <code>/api/v1/companies</code>, <code>/api/v1/contacts</code> with <code>X-API-Key: pk_live_...</code>.</p>
-
-                    <div style="margin-bottom:18px">
-                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-                            <strong style="font-size:13px">API Keys</strong>
-                            <button class="btn btn-primary btn-sm" onclick="showCreateApiKeyModal()">+ New Key</button>
-                        </div>
-                        <div id="api-keys-list" style="font-size:12px"></div>
-                    </div>
-
-                    <div>
-                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-                            <strong style="font-size:13px">Webhooks</strong>
-                            <button class="btn btn-primary btn-sm" onclick="showCreateWebhookModal()">+ New Webhook</button>
-                        </div>
-                        <div style="font-size:11px;color:#888;margin-bottom:6px">Outbound POSTs to your URL when subscribed events fire. Body is signed with HMAC-SHA256 in <code>X-Webhook-Signature: sha256=&lt;hex&gt;</code>.</div>
-                        <div id="webhooks-list" style="font-size:12px"></div>
-                    </div>
-
-                    <!-- MCP — Model Context Protocol server. Lets external AI
-                         clients (Claude Desktop, Claude.ai, ChatGPT) talk to
-                         Prospector directly using the same API key as above. -->
-                    <div style="margin-top:24px;padding-top:18px;border-top:1px solid #eee">
-                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-                            <strong style="font-size:13px">🤖 Connect Claude / ChatGPT (MCP)</strong>
-                            <a href="/mcp" target="_blank" rel="noopener" style="font-size:11px;color:var(--bmp-green);text-decoration:none">View server info →</a>
-                        </div>
-                        <p style="font-size:12px;color:#666;margin:0 0 10px">Plug Prospector into any AI assistant that speaks Model Context Protocol — Claude Desktop, Claude.ai, ChatGPT (with MCP), Cursor. Your AI can search companies, look up contacts, surface hot leads, summarize prospects, and brief you before calls.</p>
-                        <div style="background:#f8f9fa;border:1px solid #e6e6e6;border-radius:6px;padding:10px;font-size:12px;line-height:1.7">
-                            <div><strong>Server URL:</strong> <code id="mcp-url-display"></code> <button class="btn btn-secondary btn-xs" style="margin-left:6px" onclick="copyMcpUrl()">📋 Copy</button></div>
-                            <div><strong>Auth:</strong> <code>X-API-Key: &lt;your-pk_live_… key from above&gt;</code></div>
-                            <div><strong>Available tools:</strong> <span id="mcp-tools-list" style="color:#666">loading…</span></div>
-                        </div>
-                        <details style="margin-top:8px">
-                            <summary style="cursor:pointer;font-size:12px;color:#666">How to add it in Claude Desktop / Claude.ai / ChatGPT</summary>
-                            <div style="margin-top:8px;font-size:12px;color:#444;line-height:1.65">
-                                <p style="margin:0 0 6px"><strong>Claude Desktop / Claude.ai (Connectors):</strong> Settings → Connectors → Add custom connector → paste the Server URL + your API key.</p>
-                                <p style="margin:0 0 6px"><strong>ChatGPT (with MCP enabled):</strong> Settings → Connectors → Add MCP server → paste the URL + key.</p>
-                                <p style="margin:0 0 6px"><strong>Cursor / other clients:</strong> they typically accept the same URL + <code>X-API-Key</code> header pair.</p>
-                                <p style="margin:0;color:#888">Once connected, ask: <em>"Show me hot leads in Phoenix I haven't called this week"</em> or <em>"Summarize Smith Pools and pull a few talking points"</em> — your AI will call the right tool automatically.</p>
-                            </div>
-                        </details>
-                    </div>
-                </div>
+                <!-- integrations-section (API keys + Webhooks + MCP) moved to
+                     the Developer tab — see page-developer. -->
+                <div id="integrations-section-placeholder"></div>
 
                 <!-- Audit Log (admin+ only).
                      Append-only record of privileged actions. SOC2 /
                      enterprise table-stakes — admins can answer "who did
                      what when" without grep'ing journalctl. -->
-                <div id="audit-log-section" class="search-box hidden" style="max-width:900px;margin-top:16px">
+                <div id="audit-log-section" class="search-box" style="max-width:900px;margin-top:16px">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
                         <h3 style="margin:0">🔍 Audit Log</h3>
                         <div style="display:flex;gap:6px">
@@ -3134,7 +3129,7 @@ function verify(secret, rawBody, header) {
                      are arbitrary tenant-shaped data, not engineering "custom
                      fields". Internal route + storage namespace stays
                      /api/custom-fields for back-compat. -->
-                <div id="custom-fields-section" class="search-box hidden" style="max-width:800px;margin-top:16px">
+                <div id="custom-fields-section" class="search-box" style="max-width:800px;margin-top:16px">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
                         <h3 style="margin:0">Additional Information Fields</h3>
                         <button class="btn btn-primary btn-sm" onclick="showAddCustomFieldModal()">+ Add Field</button>
@@ -3185,16 +3180,12 @@ function verify(secret, rawBody, header) {
                 <div id="changelog-content"></div>
             </div>
 
-            <div id="page-platform" class="hidden">
-                <div class="page-header"><h1>🔧 Platform Settings</h1></div>
-                <p style="font-size:13px;color:#666;margin-bottom:16px">API keys, integrations, Twilio numbers, custom fields, and other platform-level configuration. Only visible to super admins.</p>
-                <div id="platform-api-keys-mount"></div>
-                <div id="platform-twilio-mount"></div>
-                <div id="platform-integrations-mount"></div>
-                <div id="platform-custom-fields-mount"></div>
-                <div id="platform-credits-mount"></div>
-                <div id="platform-audit-log-mount"></div>
-            </div>
+            <!-- Platform tab removed — moved to /admin (super_admin only).
+                 The Platform Credentials (Netrows, Twilio Master, etc.), the
+                 cross-tenant cost view, and the cross-tenant feedback now live
+                 at app.leadprospector.ai/admin. Per-tenant settings stay here
+                 in Settings; developer-facing API + MCP moved to the Developer
+                 tab. -->
         </main>
     </div>
 
@@ -3873,6 +3864,13 @@ function verify(secret, rawBody, header) {
                     // AI chatbot launcher — visible only to logged-in users
                     const aiLauncher = document.getElementById('ai-chat-launcher');
                     if (aiLauncher) aiLauncher.classList.remove('hidden');
+                    // Feedback button — submission is fine, but the listing /
+                    // management UI lives at /admin (super_admin only). We
+                    // keep the floating button visible to everyone so tenants
+                    // can still report bugs; the management view at
+                    // page-feedback never opens for non-super_admin (its
+                    // /api/feedback GET endpoint is admin-tier and the
+                    // submit-only modal works for any logged-in user).
                     const feedbackBtn = document.getElementById('feedback-btn');
                     if (feedbackBtn) feedbackBtn.classList.remove('hidden');
                     loadDashboard();
@@ -3920,21 +3918,13 @@ function verify(secret, rawBody, header) {
                     if (navVisitors) navVisitors.classList.toggle('hidden', !isAdminPlus);
                     const navSeqTemplates = document.getElementById('nav-sequence-templates');
                     if (navSeqTemplates) navSeqTemplates.classList.toggle('hidden', !isAdminPlus);
-                    // DNS Health — super_admin only (it surfaces email auth
-                    // status which is platform-level, not per-tenant).
-                    const navDns = document.getElementById('nav-dns-health');
-                    if (navDns) navDns.classList.toggle('hidden', user.role !== 'super_admin');
                     // Deliverability dashboard — super_admin only (it
                     // exposes platform-level email-infrastructure metrics
-                    // that tenant admins shouldn't see when this goes SaaS).
+                    // tenants shouldn't see). DNS Health + Platform tab
+                    // were retired from the tenant nav entirely — that
+                    // stuff lives at app.leadprospector.ai/admin now.
                     const navRep = document.getElementById('nav-reputation');
                     if (navRep) navRep.classList.toggle('hidden', user.role !== 'super_admin');
-                    const navPlatform = document.getElementById('nav-platform');
-                    if (navPlatform) navPlatform.classList.toggle('hidden', user.role !== 'super_admin');
-                    // Move super-admin sections to Platform page so Settings stays clean.
-                    // Defer to next tick so login flow completes first.
-                    const isSuper = (user.role === 'super_admin');
-                    if (isSuper) setTimeout(() => { try { _reparentToPlatform(); } catch(e) { console.warn('reparent:', e); } }, 500);
                     // Find Leads + Auto Pilot — hidden from basic sales_rep.
                     // senior_rep (BDR+) and above can search for leads.
                     const canSearch = (user.role !== 'sales_rep' && user.role !== 'read_only');
@@ -10939,8 +10929,8 @@ hmac.compare_digest(expected, header)</pre>
 
             const delSection = document.getElementById('pending-deletions-section');
             if (delSection) { delSection.classList.toggle('hidden', !isAdminPlus); if (isAdminPlus) loadPendingDeletions(); }
-            const fbSection = document.getElementById('feedback-section');
-            if (fbSection) { fbSection.classList.toggle('hidden', !isAdminPlus); if (isAdminPlus) loadFeedbackList(); }
+            // Feedback management lives at /admin (super_admin only).
+            // The tenant feedback-section is an empty placeholder now.
             loadNotificationPrefs();
 
             const tenantKeys = document.getElementById('tenant-keys-section');
@@ -15609,27 +15599,16 @@ hmac.compare_digest(expected, header)</pre>
         }
 
         let _platformReparented = false;
-        function _reparentToPlatform() {
-            if (_platformReparented) return;
-            _platformReparented = true;
-            // Move super-admin sections from Settings to Platform page
-            const moves = [
-                ['api-keys-section', 'platform-api-keys-mount'],
-                ['twilio-numbers-panel', 'platform-twilio-mount'],
-                ['integrations-section', 'platform-integrations-mount'],
-                ['custom-fields-section', 'platform-custom-fields-mount'],
-                ['credits-section', 'platform-credits-mount'],
-                ['audit-log-section', 'platform-audit-log-mount'],
-            ];
-            for (const [srcId, mountId] of moves) {
-                const src = document.getElementById(srcId);
-                const mount = document.getElementById(mountId);
-                if (src && mount) {
-                    src.classList.remove('hidden');
-                    mount.appendChild(src);
-                }
-            }
-        }
+        // _reparentToPlatform() deprecated — Platform tab was retired from
+        // the tenant view. Each section now stays where it was placed:
+        //   - integrations-section moves to Developer tab (separate edit)
+        //   - twilio-numbers-panel, custom-fields-section, audit-log-section,
+        //     credits-section stay in Settings (now visible to admin+ by
+        //     virtue of their own role checks)
+        //   - api-keys-section (Platform Credentials) stays hidden in
+        //     Settings; the same data lives at /admin Platform API Keys
+        function _reparentToPlatform() { /* no-op — kept so existing
+            callers don't blow up; can delete after one full deploy */ }
 
         async function toggleSending() {
             const enabled = document.getElementById('settings-sending-enabled').checked;
