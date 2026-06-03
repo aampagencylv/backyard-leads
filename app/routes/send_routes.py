@@ -112,6 +112,7 @@ async def send_single_email(
         email_id=email.id,
         signature_html=tracked_signature,
         unsubscribe_token=contact.unsubscribe_token,
+        step_type=email.step_type,  # defense in depth (route already gated)
     )
 
     if result["success"]:
@@ -220,6 +221,7 @@ async def send_next_in_sequence(
         email_id=email.id,
         signature_html=tracked_signature,
         unsubscribe_token=contact.unsubscribe_token,
+        step_type=email.step_type,  # defense in depth (route already gated)
     )
 
     if result["success"]:

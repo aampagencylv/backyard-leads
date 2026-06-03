@@ -196,6 +196,7 @@ async def _handle_email(db: AsyncSession, step: GeneratedEmail, contact: Contact
         email_id=step.id,
         signature_html=tracked_signature,
         unsubscribe_token=contact.unsubscribe_token,
+        step_type=step.step_type,  # defense in depth — send_email refuses if not 'email'
     )
     if not result.get("success"):
         # Transient Resend failure (timeout, 5xx, network blip) — return

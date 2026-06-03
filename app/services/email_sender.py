@@ -37,7 +37,68 @@ async def send_email(
     email_id: int,
     signature_html: str = "",
     unsubscribe_token: str | None = None,
+    step_type: str | None = None,
 ) -> dict:
+    # ----------------------------------------------------------------
+    # Defense in depth: refuse to send obvious non-email content.
+    #
+    # Incident 2026-06-03: two manual send routes (send_single_email,
+    # send_next_in_sequence) lacked a step_type filter. A BDR clicking
+    # 'Send' on a contact whose next pending row was a call/linkedin/
+    # imessage step would happily dispatch that row's PLACEHOLDER subject
+    # ('Call 3', 'iMessage step 5', '[Skipped] Linkedin step 2') and
+    # talk-track / DM body to the prospect's email inbox via Resend.
+    # 439 bad sends across 275 contacts before discovery.
+    #
+    # The route-level fix is the primary defense. These guards are the
+    # belt + suspenders so a future route that forgets to filter STILL
+    # can't reach Resend with non-email content.
+    # ----------------------------------------------------------------
+    if step_type and step_type != "email":
+        import logging
+        logging.getLogger("bmp.email_sender").error(
+            f"send_email REFUSED — step_type='{step_type}' is not 'email'. "
+            f"email_id={email_id} company={company_id} contact={contact_id} subject={subject!r}"
+        )
+        return {
+            "success": False,
+            "error": f"step_type={step_type} cannot be sent through send_email — caller bug",
+            "blocked_by_guard": True,
+        }
+    # Subject-pattern guard — catches any path that passes a placeholder
+    # subject without an accompanying step_type marker.
+    import re as _re
+    _SUBJECT_PLACEHOLDER = _re.compile(
+        r"^(\s*\[skipped\]|\s*(?:call|imessage|linkedin)\s+(?:step\s+)?\d+\s*$|\s*linkedin\s+message:\s*)",
+        _re.I,
+    )
+    if subject and _SUBJECT_PLACEHOLDER.match(subject):
+        import logging
+        logging.getLogger("bmp.email_sender").error(
+            f"send_email REFUSED — subject {subject!r} matches non-email placeholder pattern. "
+            f"email_id={email_id} company={company_id} contact={contact_id}"
+        )
+        return {
+            "success": False,
+            "error": f"Refused to send placeholder subject: {subject!r}",
+            "blocked_by_guard": True,
+        }
+    # Body-pattern guard — call talk tracks start with 📞, LinkedIn DM
+    # drafts start with 'Connect note (under 280 chars):', iMessage drafts
+    # tend to be short and casual but harder to fingerprint reliably.
+    body_stripped = (body or "").lstrip()
+    if body_stripped.startswith(("📞", "Connect note (under 280 chars):", "Connect note:")):
+        import logging
+        logging.getLogger("bmp.email_sender").error(
+            f"send_email REFUSED — body looks like non-email content (starts with talk-track/DM marker). "
+            f"email_id={email_id} company={company_id} contact={contact_id} subject={subject!r}"
+        )
+        return {
+            "success": False,
+            "error": "Refused to send non-email content (call talk-track or LinkedIn DM detected)",
+            "blocked_by_guard": True,
+        }
+
     from_address = f"{from_name} <{from_firstname}@{settings.send_domain}>"
 
     body_html = body.replace("\n", "<br>")
