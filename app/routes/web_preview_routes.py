@@ -49,7 +49,7 @@ class PreviewOut(BaseModel):
     company_id: int
     template_slug: str
     url_slug: str
-    public_url: str
+    public_url: Optional[str] = None  # computed by caller, not a DB column
     view_count: int
     cta_click_count: int
     first_viewed_at: Optional[datetime] = None
