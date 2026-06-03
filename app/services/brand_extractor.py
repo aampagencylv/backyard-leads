@@ -437,12 +437,40 @@ async def ensure_brand_assets(
 
     site_brand_color = await _dominant_color_from_logo(site_logo_url) if site_logo_url else None
 
+    # Per-prospect design DNA — Claude with vision picks the font pairing
+    # that fits this brand's vibe. Skipped if we have no logo (no signal
+    # to drive the choice — falls back to template defaults).
+    design_dna = None
+    try:
+        from app.services.design_dna_generator import generate_design_dna, fallback_design_dna
+        if site_logo_url:
+            design_dna = await generate_design_dna(
+                company_name=company.name or "",
+                business_type=company.business_type,
+                city=company.city,
+                state=company.state,
+                logo_url=site_logo_url,
+                extracted_primary_color=site_brand_color,
+            )
+        if design_dna is None:
+            design_dna = fallback_design_dna()
+            # Still honor the extracted brand color if Pillow found one
+            if site_brand_color:
+                design_dna["primary_color"] = site_brand_color
+                from app.services.design_dna_generator import _darken_hex
+                design_dna["primary_color_dark"] = _darken_hex(site_brand_color, 0.30)
+    except Exception as e:
+        log.warning(f"design_dna step failed: {e}")
+        from app.services.design_dna_generator import fallback_design_dna
+        design_dna = fallback_design_dna()
+
     payload = {
         "google_photos": google_photos,
         "google_native_place_id": resolved_pid,
         "site_images": site_images,
         "site_logo_url": site_logo_url,
         "site_brand_color": site_brand_color,
+        "design_dna": design_dna,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
     if persist:

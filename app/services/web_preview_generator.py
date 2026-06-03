@@ -142,15 +142,26 @@ def _assemble_photo_data(brand_assets: dict, fallback: list[str]) -> dict:
             "https://images.unsplash.com/photo-1568605114967-8130f3a36994?w=1200",
         ]
 
+    # Pull the per-prospect design DNA (font pairing + refined colors)
+    # or fall back to template defaults if it failed / wasn't generated.
+    dna = brand_assets.get("design_dna") or {}
+
     return {
         "hero": pool[0],
         "about": pool[1] if len(pool) > 1 else pool[0],
         "gallery": pool[2:8] if len(pool) > 2 else [],
         # Expose the full pool so the editor can let the BDR swap any photo
         "pool": pool,
-        # Brand color + logo for the template's CSS override
-        "brand_color": brand_assets.get("site_brand_color"),
-        "logo_url": brand_assets.get("site_logo_url"),
+        # Brand color + logo + per-prospect design DNA — template uses
+        # these as CSS-variable / font-family overrides so each prospect's
+        # preview feels custom-made, not template-poured.
+        "brand_color":   dna.get("primary_color")      or brand_assets.get("site_brand_color"),
+        "brand_color_dark": dna.get("primary_color_dark"),
+        "logo_url":      brand_assets.get("site_logo_url"),
+        "font_display":  dna.get("font_display"),
+        "font_body":     dna.get("font_body"),
+        "font_google_url": dna.get("font_google_url"),
+        "font_rationale": dna.get("font_rationale"),
     }
 
 

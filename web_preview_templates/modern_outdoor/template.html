@@ -7,7 +7,7 @@
 <meta name="description" content="{{ hero.subhead }}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="{{ photos.font_google_url or 'https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600&display=swap' }}" rel="stylesheet">
 <style>
   :root {
     --ink: #0c1612;
@@ -15,18 +15,20 @@
     --paper: #ffffff;
     --cream: #f8f6f1;
     --moss: {{ photos.brand_color or '#2d5a3d' }};
-    --moss-deep: {{ photos.brand_color or '#1f3f2b' }};
+    --moss-deep: {{ photos.brand_color_dark or photos.brand_color or '#1f3f2b' }};
     --gold: #c89344;
     --mist: #e6ebe7;
     --shadow: 0 8px 24px rgba(12, 22, 18, 0.08);
     --shadow-strong: 0 16px 48px rgba(12, 22, 18, 0.18);
+    --font-display: '{{ photos.font_display or "Fraunces" }}', Georgia, serif;
+    --font-body: '{{ photos.font_body or "Inter" }}', -apple-system, system-ui, sans-serif;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html { scroll-behavior: smooth; }
-  body { font-family: 'Inter', -apple-system, system-ui, sans-serif; color: var(--ink-soft); background: var(--paper); font-size: 17px; line-height: 1.65; }
+  body { font-family: var(--font-body); color: var(--ink-soft); background: var(--paper); font-size: 17px; line-height: 1.65; }
   .container { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
 
-  h1, h2, h3 { font-family: 'Fraunces', Georgia, serif; color: var(--ink); font-weight: 600; line-height: 1.1; letter-spacing: -0.01em; }
+  h1, h2, h3 { font-family: var(--font-display); color: var(--ink); font-weight: 600; line-height: 1.1; letter-spacing: -0.01em; }
   h1 { font-size: clamp(40px, 6vw, 72px); }
   h2 { font-size: clamp(32px, 4.5vw, 48px); margin-bottom: 16px; }
   h3 { font-size: 22px; }
@@ -35,7 +37,7 @@
 
   .label { font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em; color: var(--moss); }
 
-  .btn { display: inline-block; padding: 14px 32px; font-family: 'Inter', sans-serif; font-size: 16px; font-weight: 600; border-radius: 4px; cursor: pointer; transition: background 0.15s ease; text-decoration: none; border: 0; }
+  .btn { display: inline-block; padding: 14px 32px; font-family: var(--font-body); font-size: 16px; font-weight: 600; border-radius: 4px; cursor: pointer; transition: background 0.15s ease; text-decoration: none; border: 0; }
   .btn-primary { background: var(--moss); color: var(--cream); }
   .btn-primary:hover { background: var(--moss-deep); }
   .btn-gold { background: var(--gold); color: var(--ink); }
@@ -48,7 +50,7 @@
   /* Header */
   .site-header { padding: 24px 0; border-bottom: 1px solid var(--mist); background: var(--paper); }
   .site-header .row { display: flex; align-items: center; justify-content: space-between; }
-  .brand-name { font-family: 'Fraunces', serif; font-size: 22px; font-weight: 600; color: var(--ink); }
+  .brand-name { font-family: var(--font-display); font-size: 22px; font-weight: 600; color: var(--ink); }
   .brand-tag { font-size: 12px; color: var(--ink-soft); margin-top: 2px; letter-spacing: 0.04em; text-transform: uppercase; }
   .header-cta { font-size: 14px; font-weight: 600; color: var(--moss); }
 
@@ -64,7 +66,7 @@
   /* Trust strip */
   .trust { padding: 64px 0; background: var(--cream); }
   .trust-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; text-align: center; }
-  .trust .num { font-family: 'Fraunces', serif; font-size: 56px; font-weight: 600; color: var(--moss); line-height: 1; margin-bottom: 8px; font-variant-numeric: tabular-nums; }
+  .trust .num { font-family: var(--font-display); font-size: 56px; font-weight: 600; color: var(--moss); line-height: 1; margin-bottom: 8px; font-variant-numeric: tabular-nums; }
   .trust .lbl { font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-soft); }
 
   /* Section base */
@@ -76,7 +78,7 @@
   .service { background: var(--cream); padding: 40px 32px; border-radius: 0; }
   .service h3 { margin-bottom: 12px; color: var(--ink); }
   .service p { font-size: 15px; line-height: 1.6; color: var(--ink-soft); }
-  .service-num { font-family: 'Fraunces', serif; font-size: 14px; color: var(--gold); font-weight: 600; margin-bottom: 16px; display: block; }
+  .service-num { font-family: var(--font-display); font-size: 14px; color: var(--gold); font-weight: 600; margin-bottom: 16px; display: block; }
 
   /* About */
   .about { background: var(--paper); }
@@ -93,7 +95,7 @@
 
   /* Testimonial */
   .testimonial { background: var(--paper); padding: 128px 0; text-align: center; }
-  .testimonial blockquote { font-family: 'Fraunces', serif; font-size: clamp(24px, 3.5vw, 36px); font-style: italic; line-height: 1.4; color: var(--ink); max-width: 880px; margin: 0 auto 32px; font-weight: 500; }
+  .testimonial blockquote { font-family: var(--font-display); font-size: clamp(24px, 3.5vw, 36px); font-style: italic; line-height: 1.4; color: var(--ink); max-width: 880px; margin: 0 auto 32px; font-weight: 500; }
   .testimonial cite { font-style: normal; font-size: 13px; color: var(--ink-soft); font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em; }
 
   /* Final CTA */

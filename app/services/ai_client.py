@@ -86,3 +86,55 @@ async def chat_with_system(
 
     response = await client.messages.create(**kwargs)
     return response.content[0].text
+
+
+async def chat_with_vision(
+    *,
+    model: str,
+    system: str,
+    user_text: str,
+    image_urls: list[str],
+    max_tokens: int = 1024,
+    cacheable: bool = False,
+    temperature: Optional[float] = None,
+) -> str:
+    """Multimodal chat — pass image URLs alongside the user text.
+
+    Anthropic's API accepts image URLs directly (no base64 fetch needed).
+    All Claude 4.x models (Opus, Sonnet, Haiku) support vision. Use this
+    for design-DNA generation (Claude looks at the prospect's logo +
+    sample photos to infer their brand identity).
+
+    `image_urls` are sent as `{type: image, source: {type: url, ...}}`
+    content blocks in order BEFORE the text — Claude pays more attention
+    to the text block when it comes last.
+    """
+    client = get_client()
+    if cacheable:
+        system_param: Any = [
+            {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+        ]
+    else:
+        system_param = system
+
+    content_blocks: list[dict] = []
+    for u in image_urls or []:
+        if not u:
+            continue
+        content_blocks.append({
+            "type": "image",
+            "source": {"type": "url", "url": u},
+        })
+    content_blocks.append({"type": "text", "text": user_text})
+
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": system_param,
+        "messages": [{"role": "user", "content": content_blocks}],
+    }
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+
+    response = await client.messages.create(**kwargs)
+    return response.content[0].text
