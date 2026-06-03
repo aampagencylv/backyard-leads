@@ -567,6 +567,140 @@ async def tenant_costs(
     }
 
 
+@router.get("/platform-keys")
+async def platform_keys(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_super_admin),
+):
+    """Platform-wide credentials. These are the keys used by every tenant
+    on every action — not per-tenant. Steve's single source of truth.
+
+    Two storage tiers, displayed together:
+      - env: read from VPS .env via os.environ (rotation needs SSH)
+      - db:  stored on the singleton "platform" RuntimeConfig row
+             (tenant 1 / BMP carries the canonical platform values today)
+
+    Values are MASKED (first 8 + last 4) — full secrets never leave the
+    server through this endpoint.
+    """
+    import os
+    from app.runtime_config import mask_key
+
+    def env_key(name: str) -> dict:
+        v = (os.environ.get(name) or "").strip()
+        return {"name": name, "source": "env", "set": bool(v), "masked": mask_key(v) if v else None}
+
+    def db_key(label: str, val: str | None) -> dict:
+        v = (val or "").strip()
+        return {"name": label, "source": "db", "set": bool(v), "masked": mask_key(v) if v else None}
+
+    # The platform RuntimeConfig is tenant 1's row by convention (BMP). This is
+    # safe to fetch unscoped because we use get_db (no auto-filter).
+    rc = (await db.execute(
+        select(RuntimeConfig).where(RuntimeConfig.tenant_id == 1)
+    )).scalar_one_or_none()
+
+    sections = []
+
+    # === AI / generation ===
+    sections.append({
+        "service": "Anthropic",
+        "purpose": "Claude API — email generation, reply classification, AI chat",
+        "keys": [env_key("ANTHROPIC_API_KEY")],
+    })
+
+    # === Email infrastructure ===
+    sections.append({
+        "service": "Resend (Platform)",
+        "purpose": "System emails — invites, password resets, platform notifications",
+        "keys": [env_key("PLATFORM_RESEND_API_KEY"), env_key("PLATFORM_SENDING_DOMAIN")],
+    })
+    sections.append({
+        "service": "Resend (Tenant-prospect sending)",
+        "purpose": "Where new tenants' go.{slug}.leadprospector.ai domains are provisioned",
+        "keys": [
+            env_key("RESEND_API_KEY"),
+            db_key("Webhook secret (DB override)", rc.resend_webhook_secret if rc else None),
+            env_key("RESEND_WEBHOOK_SECRET"),
+        ],
+    })
+
+    # === Telephony ===
+    sections.append({
+        "service": "Twilio (Master)",
+        "purpose": "Parent account — creates per-tenant sub-accounts on tenant create",
+        "keys": [
+            env_key("TWILIO_MASTER_ACCOUNT_SID"),
+            env_key("TWILIO_MASTER_AUTH_TOKEN"),
+        ],
+    })
+    sections.append({
+        "service": "Deepgram",
+        "purpose": "Call transcription + speaker diarization",
+        "keys": [
+            env_key("DEEPGRAM_API_KEY"),
+            db_key("DB override", rc.deepgram_api_key if rc else None),
+        ],
+    })
+    sections.append({
+        "service": "Blooio",
+        "purpose": "iMessage automation (platform-brokered today; per-tenant once we onboard tenants with their own Blooio)",
+        "keys": [
+            db_key("API key", rc.blooio_api_key if rc else None),
+            db_key("Signing secret", rc.blooio_signing_secret if rc else None),
+        ],
+    })
+
+    # === Data / enrichment ===
+    sections.append({
+        "service": "Netrows",
+        "purpose": "Proprietary enrichment — platform-only, never BYO",
+        "keys": [
+            env_key("NETROWS_API_KEY"),
+            db_key("DB override", rc.netrows_api_key if rc else None),
+        ],
+    })
+    sections.append({
+        "service": "Hunter",
+        "purpose": "Email enrichment fallback",
+        "keys": [env_key("HUNTER_API_KEY")],
+    })
+    sections.append({
+        "service": "Google Maps",
+        "purpose": "/find-leads Places API + nearby search",
+        "keys": [
+            env_key("GOOGLE_MAPS_API_KEY"),
+            db_key("DB override", rc.google_maps_api_key if rc else None),
+        ],
+    })
+    sections.append({
+        "service": "DataForSEO",
+        "purpose": "Audit-report SEO scores",
+        "keys": [env_key("DATAFORSEO_LOGIN"), env_key("DATAFORSEO_PASSWORD")],
+    })
+
+    # === Infra / observability ===
+    sections.append({
+        "service": "Cloudflare",
+        "purpose": "leadprospector.ai DNS — auto-adds tenant Resend records",
+        "keys": [env_key("CLOUDFLARE_API_TOKEN"), env_key("CLOUDFLARE_ZONE_ID")],
+    })
+    sections.append({
+        "service": "Sentry",
+        "purpose": "Error tracking + API access for triage",
+        "keys": [env_key("SENTRY_DSN"), env_key("SENTRY_AUTH_TOKEN")],
+    })
+
+    # === Booking integrations ===
+    sections.append({
+        "service": "iClosed",
+        "purpose": "Booking-page integration (audit-report scheduler)",
+        "keys": [env_key("ICLOSED_API_KEY"), env_key("ICLOSED_WEBHOOK_SECRET")],
+    })
+
+    return {"sections": sections}
+
+
 @router.get("/users")
 async def list_all_users(
     search: Optional[str] = None,

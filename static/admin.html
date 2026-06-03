@@ -281,8 +281,8 @@
         </div>
 
         <div class="panel">
-          <h2>API Keys vault</h2>
-          <div style="font-size:11px;color:var(--text-dim);margin-bottom:10px">All credentials this tenant has on file. Masked.</div>
+          <h2>Provisioned credentials</h2>
+          <div style="font-size:11px;color:var(--text-dim);margin-bottom:10px">Per-tenant credentials we auto-provisioned for this tenant. Platform-wide keys (Netrows, Anthropic, etc.) live under <a onclick="go('keys')" style="cursor:pointer">Platform API Keys</a>.</div>
           <table><thead><tr><th>Service</th><th>Field</th><th>Status</th><th>Value (masked)</th></tr></thead><tbody id="td-keys-tbody"></tbody></table>
         </div>
 
@@ -349,15 +349,11 @@
 
       <section id="page-keys" class="page hidden">
         <div class="page-header">
-          <div><h1>API Keys</h1><div class="sub">Per-tenant integration footprint. Click a row to view + manage the full vault.</div></div>
+          <div><h1>Platform API Keys</h1><div class="sub">Single source of truth. These credentials are used by every tenant on every action — they are not per-tenant.</div></div>
+          <div class="actions"><button class="btn btn-sm" onclick="renderPlatformKeys()">↻ Refresh</button></div>
         </div>
 
-        <div class="panel">
-          <table>
-            <thead><tr><th>Tenant</th><th>Twilio</th><th>Resend</th><th>Netrows</th><th>Blooio</th><th>Apollo</th></tr></thead>
-            <tbody id="keys-tbody"></tbody>
-          </table>
-        </div>
+        <div id="platform-keys-list"></div>
       </section>
 
     </main>
@@ -452,7 +448,7 @@ function applyRoute() {
     case "tenant":    document.getElementById("page-tenant").classList.remove("hidden");    openTenant(parseInt(parts[1] || "0")); break;
     case "users":     document.getElementById("page-users").classList.remove("hidden");     loadUsers(); break;
     case "costs":     document.getElementById("page-costs").classList.remove("hidden");     loadPlatformCosts(); break;
-    case "keys":      document.getElementById("page-keys").classList.remove("hidden");      renderKeysOverview(); break;
+    case "keys":      document.getElementById("page-keys").classList.remove("hidden");      renderPlatformKeys(); break;
     default:          document.getElementById("page-dashboard").classList.remove("hidden"); loadDashboard();
   }
 }
@@ -614,21 +610,19 @@ async function loadTenantKeys(tenantId) {
   const tbody = document.getElementById("td-keys-tbody");
   try {
     const k = await api("GET", `/api/admin/tenants/${tenantId}/keys`);
+    // Only the credentials that are GENUINELY per-tenant — auto-provisioned
+    // for this specific tenant. Platform-wide keys (Anthropic, Netrows,
+    // Blooio, Deepgram, Cloudflare, etc.) live on the Platform API Keys page.
     const rows = [
-      ["Twilio", "Account SID", k.twilio.account_sid],
-      ["Twilio", "Auth Token", k.twilio.auth_token],
-      ["Twilio", "API Key SID", k.twilio.api_key_sid],
-      ["Twilio", "API Key Secret", k.twilio.api_key_secret],
-      ["Twilio", "TwiML App SID", k.twilio.twiml_app_sid],
-      ["Resend", "Domain", { set: !!k.resend.domain_id, masked: k.resend.domain_name || null }],
-      ["Resend", "Status", { set: !!k.resend.domain_status, masked: k.resend.domain_status || null }],
-      ["Resend", "Webhook secret", k.resend.webhook_secret],
-      ["Netrows", "API Key", k.netrows],
-      ["Blooio", "API Key", k.blooio.api_key],
-      ["Blooio", "Signing secret", k.blooio.signing_secret],
-      ["Deepgram", "API Key", k.deepgram],
-      ["Apollo", "API Key (BYO)", k.apollo],
-      ["Google Maps", "API Key", k.google_maps],
+      ["Twilio sub-account", "Account SID", k.twilio.account_sid],
+      ["Twilio sub-account", "Auth Token",  k.twilio.auth_token],
+      ["Twilio sub-account", "API Key SID", k.twilio.api_key_sid],
+      ["Twilio sub-account", "API Key Secret", k.twilio.api_key_secret],
+      ["Twilio sub-account", "TwiML App SID", k.twilio.twiml_app_sid],
+      ["Resend domain", "Domain ID",   { set: !!k.resend.domain_id, masked: k.resend.domain_id || null }],
+      ["Resend domain", "Domain name", { set: !!k.resend.domain_name, masked: k.resend.domain_name || null }],
+      ["Resend domain", "Status",      { set: !!k.resend.domain_status, masked: k.resend.domain_status || null }],
+      ["Apollo (BYO)", "API Key", k.apollo],
     ];
     tbody.innerHTML = rows.map(([svc, field, val]) => {
       const isSet = val && val.set; const masked = val && val.masked;
@@ -747,25 +741,36 @@ async function loadPlatformCosts() {
   } catch (e) { toast("Couldn't load costs: " + e.message, "error"); }
 }
 
-// ============ API Keys overview ============
-async function renderKeysOverview() {
-  await loadTenantsBackground();
-  const tbody = document.getElementById("keys-tbody");
-  if (!_tenants.length) { tbody.innerHTML = `<tr><td colspan="6" class="empty">No tenants yet.</td></tr>`; return; }
-  tbody.innerHTML = `<tr><td colspan="6" class="empty">Loading…</td></tr>`;
-  const dots = await Promise.all(_tenants.map(t => api("GET", `/api/admin/tenants/${t.id}/keys`).catch(() => null)));
-  tbody.innerHTML = _tenants.map((t, i) => {
-    const k = dots[i];
-    function d(set) { return set ? '<span style="color:var(--success);font-size:14px">●</span>' : '<span style="color:var(--text-muted);font-size:14px">○</span>'; }
-    return `<tr style="cursor:pointer" onclick="go('tenant', ${t.id})">
-      <td><strong>${escapeHtml(t.name)}</strong> <span style="color:var(--text-dim);font-size:11px">${escapeHtml(t.slug)}</span></td>
-      <td>${d(k?.twilio?.account_sid?.set)}</td>
-      <td>${d(!!k?.resend?.domain_id)}</td>
-      <td>${d(k?.netrows?.set)}</td>
-      <td>${d(k?.blooio?.api_key?.set)}</td>
-      <td>${d(k?.apollo?.set)}</td>
-    </tr>`;
-  }).join("");
+// ============ Platform Keys ============
+async function renderPlatformKeys() {
+  const wrap = document.getElementById("platform-keys-list");
+  wrap.innerHTML = `<div class="panel"><div class="empty">Loading…</div></div>`;
+  try {
+    const data = await api("GET", "/api/admin/platform-keys");
+    wrap.innerHTML = data.sections.map(s => `
+      <div class="panel">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+          <h2 style="margin:0">${escapeHtml(s.service)}</h2>
+          <span style="font-size:12px;color:var(--text-dim);font-weight:400;text-transform:none;letter-spacing:0">${escapeHtml(s.purpose)}</span>
+        </div>
+        <table>
+          <thead><tr><th>Key</th><th>Source</th><th>Status</th><th>Value (masked)</th></tr></thead>
+          <tbody>
+            ${s.keys.map(k => `
+              <tr>
+                <td style="font-family:ui-monospace,monospace;font-size:12px">${escapeHtml(k.name)}</td>
+                <td><span class="pill pill-dim">${escapeHtml(k.source)}</span></td>
+                <td>${k.set ? '<span class="pill pill-ok">set</span>' : '<span class="pill pill-warn">missing</span>'}</td>
+                <td style="font-family:ui-monospace,monospace;font-size:12px;color:${k.set ? 'var(--text)' : 'var(--text-dim)'}">${k.set ? escapeHtml(k.masked) : '—'}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    `).join("");
+  } catch (e) {
+    wrap.innerHTML = `<div class="panel"><div class="empty">Could not load: ${escapeHtml(e.message)}</div></div>`;
+  }
 }
 
 // ============ Boot ============
