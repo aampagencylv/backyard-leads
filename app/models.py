@@ -227,6 +227,17 @@ class Company(TenantMixin, Base):
     pushed_to_hubspot = Column(Boolean, default=False)
     sequence_started_at = Column(DateTime(timezone=True), nullable=True)
 
+    # Per-company sequence snooze. When sequence_resume_at is in the future
+    # the engine's NOT EXISTS gate suppresses all outbound dispatch for this
+    # company. When the timestamp passes, the engine regenerates a fresh
+    # tailored sequence anchored at wake time, with the first email
+    # referencing the agreed timeframe.
+    sequence_resume_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    sequence_snooze_reason = Column(String(500), nullable=True)
+    sequence_snoozed_at = Column(DateTime(timezone=True), nullable=True)
+    sequence_snoozed_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    sequence_snooze_days = Column(Integer, nullable=True)
+
     # Company intel (from Netrows LinkedIn enrichment)
     employee_count = Column(Integer, nullable=True)
     company_size = Column(String(50), nullable=True)  # e.g. "11-50"

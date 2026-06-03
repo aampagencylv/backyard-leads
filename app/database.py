@@ -139,6 +139,7 @@ async def init_db():
         "scripts.migrate_resend_domain_tracking",
         "scripts.migrate_web_previews",
         "scripts.migrate_imessage_toggle",
+        "scripts.migrate_company_snooze",
     )
 
     # Decide which actually need to run.

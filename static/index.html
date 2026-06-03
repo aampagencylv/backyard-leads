@@ -1251,6 +1251,7 @@
                         <button id="co-filter-replied"      class="btn btn-secondary btn-sm" onclick="loadCompanies('replied')">Replied</button>
                         <button id="co-filter-qualified"    class="btn btn-secondary btn-sm" onclick="loadCompanies('qualified')">Qualified</button>
                         <button id="co-filter-not_interested" class="btn btn-secondary btn-sm" onclick="loadCompanies('not_interested')">Unqualified</button>
+                        <button id="co-filter-snoozed"      class="btn btn-secondary btn-sm" onclick="loadCompanies('snoozed')" style="border-color:#1976d2;color:#1976d2">💤 Snoozed</button>
                         <button id="co-filter-all"          class="btn btn-secondary btn-sm" onclick="loadCompanies('all')">All</button>
                         <button id="co-filter-stalled"      class="btn btn-secondary btn-sm" onclick="loadStalledSequences()" style="border-color:#e67e22;color:#e67e22">⚠ Stalled</button>
                         <span style="border-left:1px solid #ddd;height:20px;margin:0 4px"></span>
@@ -6089,7 +6090,7 @@ function verify(secret, rawBody, header) {
             _exitStalledView();
 
             // Highlight the active status button
-            ['active','sequencing','contacted','replied','qualified','not_interested','all'].forEach(f => {
+            ['active','sequencing','contacted','replied','qualified','not_interested','snoozed','all'].forEach(f => {
                 const btn = document.getElementById(`co-filter-${f}`);
                 if (btn) btn.classList.toggle('btn-primary', f === _lastCompaniesFilter);
                 if (btn) btn.classList.toggle('btn-secondary', f !== _lastCompaniesFilter);
@@ -6097,6 +6098,7 @@ function verify(secret, rawBody, header) {
 
             let path = '/api/companies/';
             if (filter === 'active') path += '?lifecycle=active';
+            else if (filter === 'snoozed') path += '?snoozed=true';
             else if (filter && filter !== 'all') path += `?status=${filter}`;
 
             const repId = document.getElementById('company-rep-filter')?.value;
@@ -6689,6 +6691,7 @@ function verify(secret, rawBody, header) {
                         <div style="flex:1">
                             <h3><a href="#" onclick="openCompanyDetail(${c.id});return false" style="color:inherit;text-decoration:none;border-bottom:1px dashed #ccc">${escapeHtml(c.name)}</a></h3>
                             <span class="status-badge status-${c.status}">${c.status}</span>
+                            ${c.sequence_resume_at ? `<span style="background:#e3f2fd;color:#1976d2;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;margin-left:6px" title="Sequence snoozed${c.sequence_snooze_reason ? ' — ' + escapeHtml(c.sequence_snooze_reason) : ''}">💤 Snoozed until ${fmtDate(c.sequence_resume_at)}</span>` : ''}
                             ${c.problem_count > 0 ? `<span style="background:#fde8e8;color:#c0392b;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;margin-left:6px">${c.problem_count} issues found</span>` : ''}
                             ${c.assigned_name
                                 ? `<span style="background:#e8f5e9;color:var(--bmp-green);padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;margin-left:6px" title="Assigned BDR">👤 ${escapeHtml(c.assigned_name)}</span>`
@@ -7383,11 +7386,24 @@ function verify(secret, rawBody, header) {
                         ${renderCompanyNavButtons(d.id)}
                         <span class="status-badge status-${d.status}" style="font-size:13px;padding:4px 12px">${d.status}</span>
                         ${d.status !== 'not_interested' ? `<button class="btn btn-secondary btn-sm" onclick="openUnqualifyModal(${d.id}, '${escapeHtml((d.name||'').replace(/'/g,"\\'"))}')" style="color:#c0392b;border-color:#c0392b" title="Mark as unqualified — pauses sequence and notifies admins">✕ Unqualify</button>` : `<button class="btn btn-secondary btn-sm" onclick="adminRestoreCompany(${d.id})" title="Restore this company to active pursuit">↩ Restore</button>`}
+                        ${(!d.sequence_resume_at && d.status !== 'not_interested') ? `<button class="btn btn-secondary btn-sm" onclick="openSnoozeCompanyModal(${d.id}, '${escapeHtml((d.name||'').replace(/'/g,"\\'"))}')" style="color:#1976d2;border-color:#1976d2" title="Pause the sequence until a future date — company re-enters your workflow then">💤 Snooze</button>` : ''}
+                        ${d.sequence_resume_at ? `<button class="btn btn-secondary btn-sm" onclick="unsnoozeCompany(${d.id})" style="color:#1976d2;border-color:#1976d2" title="Wake the sequence now and regenerate a fresh re-engagement cadence">⏰ Wake Up</button>` : ''}
                         ${d.website ? `<button class="btn btn-secondary btn-sm" onclick="enrichContactsFromCompany(${d.id})">${d.enriched ? 'Re-Enrich' : 'Enrich'}</button>` : ''}
                         ${d.enriched ? `<button class="btn btn-secondary btn-sm" onclick="clearCompanyEnrichment(${d.id})" title="Clear Netrows-derived fields if they look wrong, then Re-Enrich">🧹 Clear & Re-Enrich</button>` : ''}
                         ${d.enriched ? `<button class="btn btn-primary btn-sm" onclick="generateAuditReport(${d.id})" id="audit-btn-${d.id}">AI Findability Audit</button>` : ''}
                     </div>
                 </div>
+
+                ${d.sequence_resume_at ? `
+                <div style="background:#e3f2fd;border:1px solid #90caf9;border-radius:8px;padding:12px 16px;margin:12px 0;display:flex;justify-content:space-between;align-items:center;gap:12px">
+                    <div>
+                        <div style="font-weight:600;color:#1565c0">💤 Sequence snoozed until ${fmtDate(d.sequence_resume_at)}</div>
+                        ${d.sequence_snooze_reason ? `<div style="font-size:12px;color:#1976d2;margin-top:2px;font-style:italic">${escapeHtml(d.sequence_snooze_reason)}</div>` : ''}
+                        <div style="font-size:11px;color:#666;margin-top:4px">On the wake date, a fresh re-engagement sequence will dispatch automatically. The first email references the ${d.sequence_snooze_days || ''}-day pause.</div>
+                    </div>
+                    <button class="btn btn-primary btn-sm" onclick="unsnoozeCompany(${d.id})" style="white-space:nowrap">⏰ Wake Now</button>
+                </div>
+                ` : ''}
 
                 <!-- Three-column layout -->
                 <div style="display:grid;grid-template-columns:260px 1fr 280px;gap:12px;align-items:start">
@@ -9116,6 +9132,90 @@ function verify(secret, rawBody, header) {
             if (!r) return;
             toast('Company restored to active pursuit. Sequences remain paused.');
             openCompanyDetail(companyId);
+        }
+
+        // ----- Company sequence snooze (pause sequence until N days / custom date) -----
+        // Mirrors the deal-snooze pattern (modal-root dynamic render).
+
+        function openSnoozeCompanyModal(companyId, companyName) {
+            const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+            const minIso = tomorrow.toISOString().slice(0, 10);
+            const root = document.getElementById('modal-root');
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:460px">
+                        <h2 style="margin-top:0">💤 Snooze sequence</h2>
+                        <p style="font-size:13px;color:#666;margin-bottom:14px"><strong>${escapeHtml(companyName)}</strong> — pause the entire outbound sequence until a future date. On wake, a fresh tailored sequence dispatches with the first email referencing the agreed timeframe ("you asked me to follow back up in N days").</p>
+                        <div class="form-group">
+                            <label>Follow up in:</label>
+                            <div style="display:flex;gap:8px;margin-top:4px">
+                                <button id="snooze-co-chip-30" class="btn btn-secondary btn-sm" onclick="_setSnoozeCoChip(30)">30 days</button>
+                                <button id="snooze-co-chip-60" class="btn btn-secondary btn-sm" onclick="_setSnoozeCoChip(60)">60 days</button>
+                                <button id="snooze-co-chip-90" class="btn btn-secondary btn-sm" onclick="_setSnoozeCoChip(90)">90 days</button>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Or pick a specific date:</label>
+                            <input type="date" id="snooze-co-date" min="${minIso}" onchange="_onSnoozeCoDatePicked()" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px">
+                        </div>
+                        <div class="form-group">
+                            <label>What did they say? (optional)</label>
+                            <textarea id="snooze-co-reason" rows="3" placeholder="e.g. Said not interested at this time, asked us to circle back after Q3" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px"></textarea>
+                        </div>
+                        <div class="modal-actions" style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">
+                            <button class="btn btn-secondary" onclick="document.getElementById('modal-root').innerHTML=''">Cancel</button>
+                            <button class="btn btn-primary" id="snooze-co-submit" onclick="submitSnoozeCompany(${companyId})">💤 Snooze sequence</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            _setSnoozeCoChip(30);
+        }
+
+        let _snoozeCoDays = 30;
+        function _setSnoozeCoChip(n) {
+            _snoozeCoDays = n;
+            ['30','60','90'].forEach(v => {
+                const el = document.getElementById('snooze-co-chip-' + v);
+                if (!el) return;
+                if (parseInt(v) === n) {
+                    el.style.background = '#1976d2'; el.style.color = '#fff'; el.style.borderColor = '#1976d2';
+                } else {
+                    el.style.background = ''; el.style.color = ''; el.style.borderColor = '';
+                }
+            });
+            const dateEl = document.getElementById('snooze-co-date');
+            if (dateEl) dateEl.value = '';
+        }
+        function _onSnoozeCoDatePicked() {
+            _snoozeCoDays = null;
+            ['30','60','90'].forEach(v => {
+                const el = document.getElementById('snooze-co-chip-' + v);
+                if (el) { el.style.background = ''; el.style.color = ''; el.style.borderColor = ''; }
+            });
+        }
+
+        async function submitSnoozeCompany(companyId) {
+            const dateVal = document.getElementById('snooze-co-date').value;
+            const reason = (document.getElementById('snooze-co-reason').value || '').trim() || null;
+            if (!_snoozeCoDays && !dateVal) { toast('Pick a number of days or a date'); return; }
+            const body = dateVal ? { until_date: dateVal, reason } : { days: _snoozeCoDays, reason };
+            const r = await api(`/api/companies/${companyId}/snooze`, {
+                method: 'POST',
+                body: JSON.stringify(body),
+            });
+            if (!r) return;
+            toast(`💤 Sequence snoozed until ${fmtDate(r.sequence_resume_at)}`);
+            document.getElementById('modal-root').innerHTML = '';
+            _refreshCurrentCompany();
+        }
+
+        async function unsnoozeCompany(companyId) {
+            if (!confirm('Wake this sequence now? A fresh re-engagement sequence will dispatch starting today — the first email references the snooze timeframe.')) return;
+            const r = await api(`/api/companies/${companyId}/unsnooze`, { method: 'POST' });
+            if (!r) return;
+            toast(r.already_awake ? 'Company is already awake.' : `⏰ Woken — ${r.steps_created} step(s) regenerated`);
+            _refreshCurrentCompany();
         }
 
         function _refreshCurrentCompany() {

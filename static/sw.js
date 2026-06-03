@@ -20,7 +20,7 @@
 // activates the new worker on the next page load (or immediately if
 // `skipWaiting()` is called — which we do here).
 
-const SW_VERSION = "v2.23.0";
+const SW_VERSION = "v2.24.0";
 const SHELL_CACHE = `prospector-shell-${SW_VERSION}`;
 const STATIC_CACHE = `prospector-static-${SW_VERSION}`;
 

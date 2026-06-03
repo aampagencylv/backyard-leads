@@ -411,6 +411,27 @@ async def process_pending_steps(db: AsyncSession, max_per_tick: int = 50) -> dic
     now = datetime.now(timezone.utc)
     counters = {"checked": 0, "sent": 0, "skipped": 0, "tasks_created": 0, "errors": 0}
 
+    # ---- Wake snoozed companies whose resume_at has passed ----
+    # When a BDR snoozed a company, sequence_resume_at was set + the
+    # NOT IN gate below suppressed dispatch. Now that the timestamp has
+    # passed, regenerate a fresh tailored sequence anchored at today and
+    # clear the snooze fields. The first email of the new sequence
+    # references the agreed timeframe ("you asked me to follow back up
+    # in N days — circling back as promised").
+    waking_companies = (await db.execute(
+        select(Company).where(
+            Company.sequence_resume_at.is_not(None),
+            Company.sequence_resume_at <= now,
+        ).limit(20)  # cap per tick — protects against thundering-herd
+    )).scalars().all()
+    for company in waking_companies:
+        try:
+            woken = await wake_sequence_for_company(db, company)
+            counters.setdefault("woken", 0)
+            counters["woken"] += woken
+        except Exception as e:
+            logger.exception(f"Wake failed for company #{company.id}: {e}")
+
     # ---- Auto-resume paused sequences after quiet period ----
     # If a contact's sequence was paused (e.g. they replied, then went
     # cold), the template can request that the sequence resume after
@@ -520,29 +541,48 @@ async def process_pending_steps(db: AsyncSession, max_per_tick: int = 50) -> dic
         ))
         counters["skipped"] += 1
 
+    # Company-snooze gate: a step is suppressed while its company is
+    # snoozed (sequence_resume_at > now). On wake, the engine regenerates
+    # a fresh sequence for the company so we don't need to mutate these
+    # rows now — just don't dispatch them. Bind the snoozed-company ids
+    # ONCE per tick so both queries reuse a small in-memory NOT IN list
+    # (cheaper than a NOT EXISTS subquery against a tiny set).
+    snoozed_company_ids = (await db.execute(
+        select(Company.id).where(
+            Company.sequence_resume_at.is_not(None),
+            Company.sequence_resume_at > now,
+        )
+    )).scalars().all()
+
     # Pull ready auto-execute steps (email, imessage)
+    auto_q = select(GeneratedEmail).where(
+        GeneratedEmail.is_sent == False,
+        GeneratedEmail.paused_at.is_(None),
+        GeneratedEmail.skipped_at.is_(None),
+        GeneratedEmail.auto_execute == True,
+        GeneratedEmail.scheduled_send_at != None,
+        GeneratedEmail.scheduled_send_at <= now,
+    )
+    if snoozed_company_ids:
+        auto_q = auto_q.where(GeneratedEmail.company_id.notin_(snoozed_company_ids))
     auto_rows = (await db.execute(
-        select(GeneratedEmail).where(
-            GeneratedEmail.is_sent == False,
-            GeneratedEmail.paused_at.is_(None),
-            GeneratedEmail.skipped_at.is_(None),
-            GeneratedEmail.auto_execute == True,
-            GeneratedEmail.scheduled_send_at != None,
-            GeneratedEmail.scheduled_send_at <= now,
-        ).order_by(GeneratedEmail.scheduled_send_at).limit(max_per_tick)
+        auto_q.order_by(GeneratedEmail.scheduled_send_at).limit(max_per_tick)
     )).scalars().all()
 
     # Also pull non-auto steps that need a Task created (call, linkedin)
+    task_q = select(GeneratedEmail).where(
+        GeneratedEmail.is_sent == False,
+        GeneratedEmail.paused_at.is_(None),
+        GeneratedEmail.skipped_at.is_(None),
+        GeneratedEmail.auto_execute == False,
+        GeneratedEmail.task_id.is_(None),  # not yet materialized as a Task
+        GeneratedEmail.scheduled_send_at != None,
+        GeneratedEmail.scheduled_send_at <= now,
+    )
+    if snoozed_company_ids:
+        task_q = task_q.where(GeneratedEmail.company_id.notin_(snoozed_company_ids))
     task_rows = (await db.execute(
-        select(GeneratedEmail).where(
-            GeneratedEmail.is_sent == False,
-            GeneratedEmail.paused_at.is_(None),
-            GeneratedEmail.skipped_at.is_(None),
-            GeneratedEmail.auto_execute == False,
-            GeneratedEmail.task_id.is_(None),  # not yet materialized as a Task
-            GeneratedEmail.scheduled_send_at != None,
-            GeneratedEmail.scheduled_send_at <= now,
-        ).order_by(GeneratedEmail.scheduled_send_at).limit(max_per_tick)
+        task_q.order_by(GeneratedEmail.scheduled_send_at).limit(max_per_tick)
     )).scalars().all()
 
     for step in list(auto_rows) + list(task_rows):
@@ -739,6 +779,131 @@ async def execute_step_now(
 # ============================================================
 # Pause / resume / start
 # ============================================================
+
+def _re_engagement_first_step(contact: Contact, company: Company, snooze_days: Optional[int], snooze_reason: Optional[str]) -> dict:
+    """Build the day-0 'circling back' email that replaces the cold-intro
+    when a snoozed company wakes up. Deterministic copy (no AI call) — the
+    pattern is too predictable to justify burning credits on every wake."""
+    first_name = (contact.full_name or "").strip().split(" ")[0] if contact.full_name else ""
+    greeting = f"Hi {first_name}," if first_name else "Hi,"
+    timeframe_line = (
+        f"You asked me to circle back in {snooze_days} days — checking in as promised."
+        if snooze_days
+        else "Circling back as promised."
+    )
+    company_label = (company.name or "your company").strip()
+    body = (
+        f"{greeting}\n\n"
+        f"{timeframe_line}\n\n"
+        f"Has anything changed at {company_label} since we last spoke? "
+        "Worth a quick 15-minute chat this week to see if it makes sense to revisit?\n\n"
+        "Either way, appreciate you being straight with me before — happy to disappear "
+        "again if the timing still isn't right."
+    )
+    return {
+        "step_type": "email",
+        "subject": "circling back as promised",
+        "body": body,
+        "label": "re_engagement",
+        "day": 0,
+    }
+
+
+async def wake_sequence_for_company(db: AsyncSession, company: Company) -> int:
+    """Wake a snoozed company: regenerate a fresh tailored sequence
+    anchored at now, with the first email referencing the snooze
+    timeframe. Returns the number of new steps materialized.
+
+    Side effects:
+      - Marks all unsent + non-skipped steps for the company's contacts
+        as skipped with reason 'regenerated_post_snooze' (so they don't
+        fire after the gate clears)
+      - Clears company.sequence_resume_at + related fields
+      - Writes Activity 'sequence_woke_from_snooze'
+
+    Idempotent enough to call from both the engine tick + the manual
+    /unsnooze route. Safe if the company isn't actually snoozed (no-op).
+    """
+    now = datetime.now(timezone.utc)
+    if company.sequence_resume_at is None and company.sequence_snoozed_at is None:
+        return 0  # not snoozed — nothing to wake
+
+    snooze_days = company.sequence_snooze_days
+    snooze_reason = company.sequence_snooze_reason
+
+    # 1) Mark every remaining unsent step across all contacts as skipped.
+    contacts = (await db.execute(
+        select(Contact).where(Contact.company_id == company.id)
+    )).scalars().all()
+    contact_ids = [c.id for c in contacts]
+    if contact_ids:
+        from sqlalchemy import update as _update
+        await db.execute(
+            _update(GeneratedEmail)
+            .where(
+                GeneratedEmail.contact_id.in_(contact_ids),
+                GeneratedEmail.is_sent == False,
+                GeneratedEmail.skipped_at.is_(None),
+            )
+            .values(skipped_at=now, skip_reason="regenerated_post_snooze")
+        )
+
+    # 2) For each contact, materialize a fresh DEFAULT_30DAY_TEMPLATE.
+    #    start_sequence_from_template handles opt-out / no-email contacts
+    #    + pre-generates email bodies for non-day-0 steps.
+    total_created = 0
+    for contact in contacts:
+        if contact.unsubscribed_at:
+            continue
+        try:
+            n = await start_sequence_from_template(db, contact, template=DEFAULT_30DAY_TEMPLATE)
+            total_created += n
+        except Exception as e:
+            logger.warning(f"Wake regenerate failed for contact #{contact.id}: {e}")
+            continue
+
+        # 3) Replace the freshly-created day-0 "cold" email with the
+        #    re-engagement copy that references the snooze timeframe.
+        #    Match by contact + email_type='cold' + most-recent.
+        freshly_made = (await db.execute(
+            select(GeneratedEmail)
+            .where(
+                GeneratedEmail.contact_id == contact.id,
+                GeneratedEmail.is_sent == False,
+                GeneratedEmail.skipped_at.is_(None),
+                GeneratedEmail.step_type == "email",
+                GeneratedEmail.email_type == "cold",
+            )
+            .order_by(GeneratedEmail.id.desc())
+            .limit(1)
+        )).scalar_one_or_none()
+        if freshly_made:
+            reeng = _re_engagement_first_step(contact, company, snooze_days, snooze_reason)
+            freshly_made.subject = reeng["subject"]
+            freshly_made.body = reeng["body"]
+            freshly_made.email_type = "re_engagement"
+
+    # 4) Clear snooze fields + log Activity.
+    prior_resume_at = company.sequence_resume_at
+    company.sequence_resume_at = None
+    company.sequence_snoozed_at = None
+    company.sequence_snooze_reason = None
+    company.sequence_snoozed_by_user_id = None
+    # Keep sequence_snooze_days for analytics — but it's safe to clear too.
+    company.sequence_snooze_days = None
+
+    reason_tail = f" — reason: {snooze_reason}" if snooze_reason else ""
+    db.add(Activity(
+        company_id=company.id,
+        activity_type="sequence_woke_from_snooze",
+        content=(
+            f"[Auto] Woke from snooze, regenerated {total_created} step(s). "
+            f"Original wake: {prior_resume_at.isoformat() if prior_resume_at else 'manual'}{reason_tail}"
+        ),
+    ))
+    await db.flush()
+    return total_created
+
 
 async def pause_sequence(db: AsyncSession, contact_id: int, reason: str, sequence_label: str = "main") -> int:
     """Pause all not-yet-sent steps for a contact. Used by listeners (reply,

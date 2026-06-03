@@ -55,6 +55,7 @@ async def list_companies(
     has_sequence: Optional[bool] = None,   # True = email_generated, False = not yet
     tag_id: Optional[int] = None,          # Filter to companies with this tag
     business_type_contains: Optional[str] = None,  # Substring match on business_type
+    snoozed: Optional[bool] = None,  # True = only snoozed; False = only active (not snoozed); None = no filter
     sort_by: str = "reviews",
     db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
@@ -89,6 +90,19 @@ async def list_companies(
         )
     if business_type_contains:
         query = query.where(Company.business_type.ilike(f"%{business_type_contains}%"))
+    if snoozed is True:
+        # Only snoozed companies (resume date is set and still in the future).
+        # Past-resume rows are conceptually awake even before the engine clears
+        # the field, so we filter them out.
+        query = query.where(
+            Company.sequence_resume_at.is_not(None),
+            Company.sequence_resume_at > datetime.now(timezone.utc),
+        )
+    elif snoozed is False:
+        query = query.where(
+            (Company.sequence_resume_at.is_(None)) |
+            (Company.sequence_resume_at <= datetime.now(timezone.utc))
+        )
 
     if sort_by == "reviews":
         query = query.order_by(Company.review_count.desc().nullslast())
@@ -494,6 +508,17 @@ async def disqualify_company(
     full_reason = req.reason if not req.notes else f"{req.reason} — {req.notes}"
     company.lost_reason = full_reason
 
+    # Disqualify wins over snooze. Clear any active snooze fields so the
+    # engine's wake-up loop doesn't try to regenerate a sequence for a
+    # company we've just marked terminal.
+    had_snooze = company.sequence_resume_at is not None
+    if had_snooze:
+        company.sequence_resume_at = None
+        company.sequence_snoozed_at = None
+        company.sequence_snooze_reason = None
+        company.sequence_snoozed_by_user_id = None
+        company.sequence_snooze_days = None
+
     # Pause every unsent, unpaused sequence step for this company
     active_steps = (await db.execute(
         select(GeneratedEmail).where(
@@ -507,11 +532,12 @@ async def disqualify_company(
         step.paused_at = now
 
     # Log activity — 'disqualified' type so admin dashboard can filter it
+    snooze_note = " (snooze cleared)" if had_snooze else ""
     db.add(Activity(
         company_id=company_id,
         user_id=user.id,
         activity_type="disqualified",
-        content=f"Marked as unqualified: {full_reason} (was: {old_status})",
+        content=f"Marked as unqualified: {full_reason} (was: {old_status}){snooze_note}",
     ))
 
     await db.commit()
@@ -521,6 +547,136 @@ async def disqualify_company(
         "lost_reason": full_reason,
         "steps_paused": len(active_steps),
     }
+
+
+class SnoozeCompanyRequest(BaseModel):
+    """Pause this company's sequence until a future date. Exactly one of
+    {days, until_date} must be set."""
+    days: Optional[int] = None       # 1..365
+    until_date: Optional[str] = None # ISO 8601 date (YYYY-MM-DD)
+    reason: Optional[str] = None
+
+
+@router.post("/{company_id}/snooze")
+async def snooze_company(
+    company_id: int,
+    req: SnoozeCompanyRequest,
+    db: AsyncSession = Depends(get_tenant_db),
+    user: User = Depends(get_current_user),
+):
+    """Snooze the entire outbound sequence for a company until a chosen
+    date. The engine suppresses every outbound step for this company while
+    snoozed. On wake, the engine regenerates a fresh tailored sequence
+    whose first email references the agreed timeframe."""
+    from app.scoping import scope_companies
+    company = (await db.execute(
+        scope_companies(select(Company).where(Company.id == company_id), user, None)
+    )).scalar_one_or_none()
+    if not company:
+        raise HTTPException(404, "Company not found")
+
+    # Disqualified companies can't be snoozed — restore first.
+    if (company.status or "") == "not_interested":
+        raise HTTPException(400, "Cannot snooze a disqualified company. Restore first.")
+
+    # Resolve wake time + snooze_days from whichever input the BDR gave.
+    now = datetime.now(timezone.utc)
+    days_chosen: Optional[int] = None
+    if req.days is not None and req.until_date:
+        raise HTTPException(400, "Provide either days OR until_date, not both.")
+    if req.days is not None:
+        if req.days < 1 or req.days > 365:
+            raise HTTPException(400, "days must be between 1 and 365")
+        days_chosen = req.days
+        resume_at = now + timedelta(days=req.days)
+    elif req.until_date:
+        try:
+            d = datetime.fromisoformat(req.until_date)
+        except ValueError:
+            raise HTTPException(400, "until_date must be ISO 8601 (YYYY-MM-DD)")
+        # Treat date-only as end-of-day local-equivalent UTC midnight
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        if d <= now:
+            raise HTTPException(400, "until_date must be in the future")
+        resume_at = d
+        days_chosen = max(1, (d - now).days)
+    else:
+        raise HTTPException(400, "Provide either days or until_date")
+
+    was_snoozed = company.sequence_resume_at is not None
+    prior_resume = company.sequence_resume_at
+
+    company.sequence_resume_at = resume_at
+    company.sequence_snoozed_at = now
+    company.sequence_snooze_reason = (req.reason or "").strip() or None
+    company.sequence_snoozed_by_user_id = user.id
+    company.sequence_snooze_days = days_chosen
+
+    # Don't mutate generated_emails — the dispatch gate suppresses them
+    # until wake, and the wake handler regenerates a fresh sequence then.
+    pending_count = (await db.execute(
+        select(func.count(GeneratedEmail.id)).where(
+            GeneratedEmail.company_id == company_id,
+            GeneratedEmail.is_sent == False,
+            GeneratedEmail.skipped_at.is_(None),
+            GeneratedEmail.paused_at.is_(None),
+        )
+    )).scalar() or 0
+
+    audit_msg = (
+        f"Snooze extended from {prior_resume.strftime('%b %d, %Y') if prior_resume else '—'} "
+        f"to {resume_at.strftime('%b %d, %Y')}"
+        if was_snoozed
+        else f"Snoozed until {resume_at.strftime('%b %d, %Y')}"
+    )
+    if req.reason:
+        audit_msg += f" — {req.reason}"
+    db.add(Activity(
+        company_id=company_id,
+        user_id=user.id,
+        activity_type="sequence_snoozed",
+        content=audit_msg,
+    ))
+    await db.commit()
+    return {
+        "ok": True,
+        "company_id": company_id,
+        "sequence_resume_at": resume_at.isoformat(),
+        "sequence_snooze_days": days_chosen,
+        "sequence_snooze_reason": company.sequence_snooze_reason,
+        "paused_step_count": int(pending_count),
+    }
+
+
+@router.post("/{company_id}/unsnooze")
+async def unsnooze_company(
+    company_id: int,
+    db: AsyncSession = Depends(get_tenant_db),
+    user: User = Depends(get_current_user),
+):
+    """Manually wake a snoozed company before its scheduled wake date.
+    Regenerates the sequence immediately (same as the engine's auto-wake)."""
+    from app.scoping import scope_companies
+    from app.services.sequence_engine import wake_sequence_for_company
+    company = (await db.execute(
+        scope_companies(select(Company).where(Company.id == company_id), user, None)
+    )).scalar_one_or_none()
+    if not company:
+        raise HTTPException(404, "Company not found")
+    if company.sequence_resume_at is None:
+        return {"ok": True, "company_id": company_id, "already_awake": True, "steps_created": 0}
+
+    woke_early = company.sequence_resume_at > datetime.now(timezone.utc)
+    n = await wake_sequence_for_company(db, company)
+    db.add(Activity(
+        company_id=company_id,
+        user_id=user.id,
+        activity_type="sequence_unsnoozed",
+        content=f"Manually woken{'(early)' if woke_early else ''} — regenerated {n} step(s)",
+    ))
+    await db.commit()
+    return {"ok": True, "company_id": company_id, "woke_early": woke_early, "steps_created": n}
 
 
 @router.post("/{company_id}/restore-disqualify")
@@ -1196,6 +1352,11 @@ async def get_company_full(
         "review_count": company.review_count,
         "business_type": company.business_type,
         "status": company.status,
+        # Sequence-snooze state — drives the snooze banner + button visibility on the UI
+        "sequence_resume_at": company.sequence_resume_at.isoformat() if company.sequence_resume_at else None,
+        "sequence_snooze_reason": company.sequence_snooze_reason,
+        "sequence_snooze_days": company.sequence_snooze_days,
+        "sequence_snoozed_at": company.sequence_snoozed_at.isoformat() if company.sequence_snoozed_at else None,
         "enriched": company.enriched,
         "enrichment_summary": company.enrichment_summary,
         "problems_found": problems,
@@ -2264,6 +2425,8 @@ def _company_summary(c: Company, assigned_name: Optional[str] = None, tags: Opti
         "has_social_links": c.has_social_links,
         "site_speed_score": c.site_speed_score,
         "status": c.status,
+        "sequence_resume_at": c.sequence_resume_at.isoformat() if c.sequence_resume_at else None,
+        "sequence_snooze_reason": c.sequence_snooze_reason,
         "email_generated": c.email_generated,
         "employee_count": c.employee_count,
         "company_size": c.company_size,
