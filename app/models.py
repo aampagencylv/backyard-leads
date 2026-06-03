@@ -1387,6 +1387,40 @@ class Booking(TenantMixin, Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
 
 
+class WebPreview(TenantMixin, Base):
+    """Single-page website preview generated for a prospect company.
+
+    Reps click "Generate web preview" on a company detail page; we
+    create one of these and return a URL like
+    sitepreview.leadprospector.ai/{url_slug} that the rep pastes into
+    a cold email. The HTML is rendered once at generation time and
+    served as-is on every subsequent view (no per-view LLM calls).
+
+    The slots_json blob holds the LLM's structured copy output, kept
+    around so a rep can edit text inline later without regenerating
+    the whole preview from scratch.
+    """
+    __tablename__ = "web_previews"
+
+    id = Column(Integer, primary_key=True, index=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    template_slug = Column(String(64), nullable=False)
+    url_slug = Column(String(128), nullable=False, unique=True, index=True)
+    html = Column(Text, nullable=False)
+    slots_json = Column(Text, nullable=False)
+    photos_json = Column(Text, nullable=True)
+    cta_url = Column(String(500), nullable=True)
+    view_count = Column(Integer, nullable=False, default=0, server_default=sa_text("0"))
+    first_viewed_at = Column(DateTime(timezone=True), nullable=True)
+    last_viewed_at = Column(DateTime(timezone=True), nullable=True)
+    cta_click_count = Column(Integer, nullable=False, default=0, server_default=sa_text("0"))
+    cost_usd = Column(Float, nullable=False, default=0.0, server_default=sa_text("0"))
+    status = Column(String(20), nullable=False, default="active", server_default="active")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), server_default=sa_text("NOW()"))
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+
+
 class Feedback(TenantMixin, Base):
     """Team feedback / bug reports submitted via the in-app form."""
     __tablename__ = "feedback"

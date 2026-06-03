@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ business.name }}</title>
+<meta name="description" content="{{ hero.subhead }}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #0c1612;
+    --ink-soft: #2a3a30;
+    --paper: #ffffff;
+    --cream: #f8f6f1;
+    --moss: #2d5a3d;
+    --moss-deep: #1f3f2b;
+    --gold: #c89344;
+    --mist: #e6ebe7;
+    --shadow: 0 8px 24px rgba(12, 22, 18, 0.08);
+    --shadow-strong: 0 16px 48px rgba(12, 22, 18, 0.18);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body { font-family: 'Inter', -apple-system, system-ui, sans-serif; color: var(--ink-soft); background: var(--paper); font-size: 17px; line-height: 1.65; }
+  .container { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+
+  h1, h2, h3 { font-family: 'Fraunces', Georgia, serif; color: var(--ink); font-weight: 600; line-height: 1.1; letter-spacing: -0.01em; }
+  h1 { font-size: clamp(40px, 6vw, 72px); }
+  h2 { font-size: clamp(32px, 4.5vw, 48px); margin-bottom: 16px; }
+  h3 { font-size: 22px; }
+  p { color: var(--ink-soft); }
+  a { color: var(--moss); text-decoration: none; }
+
+  .label { font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em; color: var(--moss); }
+
+  .btn { display: inline-block; padding: 14px 32px; font-family: 'Inter', sans-serif; font-size: 16px; font-weight: 600; border-radius: 4px; cursor: pointer; transition: background 0.15s ease; text-decoration: none; border: 0; }
+  .btn-primary { background: var(--moss); color: var(--cream); }
+  .btn-primary:hover { background: var(--moss-deep); }
+  .btn-gold { background: var(--gold); color: var(--ink); }
+  .btn-gold:hover { background: #b07e35; }
+
+  /* Disclosure banner */
+  .preview-banner { background: var(--ink); color: var(--cream); text-align: center; padding: 8px 16px; font-size: 12px; letter-spacing: 0.03em; }
+  .preview-banner strong { color: var(--gold); margin-right: 6px; }
+
+  /* Header */
+  .site-header { padding: 24px 0; border-bottom: 1px solid var(--mist); background: var(--paper); }
+  .site-header .row { display: flex; align-items: center; justify-content: space-between; }
+  .brand-name { font-family: 'Fraunces', serif; font-size: 22px; font-weight: 600; color: var(--ink); }
+  .brand-tag { font-size: 12px; color: var(--ink-soft); margin-top: 2px; letter-spacing: 0.04em; text-transform: uppercase; }
+  .header-cta { font-size: 14px; font-weight: 600; color: var(--moss); }
+
+  /* Hero */
+  .hero { position: relative; min-height: 88vh; background: var(--moss-deep); color: var(--cream); display: flex; align-items: flex-end; overflow: hidden; }
+  .hero-bg { position: absolute; inset: 0; background-size: cover; background-position: center; }
+  .hero-overlay { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(12, 22, 18, 0.25) 0%, rgba(12, 22, 18, 0.05) 40%, rgba(12, 22, 18, 0.85) 100%); }
+  .hero-content { position: relative; padding: 128px 0 96px; width: 100%; }
+  .hero-content .label { color: var(--gold); margin-bottom: 24px; }
+  .hero h1 { color: var(--cream); max-width: 900px; margin-bottom: 24px; }
+  .hero .subhead { font-size: 19px; max-width: 640px; color: rgba(248, 246, 241, 0.85); margin-bottom: 40px; line-height: 1.55; }
+
+  /* Trust strip */
+  .trust { padding: 64px 0; background: var(--cream); }
+  .trust-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; text-align: center; }
+  .trust .num { font-family: 'Fraunces', serif; font-size: 56px; font-weight: 600; color: var(--moss); line-height: 1; margin-bottom: 8px; font-variant-numeric: tabular-nums; }
+  .trust .lbl { font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-soft); }
+
+  /* Section base */
+  section.scope { padding: 96px 0; }
+  section.scope .label { display: block; margin-bottom: 16px; }
+
+  /* Services */
+  .services-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: 48px; }
+  .service { background: var(--cream); padding: 40px 32px; border-radius: 0; }
+  .service h3 { margin-bottom: 12px; color: var(--ink); }
+  .service p { font-size: 15px; line-height: 1.6; color: var(--ink-soft); }
+  .service-num { font-family: 'Fraunces', serif; font-size: 14px; color: var(--gold); font-weight: 600; margin-bottom: 16px; display: block; }
+
+  /* About */
+  .about { background: var(--paper); }
+  .about-grid { display: grid; grid-template-columns: 1.1fr 1fr; gap: 64px; align-items: center; }
+  .about-grid img { width: 100%; height: 100%; max-height: 480px; object-fit: cover; border-radius: 12px; }
+  .about .body { font-size: 17px; line-height: 1.7; color: var(--ink-soft); margin-top: 16px; }
+  .about .body p + p { margin-top: 16px; }
+
+  /* Gallery */
+  .gallery { background: var(--cream); }
+  .gallery-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 48px; }
+  .gallery-grid img { width: 100%; height: 240px; object-fit: cover; border-radius: 12px; transition: box-shadow 0.15s ease; }
+  .gallery-grid img:hover { box-shadow: var(--shadow-strong); }
+
+  /* Testimonial */
+  .testimonial { background: var(--paper); padding: 128px 0; text-align: center; }
+  .testimonial blockquote { font-family: 'Fraunces', serif; font-size: clamp(24px, 3.5vw, 36px); font-style: italic; line-height: 1.4; color: var(--ink); max-width: 880px; margin: 0 auto 32px; font-weight: 500; }
+  .testimonial cite { font-style: normal; font-size: 13px; color: var(--ink-soft); font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em; }
+
+  /* Final CTA */
+  .cta-block { background: var(--moss-deep); color: var(--cream); padding: 128px 0; text-align: center; }
+  .cta-block h2 { color: var(--cream); max-width: 760px; margin: 0 auto 16px; }
+  .cta-block .subhead { font-size: 18px; color: rgba(248, 246, 241, 0.78); max-width: 600px; margin: 0 auto 40px; }
+
+  /* Footer */
+  footer { background: var(--ink); color: rgba(248, 246, 241, 0.6); padding: 48px 0; font-size: 13px; }
+  footer .row { display: flex; justify-content: space-between; align-items: center; gap: 24px; flex-wrap: wrap; }
+  footer a { color: rgba(248, 246, 241, 0.85); }
+  footer .powered { font-size: 12px; }
+  footer .powered strong { color: var(--gold); font-weight: 600; }
+
+  /* Mobile */
+  @media (max-width: 768px) {
+    body { font-size: 16px; }
+    .hero-content { padding: 96px 0 64px; }
+    .hero .subhead { font-size: 16px; margin-bottom: 32px; }
+    .trust-grid { grid-template-columns: 1fr; gap: 32px; }
+    .trust .num { font-size: 44px; }
+    section.scope { padding: 64px 0; }
+    .services-grid { grid-template-columns: 1fr; }
+    .about-grid { grid-template-columns: 1fr; gap: 32px; }
+    .about-grid img { max-height: 320px; order: -1; }
+    .gallery-grid { grid-template-columns: repeat(2, 1fr); }
+    .gallery-grid img { height: 180px; }
+    .testimonial { padding: 80px 0; }
+    .cta-block { padding: 80px 0; }
+  }
+</style>
+</head>
+<body>
+
+<div class="preview-banner">
+  <strong>PREVIEW</strong> This is a quick look at what your real site could look like — built by AI from your business data for review.
+</div>
+
+<header class="site-header">
+  <div class="container row">
+    <div>
+      <div class="brand-name">{{ business.name }}</div>
+      <div class="brand-tag">{{ business.tagline }}</div>
+    </div>
+    <a href="{{ cta_url }}" class="header-cta">{{ hero.cta_text }} →</a>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="hero-bg" style="background-image: url('{{ photos.hero }}')"></div>
+  <div class="hero-overlay"></div>
+  <div class="container hero-content">
+    <span class="label">{{ hero.eyebrow }}</span>
+    <h1>{{ hero.headline }}</h1>
+    <p class="subhead">{{ hero.subhead }}</p>
+    <a href="{{ cta_url }}" class="btn btn-gold">{{ hero.cta_text }}</a>
+  </div>
+</section>
+
+<section class="trust">
+  <div class="container">
+    <div class="trust-grid">
+      {% for item in trust_strip %}
+      <div>
+        <div class="num">{{ item.value }}</div>
+        <div class="lbl">{{ item.label }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<section class="scope services">
+  <div class="container">
+    <span class="label">{{ services.section_label }}</span>
+    <h2>{{ services.section_headline }}</h2>
+    <div class="services-grid">
+      {% for service in services.items %}
+      <div class="service">
+        <span class="service-num">{{ "%02d"|format(loop.index) }}</span>
+        <h3>{{ service.name }}</h3>
+        <p>{{ service.description }}</p>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<section class="scope about">
+  <div class="container">
+    <div class="about-grid">
+      <div>
+        <span class="label">{{ about.eyebrow }}</span>
+        <h2>{{ about.headline }}</h2>
+        <div class="body">
+          {% for paragraph in about.paragraphs %}
+          <p>{{ paragraph }}</p>
+          {% endfor %}
+        </div>
+      </div>
+      <img src="{{ photos.about }}" alt="{{ business.name }}">
+    </div>
+  </div>
+</section>
+
+{% if photos.gallery and photos.gallery|length >= 3 %}
+<section class="scope gallery">
+  <div class="container">
+    <span class="label">Recent work</span>
+    <h2>{{ business.location }} backyards we've built</h2>
+    <div class="gallery-grid">
+      {% for img in photos.gallery[:6] %}
+      <img src="{{ img }}" alt="Recent project">
+      {% endfor %}
+    </div>
+  </div>
+</section>
+{% endif %}
+
+{% if testimonial %}
+<section class="testimonial">
+  <div class="container">
+    <blockquote>"{{ testimonial.quote }}"</blockquote>
+    <cite>— {{ testimonial.author }}</cite>
+  </div>
+</section>
+{% endif %}
+
+<section class="cta-block">
+  <div class="container">
+    <h2>{{ cta_section.headline }}</h2>
+    <p class="subhead">{{ cta_section.subhead }}</p>
+    <a href="{{ cta_url }}" class="btn btn-gold">{{ cta_section.button_text }}</a>
+  </div>
+</section>
+
+<footer>
+  <div class="container row">
+    <div>&copy; {{ year }} {{ business.name }}. Concept design for review.</div>
+    <div class="powered">Designed by <strong>{{ agency.name }}</strong> · <a href="{{ agency.url }}">{{ agency.url_display }}</a></div>
+  </div>
+</footer>
+
+</body>
+</html>
