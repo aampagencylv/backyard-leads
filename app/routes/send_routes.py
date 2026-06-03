@@ -42,6 +42,26 @@ async def send_single_email(
         raise HTTPException(status_code=400, detail="Email already sent")
     if email.paused_at:
         raise HTTPException(status_code=400, detail="Sequence is paused (the contact has replied or unsubscribed). Resume from the contact card to send.")
+    # Hard gate: only email step_types can be dispatched through this route.
+    # Without this check, a BDR clicking Send on a call/linkedin/imessage row
+    # would silently send the talk-track or chat draft to the prospect's email
+    # inbox with a placeholder subject ('Call 3', 'LinkedIn step 2'). Found
+    # 2026-06-03 after Sebastian sent a call talk-track to texasremodelteam.com
+    # with subject 'Call 3' (the placeholder), and the prospect opened it.
+    if (email.step_type or "email") != "email":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"This step is a {(email.step_type or '').upper()} task, not an email. "
+                "Complete it from the Tasks panel — clicking Send here would have "
+                "emailed the talk-track / chat draft to the prospect."
+            ),
+        )
+    if email.skipped_at:
+        raise HTTPException(
+            status_code=400,
+            detail=f"This step was skipped at creation ({email.skip_reason or 'no reason'}). It has placeholder copy and should not be sent.",
+        )
 
     contact = (await db.execute(select(Contact).where(Contact.id == email.contact_id))).scalar_one_or_none()
     if not contact:
@@ -146,12 +166,20 @@ async def send_next_in_sequence(
     if not contact.email:
         raise HTTPException(status_code=400, detail="Contact has no email address.")
 
+    # Filter by step_type='email' so we never accidentally send a
+    # call-talk-track or LinkedIn DM draft to the prospect's INBOX.
+    # Also filter out skipped rows (placeholder subject/body). This route
+    # is "send the next EMAIL" — call/linkedin steps are completed via the
+    # Tasks panel, not via Send Email. The Texas Remodel Team incident on
+    # 2026-06-03 was caused by the missing step_type filter here.
     email = (await db.execute(
         select(GeneratedEmail)
         .where(
             GeneratedEmail.contact_id == contact_id,
             GeneratedEmail.is_sent == False,
             GeneratedEmail.paused_at.is_(None),
+            GeneratedEmail.skipped_at.is_(None),
+            GeneratedEmail.step_type == "email",
         )
         .order_by(GeneratedEmail.sequence_order)
     )).scalars().first()
