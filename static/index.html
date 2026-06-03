@@ -7160,10 +7160,96 @@ function verify(secret, rawBody, header) {
                 _skipPushState = false;
                 history.pushState({ page: 'company-detail', companyId: id }, '', '/#company/' + id);
                 renderCompanyDetail(data);
+                // Load any existing previews for this company so the rep
+                // sees history + reuse options, not just a blank Generate
+                // button. Fire-and-forget; never blocks render.
+                loadWebPreviewsForCompany(id).catch(() => {});
             } catch (err) {
                 console.error('renderCompanyDetail failed', err, data);
                 toast(`Render error: ${err.message}`);
             }
+        }
+
+        // ============ Web Preview ============
+        async function loadWebPreviewsForCompany(companyId) {
+            const mount = document.getElementById('web-preview-content-' + companyId);
+            if (!mount) return;
+            try {
+                const previews = await api('/api/web-previews/by-company/' + companyId);
+                if (!previews || !previews.length) return;
+                renderWebPreviewList(companyId, previews);
+            } catch (e) { /* swallow — keep the default Generate button */ }
+        }
+
+        function renderWebPreviewList(companyId, previews) {
+            const mount = document.getElementById('web-preview-content-' + companyId);
+            if (!mount) return;
+            const latest = previews[0];
+            const rest = previews.slice(1, 4);
+            const safeUrl = escapeHtml(latest.public_url);
+            mount.innerHTML = `
+                <div style="background:#f5f7f5;border-radius:6px;padding:10px;font-size:12px;margin-bottom:10px">
+                    <div style="font-weight:600;margin-bottom:4px;color:var(--bmp-green)">Latest preview</div>
+                    <div style="display:flex;gap:6px;align-items:center">
+                        <code style="flex:1;font-size:11px;background:white;padding:4px 6px;border:1px solid #e0e0e0;border-radius:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${safeUrl}</code>
+                        <button class="btn btn-secondary btn-xs" onclick="copyToClipboard('${safeUrl}')" title="Copy URL">📋</button>
+                        <a href="${safeUrl}" target="_blank" rel="noopener" class="btn btn-secondary btn-xs" title="Open in new tab">↗</a>
+                    </div>
+                    <div style="font-size:10px;color:#888;margin-top:6px">
+                        ${latest.view_count} view${latest.view_count === 1 ? '' : 's'}
+                        ${latest.last_viewed_at ? '· last opened ' + new Date(latest.last_viewed_at).toLocaleDateString() : ''}
+                        · ${escapeHtml(latest.template_slug)}
+                    </div>
+                </div>
+                <button class="btn btn-secondary btn-sm" onclick="generateWebPreview(${companyId})" style="width:100%">+ New preview</button>
+                ${rest.length ? `
+                    <details style="margin-top:8px">
+                        <summary style="cursor:pointer;font-size:11px;color:#888">Older previews (${rest.length})</summary>
+                        <div style="margin-top:6px">
+                            ${rest.map(p => `
+                                <div style="font-size:11px;padding:4px 0;border-top:1px solid #eee">
+                                    <a href="${escapeHtml(p.public_url)}" target="_blank" rel="noopener" style="color:var(--bmp-green)">${escapeHtml(p.public_url.replace('https://sitepreview.leadprospector.ai/', ''))}</a>
+                                    <span style="color:#999;margin-left:6px">${p.view_count} view${p.view_count === 1 ? '' : 's'}</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </details>
+                ` : ''}
+            `;
+        }
+
+        async function generateWebPreview(companyId) {
+            const mount = document.getElementById('web-preview-content-' + companyId);
+            if (!mount) return;
+            // Disable + show working state.
+            mount.innerHTML = `
+                <div style="text-align:center;padding:12px">
+                    <div style="display:inline-block;width:24px;height:24px;border:3px solid var(--bmp-green);border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite"></div>
+                    <div style="font-size:12px;color:#666;margin-top:8px">Generating preview…</div>
+                    <div style="font-size:10px;color:#999">~15-30 seconds. The AI is writing copy + rendering the page.</div>
+                </div>
+                <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+            `;
+            try {
+                const out = await api('/api/web-previews/generate', {
+                    method: 'POST',
+                    body: JSON.stringify({ company_id: companyId }),
+                });
+                toast('Preview generated', { variant: 'engagement-top' });
+                // Refresh the list so the new one shows up at top.
+                await loadWebPreviewsForCompany(companyId);
+            } catch (e) {
+                mount.innerHTML = `
+                    <div style="color:#b00;font-size:12px;margin-bottom:8px">${escapeHtml(e.message)}</div>
+                    <button class="btn btn-secondary btn-sm" onclick="generateWebPreview(${companyId})" style="width:100%">Try again</button>
+                `;
+            }
+        }
+
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text)
+                .then(() => toast('URL copied'))
+                .catch(() => toast('Copy failed — long-press to copy manually', { variant: 'hot' }));
         }
 
         let _currentCompanyData = null;
@@ -7491,6 +7577,18 @@ function verify(secret, rawBody, header) {
                             `).join('')}
                         </div>
                         ` : ''}
+
+                        <!-- Web Preview — generate a single-page homepage
+                             mockup to send in cold outreach. Backend lives
+                             at /api/web-previews/generate; status updates
+                             load lazily after the company panel renders. -->
+                        <div class="panel" id="web-preview-panel-${d.id}">
+                            <h3 style="font-size:14px;color:var(--bmp-green)">🎨 Web Preview</h3>
+                            <p style="font-size:11px;color:#888;margin-bottom:10px">Generate a personalized homepage mockup for cold outreach.</p>
+                            <div id="web-preview-content-${d.id}">
+                                <button class="btn btn-primary btn-sm" onclick="generateWebPreview(${d.id})" style="width:100%">Generate preview</button>
+                            </div>
+                        </div>
 
                         <div class="panel">
                             <h3 style="font-size:14px">Tags</h3>
