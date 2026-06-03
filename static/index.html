@@ -13586,13 +13586,37 @@ hmac.compare_digest(expected, header)</pre>
                     });
                     dialerState.device.on('registered', () => {
                         console.log('Twilio Device REGISTERED — ready for inbound calls');
+                        dialerState.voiceRegistered = true;
+                        _refreshAvailabilityUI();
                     });
                     dialerState.device.on('unregistered', () => {
                         console.warn('Twilio Device UNREGISTERED — inbound calls will NOT ring');
+                        dialerState.voiceRegistered = false;
+                        _refreshAvailabilityUI();
+                        // Auto-attempt reconnect after 3s — handles token expiry
+                        // (Twilio JWTs are typically 1 hour) without surfacing
+                        // a "go reconnect" prompt for every silent expiry.
+                        if (!dialerState._reconnectScheduled) {
+                            dialerState._reconnectScheduled = true;
+                            setTimeout(() => { _reconnectVoice().catch(() => {}); }, 3000);
+                        }
+                    });
+                    dialerState.device.on('tokenWillExpire', () => {
+                        // Twilio fires this ~3 minutes before expiry. Refresh
+                        // the token + update the Device so the registration
+                        // doesn't drop. Standard pattern from Twilio docs.
+                        _refreshVoiceToken().catch(e => {
+                            console.warn('tokenWillExpire refresh failed:', e);
+                        });
                     });
                     dialerState.device.on('error', (e) => {
                         console.error('Twilio Device error:', e);
-                        toast('Dialer error: ' + (e.message || e.code || 'unknown'));
+                        dialerState.voiceRegistered = false;
+                        _refreshAvailabilityUI();
+                        // Loud toast — previously this only console.warn'd and
+                        // reps had no idea their inbound calls were broken.
+                        const msg = (e && (e.message || e.code)) || 'unknown';
+                        toast('🔌 Phone connection error: ' + msg + ' — calls will go to voicemail. Refresh to reconnect.');
                     });
                     // Register with Twilio so inbound calls can reach this client.
                     // Without this, the Device can only make outbound calls.
@@ -14564,22 +14588,92 @@ hmac.compare_digest(expected, header)</pre>
         }
 
         function _updateCallToggleUI(isAvailable) {
+            // Remember the server-side flag so _refreshAvailabilityUI() can
+            // combine it with the live Voice SDK registration state.
+            dialerState.serverAvailable = !!isAvailable;
+            _refreshAvailabilityUI();
+        }
+
+        // Renders the sidebar phone-status dot using BOTH:
+        //   - serverAvailable  (the is_available_for_calls flag from the DB)
+        //   - voiceRegistered  (whether Twilio Voice SDK is currently subscribed)
+        // Three visible states:
+        //   🟢 green : server online + SDK registered → calls actually ring through
+        //   🟡 amber : server online + SDK NOT registered → calls drop to VM despite the toggle
+        //   🔴 red   : server offline → calls drop to VM by design
+        // Before this fix, the toggle showed green even when the SDK was disconnected,
+        // which is exactly what happened to Jenny — DB said she was online but her
+        // browser client wasn't actually registered, so Twilio's <Client>bmp_user_4
+        // dispatch hit "no-answer" every time.
+        function _refreshAvailabilityUI() {
             const toggle = document.getElementById('call-status-toggle');
             const knob = document.getElementById('call-status-knob');
-            if (toggle) {
-                toggle.style.background = isAvailable ? '#27ae60' : '#c0392b';
-                toggle.title = isAvailable ? 'Online — accepting calls. Click to go offline.' : 'Offline — calls go to voicemail. Click to go online.';
+            if (!toggle || !knob) return;
+            const serverOn = !!dialerState.serverAvailable;
+            const sdkOn = !!dialerState.voiceRegistered;
+            let bg, knobLeft, title;
+            if (!serverOn) {
+                bg = '#c0392b'; knobLeft = '2px';
+                title = 'Offline — calls go to voicemail. Click to go online.';
+            } else if (sdkOn) {
+                bg = '#27ae60'; knobLeft = '18px';
+                title = 'Online — calls ringing through to your browser. Click to go offline.';
+            } else {
+                bg = '#e67e22'; knobLeft = '18px';
+                title = 'Online (server) but BROWSER NOT CONNECTED — calls will go to voicemail. Click to reconnect.';
             }
-            if (knob) {
-                knob.style.left = isAvailable ? '18px' : '2px';
-            }
+            toggle.style.background = bg;
+            toggle.title = title;
+            knob.style.left = knobLeft;
         }
 
         async function toggleCallAvailability() {
+            // If the dot is AMBER (server-on, SDK-off), interpret a click as
+            // "try to reconnect" instead of flipping the server flag. This
+            // matches what the tooltip promises.
+            if (dialerState.serverAvailable && !dialerState.voiceRegistered) {
+                toast('Attempting to reconnect to phone system…');
+                try {
+                    await _reconnectVoice();
+                } catch (e) {
+                    toast('Reconnect failed: ' + (e.message || 'unknown') + '. Try refreshing the page.');
+                }
+                return;
+            }
             const data = await api('/api/twilio/voice/availability', { method: 'POST' });
             if (data) {
                 _updateCallToggleUI(data.is_available_for_calls);
                 toast(data.is_available_for_calls ? 'You are now ONLINE — calls will ring in your browser' : 'You are now OFFLINE — calls will go to voicemail');
+            }
+        }
+
+        // Get a fresh Twilio access token + push it into the Device so the
+        // registration doesn't drop when the JWT expires (~1 hour TTL).
+        async function _refreshVoiceToken() {
+            const data = await api('/api/twilio/voice/token', { method: 'POST' });
+            if (data && data.token && dialerState.device && typeof dialerState.device.updateToken === 'function') {
+                dialerState.device.updateToken(data.token);
+                console.log('Twilio Voice token refreshed');
+            }
+        }
+
+        // Full reconnect — used when the device fires 'unregistered' or 'error',
+        // or when the user clicks the amber dot. Tries to update token first
+        // (cheap), then re-register the device. Guarded against re-entry.
+        async function _reconnectVoice() {
+            if (dialerState._reconnectInFlight) return;
+            dialerState._reconnectInFlight = true;
+            try {
+                if (!dialerState.device) {
+                    // Device was never initialized — full init path.
+                    if (typeof initDialer === 'function') await initDialer();
+                    return;
+                }
+                await _refreshVoiceToken();
+                await dialerState.device.register();
+            } finally {
+                dialerState._reconnectInFlight = false;
+                dialerState._reconnectScheduled = false;
             }
         }
 
