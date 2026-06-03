@@ -3478,6 +3478,65 @@ function verify(secret, rawBody, header) {
 
         // Render the phone-type badge on contact cards. Empty string when we
         // haven't checked yet — keeps the UI quiet until we have real data.
+        // Per-contact sequence progress strip — one tiny box per step.
+        // Colors at-a-glance: green=sent, gray=skipped (clean), yellow=paused,
+        // blue=snoozed by company, red=stalled (overdue >24h, engine couldn't
+        // fire), orange=task awaiting BDR, white=upcoming.
+        function renderSequenceProgressStrip(contact, company) {
+            const steps = (contact.emails || []).slice().sort((a, b) =>
+                (a.sequence_order || 0) - (b.sequence_order || 0) || (a.id - b.id)
+            );
+            if (!steps.length) {
+                return '<div style="font-size:10px;color:#aaa;margin-top:4px">no sequence yet</div>';
+            }
+            const nowMs = Date.now();
+            const dayMs = 24 * 3600 * 1000;
+            const companySnoozed = !!(company && company.sequence_resume_at);
+
+            // Icon per step_type so the BDR can see the channel mix at a glance.
+            const iconFor = (t) => ({email:'✉',imessage:'💬',call:'📞',linkedin:'in'}[t] || '•');
+
+            const sentCount = steps.filter(s => s.is_sent).length;
+            const boxes = steps.map(s => {
+                let bg = '#fff', border = '#ddd', fg = '#444', label = '';
+                const dueAt = s.scheduled_send_at ? Date.parse(s.scheduled_send_at) : null;
+                if (s.is_sent) {
+                    bg = '#27ae60'; border = '#27ae60'; fg = '#fff';
+                    label = `Sent ${s.sent_at ? fmtDate(s.sent_at) : ''}`;
+                } else if (s.skipped_at) {
+                    bg = '#e0e0e0'; border = '#bbb'; fg = '#777';
+                    label = `Skipped — ${s.skip_reason || 'no reason'}`;
+                } else if (s.paused_at) {
+                    bg = '#fff3cd'; border = '#e6c84a'; fg = '#7a5a00';
+                    label = 'Paused';
+                } else if (companySnoozed) {
+                    bg = '#e3f2fd'; border = '#90caf9'; fg = '#1565c0';
+                    label = `Snoozed (wakes ${fmtDate(company.sequence_resume_at)})`;
+                } else if (dueAt && dueAt < nowMs - dayMs && s.auto_execute) {
+                    bg = '#fde8e8'; border = '#c0392b'; fg = '#c0392b';
+                    const hrs = Math.round((nowMs - dueAt) / 3600000);
+                    label = `STALLED — overdue ${hrs}h`;
+                } else if (dueAt && dueAt <= nowMs && !s.auto_execute && !s.task_id) {
+                    bg = '#ffe9d4'; border = '#e67e22'; fg = '#a04a00';
+                    label = 'Task awaiting BDR';
+                } else if (dueAt && dueAt <= nowMs + dayMs) {
+                    bg = '#fff'; border = '#0b93f6'; fg = '#0b93f6';
+                    label = `Up next${dueAt ? ' · ' + fmtDate(s.scheduled_send_at) : ''}`;
+                } else {
+                    bg = '#fff'; border = '#ddd'; fg = '#aaa';
+                    label = dueAt ? `Scheduled ${fmtDate(s.scheduled_send_at)}` : 'Upcoming';
+                }
+                const title = `Step ${s.sequence_order} · ${(s.step_type||'email').toUpperCase()} · ${label}`;
+                return `<span title="${escapeHtml(title)}" style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border:1px solid ${border};background:${bg};color:${fg};border-radius:3px;font-size:9px;line-height:1;font-weight:700">${iconFor(s.step_type||'email')}</span>`;
+            }).join('');
+            return `
+                <div style="display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap">
+                    <div style="display:flex;gap:2px;flex-wrap:wrap">${boxes}</div>
+                    <span style="font-size:10px;color:#666;font-weight:600">${sentCount}/${steps.length}</span>
+                </div>
+            `;
+        }
+
         function renderPhoneTypeBadge(c) {
             const t = c && c.phone_type;
             if (!t || t === 'unknown' || t === 'error') return '';
@@ -7439,7 +7498,7 @@ function verify(secret, rawBody, header) {
                                         ${c.email && !c.unsubscribed_at ? `<a onclick="event.stopPropagation();openAdhocComposer(${c.id})" style="color:var(--bmp-orange);cursor:pointer;text-decoration:none;border-bottom:1px dotted var(--bmp-orange)" title="Send a one-off email">📧 Send Email</a>` : ''}
                                         <a onclick="event.stopPropagation();openScheduleModal(${c.id})" style="color:#1a73e8;cursor:pointer;text-decoration:none;border-bottom:1px dotted #1a73e8;font-weight:600" title="Pick a time on your calendar + send the invite">📅 Schedule</a>
                                     </div>
-                                    ${c.emails.length > 0 ? `<div style="font-size:10px;color:var(--bmp-green);margin-top:2px">${c.emails.filter(e=>e.is_sent).length}/${c.emails.length} steps sent</div>` : ''}
+                                    ${renderSequenceProgressStrip(c, d)}
                                 </div>
                             `).join('')}
                         </div>

@@ -2474,6 +2474,12 @@ def _email_to_dict(e: GeneratedEmail) -> dict:
         "scheduled_send_at": e.scheduled_send_at.isoformat() if e.scheduled_send_at else None,
         "sent_at": e.sent_at.isoformat() if e.sent_at else None,
         "created_at": e.created_at.isoformat() if e.created_at else None,
+        # Skip + auto fields — drive the progress-strip color coding
+        # (gray=skipped, red=stalled-auto, orange=task-awaiting-BDR).
+        "skipped_at": e.skipped_at.isoformat() if e.skipped_at else None,
+        "skip_reason": e.skip_reason,
+        "auto_execute": bool(e.auto_execute),
+        "task_id": e.task_id,
     }
 
 
