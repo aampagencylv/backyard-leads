@@ -337,6 +337,7 @@ class UpdateCampaignRequest(BaseModel):
     mode: Optional[str] = None  # moderate | full_auto
     business_types: Optional[List[str]] = None
     locations: Optional[List[str]] = None
+    expand_metros: Optional[bool] = None  # If True + locations set → run metro expansion
 
 
 @router.patch("/{campaign_id}")
@@ -378,7 +379,19 @@ async def update_campaign(
     if req.business_types is not None and len(req.business_types) > 0:
         campaign.business_types = json.dumps(req.business_types)
     if req.locations is not None and len(req.locations) > 0:
-        campaign.locations = json.dumps(req.locations)
+        new_locs = req.locations
+        # Honor expand_metros on update the same way create does. Without
+        # this, editing a campaign's locations would silently lose suburb
+        # expansion even when the UI checkbox is checked — what bit
+        # campaigns #9/#10/#11 (Dallas, Naples, Palm Beach).
+        if req.expand_metros:
+            from app.services.metro_areas import expand_metro
+            expanded = []
+            for loc in new_locs:
+                expanded.extend(expand_metro(loc))
+            seen = set()
+            new_locs = [c for c in expanded if c.lower() not in seen and not seen.add(c.lower())]
+        campaign.locations = json.dumps(new_locs)
 
     # If a completed campaign is edited, reset it to running so the engine
     # re-scans with the new criteria (wider review range, new locations, etc).
