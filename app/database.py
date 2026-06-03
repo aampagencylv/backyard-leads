@@ -141,6 +141,7 @@ async def init_db():
         "scripts.migrate_imessage_toggle",
         "scripts.migrate_company_snooze",
         "scripts.migrate_brand_assets",
+        "scripts.migrate_outbound_audit",
     )
 
     # Decide which actually need to run.

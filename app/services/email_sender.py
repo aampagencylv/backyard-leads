@@ -4,9 +4,157 @@ Handles sending emails, tracking opens, and processing webhooks.
 """
 from __future__ import annotations
 from typing import Optional
+import re as _re
 import httpx
 from datetime import datetime, timezone
 from app.config import settings
+
+
+# ============================================================
+# Anomaly scoring + audit logging
+# ============================================================
+#
+# Three failure modes the existing guards in send_email() catch
+# explicitly:
+#   - step_type != 'email'
+#   - subject matches placeholder regex
+#   - body starts with talk-track / DM marker
+#
+# Beyond those, an anomaly SCORE catches general weirdness without
+# enumerating every possible failure: ultra-short bodies, body that
+# is only ALL CAPS, placeholder-y filler text, mismatched recipients.
+# Score >= 60 → refuse + log. Score >= 30 → allow but flag in audit.
+
+_SUBJECT_PLACEHOLDER_RE = _re.compile(
+    r"^(\s*\[skipped\]|\s*(?:call|imessage|linkedin)\s+(?:step\s+)?\d+\s*$|\s*linkedin\s+message:\s*)",
+    _re.I,
+)
+_BODY_NONEMAIL_PREFIXES = ("📞", "Connect note (under 280 chars):", "Connect note:")
+
+
+def _score_email_anomaly(subject: str, body: str, recipient_email: str) -> tuple[int, list[str]]:
+    """Score how 'weird-looking' an outbound email is. Returns (score, flags).
+    Score range: 0 (clean) → 100 (clearly garbage). Flags are short
+    human-readable strings so the audit log row + digest can explain why."""
+    score = 0
+    flags: list[str] = []
+
+    s = (subject or "").strip()
+    b = (body or "").strip()
+
+    # Subject signals
+    if not s:
+        score += 40; flags.append("empty_subject")
+    if s and _SUBJECT_PLACEHOLDER_RE.match(s):
+        score += 50; flags.append("placeholder_subject")
+    if len(s) > 0 and len(s) <= 6:
+        score += 15; flags.append("tiny_subject")
+    if s and s.isupper() and len(s) > 8:
+        score += 20; flags.append("all_caps_subject")
+    if s and "step" in s.lower() and _re.search(r"\b\d+\b", s):
+        score += 25; flags.append("subject_has_step_n")
+    if s and s.startswith("["):
+        score += 20; flags.append("subject_starts_bracket")
+
+    # Body signals
+    if not b:
+        score += 50; flags.append("empty_body")
+    if b and b.startswith(_BODY_NONEMAIL_PREFIXES):
+        score += 60; flags.append("non_email_body_marker")
+    if 0 < len(b) < 80:
+        score += 25; flags.append("ultra_short_body")
+    if b and b.lower().startswith("connect note"):
+        score += 50; flags.append("linkedin_body_marker")
+    # All-caps body (more than 5 ALL-CAPS words in a row)
+    if b and _re.search(r"\b[A-Z]{4,}\b(\s+\b[A-Z]{4,}\b){4,}", b):
+        score += 20; flags.append("all_caps_run")
+    # Body still has unsubstituted template placeholders {{like_this}}
+    if "{{" in b and "}}" in b:
+        score += 35; flags.append("unsubstituted_template_var")
+
+    # Recipient sanity — covers obvious test-data leaks
+    if not recipient_email or "@" not in recipient_email:
+        score += 50; flags.append("invalid_recipient")
+    elif recipient_email.lower().endswith(("@test.com", "@example.com", "@localhost")):
+        score += 30; flags.append("test_domain_recipient")
+
+    return min(score, 100), flags
+
+
+async def _log_outbound_audit(
+    *,
+    sender_user_id: Optional[int],
+    company_id: int,
+    contact_id: int,
+    email_id: int,
+    step_type: Optional[str],
+    subject: str,
+    body: str,
+    recipient_email: str,
+    status: str,                    # 'sent' | 'blocked' | 'failed' | 'transient'
+    blocked_reason: Optional[str] = None,
+    anomaly_score: int = 0,
+    anomaly_flags: Optional[list[str]] = None,
+    resend_id: Optional[str] = None,
+    error_message: Optional[str] = None,
+    caller_module: Optional[str] = None,
+) -> None:
+    """Write one row to outbound_email_audit per send_email() call.
+
+    All inserts are best-effort — never raise. We never want an audit
+    failure to break a real outbound send (or block a guard return).
+    """
+    try:
+        from sqlalchemy import text
+        from app.database import async_session
+
+        # Resolve tenant via company row when possible (audit needs tenant scope).
+        tenant_id: Optional[int] = None
+        async with async_session() as s:
+            if company_id:
+                row = await s.execute(
+                    text("SELECT tenant_id FROM companies WHERE id = :c"),
+                    {"c": company_id},
+                )
+                r = row.fetchone()
+                if r:
+                    tenant_id = r[0]
+            await s.execute(text("""
+                INSERT INTO outbound_email_audit (
+                    tenant_id, sender_user_id, company_id, contact_id, email_id,
+                    step_type, subject, body_preview, recipient_email,
+                    status, blocked_reason, anomaly_score, anomaly_flags,
+                    resend_id, error_message, caller_module
+                ) VALUES (
+                    :tenant_id, :sender_user_id, :company_id, :contact_id, :email_id,
+                    :step_type, :subject, :body_preview, :recipient_email,
+                    :status, :blocked_reason, :anomaly_score, :anomaly_flags,
+                    :resend_id, :error_message, :caller_module
+                )
+            """), {
+                "tenant_id": tenant_id,
+                "sender_user_id": sender_user_id,
+                "company_id": company_id or None,
+                "contact_id": contact_id or None,
+                "email_id": email_id or None,
+                "step_type": step_type,
+                "subject": (subject or "")[:500],
+                "body_preview": (body or "")[:300],
+                "recipient_email": (recipient_email or "")[:320],
+                "status": status,
+                "blocked_reason": blocked_reason[:200] if blocked_reason else None,
+                "anomaly_score": int(anomaly_score),
+                "anomaly_flags": (",".join(anomaly_flags) if anomaly_flags else None),
+                "resend_id": resend_id,
+                "error_message": error_message[:2000] if error_message else None,
+                "caller_module": (caller_module or "")[:120] or None,
+            })
+            await s.commit()
+    except Exception as e:
+        import logging
+        logging.getLogger("bmp.outbound_audit").warning(
+            f"audit write failed (non-fatal): {type(e).__name__}: {e}"
+        )
 
 
 def _compliance_footer() -> str:
@@ -54,50 +202,61 @@ async def send_email(
     # belt + suspenders so a future route that forgets to filter STILL
     # can't reach Resend with non-email content.
     # ----------------------------------------------------------------
-    if step_type and step_type != "email":
-        import logging
-        logging.getLogger("bmp.email_sender").error(
-            f"send_email REFUSED — step_type='{step_type}' is not 'email'. "
-            f"email_id={email_id} company={company_id} contact={contact_id} subject={subject!r}"
-        )
-        return {
-            "success": False,
-            "error": f"step_type={step_type} cannot be sent through send_email — caller bug",
-            "blocked_by_guard": True,
-        }
-    # Subject-pattern guard — catches any path that passes a placeholder
-    # subject without an accompanying step_type marker.
-    import re as _re
-    _SUBJECT_PLACEHOLDER = _re.compile(
-        r"^(\s*\[skipped\]|\s*(?:call|imessage|linkedin)\s+(?:step\s+)?\d+\s*$|\s*linkedin\s+message:\s*)",
-        _re.I,
+    # Compute anomaly score ONCE — used by guards + audit log + digest.
+    anomaly_score, anomaly_flags = _score_email_anomaly(subject, body, to_email)
+
+    # Identify the calling module for audit trail (helps post-incident triage —
+    # tells us if a bad send came from send_routes vs sequence_engine vs audit_routes etc.)
+    import inspect
+    _caller = None
+    try:
+        _frame = inspect.currentframe()
+        if _frame and _frame.f_back:
+            _caller = f"{_frame.f_back.f_globals.get('__name__', '?')}:{_frame.f_back.f_lineno}"
+    except Exception:
+        pass
+
+    # Lookup sender_user_id from the X-Sender header (set higher up) —
+    # actually we don't have it on this call signature, so leave NULL.
+    # The audit log query joins via company.assigned_to for reporting if needed.
+    _audit_base = dict(
+        sender_user_id=None,
+        company_id=company_id, contact_id=contact_id, email_id=email_id,
+        step_type=step_type, subject=subject or "", body=body or "",
+        recipient_email=to_email, anomaly_score=anomaly_score,
+        anomaly_flags=anomaly_flags, caller_module=_caller,
     )
-    if subject and _SUBJECT_PLACEHOLDER.match(subject):
+
+    async def _refuse(reason_short: str, error_msg: str) -> dict:
         import logging
         logging.getLogger("bmp.email_sender").error(
-            f"send_email REFUSED — subject {subject!r} matches non-email placeholder pattern. "
-            f"email_id={email_id} company={company_id} contact={contact_id}"
+            f"send_email REFUSED [{reason_short}] — "
+            f"email_id={email_id} company={company_id} contact={contact_id} "
+            f"subject={subject!r} score={anomaly_score} flags={anomaly_flags}"
         )
-        return {
-            "success": False,
-            "error": f"Refused to send placeholder subject: {subject!r}",
-            "blocked_by_guard": True,
-        }
-    # Body-pattern guard — call talk tracks start with 📞, LinkedIn DM
-    # drafts start with 'Connect note (under 280 chars):', iMessage drafts
-    # tend to be short and casual but harder to fingerprint reliably.
+        await _log_outbound_audit(**_audit_base, status="blocked",
+                                  blocked_reason=reason_short, error_message=error_msg)
+        return {"success": False, "error": error_msg, "blocked_by_guard": True,
+                "anomaly_score": anomaly_score, "anomaly_flags": anomaly_flags}
+
+    # Hard guards (route-level + caller-level explicit signals)
+    if step_type and step_type != "email":
+        return await _refuse("step_type_not_email",
+                             f"step_type={step_type} cannot be sent through send_email — caller bug")
+    if subject and _SUBJECT_PLACEHOLDER_RE.match(subject):
+        return await _refuse("placeholder_subject",
+                             f"Refused to send placeholder subject: {subject!r}")
     body_stripped = (body or "").lstrip()
-    if body_stripped.startswith(("📞", "Connect note (under 280 chars):", "Connect note:")):
-        import logging
-        logging.getLogger("bmp.email_sender").error(
-            f"send_email REFUSED — body looks like non-email content (starts with talk-track/DM marker). "
-            f"email_id={email_id} company={company_id} contact={contact_id} subject={subject!r}"
-        )
-        return {
-            "success": False,
-            "error": "Refused to send non-email content (call talk-track or LinkedIn DM detected)",
-            "blocked_by_guard": True,
-        }
+    if body_stripped.startswith(_BODY_NONEMAIL_PREFIXES):
+        return await _refuse("non_email_body",
+                             "Refused to send non-email content (call talk-track or LinkedIn DM detected)")
+    # Soft guard — anomaly score threshold. The hard guards above are
+    # exact matches for known leak patterns; this one catches NEW failure
+    # modes we haven't enumerated. 60 is permissive — only refuses when
+    # several signals fire together.
+    if anomaly_score >= 60:
+        return await _refuse("anomaly_score_high",
+                             f"Refused: anomaly score {anomaly_score} with flags {anomaly_flags}")
 
     from_address = f"{from_name} <{from_firstname}@{settings.send_domain}>"
 
@@ -197,22 +356,34 @@ async def send_email(
         logging.getLogger("bmp.email_sender").warning(
             f"Resend transient failure for email_id={email_id}: {type(e).__name__}: {e}"
         )
-        return {"success": False, "error": f"Resend transient: {type(e).__name__}", "retryable": True}
+        await _log_outbound_audit(**_audit_base, status="transient",
+                                  error_message=f"{type(e).__name__}: {e}")
+        return {"success": False, "error": f"Resend transient: {type(e).__name__}", "retryable": True,
+                "anomaly_score": anomaly_score, "anomaly_flags": anomaly_flags}
     except httpx.HTTPError as e:
-        # Anything else httpx raises — log + treat as non-retryable so the
-        # operator can investigate (likely a bug, not a transient blip).
         import logging
         logging.getLogger("bmp.email_sender").exception(
             f"Resend HTTPError for email_id={email_id}: {type(e).__name__}: {e}"
         )
-        return {"success": False, "error": f"{type(e).__name__}: {e}", "retryable": False}
+        await _log_outbound_audit(**_audit_base, status="failed",
+                                  error_message=f"{type(e).__name__}: {e}")
+        return {"success": False, "error": f"{type(e).__name__}: {e}", "retryable": False,
+                "anomaly_score": anomaly_score, "anomaly_flags": anomaly_flags}
 
     if response.status_code in (200, 201):
         data = response.json()
-        return {"success": True, "resend_id": data.get("id"), "message": "Email sent successfully"}
+        resend_id = data.get("id")
+        await _log_outbound_audit(**_audit_base, status="sent", resend_id=resend_id)
+        return {"success": True, "resend_id": resend_id, "message": "Email sent successfully",
+                "anomaly_score": anomaly_score, "anomaly_flags": anomaly_flags}
     # 5xx from Resend = their problem, retry on next tick
     retryable = 500 <= response.status_code < 600
-    return {"success": False, "error": response.text, "status_code": response.status_code, "retryable": retryable}
+    await _log_outbound_audit(
+        **_audit_base, status=("transient" if retryable else "failed"),
+        error_message=f"HTTP {response.status_code}: {(response.text or '')[:500]}",
+    )
+    return {"success": False, "error": response.text, "status_code": response.status_code,
+            "retryable": retryable, "anomaly_score": anomaly_score, "anomaly_flags": anomaly_flags}
 
 
 def get_sender_info(first_name: str, full_name: str) -> dict:

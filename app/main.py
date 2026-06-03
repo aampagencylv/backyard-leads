@@ -1,5 +1,7 @@
 import asyncio
 import logging
+from datetime import datetime, timezone
+from typing import Optional
 # Load .env into os.environ so every module (not just pydantic-settings)
 # can read configuration. Pydantic-settings reads its own copy from the
 # file, but provisioning services (Cloudflare, Twilio, Resend platform
@@ -313,6 +315,41 @@ async def _wake_snoozed_deals(tenant_id: int):
                 await db.commit()
 
 
+async def _daily_digest_loop():
+    """Background tick — fires the outbound audit digest once per UTC day.
+
+    Wakes hourly, computes the current UTC date, and sends the digest the
+    first time it sees a date it hasn't sent for yet. Cheap state lives in
+    a module-level variable; on restart we might send a duplicate digest
+    in the same UTC day in the rare case of multiple restarts after the
+    fire hour — acceptable.
+
+    Fire hour is 13:00 UTC ≈ 7am MT / 6am PT — early enough that Steve
+    sees yesterday's summary with morning coffee.
+    """
+    FIRE_HOUR_UTC = 13
+    last_sent_date: Optional[str] = None
+    while True:
+        try:
+            now = datetime.now(timezone.utc)
+            today = now.strftime("%Y-%m-%d")
+            if now.hour >= FIRE_HOUR_UTC and last_sent_date != today:
+                from app.services.outbound_digest import send_digest
+                try:
+                    result = await send_digest()
+                    log.info(f"outbound digest fired: {result}")
+                    last_sent_date = today
+                except Exception as e:
+                    log.exception(f"outbound digest failed: {e}")
+                    # Don't update last_sent_date — retry next hour
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.exception(f"digest loop tick failed: {e}")
+        # Sleep an hour. Loop is light so missing a tick on shutdown is fine.
+        await asyncio.sleep(3600)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
@@ -323,14 +360,16 @@ async def lifespan(app: FastAPI):
     from app.tenancy import install_tenant_filter
     install_tenant_filter()
     task = asyncio.create_task(_sequence_engine_loop())
+    digest_task = asyncio.create_task(_daily_digest_loop())
     try:
         yield
     finally:
-        task.cancel()
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):
-            pass
+        for t in (task, digest_task):
+            t.cancel()
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):
+                pass
 
 
 app = FastAPI(
