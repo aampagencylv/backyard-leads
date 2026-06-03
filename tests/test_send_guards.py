@@ -137,15 +137,26 @@ async def test_anomaly_score_high_is_refused():
 
 
 @pytest.mark.asyncio
-async def test_anomaly_score_attached_to_all_results():
-    """Even successful sends should expose anomaly_score for the audit trail."""
+async def test_realistic_cold_email_scores_clean():
+    """A real cold-outreach email of normal length + clean subject scores 0."""
     from app.services.email_sender import _score_email_anomaly
+    body = (
+        "Hi Timothy\n\n"
+        "I ran a quick AI findability scan on your site this morning and "
+        "noticed a couple of things you'd probably want to know.\n\n"
+        "When someone asks ChatGPT or Perplexity 'best patio contractors in "
+        "Spring, Texas,' Texas Remodel Team isn't getting recommended — even "
+        "though your reviews are stronger than the firms that are.\n\n"
+        "I posted the full audit here: https://audit.example.com/report/abc123\n\n"
+        "Worth 15 minutes to walk through what's fixable?\n\n"
+        "— Sebastian"
+    )
     score, flags = _score_email_anomaly(
         subject="Quick AI audit for Texas Remodel Team",
-        body="Hi Timothy\n\nI ran a quick scan on your site...",
+        body=body,
         recipient_email="tim@texasremodelteam.com",
     )
-    assert score == 0
+    assert score == 0, f"Real cold email scored {score} with flags {flags}"
     assert flags == []
 
 
