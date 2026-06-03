@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ business.name }}</title>
+<meta name="description" content="{{ hero.subhead }}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="{{ photos.font_google_url or 'https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@400;500;600&display=swap' }}" rel="stylesheet">
+<style>
+  :root {
+    --ink: #0a0a09;
+    --steel: #5e5d58;
+    --paper: #fafaf7;
+    --cream: #f0ede5;
+    --mist: #d8d6cf;
+    --primary: {{ photos.brand_color or '#1f2933' }};
+    --primary-deep: {{ photos.brand_color_dark or photos.brand_color or '#0f1c26' }};
+    --font-display: '{{ photos.font_display or "DM Serif Display" }}', Georgia, serif;
+    --font-body: '{{ photos.font_body or "DM Sans" }}', -apple-system, system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body { font-family: var(--font-body); color: var(--ink); background: var(--paper); font-size: 16px; line-height: 1.55; }
+  .container { max-width: 1180px; margin: 0 auto; padding: 0 32px; }
+
+  h1, h2, h3 { font-family: var(--font-display); color: var(--ink); font-weight: 400; line-height: 1; letter-spacing: -0.02em; }
+  h1 { font-size: clamp(64px, 11vw, 160px); }
+  h2 { font-size: clamp(48px, 7vw, 88px); margin-bottom: 24px; }
+  h3 { font-size: 32px; line-height: 1.05; }
+  p { color: var(--steel); }
+  a { color: var(--ink); text-decoration: none; transition: color 0.25s ease, border-color 0.25s ease; }
+  a:hover { color: var(--primary); }
+
+  .caption { font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.32em; color: var(--ink); }
+  .caption-soft { color: var(--steel); }
+
+  .arrow-link { display: inline-flex; align-items: center; gap: 12px; font-size: 16px; font-weight: 500; color: var(--ink); border-bottom: 1px solid var(--ink); padding-bottom: 4px; transition: color 0.25s ease, border-color 0.25s ease; }
+  .arrow-link:hover { color: var(--primary); border-color: var(--primary); }
+  .arrow-link .arrow { font-size: 18px; line-height: 1; transition: transform 0.25s ease; }
+  .arrow-link:hover .arrow { transform: translateX(4px); }
+
+  .btn-ink { display: inline-block; padding: 18px 36px; font-family: var(--font-body); font-size: 13px; font-weight: 500; letter-spacing: 0.18em; text-transform: uppercase; border-radius: 0; cursor: pointer; transition: background 0.25s ease, color 0.25s ease; text-decoration: none; background: var(--ink); color: var(--paper); border: 0; }
+  .btn-ink:hover { background: var(--primary); }
+
+  /* Disclosure banner */
+  .preview-banner { background: var(--paper); color: var(--steel); text-align: center; padding: 10px 16px; font-size: 10px; letter-spacing: 0.32em; text-transform: uppercase; border-bottom: 1px solid var(--mist); }
+
+  /* Header — transparent, overlays the hero photo */
+  .site-header { position: absolute; top: 30px; left: 0; right: 0; z-index: 10; background: transparent; padding: 24px 0; }
+  .site-header .row { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+  .brand-block { display: flex; align-items: center; gap: 14px; color: var(--paper); }
+  .brand-block img { height: 36px; width: auto; max-width: 140px; object-fit: contain; }
+  .brand-name { font-family: var(--font-display); font-size: 22px; font-weight: 400; color: var(--paper); letter-spacing: -0.01em; text-shadow: 0 1px 3px rgba(0,0,0,0.4); }
+  .brand-tag { font-size: 10px; color: rgba(250, 250, 247, 0.78); margin-top: 2px; letter-spacing: 0.3em; text-transform: uppercase; }
+  .header-cta { font-size: 11px; font-weight: 500; color: var(--paper); letter-spacing: 0.32em; text-transform: uppercase; text-shadow: 0 1px 3px rgba(0,0,0,0.4); }
+  .header-cta:hover { color: rgba(250, 250, 247, 0.7); }
+
+  /* Hero — 100vh, asymmetric bottom-left text positioning */
+  .hero { position: relative; height: 100vh; min-height: 640px; background: var(--ink); color: var(--paper); overflow: hidden; }
+  .hero-bg { position: absolute; inset: 0; background-size: cover; background-position: center; filter: saturate(1.02); }
+  .hero-overlay { position: absolute; inset: 0; background: linear-gradient(135deg, rgba(10, 10, 9, 0.12) 0%, rgba(10, 10, 9, 0.08) 50%, rgba(10, 10, 9, 0.55) 100%); }
+  .hero-content { position: relative; height: 100%; max-width: 1180px; margin: 0 auto; padding: 0 32px; display: flex; flex-direction: column; justify-content: flex-end; padding-bottom: 88px; }
+  .hero-caption { font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.32em; color: rgba(250, 250, 247, 0.88); margin-bottom: 32px; }
+  .hero h1 { color: var(--paper); max-width: 1000px; margin-bottom: 32px; text-shadow: 0 2px 8px rgba(0,0,0,0.25); }
+  .hero .subhead { font-size: 18px; max-width: 520px; color: rgba(250, 250, 247, 0.88); line-height: 1.5; font-weight: 400; margin-bottom: 40px; }
+
+  /* Index strip — work categories instead of trust stats */
+  .index-strip { background: var(--paper); padding: 56px 0; border-bottom: 1px solid var(--mist); }
+  .index-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 24px; max-width: 1180px; margin: 0 auto; padding: 0 32px; }
+  .index-item .num { font-family: var(--font-display); font-size: 22px; color: var(--ink); font-weight: 400; display: block; margin-bottom: 8px; line-height: 1; }
+  .index-item .lbl { font-size: 10px; font-weight: 500; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink); }
+
+  /* Section anchors with big numbered markers */
+  section.scope { padding: 144px 0; }
+  .section-mark { display: flex; align-items: baseline; gap: 16px; margin-bottom: 64px; }
+  .section-mark .mark-num { font-family: var(--font-display); font-size: 28px; color: var(--ink); line-height: 1; }
+  .section-mark .mark-lbl { font-size: 11px; font-weight: 500; letter-spacing: 0.32em; text-transform: uppercase; color: var(--ink); }
+  section.scope h2 { max-width: 880px; }
+
+  /* Work — asymmetric magazine grid */
+  .work-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
+  .work-item { display: block; }
+  .work-item.full { grid-column: 1 / -1; }
+  .work-item img { width: 100%; height: 100%; max-height: 640px; object-fit: cover; border-radius: 0; filter: saturate(1.02); transition: filter 0.3s ease; }
+  .work-item:hover img { filter: saturate(1.06) brightness(1.04); }
+  .work-item.full img { max-height: 720px; }
+  .work-meta { display: flex; justify-content: space-between; align-items: baseline; margin-top: 14px; padding-bottom: 14px; }
+  .work-meta-title { font-size: 14px; font-weight: 500; color: var(--ink); letter-spacing: 0.02em; }
+  .work-meta-desc { font-size: 12px; color: var(--steel); margin-top: 4px; line-height: 1.5; max-width: 480px; }
+  .work-meta-tag { font-size: 10px; font-weight: 500; letter-spacing: 0.18em; text-transform: uppercase; color: var(--steel); white-space: nowrap; }
+
+  /* About — large portrait + minimal copy */
+  .about { background: var(--cream); }
+  .about-grid { display: grid; grid-template-columns: 1.3fr 1fr; gap: 80px; align-items: start; }
+  .about-grid img { width: 100%; height: 680px; object-fit: cover; border-radius: 0; }
+  .about .body { font-size: 18px; line-height: 1.65; color: var(--ink); padding-top: 40px; }
+  .about .body p + p { margin-top: 20px; }
+  .about .body .lead { font-family: var(--font-display); font-size: 28px; line-height: 1.25; color: var(--ink); margin-bottom: 28px; }
+
+  /* Final CTA — minimal, text-only */
+  .cta-block { background: var(--paper); padding: 200px 0; text-align: center; border-top: 1px solid var(--mist); }
+  .cta-block .caption { margin-bottom: 32px; }
+  .cta-block h2 { color: var(--ink); max-width: 960px; margin: 0 auto 56px; }
+  .cta-block .subhead { font-size: 17px; color: var(--steel); max-width: 540px; margin: 0 auto 56px; }
+
+  /* Footer — minimal */
+  footer { background: var(--paper); color: var(--steel); padding: 56px 0 80px; font-size: 13px; border-top: 1px solid var(--mist); }
+  footer .row { display: flex; justify-content: space-between; align-items: flex-end; gap: 32px; flex-wrap: wrap; }
+  footer .col strong { color: var(--ink); font-weight: 500; }
+  footer a { color: var(--ink); border-bottom: 1px solid var(--mist); padding-bottom: 2px; }
+  footer .powered { font-size: 10px; letter-spacing: 0.32em; text-transform: uppercase; }
+
+  /* Mobile */
+  @media (max-width: 900px) {
+    .container { padding: 0 24px; }
+    h1 { font-size: clamp(48px, 12vw, 96px); }
+    h2 { font-size: clamp(36px, 10vw, 64px); }
+    .hero-content { padding-bottom: 56px; padding-left: 24px; padding-right: 24px; }
+    .hero .subhead { font-size: 16px; }
+    .site-header { padding: 16px 0; top: 30px; }
+    .site-header .container { padding: 0 24px; }
+    .index-grid { grid-template-columns: repeat(2, 1fr); padding: 0 24px; }
+    section.scope { padding: 80px 0; }
+    .work-grid { grid-template-columns: 1fr; gap: 24px; }
+    .work-item img { max-height: 360px; }
+    .about-grid { grid-template-columns: 1fr; gap: 48px; }
+    .about-grid img { height: 420px; }
+    .about .body { padding-top: 0; font-size: 17px; }
+    .cta-block { padding: 96px 0; }
+  }
+</style>
+</head>
+<body>
+
+<div class="preview-banner">Preview · {{ agency.name }} for {{ business.name }}</div>
+
+<header class="site-header">
+  <div class="container row">
+    <div class="brand-block">
+      {% if photos.logo_url %}<img src="{{ photos.logo_url }}" alt="{{ business.name }}">{% endif %}
+      <div>
+        <div class="brand-name">{{ business.name }}</div>
+        <div class="brand-tag">{{ business.tagline }}</div>
+      </div>
+    </div>
+    <a href="{{ cta_url }}" class="header-cta">{{ hero.cta_text }}</a>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="hero-bg" style="background-image: url('{{ photos.hero }}')"></div>
+  <div class="hero-overlay"></div>
+  <div class="hero-content">
+    <div class="hero-caption">{{ hero.eyebrow }} — {{ business.location }}</div>
+    <h1>{{ hero.headline }}</h1>
+    <p class="subhead">{{ hero.subhead }}</p>
+    <a href="{{ cta_url }}" class="arrow-link" style="color: var(--paper); border-color: var(--paper)">{{ hero.cta_text }} <span class="arrow">→</span></a>
+  </div>
+</section>
+
+<section class="index-strip">
+  <div class="index-grid">
+    {% for service in services['items'][:6] %}
+    <div class="index-item">
+      <span class="num">{{ "%02d"|format(loop.index) }}</span>
+      <span class="lbl">{{ service.name }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="scope">
+  <div class="container">
+    <div class="section-mark"><span class="mark-num">01</span><span class="mark-lbl">{{ services.section_label or 'Work' }}</span></div>
+    <h2>{{ services.section_headline }}</h2>
+    <div class="work-grid" style="margin-top: 64px">
+      {% set photo_pool = photos.gallery if photos.gallery else [photos.hero, photos.about] %}
+      {% for service in services['items'][:5] %}
+        {% set photo = photo_pool[loop.index0 % photo_pool|length] if photo_pool else None %}
+        <div class="work-item {% if loop.index == 1 or loop.index == 4 %}full{% endif %}">
+          {% if photo %}<img src="{{ photo }}" alt="{{ service.name }}">{% endif %}
+          <div class="work-meta">
+            <div>
+              <div class="work-meta-title">{{ service.name }}</div>
+              <div class="work-meta-desc">{{ service.description }}</div>
+            </div>
+            <div class="work-meta-tag">{{ business.location }}</div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<section class="scope about">
+  <div class="container">
+    <div class="section-mark"><span class="mark-num">02</span><span class="mark-lbl">{{ about.eyebrow or 'About' }}</span></div>
+    <div class="about-grid">
+      {% if photos.about %}<img src="{{ photos.about }}" alt="{{ business.name }}">{% endif %}
+      <div class="body">
+        {% if about.paragraphs %}
+        <p class="lead">{{ about.paragraphs[0] }}</p>
+        {% for p in about.paragraphs[1:] %}<p>{{ p }}</p>{% endfor %}
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="cta-block">
+  <div class="container">
+    <div class="caption">{{ cta_section.headline_eyebrow or 'Tell us about your project' }}</div>
+    <h2>{{ cta_section.headline }}</h2>
+    <p class="subhead">{{ cta_section.subhead }}</p>
+    <a href="{{ cta_url }}" class="arrow-link">{{ cta_section.button_text }} <span class="arrow">→</span></a>
+  </div>
+</section>
+
+<footer>
+  <div class="container row">
+    <div class="col">
+      <strong>{{ business.name }}</strong>
+      <div style="margin-top: 6px">{{ business.location }}</div>
+      <div style="margin-top: 16px; font-size: 11px">&copy; {{ year }}</div>
+    </div>
+    <div class="powered">Designed by <a href="{{ agency.url }}">{{ agency.name }}</a></div>
+  </div>
+</footer>
+
+</body>
+</html>

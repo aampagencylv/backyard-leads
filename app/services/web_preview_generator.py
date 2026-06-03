@@ -36,30 +36,119 @@ log = logging.getLogger("bmp.web_preview_generator")
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "web_preview_templates"
 
-# Business-type → template slug mapping. Vertical-aware picking so
-# pool builders get "Modern Outdoor", salons get "Luxury", etc.
-# Future: more granular + LLM-assisted picking. For now keyword-match.
+# Available templates + their vibe one-liners. Used by both the keyword
+# fallback and the LLM picker (which gets the vibe descriptions to match
+# against the prospect's brand).
+AVAILABLE_TEMPLATES = {
+    "modern_outdoor": "Confident craft-trade outdoor work — pools, landscape, decks, hardscape, fence, lawn, outdoor kitchens. Modern serif headlines, photo-led hero, green/cream palette.",
+    "luxury":         "High-end personal service — med spa, aesthetic clinic, plastic surgery, jewelry, premium salons, luxury real estate. Editorial restraint, generous whitespace, italic serif, sharp 0px corners, outlined buttons. Never pushy.",
+    "local_trust":    "Utility trades — HVAC, plumbing, electrical, roofing, garage doors, pest control. Bold sans, phone-forward, big trust numbers, service-area focus. Confident no-nonsense.",
+    "craft_studio":   "Portfolio-driven design-forward — design studios, photographers, custom furniture, ceramicists, branding agencies, architects. Magazine layout, extreme scale contrast, asymmetric work grid, near-monochrome.",
+    "wellness_natural": "Calm soft-tier — salons, day spas, hair, organic beauty, naturopath, yoga, holistic. Warm cream + sage palette, humanist serif, rounded pill buttons, soft generous spacing.",
+    "emergency_service": "24/7 urgency — emergency plumbing, water damage restoration, towing, locksmith, biohazard cleanup, board-up. Heavy block display, alarm-aware red, phone-first, alert pills, sticky 24/7 top bar.",
+}
+
+# Keyword fallback for when the LLM picker isn't called or fails. Listed
+# in priority order — emergency keywords win over generic trade keywords
+# (e.g. "24/7 emergency plumbing" hits emergency_service, not local_trust).
 _VERTICAL_MAP: list[tuple[list[str], str]] = [
-    # Outdoor / home-service: BMP's vertical + adjacent.
-    (["pool", "landscap", "deck", "backyard", "outdoor kitchen",
+    # Emergency wins over everything — visitor urgency matters most
+    (["24/7", "24-7", "emergency", "towing", "locksmith", "water damage",
+      "restoration", "biohazard", "mold remediation", "fire damage",
+      "board-up", "board up", "boardup"], "emergency_service"),
+    # Luxury — high-margin, aesthetic-conscious
+    (["med spa", "medspa", "plastic surgery", "aesthetic", "dermatology",
+      "cosmetic surgery", "luxury", "fine jewelry", "jeweler",
+      "premium salon", "high-end"], "luxury"),
+    # Outdoor / home-service — BMP's vertical
+    (["pool", "landscap", "deck builder", "backyard", "outdoor kitchen",
       "patio", "hardscape", "fence", "lawn", "garden", "irrigation",
       "tree", "arborist", "concrete", "paver"], "modern_outdoor"),
-    # Future templates land here as we ship them:
-    # (["salon", "spa", "beauty", "med spa"], "luxury"),
-    # (["hvac", "plumb", "electric", "roof"], "local_trust"),
+    # Utility trades — HVAC, plumb, electric, roof
+    (["hvac", "heating", "air conditioning", "plumb", "electric",
+      "electrician", "roofing", "roof", "garage door", "septic",
+      "pest control", "gutter", "siding", "drain"], "local_trust"),
+    # Wellness / soft-service
+    (["spa", "salon", "hair", "beauty", "organic", "naturopath",
+      "herbalist", "yoga", "pilates", "holistic", "doula", "skincare",
+      "esthetician", "wellness", "acupuncture", "massage"], "wellness_natural"),
+    # Craft / portfolio
+    (["design studio", "photographer", "photography", "ceramic",
+      "branding agency", "architect", "custom maker", "graphic design",
+      "creative studio", "tattoo", "boutique cafe", "indie"], "craft_studio"),
 ]
 
 
-def pick_template(business_type: Optional[str]) -> str:
-    """Pick which template slug fits this business. Falls back to
-    modern_outdoor (our only template at MVP)."""
-    if not business_type:
+def pick_template_keyword(business_type: Optional[str], company_name: Optional[str] = None) -> str:
+    """Keyword-based fallback. Used when the LLM picker is skipped or
+    fails. Falls back to modern_outdoor."""
+    blob = f"{business_type or ''} {company_name or ''}".lower()
+    if not blob.strip():
         return "modern_outdoor"
-    bt = business_type.lower()
     for keywords, slug in _VERTICAL_MAP:
-        if any(kw in bt for kw in keywords):
+        if any(kw in blob for kw in keywords):
             return slug
     return "modern_outdoor"
+
+
+async def pick_template_llm(
+    business_type: Optional[str],
+    company_name: str,
+    city: Optional[str],
+    state: Optional[str],
+    description: Optional[str],
+) -> str:
+    """LLM-assisted template picker. Reads the business context + the
+    AVAILABLE_TEMPLATES vibe descriptions and returns the slug whose
+    vibe best fits this prospect. Falls back to keyword match on
+    LLM/parse failure.
+
+    Cached upstream in brand_assets_json so we only call this once per
+    company per 30-day refresh cycle.
+    """
+    from app.services.ai_client import chat_with_system, MODEL_BALANCED
+    import json as _json
+
+    system = (
+        "You pick a single template slug for a prospect's website preview. "
+        "Read the business context, match it to ONE of the available templates "
+        "by vibe, and return the slug. Return ONLY a JSON object — no fences, no prose.\n\n"
+        "Output shape: {\"template\": \"<slug>\", \"rationale\": \"<1 short sentence>\"}\n\n"
+        "Available templates:\n"
+        + "\n".join(f"  - {k}: {v}" for k, v in AVAILABLE_TEMPLATES.items())
+    )
+    user = (
+        f"BUSINESS:\n"
+        f"  Name: {company_name}\n"
+        f"  Type: {business_type or '(unknown)'}\n"
+        f"  Location: {city or ''}{', ' + state if state else ''}\n"
+        f"  Description: {(description or '')[:400]}\n\n"
+        "Pick the template now."
+    )
+    try:
+        raw = await chat_with_system(
+            model=MODEL_BALANCED, system=system, user=user,
+            max_tokens=200, cacheable=True,
+        )
+        txt = raw.strip()
+        if "```json" in txt:
+            txt = txt.split("```json", 1)[1].split("```", 1)[0]
+        elif "```" in txt:
+            txt = txt.split("```", 1)[1].split("```", 1)[0]
+        choice = _json.loads(txt.strip())
+        slug = choice.get("template", "").strip()
+        if slug in AVAILABLE_TEMPLATES:
+            log.info(f"template picker chose {slug} — {choice.get('rationale','')}")
+            return slug
+    except Exception as e:
+        log.warning(f"LLM template picker failed: {e} — falling back to keyword match")
+    return pick_template_keyword(business_type, company_name)
+
+
+# Back-compat alias — older code paths still call pick_template
+def pick_template(business_type: Optional[str]) -> str:
+    """Synchronous keyword-only picker. Prefer pick_template_llm() in new code."""
+    return pick_template_keyword(business_type)
 
 
 def slugify(name: str) -> str:
@@ -307,7 +396,20 @@ async def generate_web_preview(
     Never raises. Returns {"error": "..."} on failure (caller decides
     whether to surface or retry).
     """
-    template_slug = template_override or pick_template(company.business_type)
+    if template_override:
+        template_slug = template_override
+    else:
+        # LLM-assisted picker — reads business context + matches to one
+        # of the 6 templates by vibe. Falls back to keyword match on
+        # LLM failure. Costs ~$0.005 per company; cache via the
+        # force_refresh_assets gating one level up.
+        template_slug = await pick_template_llm(
+            business_type=company.business_type,
+            company_name=company.name or "",
+            city=company.city,
+            state=company.state,
+            description=company.company_description,
+        )
     template_dir = TEMPLATES_DIR / template_slug
     design_md_path = template_dir / "design.md"
     if not design_md_path.exists():

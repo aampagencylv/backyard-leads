@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ business.name }}</title>
+<meta name="description" content="{{ hero.subhead }}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="{{ photos.font_google_url or 'https://fonts.googleapis.com/css2?family=Archivo+Black&family=Archivo:wght@400;500;600;700&display=swap' }}" rel="stylesheet">
+<style>
+  :root {
+    --ink: #0a0a0a;
+    --ink-soft: #444444;
+    --paper: #ffffff;
+    --mist: #e0e0e0;
+    --primary: {{ photos.brand_color or '#cc1f1f' }};
+    --primary-deep: {{ photos.brand_color_dark or photos.brand_color or '#8e1414' }};
+    --alert: #fbb800;
+    --font-display: '{{ photos.font_display or "Archivo Black" }}', -apple-system, system-ui, sans-serif;
+    --font-body: '{{ photos.font_body or "Archivo" }}', -apple-system, system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body { font-family: var(--font-body); color: var(--ink-soft); background: var(--paper); font-size: 17px; line-height: 1.55; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+
+  h1, h2, h3 { font-family: var(--font-display); color: var(--ink); font-weight: 900; line-height: 1.05; letter-spacing: -0.02em; }
+  h1 { font-size: clamp(40px, 6vw, 88px); }
+  h2 { font-size: clamp(32px, 4vw, 52px); margin-bottom: 12px; }
+  h3 { font-size: 22px; font-weight: 800; }
+  p { color: var(--ink-soft); }
+  a { color: var(--primary); text-decoration: none; }
+
+  .label { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--primary); }
+
+  .btn { display: inline-flex; align-items: center; gap: 10px; font-family: var(--font-body); font-weight: 700; cursor: pointer; transition: background 0.12s ease; text-decoration: none; border: 0; border-radius: 6px; }
+  .btn-call { padding: 20px 48px; font-size: 22px; font-weight: 800; background: var(--primary); color: var(--paper); letter-spacing: -0.02em; }
+  .btn-call:hover { background: var(--primary-deep); }
+  .btn-call-lg { padding: 28px 56px; font-size: 28px; }
+  .btn-secondary { padding: 16px 32px; font-size: 15px; background: var(--ink); color: var(--paper); }
+  .btn-secondary:hover { background: #2a2a2a; }
+  .btn-outlined { padding: 14px 30px; font-size: 15px; background: transparent; color: var(--ink); border: 2px solid var(--ink); }
+  .btn-outlined:hover { background: var(--ink); color: var(--paper); }
+
+  /* Emergency top bar — sticky, alarm-aware */
+  .top-bar { background: var(--primary); color: var(--paper); padding: 10px 16px; text-align: center; font-weight: 700; font-size: 14px; letter-spacing: 0.02em; position: sticky; top: 0; z-index: 50; }
+  .top-bar a { color: var(--paper); text-decoration: underline; text-underline-offset: 2px; }
+  .pulse { display: inline-block; width: 8px; height: 8px; background: var(--alert); border-radius: 100px; margin-right: 8px; animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.6; transform: scale(0.85); } }
+
+  /* Disclosure */
+  .preview-banner { background: var(--ink); color: var(--alert); text-align: center; padding: 6px 16px; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+
+  /* Header */
+  .site-header { background: var(--paper); border-bottom: 1px solid var(--mist); padding: 16px 0; }
+  .site-header .row { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+  .brand-block { display: flex; align-items: center; gap: 12px; }
+  .brand-block img { height: 44px; width: auto; max-width: 150px; object-fit: contain; }
+  .brand-name { font-family: var(--font-display); font-size: 22px; font-weight: 900; color: var(--ink); letter-spacing: -0.02em; }
+  .brand-license { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); margin-top: 2px; }
+
+  /* Hero — solid color block, phone-forward */
+  .hero { background: var(--ink); color: var(--paper); padding: 80px 0 96px; position: relative; overflow: hidden; }
+  .hero-bg { position: absolute; inset: 0; background-size: cover; background-position: center; opacity: 0.18; filter: saturate(0.6); }
+  .hero-content { position: relative; max-width: 1080px; margin: 0 auto; padding: 0 24px; text-align: center; }
+  .hero .alert-pill { display: inline-flex; align-items: center; background: var(--alert); color: var(--ink); padding: 8px 18px; border-radius: 100px; font-size: 13px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 24px; }
+  .hero h1 { color: var(--paper); max-width: 1080px; margin: 0 auto 24px; }
+  .hero .subhead { font-size: 19px; max-width: 640px; margin: 0 auto 40px; color: rgba(255, 255, 255, 0.85); line-height: 1.5; font-weight: 500; }
+  .hero-creds { margin-top: 32px; display: flex; gap: 24px; justify-content: center; flex-wrap: wrap; font-size: 13px; color: rgba(255, 255, 255, 0.7); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+  .hero-creds span:before { content: '✓ '; color: var(--alert); margin-right: 6px; }
+
+  /* Trust strip — bold stats */
+  .trust { background: var(--paper); padding: 56px 0; border-bottom: 1px solid var(--mist); }
+  .trust-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 32px; text-align: center; }
+  .trust .num { font-family: var(--font-display); font-size: clamp(36px, 4.5vw, 56px); font-weight: 900; color: var(--primary); line-height: 1; margin-bottom: 8px; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+  .trust .lbl { font-size: 12px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink); }
+
+  /* Section base */
+  section.scope { padding: 88px 0; }
+  section.scope .label { display: block; margin-bottom: 12px; text-align: center; }
+  section.scope h2 { text-align: center; margin-bottom: 48px; }
+
+  /* Services */
+  .services { background: var(--paper); }
+  .services-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  .service { background: var(--paper); border: 2px solid var(--mist); border-radius: 8px; padding: 32px; transition: border-color 0.15s ease, transform 0.15s ease; }
+  .service:hover { border-color: var(--primary); transform: translateY(-2px); }
+  .service-num { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 8px; background: var(--primary); color: var(--paper); font-weight: 900; font-size: 18px; margin-bottom: 16px; font-family: var(--font-display); }
+  .service h3 { margin-bottom: 8px; color: var(--ink); }
+  .service p { font-size: 15px; line-height: 1.55; color: var(--ink-soft); margin-bottom: 16px; }
+  .service .service-call { font-size: 13px; font-weight: 700; color: var(--primary); letter-spacing: 0.04em; text-transform: uppercase; }
+  .service .service-call:hover { color: var(--primary-deep); }
+
+  /* Process — horizontal 3-step */
+  .process { background: var(--ink); color: var(--paper); }
+  .process .label { color: var(--alert); }
+  .process h2 { color: var(--paper); }
+  .process-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: 48px; }
+  .process-item { text-align: center; padding: 24px; }
+  .process-num { font-family: var(--font-display); font-size: 56px; font-weight: 900; color: var(--alert); line-height: 1; margin-bottom: 16px; }
+  .process-item h3 { color: var(--paper); margin-bottom: 12px; }
+  .process-item p { color: rgba(255, 255, 255, 0.7); font-size: 15px; }
+
+  /* About / Why call us — brief */
+  .about { background: var(--paper); }
+  .about-content { max-width: 880px; margin: 0 auto; text-align: center; }
+  .about-content .label { color: var(--primary); }
+  .about-content p { font-size: 18px; line-height: 1.65; color: var(--ink-soft); margin-bottom: 16px; }
+
+  /* Service area */
+  .service-area { background: #fafafa; padding: 64px 0; border-top: 1px solid var(--mist); border-bottom: 1px solid var(--mist); }
+  .service-area h2 { text-align: center; font-size: clamp(24px, 3vw, 32px); margin-bottom: 24px; }
+  .service-area p { text-align: center; font-size: 16px; max-width: 780px; margin: 0 auto; }
+  .service-area-list { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 24px; }
+  .service-area-list span { background: var(--paper); border: 2px solid var(--mist); border-radius: 4px; padding: 6px 14px; font-size: 14px; font-weight: 700; color: var(--ink); }
+
+  /* Final CTA — alarm level */
+  .cta-block { background: var(--primary); color: var(--paper); padding: 112px 0; text-align: center; }
+  .cta-block .label { color: var(--alert); margin-bottom: 16px; }
+  .cta-block h2 { color: var(--paper); max-width: 800px; margin: 0 auto 16px; }
+  .cta-block .subhead { font-size: 19px; color: rgba(255, 255, 255, 0.92); max-width: 580px; margin: 0 auto 40px; line-height: 1.55; }
+  .cta-block .btn-call { background: var(--paper); color: var(--primary); }
+  .cta-block .btn-call:hover { background: var(--alert); color: var(--ink); }
+
+  /* Footer */
+  footer { background: var(--ink); color: rgba(255, 255, 255, 0.66); padding: 48px 0 40px; font-size: 14px; }
+  footer .row { display: flex; justify-content: space-between; align-items: flex-start; gap: 32px; flex-wrap: wrap; }
+  footer a { color: var(--paper); }
+  footer .powered { font-size: 11px; letter-spacing: 0.06em; }
+  footer .powered strong { color: var(--alert); font-weight: 800; }
+
+  /* Mobile */
+  @media (max-width: 768px) {
+    .top-bar { font-size: 12px; }
+    .hero { padding: 56px 0 72px; }
+    .hero-creds { gap: 12px; font-size: 11px; }
+    .trust-grid { grid-template-columns: repeat(2, 1fr); gap: 24px; }
+    section.scope { padding: 64px 0; }
+    .services-grid { grid-template-columns: 1fr; }
+    .process-grid { grid-template-columns: 1fr; gap: 16px; }
+    .cta-block { padding: 80px 0; }
+    .btn-call { padding: 16px 32px; font-size: 18px; }
+    .btn-call-lg { padding: 20px 36px; font-size: 22px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="preview-banner">PREVIEW · {{ agency.name }} for {{ business.name }}</div>
+
+<div class="top-bar">
+  <span class="pulse"></span>
+  24/7 EMERGENCY {% if business.phone %}— <a href="tel:{{ business.phone }}">CALL {{ business.phone }}</a>{% endif %}
+  {% if trust_strip and trust_strip[0] %}— {{ trust_strip[0].label }}{% endif %}
+</div>
+
+<header class="site-header">
+  <div class="container row">
+    <div class="brand-block">
+      {% if photos.logo_url %}<img src="{{ photos.logo_url }}" alt="{{ business.name }}">{% endif %}
+      <div>
+        <div class="brand-name">{{ business.name }}</div>
+        <div class="brand-license">{{ business.tagline }}</div>
+      </div>
+    </div>
+    {% if business.phone %}<a href="tel:{{ business.phone }}" class="btn btn-call">📞 {{ business.phone }}</a>{% endif %}
+  </div>
+</header>
+
+<section class="hero">
+  <div class="hero-bg" style="background-image: url('{{ photos.hero }}')"></div>
+  <div class="hero-content">
+    <div class="alert-pill"><span style="margin-right: 8px">⚡</span>24/7 EMERGENCY RESPONSE</div>
+    <h1>{{ hero.headline }}</h1>
+    <p class="subhead">{{ hero.subhead }}</p>
+    {% if business.phone %}<a href="tel:{{ business.phone }}" class="btn btn-call btn-call-lg">📞 CALL NOW — {{ business.phone }}</a>{% endif %}
+    <div class="hero-creds">
+      {% if trust_strip %}{% for item in trust_strip[:3] %}<span>{{ item.label }}</span>{% endfor %}{% else %}
+      <span>Licensed & Insured</span>
+      <span>Available 24/7/365</span>
+      <span>Locally Owned</span>
+      {% endif %}
+    </div>
+  </div>
+</section>
+
+{% if trust_strip %}
+<section class="trust">
+  <div class="container">
+    <div class="trust-grid">
+      {% for item in trust_strip %}
+      <div>
+        <div class="num">{{ item.value }}</div>
+        <div class="lbl">{{ item.label }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+{% endif %}
+
+<section class="scope services">
+  <div class="container">
+    <span class="label">{{ services.section_label or 'Emergency Services' }}</span>
+    <h2>{{ services.section_headline }}</h2>
+    <div class="services-grid">
+      {% for service in services['items'] %}
+      <div class="service">
+        <span class="service-num">{{ "%02d"|format(loop.index) }}</span>
+        <h3>{{ service.name }}</h3>
+        <p>{{ service.description }}</p>
+        {% if business.phone %}<a href="tel:{{ business.phone }}" class="service-call">📞 Call Now →</a>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<section class="scope process">
+  <div class="container">
+    <span class="label">How it works</span>
+    <h2>From your call to our arrival</h2>
+    <div class="process-grid">
+      <div class="process-item">
+        <div class="process-num">01</div>
+        <h3>You call</h3>
+        <p>A live person picks up — never a phone tree. Tell us what's wrong and where you are.</p>
+      </div>
+      <div class="process-item">
+        <div class="process-num">02</div>
+        <h3>We dispatch</h3>
+        <p>The closest available tech is on the way. We tell you the ETA so you're not guessing.</p>
+      </div>
+      <div class="process-item">
+        <div class="process-num">03</div>
+        <h3>We fix it</h3>
+        <p>Diagnostic + fix on the spot for most cases. Flat-rate pricing — no clock-watching.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="scope about">
+  <div class="container">
+    <div class="about-content">
+      <span class="label">{{ about.eyebrow or 'Why call us' }}</span>
+      <h2>{{ about.headline }}</h2>
+      {% if about.paragraphs %}
+      <p>{{ about.paragraphs[0] }}</p>
+      {% endif %}
+    </div>
+  </div>
+</section>
+
+<section class="service-area">
+  <div class="container">
+    <h2>Service area</h2>
+    <p>Serving {{ business.location }} and surrounding communities — 24 hours a day, 7 days a week.</p>
+    {% if service_area and service_area|length > 0 %}
+    <div class="service-area-list">
+      {% for city in service_area %}<span>{{ city }}</span>{% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</section>
+
+<section class="cta-block">
+  <div class="container">
+    <span class="label">{{ cta_section.headline_eyebrow or 'Need help right now?' }}</span>
+    <h2>{{ cta_section.headline }}</h2>
+    <p class="subhead">{{ cta_section.subhead }}</p>
+    {% if business.phone %}<a href="tel:{{ business.phone }}" class="btn btn-call btn-call-lg">📞 CALL {{ business.phone }}</a>{% else %}<a href="{{ cta_url }}" class="btn btn-call btn-call-lg">{{ cta_section.button_text }}</a>{% endif %}
+  </div>
+</section>
+
+<footer>
+  <div class="container row">
+    <div>
+      <div style="color: var(--paper); font-weight: 900; font-family: var(--font-display); font-size: 18px; margin-bottom: 6px">{{ business.name }}</div>
+      <div>{% if business.phone %}<a href="tel:{{ business.phone }}">{{ business.phone }}</a> · {% endif %}{{ business.location }}</div>
+      <div style="margin-top: 12px; font-size: 11px">&copy; {{ year }}</div>
+    </div>
+    <div class="powered">Designed by <strong>{{ agency.name }}</strong> · <a href="{{ agency.url }}">{{ agency.url_display }}</a></div>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ business.name }}</title>
+<meta name="description" content="{{ hero.subhead }}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="{{ photos.font_google_url or 'https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Inter:wght@400;500;600&display=swap' }}" rel="stylesheet">
+<style>
+  :root {
+    --ink: #1a1614;
+    --ink-soft: #5a544e;
+    --paper: #fdfcf8;
+    --cream: #f5f0e7;
+    --primary: {{ photos.brand_color or '#7a2e2e' }};
+    --primary-deep: {{ photos.brand_color_dark or photos.brand_color or '#5a1f1f' }};
+    --mist: #e8e3d8;
+    --font-display: '{{ photos.font_display or "Cormorant Garamond" }}', Georgia, serif;
+    --font-body: '{{ photos.font_body or "Inter" }}', -apple-system, system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body { font-family: var(--font-body); color: var(--ink-soft); background: var(--paper); font-size: 17px; line-height: 1.8; }
+  .container { max-width: 1180px; margin: 0 auto; padding: 0 32px; }
+
+  h1, h2, h3 { font-family: var(--font-display); color: var(--ink); font-weight: 500; line-height: 1.1; letter-spacing: -0.01em; }
+  h1 { font-size: clamp(56px, 7vw, 96px); }
+  h2 { font-size: clamp(40px, 5vw, 56px); margin-bottom: 24px; }
+  h3 { font-size: 26px; font-weight: 500; }
+  p { color: var(--ink-soft); }
+  a { color: var(--primary); text-decoration: none; transition: color 0.2s ease; }
+
+  .label { font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.24em; color: var(--ink); }
+
+  .btn { display: inline-block; padding: 16px 40px; font-family: var(--font-body); font-size: 14px; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; border-radius: 0; cursor: pointer; transition: background 0.2s ease, color 0.2s ease; text-decoration: none; border: 1px solid var(--primary); background: transparent; color: var(--primary); }
+  .btn:hover { background: var(--primary); color: var(--paper); }
+  .btn-ink { border-color: var(--ink); color: var(--ink); }
+  .btn-ink:hover { background: var(--ink); color: var(--paper); }
+  .btn-paper { border-color: var(--paper); color: var(--paper); }
+  .btn-paper:hover { background: var(--paper); color: var(--ink); }
+
+  /* Disclosure banner — discreet, not alarming */
+  .preview-banner { background: var(--paper); color: var(--ink-soft); text-align: center; padding: 10px 16px; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; border-bottom: 1px solid var(--mist); font-style: italic; }
+
+  /* Header */
+  .site-header { padding: 32px 0; background: var(--paper); }
+  .site-header .row { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+  .brand-block { display: flex; align-items: center; gap: 18px; }
+  .brand-block img { height: 48px; width: auto; max-width: 200px; object-fit: contain; }
+  .brand-name { font-family: var(--font-display); font-size: 26px; font-weight: 500; color: var(--ink); letter-spacing: -0.01em; }
+  .brand-tag { font-size: 10px; color: var(--ink-soft); margin-top: 2px; letter-spacing: 0.2em; text-transform: uppercase; }
+  .header-cta { font-size: 12px; font-weight: 500; color: var(--ink); letter-spacing: 0.18em; text-transform: uppercase; }
+  .header-cta:hover { color: var(--primary); }
+
+  /* Hero — full bleed photo, centered text, gentle gradient */
+  .hero { position: relative; min-height: 100vh; background: var(--ink); color: var(--paper); display: flex; align-items: center; justify-content: center; overflow: hidden; text-align: center; }
+  .hero-bg { position: absolute; inset: 0; background-size: cover; background-position: center; filter: saturate(0.94); }
+  .hero-overlay { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(26, 22, 20, 0.3) 0%, rgba(26, 22, 20, 0.45) 70%, rgba(26, 22, 20, 0.7) 100%); }
+  .hero-content { position: relative; padding: 200px 24px 200px; max-width: 1080px; }
+  .hero-content .label { color: rgba(253, 252, 248, 0.85); margin-bottom: 32px; }
+  .hero h1 { color: var(--paper); margin-bottom: 32px; font-weight: 500; }
+  .hero .subhead { font-size: 18px; max-width: 600px; margin: 0 auto 56px; color: rgba(253, 252, 248, 0.9); line-height: 1.7; font-weight: 400; }
+
+  /* Promise statement (replaces trust strip) */
+  .promise { padding: 88px 0; background: var(--paper); text-align: center; }
+  .promise-eyebrow { font-size: 11px; letter-spacing: 0.24em; text-transform: uppercase; color: var(--ink-soft); margin-bottom: 20px; }
+  .promise-phrase { font-family: var(--font-display); font-size: clamp(22px, 3vw, 30px); font-style: italic; color: var(--ink); font-weight: 500; line-height: 1.5; max-width: 760px; margin: 0 auto; }
+  .promise-creds { margin-top: 20px; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-soft); }
+  .promise-creds span + span:before { content: '—'; margin: 0 14px; opacity: 0.4; }
+
+  /* Section base */
+  section.scope { padding: 160px 0; border-top: 1px solid var(--mist); }
+  section.scope .label { display: block; margin-bottom: 24px; text-align: center; }
+  section.scope h2 { text-align: center; max-width: 800px; margin: 0 auto 64px; }
+
+  /* Services — 2-column, hairline-only */
+  .services { background: var(--paper); }
+  .services-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0; margin-top: 80px; border-top: 1px solid var(--mist); border-left: 1px solid var(--mist); }
+  .service { padding: 56px; border-right: 1px solid var(--mist); border-bottom: 1px solid var(--mist); background: var(--paper); }
+  .service-num { font-family: var(--font-display); font-size: 13px; color: var(--primary); font-style: italic; margin-bottom: 20px; display: block; letter-spacing: 0.04em; }
+  .service h3 { margin-bottom: 16px; color: var(--ink); }
+  .service p { font-size: 16px; line-height: 1.75; color: var(--ink-soft); }
+
+  /* About — single column centered editorial */
+  .about { background: var(--cream); }
+  .about-wrap { max-width: 760px; margin: 0 auto; text-align: center; }
+  .about-wrap .label { color: var(--ink); margin-bottom: 24px; }
+  .about-wrap h2 { margin-bottom: 48px; }
+  .about-wrap .lead { font-family: var(--font-display); font-style: italic; font-size: 24px; line-height: 1.55; color: var(--ink); margin-bottom: 32px; font-weight: 500; }
+  .about-wrap .body { font-size: 17px; line-height: 1.85; color: var(--ink-soft); }
+  .about-wrap .body p + p { margin-top: 22px; }
+  .about-image { margin-top: 80px; }
+  .about-image img { width: 100%; height: 540px; object-fit: cover; filter: saturate(0.92); border-radius: 0; }
+
+  /* Gallery — uniform 4-up, muted */
+  .gallery { background: var(--paper); }
+  .gallery-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: 64px; }
+  .gallery-grid img { width: 100%; height: 320px; object-fit: cover; border-radius: 0; filter: saturate(0.92); }
+  @media (max-width: 1024px) { .gallery-grid { grid-template-columns: repeat(2, 1fr); } }
+
+  /* Testimonial — single centered quote, italic serif */
+  .testimonial { background: var(--cream); padding: 160px 0; text-align: center; border-top: 1px solid var(--mist); }
+  .testimonial blockquote { font-family: var(--font-display); font-size: clamp(28px, 4vw, 52px); font-style: italic; line-height: 1.4; color: var(--ink); max-width: 940px; margin: 0 auto 40px; font-weight: 500; }
+  .testimonial blockquote:before, .testimonial blockquote:after { content: '"'; color: var(--primary); }
+  .testimonial cite { font-style: normal; font-size: 11px; color: var(--ink-soft); font-weight: 500; text-transform: uppercase; letter-spacing: 0.24em; }
+
+  /* Final CTA — cream, outlined button only */
+  .cta-block { background: var(--paper); padding: 200px 0; text-align: center; border-top: 1px solid var(--mist); }
+  .cta-block .label { margin-bottom: 24px; color: var(--primary); }
+  .cta-block h2 { color: var(--ink); max-width: 800px; margin: 0 auto 24px; font-style: italic; }
+  .cta-block .subhead { font-size: 18px; color: var(--ink-soft); max-width: 580px; margin: 0 auto 56px; line-height: 1.7; }
+
+  /* Footer */
+  footer { background: var(--paper); color: var(--ink-soft); padding: 56px 0 64px; font-size: 12px; border-top: 1px solid var(--mist); letter-spacing: 0.06em; }
+  footer .row { display: flex; justify-content: space-between; align-items: center; gap: 24px; flex-wrap: wrap; }
+  footer a { color: var(--ink); text-decoration: underline; text-underline-offset: 4px; text-decoration-thickness: 1px; }
+  footer .powered { font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; font-style: italic; }
+
+  /* Mobile */
+  @media (max-width: 768px) {
+    body { font-size: 16px; line-height: 1.75; }
+    .container { padding: 0 24px; }
+    .hero-content { padding: 120px 24px; }
+    .hero .subhead { font-size: 16px; margin-bottom: 40px; }
+    .promise { padding: 64px 0; }
+    section.scope { padding: 96px 0; }
+    .services-grid { grid-template-columns: 1fr; }
+    .service { padding: 40px 24px; }
+    .about-image img { height: 320px; }
+    .gallery-grid { grid-template-columns: repeat(2, 1fr); }
+    .gallery-grid img { height: 200px; }
+    .testimonial { padding: 96px 0; }
+    .cta-block { padding: 120px 0; }
+  }
+</style>
+</head>
+<body>
+
+<div class="preview-banner">Preview · {{ agency.name }} for {{ business.name }}</div>
+
+<header class="site-header">
+  <div class="container row">
+    <div class="brand-block">
+      {% if photos.logo_url %}<img src="{{ photos.logo_url }}" alt="{{ business.name }}">{% endif %}
+      <div>
+        <div class="brand-name">{{ business.name }}</div>
+        <div class="brand-tag">{{ business.tagline }}</div>
+      </div>
+    </div>
+    <a href="{{ cta_url }}" class="header-cta">{{ hero.cta_text }}</a>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="hero-bg" style="background-image: url('{{ photos.hero }}')"></div>
+  <div class="hero-overlay"></div>
+  <div class="hero-content">
+    <span class="label">{{ hero.eyebrow }}</span>
+    <h1>{{ hero.headline }}</h1>
+    <p class="subhead">{{ hero.subhead }}</p>
+    <a href="{{ cta_url }}" class="btn btn-paper">{{ hero.cta_text }}</a>
+  </div>
+</section>
+
+<section class="promise">
+  <div class="container">
+    <div class="promise-eyebrow">{{ services.section_label or business.location }}</div>
+    <div class="promise-phrase">{{ services.section_headline }}</div>
+    {% if trust_strip %}
+    <div class="promise-creds">
+      {% for item in trust_strip %}<span>{{ item.label }}</span>{% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</section>
+
+<section class="scope services">
+  <div class="container">
+    <span class="label">What we offer</span>
+    <h2>Our practice in {{ business.location }}</h2>
+    <div class="services-grid">
+      {% for service in services['items'] %}
+      <div class="service">
+        <span class="service-num">{{ "%02d"|format(loop.index) }}</span>
+        <h3>{{ service.name }}</h3>
+        <p>{{ service.description }}</p>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<section class="scope about">
+  <div class="container">
+    <div class="about-wrap">
+      <span class="label">{{ about.eyebrow }}</span>
+      <h2>{{ about.headline }}</h2>
+      {% if about.paragraphs %}
+      <p class="lead">{{ about.paragraphs[0] }}</p>
+      <div class="body">
+        {% for p in about.paragraphs[1:] %}<p>{{ p }}</p>{% endfor %}
+      </div>
+      {% endif %}
+    </div>
+    {% if photos.about %}
+    <div class="about-image"><img src="{{ photos.about }}" alt="{{ business.name }}"></div>
+    {% endif %}
+  </div>
+</section>
+
+{% if photos.gallery and photos.gallery|length >= 3 %}
+<section class="scope gallery">
+  <div class="container">
+    <span class="label">Selected work</span>
+    <h2>From recent visits</h2>
+    <div class="gallery-grid">
+      {% for img in photos.gallery[:4] %}
+      <img src="{{ img }}" alt="From a recent visit to {{ business.name }}">
+      {% endfor %}
+    </div>
+  </div>
+</section>
+{% endif %}
+
+{% if testimonial %}
+<section class="testimonial">
+  <div class="container">
+    <blockquote>{{ testimonial.quote }}</blockquote>
+    <cite>— {{ testimonial.author }}</cite>
+  </div>
+</section>
+{% endif %}
+
+<section class="cta-block">
+  <div class="container">
+    <span class="label">{{ cta_section.headline_eyebrow or 'A measured next step' }}</span>
+    <h2>{{ cta_section.headline }}</h2>
+    <p class="subhead">{{ cta_section.subhead }}</p>
+    <a href="{{ cta_url }}" class="btn btn-ink">{{ cta_section.button_text }}</a>
+  </div>
+</section>
+
+<footer>
+  <div class="container row">
+    <div>&copy; {{ year }} {{ business.name }}</div>
+    <div class="powered">Designed by <a href="{{ agency.url }}">{{ agency.name }}</a></div>
+  </div>
+</footer>
+
+</body>
+</html>
