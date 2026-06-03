@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ business.name }}</title>
+<meta name="description" content="{{ hero.subhead }}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="{{ photos.font_google_url or 'https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;1,400;1,500&family=Inter:wght@400;500;600&display=swap' }}" rel="stylesheet">
+<style>
+  :root {
+    --ink: #0e1b14;
+    --ink-soft: #3d4a3f;
+    --paper: #faf7f0;
+    --cream-deep: #efe7d4;
+    --mist: #d4cdb8;
+    --primary: {{ photos.brand_color or '#1f3a2e' }};
+    --primary-deep: {{ photos.brand_color_dark or photos.brand_color or '#13241c' }};
+    --accent-rust: #a4612b;
+    --font-display: '{{ photos.font_display or "Cormorant Garamond" }}', Georgia, serif;
+    --font-body: '{{ photos.font_body or "Inter" }}', -apple-system, system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body { font-family: var(--font-body); color: var(--ink-soft); background: var(--paper); font-size: 17px; line-height: 1.7; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 0 32px; }
+
+  h1, h2, h3 { font-family: var(--font-display); color: var(--ink); font-weight: 500; line-height: 1.1; letter-spacing: -0.01em; }
+  h1 { font-size: clamp(56px, 7vw, 96px); }
+  h2 { font-size: clamp(40px, 4.8vw, 56px); margin-bottom: 28px; }
+  h3 { font-size: 26px; font-weight: 500; }
+  p { color: var(--ink-soft); }
+  a { color: var(--primary-deep); text-decoration: none; transition: color 0.4s ease; }
+  a:hover { color: var(--accent-rust); }
+
+  .label { font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.22em; color: var(--ink); }
+  .label-soft { color: var(--ink-soft); }
+  .italic-serif { font-family: var(--font-display); font-style: italic; font-weight: 500; }
+
+  .btn { display: inline-block; padding: 14px 36px; font-family: var(--font-body); font-size: 14px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; border-radius: 100px; cursor: pointer; transition: background 0.4s ease, color 0.4s ease; text-decoration: none; border: 1px solid var(--primary); background: transparent; color: var(--primary); }
+  .btn:hover { background: var(--primary); color: var(--paper); }
+  .btn-ink { border-color: var(--ink); color: var(--ink); }
+  .btn-ink:hover { background: var(--ink); color: var(--paper); }
+
+  /* Disclosure */
+  .preview-banner { background: var(--paper); color: var(--ink-soft); text-align: center; padding: 12px 16px; font-size: 11px; font-style: italic; letter-spacing: 0.18em; text-transform: uppercase; border-bottom: 1px solid var(--mist); }
+
+  /* Header */
+  .site-header { padding: 36px 0; background: var(--paper); }
+  .site-header .row { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+  .brand-block { display: flex; align-items: center; gap: 16px; }
+  .brand-block img { height: 44px; width: auto; max-width: 180px; object-fit: contain; }
+  .brand-name { font-family: var(--font-display); font-size: 24px; font-weight: 500; color: var(--ink); letter-spacing: -0.01em; }
+  .brand-tag { font-size: 10px; color: var(--ink-soft); margin-top: 2px; letter-spacing: 0.22em; text-transform: uppercase; }
+  .header-cta { font-size: 12px; font-weight: 500; color: var(--ink); letter-spacing: 0.18em; text-transform: uppercase; }
+  .header-cta:hover { color: var(--primary); }
+
+  /* Hero — SPLIT layout, text left + tall portrait/landscape image right */
+  .hero { padding: 80px 0 96px; background: var(--paper); }
+  .hero-grid { display: grid; grid-template-columns: 1.05fr 1fr; gap: 80px; align-items: center; min-height: 70vh; }
+  .hero-text { padding-right: 24px; }
+  .hero-text .label { margin-bottom: 28px; }
+  .hero h1 { margin-bottom: 28px; }
+  .hero .hero-italic { font-family: var(--font-display); font-style: italic; font-size: clamp(24px, 2.6vw, 32px); color: var(--ink); font-weight: 500; line-height: 1.4; margin-bottom: 36px; max-width: 520px; }
+  .hero .hero-sub { font-size: 17px; color: var(--ink-soft); margin-bottom: 44px; max-width: 480px; line-height: 1.75; }
+  .hero-image { position: relative; }
+  .hero-image img { width: 100%; height: 660px; object-fit: cover; border-radius: 6px; filter: saturate(1.08); }
+  .hero-image .image-caption { position: absolute; bottom: -32px; left: 0; font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--ink-soft); font-style: italic; }
+
+  /* Statement strip — single italic serif sentence */
+  .statement { padding: 128px 0; background: var(--cream-deep); text-align: center; border-top: 1px solid var(--mist); border-bottom: 1px solid var(--mist); }
+  .statement-phrase { font-family: var(--font-display); font-size: clamp(28px, 3.6vw, 42px); font-style: italic; color: var(--ink); font-weight: 500; line-height: 1.5; max-width: 920px; margin: 0 auto; padding: 0 32px; }
+  .statement-attr { margin-top: 32px; font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink-soft); }
+
+  /* Section base */
+  section.scope { padding: 144px 0; }
+  .section-mark { display: flex; align-items: baseline; gap: 14px; margin-bottom: 56px; }
+  .section-mark .mark-num { font-family: var(--font-display); font-style: italic; font-size: 24px; color: var(--ink); }
+  .section-mark .mark-lbl { font-size: 11px; font-weight: 500; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink); }
+  section.scope h2 { max-width: 880px; }
+
+  /* Selected projects — 2-col editorial */
+  .projects { background: var(--paper); }
+  .projects-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 64px 48px; margin-top: 64px; }
+  .project-item img { width: 100%; height: 480px; object-fit: cover; border-radius: 6px; filter: saturate(1.06); transition: box-shadow 0.4s ease; }
+  .project-item:hover img { box-shadow: 0 16px 48px rgba(14, 27, 20, 0.12); }
+  .project-meta { margin-top: 24px; padding-right: 16px; }
+  .project-name { font-family: var(--font-display); font-size: 26px; font-weight: 500; color: var(--ink); margin-bottom: 10px; }
+  .project-attrs { display: flex; gap: 16px; flex-wrap: wrap; font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--accent-rust); margin-bottom: 14px; font-weight: 500; }
+  .project-attrs span + span:before { content: '—'; margin-right: 16px; color: var(--mist); }
+  .project-desc { font-size: 16px; line-height: 1.7; color: var(--ink-soft); max-width: 480px; }
+
+  /* About — portrait + first-person bio */
+  .about { background: var(--cream-deep); }
+  .about-grid { display: grid; grid-template-columns: 1fr 1.1fr; gap: 80px; align-items: center; }
+  .about-grid img { width: 100%; height: 600px; object-fit: cover; border-radius: 6px; filter: saturate(1.06); }
+  .about .label { margin-bottom: 20px; }
+  .about h2 { margin-bottom: 32px; }
+  .about .lead { font-family: var(--font-display); font-style: italic; font-size: 24px; line-height: 1.5; color: var(--ink); margin-bottom: 28px; }
+  .about .body { font-size: 17px; line-height: 1.85; color: var(--ink-soft); max-width: 520px; }
+  .about .body p + p { margin-top: 22px; }
+
+  /* Recognition strip */
+  .recognition { background: var(--paper); padding: 88px 0; border-top: 1px solid var(--mist); }
+  .recognition-eyebrow { font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink-soft); text-align: center; margin-bottom: 24px; }
+  .recognition-line { text-align: center; font-family: var(--font-display); font-size: 18px; font-style: italic; color: var(--ink); }
+  .recognition-line span + span:before { content: '—'; margin: 0 16px; color: var(--mist); font-style: normal; }
+
+  /* Inquiry CTA — soft cream centered */
+  .cta-block { background: var(--cream-deep); padding: 168px 0; text-align: center; border-top: 1px solid var(--mist); }
+  .cta-block .label { margin-bottom: 28px; color: var(--primary); }
+  .cta-block h2 { color: var(--ink); max-width: 820px; margin: 0 auto 24px; font-style: italic; }
+  .cta-block .subhead { font-size: 18px; color: var(--ink-soft); max-width: 580px; margin: 0 auto 48px; line-height: 1.7; }
+
+  /* Footer */
+  footer { background: var(--paper); color: var(--ink-soft); padding: 56px 0 72px; font-size: 12px; border-top: 1px solid var(--mist); letter-spacing: 0.06em; }
+  footer .row { display: flex; justify-content: space-between; align-items: center; gap: 24px; flex-wrap: wrap; }
+  footer a { color: var(--ink); text-decoration: underline; text-underline-offset: 4px; text-decoration-thickness: 1px; }
+  footer .powered { font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; font-style: italic; }
+
+  /* Mobile */
+  @media (max-width: 900px) {
+    body { font-size: 16px; line-height: 1.7; }
+    .container { padding: 0 24px; }
+    .hero { padding: 56px 0 72px; }
+    .hero-grid { grid-template-columns: 1fr; gap: 56px; }
+    .hero-image img { height: 480px; }
+    .hero-text { padding-right: 0; }
+    .statement { padding: 80px 0; }
+    section.scope { padding: 96px 0; }
+    .projects-grid { grid-template-columns: 1fr; gap: 56px; }
+    .project-item img { height: 360px; }
+    .about-grid { grid-template-columns: 1fr; gap: 40px; }
+    .about-grid img { height: 360px; }
+    .cta-block { padding: 96px 0; }
+  }
+</style>
+</head>
+<body>
+
+<div class="preview-banner">a preview · {{ agency.name }} for {{ business.name }}</div>
+
+<header class="site-header">
+  <div class="container row">
+    <div class="brand-block">
+      {% if photos.logo_url %}<img src="{{ photos.logo_url }}" alt="{{ business.name }}">{% endif %}
+      <div>
+        <div class="brand-name">{{ business.name }}</div>
+        <div class="brand-tag">{{ business.location }}</div>
+      </div>
+    </div>
+    <a href="{{ cta_url }}" class="header-cta">{{ hero.cta_text or 'Inquire' }}</a>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="container">
+    <div class="hero-grid">
+      <div class="hero-text">
+        <span class="label">{{ hero.eyebrow or business.location }}</span>
+        <h1>{{ hero.headline }}</h1>
+        {% if hero.subhead %}<p class="hero-italic">{{ hero.subhead }}</p>{% endif %}
+        <a href="{{ cta_url }}" class="btn">{{ hero.cta_text or 'Talk through your project' }}</a>
+      </div>
+      <div class="hero-image">
+        <img src="{{ photos.hero }}" alt="A recent {{ business.name }} project">
+        <div class="image-caption">A recent project — {{ business.location }}</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="statement">
+  <div class="statement-phrase italic-serif">{{ services.section_headline or about.headline }}</div>
+  {% if trust_strip and trust_strip|length > 0 %}
+  <div class="statement-attr">
+    {% for item in trust_strip[:3] %}{{ item.label }}{% if not loop.last %} · {% endif %}{% endfor %}
+  </div>
+  {% endif %}
+</section>
+
+<section class="scope projects">
+  <div class="container">
+    <div class="section-mark"><span class="mark-num"><em>i.</em></span><span class="mark-lbl">Selected projects</span></div>
+    <h2>{{ services.section_label or 'Recent work, in detail' }}</h2>
+    <div class="projects-grid">
+      {% set photo_pool = (photos.gallery if photos.gallery else [])[:6] %}
+      {% if not photo_pool %}{% set photo_pool = [photos.hero, photos.about] %}{% endif %}
+      {% for service in services['items'][:4] %}
+        {% set proj_photo = photo_pool[loop.index0 % photo_pool|length] if photo_pool else photos.hero %}
+        <div class="project-item">
+          <img src="{{ proj_photo }}" alt="{{ service.name }}">
+          <div class="project-meta">
+            <div class="project-name">{{ service.name }}</div>
+            <div class="project-attrs">
+              <span>{{ business.location }}</span>
+              <span>Recent</span>
+            </div>
+            <p class="project-desc">{{ service.description }}</p>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<section class="scope about">
+  <div class="container">
+    <div class="about-grid">
+      {% if photos.about %}<img src="{{ photos.about }}" alt="{{ business.name }}">{% endif %}
+      <div>
+        <span class="label">{{ about.eyebrow or 'About the practice' }}</span>
+        <h2>{{ about.headline }}</h2>
+        {% if about.paragraphs %}
+        <p class="lead">{{ about.paragraphs[0] }}</p>
+        <div class="body">
+          {% for p in about.paragraphs[1:] %}<p>{{ p }}</p>{% endfor %}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</section>
+
+{% if trust_strip and trust_strip|length > 0 %}
+<section class="recognition">
+  <div class="container">
+    <div class="recognition-eyebrow">Recognition</div>
+    <div class="recognition-line">
+      {% for item in trust_strip %}<span>{{ item.label }}</span>{% endfor %}
+    </div>
+  </div>
+</section>
+{% endif %}
+
+<section class="cta-block">
+  <div class="container">
+    <span class="label">{{ cta_section.headline_eyebrow or 'An inquiry, considered' }}</span>
+    <h2>{{ cta_section.headline }}</h2>
+    <p class="subhead">{{ cta_section.subhead }}</p>
+    <a href="{{ cta_url }}" class="btn btn-ink">{{ cta_section.button_text or 'Send us your plans' }}</a>
+  </div>
+</section>
+
+<footer>
+  <div class="container row">
+    <div>&copy; {{ year }} {{ business.name }} · {{ business.location }}</div>
+    <div class="powered">Designed by <a href="{{ agency.url }}">{{ agency.name }}</a></div>
+  </div>
+</footer>
+
+</body>
+</html>

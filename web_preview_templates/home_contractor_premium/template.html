@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ business.name }}</title>
+<meta name="description" content="{{ hero.subhead }}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="{{ photos.font_google_url or 'https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap' }}" rel="stylesheet">
+<style>
+  :root {
+    --ink: #0d1419;
+    --ink-soft: #3a4452;
+    --steel: #6b7280;
+    --paper: #ffffff;
+    --cream-cool: #f5f7fa;
+    --mist: #e2e8f0;
+    --primary: {{ photos.brand_color or '#1e3a5f' }};
+    --primary-deep: {{ photos.brand_color_dark or photos.brand_color or '#13243d' }};
+    --accent-green: #5fa030;
+    --font-display: '{{ photos.font_display or "Manrope" }}', -apple-system, system-ui, sans-serif;
+    --font-body: '{{ photos.font_body or "Manrope" }}', -apple-system, system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body { font-family: var(--font-body); color: var(--ink-soft); background: var(--paper); font-size: 17px; line-height: 1.65; }
+  .container { max-width: 1220px; margin: 0 auto; padding: 0 24px; }
+
+  h1, h2, h3 { font-family: var(--font-display); color: var(--ink); line-height: 1.1; letter-spacing: -0.02em; }
+  h1 { font-size: clamp(40px, 5.5vw, 80px); font-weight: 800; }
+  h2 { font-size: clamp(32px, 4vw, 52px); font-weight: 700; margin-bottom: 16px; }
+  h3 { font-size: 22px; font-weight: 700; }
+  p { color: var(--ink-soft); }
+  a { color: var(--primary); text-decoration: none; }
+
+  .label { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.14em; color: var(--primary); }
+
+  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 14px 32px; font-family: var(--font-body); font-size: 15px; font-weight: 700; border-radius: 8px; cursor: pointer; transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease; text-decoration: none; border: 0; letter-spacing: 0.02em; }
+  .btn-primary { background: var(--primary); color: var(--paper); }
+  .btn-primary:hover { background: var(--primary-deep); }
+  .btn-outlined { background: transparent; color: var(--primary); border: 2px solid var(--primary); padding: 12px 30px; }
+  .btn-outlined:hover { background: var(--primary); color: var(--paper); }
+  .btn-paper { background: var(--paper); color: var(--primary); }
+  .btn-paper:hover { background: var(--cream-cool); }
+  .btn-lg { padding: 16px 36px; font-size: 16px; }
+
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 100px; font-size: 12px; font-weight: 700; letter-spacing: 0.04em; background: var(--cream-cool); color: var(--primary); border: 1px solid var(--mist); }
+  .pill-accent { background: rgba(95, 160, 48, 0.1); color: var(--accent-green); border-color: rgba(95, 160, 48, 0.3); }
+
+  /* Top utility bar — useful, not alarming */
+  .top-bar { background: var(--ink); color: rgba(255, 255, 255, 0.85); padding: 8px 16px; font-size: 12px; letter-spacing: 0.02em; }
+  .top-bar .row { display: flex; justify-content: space-between; gap: 24px; flex-wrap: wrap; align-items: center; max-width: 1220px; margin: 0 auto; }
+  .top-bar a { color: var(--paper); font-weight: 700; }
+  .top-bar a:hover { color: var(--accent-green); }
+
+  /* Disclosure */
+  .preview-banner { background: var(--cream-cool); color: var(--steel); text-align: center; padding: 8px 16px; font-size: 11px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; border-bottom: 1px solid var(--mist); }
+
+  /* Header */
+  .site-header { background: var(--paper); border-bottom: 1px solid var(--mist); padding: 20px 0; position: sticky; top: 0; z-index: 40; }
+  .site-header .row { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+  .brand-block { display: flex; align-items: center; gap: 14px; }
+  .brand-block img { height: 48px; width: auto; max-width: 180px; object-fit: contain; }
+  .brand-name { font-family: var(--font-display); font-size: 22px; font-weight: 800; color: var(--ink); letter-spacing: -0.02em; }
+  .brand-license { font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--steel); margin-top: 2px; }
+  .header-actions { display: flex; align-items: center; gap: 12px; }
+  .header-phone { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; color: var(--ink); letter-spacing: 0.08em; text-transform: uppercase; padding: 0 8px; }
+  .header-phone:hover { color: var(--primary); }
+  .header-phone .number { font-size: 16px; letter-spacing: -0.01em; text-transform: none; font-weight: 800; }
+
+  /* Hero — split layout, text left on cream block + photo right */
+  .hero { background: var(--paper); position: relative; }
+  .hero-grid { display: grid; grid-template-columns: 1fr 1fr; min-height: 580px; }
+  .hero-text { background: var(--cream-cool); padding: 88px 64px; display: flex; flex-direction: column; justify-content: center; }
+  .hero-text .label { margin-bottom: 24px; }
+  .hero h1 { margin-bottom: 24px; max-width: 580px; }
+  .hero-subhead { font-size: 18px; color: var(--ink-soft); margin-bottom: 36px; line-height: 1.6; max-width: 520px; }
+  .hero-ctas { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 28px; }
+  .hero-phone { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--ink-soft); }
+  .hero-phone a { font-weight: 800; color: var(--ink); font-size: 18px; letter-spacing: -0.01em; }
+  .hero-phone a:hover { color: var(--primary); }
+  .hero-photo { background-size: cover; background-position: center; min-height: 320px; }
+
+  /* Tenure trust strip */
+  .tenure { background: var(--paper); padding: 64px 0; border-bottom: 1px solid var(--mist); }
+  .tenure-grid { display: flex; justify-content: space-between; align-items: center; gap: 48px; flex-wrap: wrap; }
+  .tenure-num-block { flex-shrink: 0; }
+  .tenure-num { font-family: var(--font-display); font-size: clamp(56px, 8vw, 88px); font-weight: 800; color: var(--primary); line-height: 1; letter-spacing: -0.04em; }
+  .tenure-num-lbl { font-size: 12px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; color: var(--steel); margin-top: 6px; }
+  .tenure-pills { display: flex; gap: 10px; flex-wrap: wrap; }
+
+  /* Section base */
+  section.scope { padding: 128px 0; }
+  section.scope .label { display: block; margin-bottom: 16px; }
+
+  /* Multi-service category grid */
+  .services { background: var(--paper); }
+  .services-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: 56px; }
+  .service { background: var(--paper); border: 1px solid var(--mist); border-radius: 10px; padding: 28px; transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease; }
+  .service:hover { border-color: var(--primary); box-shadow: 0 12px 32px rgba(13, 20, 25, 0.06); transform: translateY(-2px); }
+  .service-num { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 10px; background: var(--cream-cool); color: var(--primary); font-weight: 800; font-size: 15px; margin-bottom: 16px; font-family: var(--font-display); }
+  .service h3 { margin-bottom: 8px; font-size: 18px; color: var(--ink); }
+  .service p { font-size: 14px; line-height: 1.55; color: var(--ink-soft); margin-bottom: 14px; }
+  .service-learn { font-size: 13px; font-weight: 700; color: var(--primary); letter-spacing: 0.02em; }
+  .service-learn:hover { color: var(--primary-deep); }
+
+  /* About — text + photo */
+  .about { background: var(--cream-cool); }
+  .about-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 64px; align-items: center; }
+  .about-grid img { width: 100%; height: 100%; max-height: 480px; object-fit: cover; border-radius: 10px; }
+  .about .body { font-size: 17px; line-height: 1.7; color: var(--ink-soft); }
+  .about .body p + p { margin-top: 16px; }
+  .about .creds { margin-top: 28px; display: flex; gap: 8px; flex-wrap: wrap; }
+
+  /* Process — horizontal numbered */
+  .process { background: var(--paper); padding: 96px 0; border-top: 1px solid var(--mist); border-bottom: 1px solid var(--mist); }
+  .process-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; margin-top: 56px; }
+  .process-item { padding: 16px; }
+  .process-num { font-family: var(--font-display); font-size: 56px; font-weight: 800; color: var(--primary); line-height: 1; margin-bottom: 14px; letter-spacing: -0.03em; }
+  .process-item h3 { color: var(--ink); margin-bottom: 8px; font-size: 18px; }
+  .process-item p { color: var(--ink-soft); font-size: 14px; line-height: 1.55; }
+
+  /* Service area */
+  .service-area { background: var(--cream-cool); padding: 80px 0; }
+  .service-area h2 { font-size: clamp(24px, 3vw, 32px); margin-bottom: 16px; }
+  .service-area-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
+  .service-area-list span { background: var(--paper); border: 1px solid var(--mist); border-radius: 6px; padding: 6px 14px; font-size: 14px; font-weight: 500; color: var(--ink); }
+
+  /* Reviews — 3-up */
+  .reviews { background: var(--paper); }
+  .reviews-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: 56px; }
+  .review { background: var(--cream-cool); border-radius: 10px; padding: 32px; }
+  .review-stars { color: #f59e0b; font-size: 16px; letter-spacing: 0.04em; margin-bottom: 14px; }
+  .review-quote { font-size: 16px; line-height: 1.6; color: var(--ink); margin-bottom: 18px; font-weight: 500; }
+  .review-author { font-size: 13px; color: var(--steel); font-weight: 700; letter-spacing: 0.02em; }
+
+  /* Final CTA — primary color block */
+  .cta-block { background: var(--primary); color: var(--paper); padding: 112px 0; text-align: center; }
+  .cta-block h2 { color: var(--paper); max-width: 800px; margin: 0 auto 16px; }
+  .cta-block .subhead { font-size: 18px; color: rgba(255, 255, 255, 0.88); max-width: 600px; margin: 0 auto 40px; line-height: 1.55; }
+  .cta-block .ctas { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .cta-block .btn-paper { background: var(--paper); color: var(--primary); }
+  .cta-block .btn-paper:hover { background: var(--cream-cool); }
+
+  /* Footer */
+  footer { background: var(--ink); color: rgba(255, 255, 255, 0.66); padding: 64px 0 48px; font-size: 14px; }
+  footer .row { display: flex; justify-content: space-between; align-items: flex-start; gap: 32px; flex-wrap: wrap; }
+  footer a { color: rgba(255, 255, 255, 0.88); }
+  footer .powered { font-size: 12px; }
+  footer .powered strong { color: var(--accent-green); font-weight: 700; }
+
+  /* Mobile */
+  @media (max-width: 900px) {
+    .top-bar { font-size: 11px; }
+    .top-bar .row { gap: 8px; }
+    .hero-grid { grid-template-columns: 1fr; }
+    .hero-text { padding: 56px 32px; min-height: auto; }
+    .hero-photo { min-height: 280px; order: -1; }
+    .tenure { padding: 48px 0; }
+    .tenure-grid { justify-content: center; text-align: center; }
+    section.scope { padding: 80px 0; }
+    .services-grid { grid-template-columns: repeat(2, 1fr); }
+    .about-grid { grid-template-columns: 1fr; gap: 40px; }
+    .about-grid img { max-height: 320px; }
+    .process-grid { grid-template-columns: repeat(2, 1fr); gap: 32px; }
+    .reviews-grid { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 600px) {
+    .services-grid { grid-template-columns: 1fr; }
+    .process-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="preview-banner">Preview · {{ agency.name }} for {{ business.name }}</div>
+
+<div class="top-bar">
+  <div class="row">
+    <span>Serving {{ business.location }}{% if trust_strip and trust_strip[0] %} · {{ trust_strip[0].label }}{% endif %}</span>
+    {% if business.phone %}<span><a href="tel:{{ business.phone }}">📞 {{ business.phone }}</a></span>{% endif %}
+  </div>
+</div>
+
+<header class="site-header">
+  <div class="container row">
+    <div class="brand-block">
+      {% if photos.logo_url %}<img src="{{ photos.logo_url }}" alt="{{ business.name }} logo">{% endif %}
+      <div>
+        <div class="brand-name">{{ business.name }}</div>
+        <div class="brand-license">{{ business.tagline }}</div>
+      </div>
+    </div>
+    <div class="header-actions">
+      {% if business.phone %}
+      <a href="tel:{{ business.phone }}" class="header-phone">
+        <div>
+          Call · 7 days
+          <div class="number">{{ business.phone }}</div>
+        </div>
+      </a>
+      {% endif %}
+      <a href="{{ cta_url }}" class="btn btn-primary">{{ hero.cta_text or 'Schedule Service' }}</a>
+    </div>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="hero-grid">
+    <div class="hero-text">
+      <span class="label">{{ hero.eyebrow }}</span>
+      <h1>{{ hero.headline }}</h1>
+      <p class="hero-subhead">{{ hero.subhead }}</p>
+      <div class="hero-ctas">
+        <a href="{{ cta_url }}" class="btn btn-primary btn-lg">{{ hero.cta_text or 'Schedule Service' }}</a>
+        <a href="{{ cta_url }}" class="btn btn-outlined btn-lg">Get a Free Estimate</a>
+      </div>
+      {% if business.phone %}
+      <div class="hero-phone">Or call us — <a href="tel:{{ business.phone }}">{{ business.phone }}</a></div>
+      {% endif %}
+    </div>
+    <div class="hero-photo" style="background-image: url('{{ photos.hero }}')"></div>
+  </div>
+</section>
+
+{% if trust_strip %}
+<section class="tenure">
+  <div class="container">
+    <div class="tenure-grid">
+      <div class="tenure-num-block">
+        <div class="tenure-num">{{ trust_strip[0].value }}</div>
+        <div class="tenure-num-lbl">{{ trust_strip[0].label }}</div>
+      </div>
+      <div class="tenure-pills">
+        {% for item in trust_strip[1:] %}<span class="pill">{{ item.label }}</span>{% endfor %}
+        <span class="pill pill-accent">Licensed &amp; Insured</span>
+        <span class="pill pill-accent">BBB A+ Rated</span>
+      </div>
+    </div>
+  </div>
+</section>
+{% endif %}
+
+<section class="scope services">
+  <div class="container">
+    <span class="label">{{ services.section_label or 'What we do' }}</span>
+    <h2>{{ services.section_headline }}</h2>
+    <div class="services-grid">
+      {% for service in services['items'] %}
+      <div class="service">
+        <span class="service-num">{{ "%02d"|format(loop.index) }}</span>
+        <h3>{{ service.name }}</h3>
+        <p>{{ service.description }}</p>
+        <a href="{{ cta_url }}" class="service-learn">Learn more →</a>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<section class="scope about">
+  <div class="container">
+    <div class="about-grid">
+      <div>
+        <span class="label">{{ about.eyebrow or 'About us' }}</span>
+        <h2>{{ about.headline }}</h2>
+        <div class="body">
+          {% for p in about.paragraphs %}<p>{{ p }}</p>{% endfor %}
+        </div>
+        <div class="creds">
+          {% if trust_strip %}
+            {% for item in trust_strip[:3] %}<span class="pill">{{ item.label }}</span>{% endfor %}
+          {% endif %}
+        </div>
+      </div>
+      {% if photos.about %}<img src="{{ photos.about }}" alt="{{ business.name }} team">{% endif %}
+    </div>
+  </div>
+</section>
+
+<section class="process">
+  <div class="container">
+    <span class="label">How it works</span>
+    <h2>From first call to job done</h2>
+    <div class="process-grid">
+      <div class="process-item">
+        <div class="process-num">01</div>
+        <h3>You schedule</h3>
+        <p>Pick a time online or call us. We answer 7 days a week.</p>
+      </div>
+      <div class="process-item">
+        <div class="process-num">02</div>
+        <h3>We visit</h3>
+        <p>A technician inspects the work — no charge, no obligation.</p>
+      </div>
+      <div class="process-item">
+        <div class="process-num">03</div>
+        <h3>You get a quote</h3>
+        <p>Written estimate, line-itemed. No surprises after we start.</p>
+      </div>
+      <div class="process-item">
+        <div class="process-num">04</div>
+        <h3>We do the work</h3>
+        <p>On schedule, with the technician who quoted the job — not a sub.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="service-area">
+  <div class="container">
+    <span class="label">Service area</span>
+    <h2>Serving {{ business.location }} and the surrounding region</h2>
+    {% if service_area and service_area|length > 0 %}
+    <div class="service-area-list">
+      {% for city in service_area %}<span>{{ city }}</span>{% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</section>
+
+{% if testimonial %}
+<section class="scope reviews">
+  <div class="container">
+    <span class="label">What customers say</span>
+    <h2>Reviews from neighbors in {{ business.location }}</h2>
+    <div class="reviews-grid">
+      <div class="review">
+        <div class="review-stars">★★★★★</div>
+        <div class="review-quote">"{{ testimonial.quote }}"</div>
+        <div class="review-author">— {{ testimonial.author }}</div>
+      </div>
+    </div>
+  </div>
+</section>
+{% endif %}
+
+<section class="cta-block">
+  <div class="container">
+    <h2>{{ cta_section.headline }}</h2>
+    <p class="subhead">{{ cta_section.subhead }}</p>
+    <div class="ctas">
+      <a href="{{ cta_url }}" class="btn btn-paper btn-lg">{{ cta_section.button_text or 'Schedule Service' }}</a>
+      {% if business.phone %}<a href="tel:{{ business.phone }}" class="btn btn-outlined btn-lg" style="color: var(--paper); border-color: var(--paper)">📞 {{ business.phone }}</a>{% endif %}
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container row">
+    <div>
+      <div style="color: var(--paper); font-weight: 800; font-size: 18px; margin-bottom: 6px">{{ business.name }}</div>
+      <div>Serving {{ business.location }}{% if business.phone %} · <a href="tel:{{ business.phone }}">{{ business.phone }}</a>{% endif %}</div>
+      <div style="margin-top: 12px; font-size: 12px">&copy; {{ year }} {{ business.name }} · Preview design</div>
+    </div>
+    <div class="powered">Designed by <strong>{{ agency.name }}</strong><br><a href="{{ agency.url }}">{{ agency.url_display }}</a></div>
+  </div>
+</footer>
+
+</body>
+</html>

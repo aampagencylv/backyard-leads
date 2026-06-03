@@ -40,12 +40,14 @@ TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "web_preview_tem
 # fallback and the LLM picker (which gets the vibe descriptions to match
 # against the prospect's brand).
 AVAILABLE_TEMPLATES = {
-    "modern_outdoor": "Confident craft-trade outdoor work — pools, landscape, decks, hardscape, fence, lawn, outdoor kitchens. Modern serif headlines, photo-led hero, green/cream palette.",
+    "modern_outdoor": "Confident craft-trade outdoor work — pool builders, landscape construction, deck builders, hardscape, fence, outdoor kitchens. Modern serif headlines, photo-led hero, green/cream palette. Use when the focus is BUILDING / CONSTRUCTING outdoor things.",
     "luxury":         "High-end personal service — med spa, aesthetic clinic, plastic surgery, jewelry, premium salons, luxury real estate. Editorial restraint, generous whitespace, italic serif, sharp 0px corners, outlined buttons. Never pushy.",
-    "local_trust":    "Utility trades — HVAC, plumbing, electrical, roofing, garage doors, pest control. Bold sans, phone-forward, big trust numbers, service-area focus. Confident no-nonsense.",
-    "craft_studio":   "Portfolio-driven design-forward — design studios, photographers, custom furniture, ceramicists, branding agencies, architects. Magazine layout, extreme scale contrast, asymmetric work grid, near-monochrome.",
+    "local_trust":    "Utility trades, single-vertical — HVAC, plumbing, electrical, roofing, garage doors, pest control, septic. Bold sans, phone-forward, big trust numbers, service-area focus. Confident no-nonsense BLUE-COLLAR trade feel.",
+    "craft_studio":   "Portfolio-driven design-forward — design studios, photographers, custom furniture, ceramicists, branding agencies, architects (BUILDING-focused architects). Magazine layout, extreme scale contrast, asymmetric work grid, near-monochrome.",
     "wellness_natural": "Calm soft-tier — salons, day spas, hair, organic beauty, naturopath, yoga, holistic. Warm cream + sage palette, humanist serif, rounded pill buttons, soft generous spacing.",
     "emergency_service": "24/7 urgency — emergency plumbing, water damage restoration, towing, locksmith, biohazard cleanup, board-up. Heavy block display, alarm-aware red, phone-first, alert pills, sticky 24/7 top bar.",
+    "landscape_design_studio": "Designer-led landscape practice — landscape architects, garden designers, botanical-focused studios, regenerative design, master gardeners. The DESIGNER is the brand. Earthy palette (deep green / teal / cream), serif display, NO phone CTAs, editorial portfolio with project metadata, designer's name in hero. Use when the prospect designs gardens / landscapes as an aesthetic practice, NOT when they construct hardscape.",
+    "home_contractor_premium": "Polished multi-service home contractor — renovation contractors, multi-trade home companies (plumb+HVAC+electric under one roof), upscale general contractors, premium remodelers. Sits BETWEEN local_trust (utility) and luxury (boutique editorial). Booking-first CTAs ('Schedule Service' + 'Get Free Estimate'), multi-service category grid (4-12 services), tenure trust strip ('25 YEARS'), navy/cream palette. Use when prospect offers MULTIPLE services and wants to look professional, not strictly blue-collar.",
 }
 
 # Keyword fallback for when the LLM picker isn't called or fails. Listed
@@ -60,11 +62,24 @@ _VERTICAL_MAP: list[tuple[list[str], str]] = [
     (["med spa", "medspa", "plastic surgery", "aesthetic", "dermatology",
       "cosmetic surgery", "luxury", "fine jewelry", "jeweler",
       "premium salon", "high-end"], "luxury"),
-    # Outdoor / home-service — BMP's vertical
-    (["pool", "landscap", "deck builder", "backyard", "outdoor kitchen",
-      "patio", "hardscape", "fence", "lawn", "garden", "irrigation",
-      "tree", "arborist", "concrete", "paver"], "modern_outdoor"),
-    # Utility trades — HVAC, plumb, electric, roof
+    # Designer-led landscape — distinct from construction outdoor.
+    # MUST come before modern_outdoor + craft_studio so it wins for
+    # business types that include "landscape design" / "garden design".
+    (["landscape design", "landscape architect", "garden design",
+      "botanical design", "landscape designer", "regenerative design"],
+     "landscape_design_studio"),
+    # Outdoor BUILDING / construction — BMP's vertical (pool builders etc.)
+    (["pool", "deck builder", "backyard", "outdoor kitchen",
+      "patio", "hardscape", "fence", "lawn", "garden",
+      "irrigation", "tree", "arborist", "concrete", "paver",
+      "landscaping company", "landscaper"], "modern_outdoor"),
+    # Polished multi-service home contractor — sits between local_trust
+    # and luxury. Check BEFORE local_trust so multi-vertical contractors
+    # don't drop into the blue-collar template.
+    (["home services", "home improvement", "general contractor",
+      "remodeler", "remodeling", "renovation", "multi-service",
+      "home renovation", "design build"], "home_contractor_premium"),
+    # Utility trades — HVAC, plumb, electric, roof (single-vertical)
     (["hvac", "heating", "air conditioning", "plumb", "electric",
       "electrician", "roofing", "roof", "garage door", "septic",
       "pest control", "gutter", "siding", "drain"], "local_trust"),
