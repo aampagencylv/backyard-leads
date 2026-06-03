@@ -583,6 +583,13 @@ class RuntimeConfig(TenantMixin, Base):
     # accepts any request that knows the URL.
     blooio_signing_secret = Column(Text, nullable=True)
 
+    # iMessage send toggle. Defaults FALSE — until the tenant's Blooio
+    # device link is verified healthy, the sequence engine skips iMessage
+    # steps rather than thrashing on "no active devices" errors. Separate
+    # from blooio_api_key so an operator can pause iMessage cleanly
+    # without losing their credentials.
+    imessage_enabled = Column(Boolean, nullable=False, default=False, server_default=sa_text("false"))
+
     # Resend webhook signing secret (whsec_…) — used to HMAC-verify the inbound
     # email webhook (/api/email/inbound) where prospect replies route after we
     # set Reply-To: r-<token>@go.bymp.com. DB-first; falls back to

@@ -64,6 +64,9 @@ class UpdateRuntimeConfigRequest(BaseModel):
     brand_logo_url: Optional[str] = None
     brand_company_name: Optional[str] = None
     brand_website_url: Optional[str] = None
+    # iMessage send toggle. When False, sequence engine skips all iMessage
+    # steps for this tenant instead of attempting + failing on Blooio.
+    imessage_enabled: Optional[bool] = None
 
 
 def _mask_field(field: Optional[str]) -> dict:
@@ -124,6 +127,11 @@ def _tenant_payload(rc, settings_obj) -> dict:
         },
         "voice_account": {
             "configured": bool((getattr(rc, "twilio_account_sid", None) or "").strip()),
+        },
+        # Channel toggles — operator-controlled. When False, the sequence
+        # engine auto-skips steps for that channel instead of attempting.
+        "channels": {
+            "imessage_enabled": bool(getattr(rc, "imessage_enabled", False)),
         },
     }
 
@@ -320,6 +328,11 @@ async def update_runtime_config(
         await set_apollo_api_key(db, req.apollo_api_key)
     if req.messaging_direction is not None:
         await set_messaging_direction(db, req.messaging_direction)
+    if req.imessage_enabled is not None:
+        from app.runtime_config import _get_or_create
+        rc = await _get_or_create(db)
+        rc.imessage_enabled = bool(req.imessage_enabled)
+        await db.flush()
     # Org brand — tenant-tier, admin can manage
     _brand_fields = (
         req.brand_primary_color, req.brand_secondary_color,

@@ -138,6 +138,7 @@ async def init_db():
         "scripts.migrate_runtime_config_sequence",
         "scripts.migrate_resend_domain_tracking",
         "scripts.migrate_web_previews",
+        "scripts.migrate_imessage_toggle",
     )
 
     # Decide which actually need to run.

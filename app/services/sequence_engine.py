@@ -220,14 +220,29 @@ async def _handle_email(db: AsyncSession, step: GeneratedEmail, contact: Contact
 
 
 async def _handle_imessage(db: AsyncSession, step: GeneratedEmail, contact: Contact, company: Company) -> tuple[bool, str]:
-    """Auto-generate (if step.body is a placeholder) and send via Blooio."""
-    from app.runtime_config import get_blooio_api_key
+    """Auto-generate (if step.body is a placeholder) and send via Blooio.
+
+    Returns (ok, msg). The CALLER is responsible for marking the step
+    skipped vs. retried based on the failure mode — see the dispatch
+    loop in process_pending_steps. The 'skip' return-value convention:
+    msg='SKIP:<reason>' tells the caller to set skipped_at on the step
+    so the engine never re-attempts it (vs. plain "failed: …" which
+    lets the engine try again next tick).
+    """
+    from app.runtime_config import _get_or_create
     from app.services.blooio_messaging import send_message as blooio_send
     from app.services.email_generator import generate_imessage
 
-    api_key = await get_blooio_api_key(db)
+    # Tenant toggle check first — if iMessage is paused for this tenant,
+    # we skip immediately. Avoids the 'no active devices' thrash we hit
+    # when Blooio is configured but the device link is unhealthy.
+    rc = await _get_or_create(db)
+    if not getattr(rc, "imessage_enabled", False):
+        return False, "SKIP:imessage_disabled_by_tenant"
+
+    api_key = (getattr(rc, "blooio_api_key", None) or "").strip()
     if not api_key:
-        return False, "iMessage service not configured"
+        return False, "SKIP:imessage_not_configured"
 
     # If the step body is a template placeholder (or missing), generate fresh.
     # Heuristic: if body starts with "AUTO:" or is empty, regenerate using
@@ -602,6 +617,19 @@ async def process_pending_steps(db: AsyncSession, max_per_tick: int = 50) -> dic
                         step.is_sent = True
                         step.sent_at = now
                         counters["sent"] += 1
+                    elif msg.startswith("SKIP:"):
+                        # iMessage is paused or unconfigured for this tenant.
+                        # Mark the step skipped so the engine moves on +
+                        # the next step in the sequence isn't blocked.
+                        reason = msg.split(":", 1)[1] or "imessage_unavailable"
+                        step.skipped_at = now
+                        step.skip_reason = reason
+                        db.add(Activity(
+                            company_id=company.id, contact_id=contact.id,
+                            activity_type="sequence_step_skipped",
+                            content=f"[Auto] Skipped iMessage step #{step.sequence_order} — reason: {reason}",
+                        ))
+                        counters["skipped"] += 1
                     else:
                         counters["errors"] += 1
                         logger.warning(f"iMessage step #{step.id} failed: {msg}")
