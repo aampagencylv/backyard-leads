@@ -237,12 +237,27 @@ def _extract_logo_and_images(html: str, base_url: str) -> tuple[Optional[str], l
 
     soup = BeautifulSoup(html, "html.parser")
 
-    # Logo candidates in priority order:
+    def _looks_like_image_url(u: str) -> bool:
+        """A logo URL must actually point to an image. Sites occasionally
+        misconfigure rel='apple-touch-icon' to point to / or /home — that
+        crashes Claude vision when we try to send it. Accept only known
+        image extensions. Bare /favicon.ico is also OK."""
+        if not u:
+            return False
+        path = u.split("?", 1)[0].lower()
+        if path.endswith(("/favicon.ico", ".ico", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg")):
+            return True
+        return False
+
+    # Logo candidates in priority order — we validate each one and skip
+    # those that aren't actually image URLs.
     #   1. <link rel="apple-touch-icon"> — usually the highest-res square
     #   2. og:image meta tag
     #   3. <img> with 'logo' in src/class/id/alt
     #   4. <link rel="icon"> (favicon)
+    #   5. /favicon.ico as a last resort
     logo_url = None
+    candidates: list[str] = []
     for sel, attr in [
         ('link[rel="apple-touch-icon"]', "href"),
         ('link[rel="apple-touch-icon-precomposed"]', "href"),
@@ -251,24 +266,32 @@ def _extract_logo_and_images(html: str, base_url: str) -> tuple[Optional[str], l
     ]:
         el = soup.select_one(sel)
         if el and el.get(attr):
-            logo_url = _absolutize(base_url, el.get(attr))
+            candidates.append(_absolutize(base_url, el.get(attr)))
+    for img in soup.find_all("img"):
+        blob = " ".join(
+            str(img.get(k) or "") for k in ("src", "class", "id", "alt")
+        ).lower()
+        if "logo" in blob:
+            src = img.get("src")
+            if src:
+                candidates.append(_absolutize(base_url, src))
+    for sel in ('link[rel="icon"]', 'link[rel="shortcut icon"]'):
+        el = soup.select_one(sel)
+        if el and el.get("href"):
+            candidates.append(_absolutize(base_url, el.get("href")))
+    # Last-resort: the root favicon.ico path
+    try:
+        from urllib.parse import urlsplit
+        parts = urlsplit(base_url)
+        if parts.scheme and parts.netloc:
+            candidates.append(f"{parts.scheme}://{parts.netloc}/favicon.ico")
+    except Exception:
+        pass
+
+    for c in candidates:
+        if _looks_like_image_url(c):
+            logo_url = c
             break
-    if not logo_url:
-        for img in soup.find_all("img"):
-            blob = " ".join(
-                str(img.get(k) or "") for k in ("src", "class", "id", "alt")
-            ).lower()
-            if "logo" in blob:
-                src = img.get("src")
-                if src:
-                    logo_url = _absolutize(base_url, src)
-                    break
-    if not logo_url:
-        for sel in ('link[rel="icon"]', 'link[rel="shortcut icon"]'):
-            el = soup.select_one(sel)
-            if el and el.get("href"):
-                logo_url = _absolutize(base_url, el.get("href"))
-                break
 
     # All substantive page images
     seen = set()
@@ -439,17 +462,24 @@ async def ensure_brand_assets(
 
     # Per-prospect design DNA — Claude with vision picks the font pairing
     # that fits this brand's vibe. Skipped if we have no logo (no signal
-    # to drive the choice — falls back to template defaults).
+    # to drive the choice — falls back to template defaults). Claude
+    # vision supports png/jpg/jpeg/webp/gif only; .ico and .svg are
+    # passed through PIL for color extraction but not to vision.
     design_dna = None
+    vision_safe_logo: Optional[str] = None
+    if site_logo_url:
+        _p = site_logo_url.split("?", 1)[0].lower()
+        if _p.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif")):
+            vision_safe_logo = site_logo_url
     try:
         from app.services.design_dna_generator import generate_design_dna, fallback_design_dna
-        if site_logo_url:
+        if vision_safe_logo:
             design_dna = await generate_design_dna(
                 company_name=company.name or "",
                 business_type=company.business_type,
                 city=company.city,
                 state=company.state,
-                logo_url=site_logo_url,
+                logo_url=vision_safe_logo,
                 extracted_primary_color=site_brand_color,
             )
         if design_dna is None:
