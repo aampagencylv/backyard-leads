@@ -6665,7 +6665,7 @@ function verify(secret, rawBody, header) {
             container.innerHTML = companies.map(c => `
                 <div class="company-card ${c.enriched ? 'enriched' : ''} ${c.problem_count > 0 ? 'has-problems' : ''}">
                     <div class="company-card-header">
-                        ${(currentUser && currentUser.role === 'admin') ? `<input type="checkbox" class="merge-checkbox" data-company-id="${c.id}" ${_mergeSel.has(c.id) ? 'checked' : ''} onchange="toggleMergeSelection(${c.id}, this.checked)" style="margin-right:10px;margin-top:6px;cursor:pointer;width:16px;height:16px" title="Select to merge with other companies (admin only)">` : ''}
+                        ${(currentUser && (currentUser.role === 'admin' || currentUser.role === 'super_admin')) ? `<input type="checkbox" class="merge-checkbox" data-company-id="${c.id}" ${_mergeSel.has(c.id) ? 'checked' : ''} onchange="toggleMergeSelection(${c.id}, this.checked)" style="margin-right:10px;margin-top:6px;cursor:pointer;width:16px;height:16px" title="Select for bulk actions (assign, tag, status, merge)">` : ''}
                         <div style="flex:1">
                             <h3><a href="#" onclick="openCompanyDetail(${c.id});return false" style="color:inherit;text-decoration:none;border-bottom:1px dashed #ccc">${escapeHtml(c.name)}</a></h3>
                             <span class="status-badge status-${c.status}">${c.status}</span>
@@ -6761,8 +6761,18 @@ function verify(secret, rawBody, header) {
                 <button class="btn btn-sm" onclick="bulkCompanyEnrich()" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.4)">🧪 Enrich</button>
                 <button class="btn btn-sm" onclick="bulkCompanyDelete()" style="background:#c0392b;color:white;font-weight:600">🗑 Delete</button>
             ` : '';
+            // Count of visible checkboxes (rendered companies on this page)
+            // — used by the "Select all" / "Deselect all" toggle so admins can
+            // grab every result of the current filter (e.g. all of Juval's
+            // companies) without clicking each one.
+            const visibleCount = document.querySelectorAll('.merge-checkbox').length;
+            const allSelected = visibleCount > 0 && Array.from(document.querySelectorAll('.merge-checkbox')).every(cb => cb.checked);
+            const selectAllBtn = isAdmin && visibleCount > 0
+                ? `<button class="btn btn-sm" onclick="toggleSelectAllVisible()" style="background:transparent;color:white;border:1px solid rgba(255,255,255,0.6)">${allSelected ? 'Deselect all' : `Select all (${visibleCount})`}</button>`
+                : '';
             bar.innerHTML = `
                 <span><strong>${_mergeSel.size}</strong> compan${_mergeSel.size === 1 ? 'y' : 'ies'} selected</span>
+                ${selectAllBtn}
                 ${mergeBtn}
                 ${adminActions}
                 <button class="btn btn-sm" onclick="clearMergeSelection()" style="background:transparent;color:white;border:1px solid white">Clear</button>
@@ -6788,18 +6798,91 @@ function verify(secret, rawBody, header) {
             return data;
         }
 
+        // Select / deselect every rendered company checkbox. Updates the
+        // _mergeSel set + the per-row checked state + the action bar.
+        function toggleSelectAllVisible() {
+            const boxes = document.querySelectorAll('.merge-checkbox');
+            const allChecked = boxes.length > 0 && Array.from(boxes).every(cb => cb.checked);
+            const next = !allChecked;  // flip
+            boxes.forEach(cb => {
+                const cid = parseInt(cb.dataset.companyId, 10);
+                if (isNaN(cid)) return;
+                cb.checked = next;
+                if (next) _mergeSel.add(cid);
+                else _mergeSel.delete(cid);
+            });
+            updateMergeBar();
+        }
+
         async function bulkCompanyAssign() {
             const users = await api('/api/auth/users') || [];
-            const choice = prompt(
-                `Assign ${_mergeSel.size} companies to which rep?\n\n` +
-                users.map((u, i) => `${i + 1}. ${u.full_name || u.email}`).join('\n') +
-                `\n\nEnter the number, or 0 to UNASSIGN. Cancel to abort.`
-            );
-            if (choice === null) return;
-            const idx = parseInt(choice, 10);
-            if (isNaN(idx) || idx < 0 || idx > users.length) { toast('Invalid choice'); return; }
-            const user_id = idx === 0 ? null : users[idx - 1].id;
-            await _callBulkAction({ action: 'assign', user_id });
+            if (!users.length) { toast('No users to assign to', { variant: 'hot' }); return; }
+
+            // Sort users: active first, then by name.
+            const sorted = [...users].sort((a, b) => {
+                if (a.is_active !== b.is_active) return b.is_active - a.is_active;
+                const na = (a.full_name || a.email || '').toLowerCase();
+                const nb = (b.full_name || b.email || '').toLowerCase();
+                return na.localeCompare(nb);
+            });
+
+            const root = document.getElementById('modal-root');
+            const count = _mergeSel.size;
+            root.innerHTML = `
+                <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:480px">
+                        <h2 style="margin:0 0 4px">Reassign companies</h2>
+                        <p style="font-size:13px;color:#666;margin-bottom:16px">${count} compan${count === 1 ? 'y' : 'ies'} selected. Pick a rep to reassign them to.</p>
+
+                        <div class="form-group">
+                            <input type="text" id="assign-search" placeholder="Search by name or email…" oninput="filterAssignList()" style="width:100%;padding:8px 12px;border:1px solid #ddd;border-radius:6px;font-size:13px">
+                        </div>
+
+                        <div id="assign-list" style="max-height:320px;overflow-y:auto;border:1px solid #eee;border-radius:6px">
+                            <div onclick="confirmBulkAssign(null, 'Unassign')" class="assign-row" style="padding:10px 14px;border-bottom:1px solid #eee;cursor:pointer;display:flex;justify-content:space-between;align-items:center;color:#999" onmouseover="this.style.background='#f8f8f8'" onmouseout="this.style.background='white'">
+                                <div>
+                                    <div style="font-size:13px;font-weight:500">— Unassign —</div>
+                                    <div style="font-size:11px;color:#aaa">Leave these companies without an owner</div>
+                                </div>
+                            </div>
+                            ${sorted.map(u => {
+                                const nm = escapeHtml(u.full_name || u.email);
+                                const em = escapeHtml(u.email || '');
+                                const inactive = !u.is_active;
+                                return `
+                                    <div data-search="${nm.toLowerCase()} ${em.toLowerCase()}" onclick="confirmBulkAssign(${u.id}, '${nm.replace(/'/g, "\\'")}')" class="assign-row" style="padding:10px 14px;border-bottom:1px solid #eee;cursor:pointer;display:flex;justify-content:space-between;align-items:center;${inactive ? 'opacity:0.5' : ''}" onmouseover="this.style.background='#f8f8f8'" onmouseout="this.style.background='white'">
+                                        <div>
+                                            <div style="font-size:13px;font-weight:500">${nm}${inactive ? ' <span style="color:#c00;font-size:10px;font-weight:400">(disabled)</span>' : ''}</div>
+                                            <div style="font-size:11px;color:#888">${em}${u.role ? ` · ${escapeHtml(u.role)}` : ''}</div>
+                                        </div>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+
+                        <div class="modal-actions" style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">
+                            <button class="btn btn-secondary btn-sm" onclick="document.getElementById('modal-root').innerHTML=''">Cancel</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            setTimeout(() => document.getElementById('assign-search')?.focus(), 100);
+        }
+
+        function filterAssignList() {
+            const q = document.getElementById('assign-search').value.trim().toLowerCase();
+            document.querySelectorAll('#assign-list .assign-row').forEach(row => {
+                const hay = row.dataset.search || '';
+                row.style.display = (!q || hay.includes(q)) ? '' : 'none';
+            });
+        }
+
+        async function confirmBulkAssign(userId, displayName) {
+            const count = _mergeSel.size;
+            const action = userId === null ? 'Unassign' : `Reassign to ${displayName}`;
+            if (!confirm(`${action} ${count} compan${count === 1 ? 'y' : 'ies'}?`)) return;
+            document.getElementById('modal-root').innerHTML = '';
+            await _callBulkAction({ action: 'assign', user_id: userId });
         }
 
         async function bulkCompanyTag() {
@@ -10790,12 +10873,24 @@ hmac.compare_digest(expected, header)</pre>
             const campaigns = await api('/api/campaigns/');
             const c = (campaigns || []).find(x => x.id === id);
             if (!c) { toast('Campaign not found', 'error'); return; }
+            const locText = (c.locations || []).join('\n');
             const root = document.getElementById('modal-root');
             root.innerHTML = `
                 <div class="modal-backdrop" onclick="document.getElementById('modal-root').innerHTML=''">
-                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:560px">
+                    <div class="modal-card" onclick="event.stopPropagation()" style="max-width:600px;max-height:90vh;overflow-y:auto">
                         <h2>Edit Campaign</h2>
                         <div class="form-group"><label>Campaign Name</label><input type="text" id="edit-camp-name" value="${escapeHtml(c.name)}"></div>
+
+                        <div class="form-group">
+                            <label>Locations (one per line)</label>
+                            <textarea id="edit-camp-locations" rows="3" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px">${escapeHtml(locText)}</textarea>
+                            <label style="display:flex;align-items:center;gap:6px;margin-top:6px;cursor:pointer;font-size:13px">
+                                <input type="checkbox" id="edit-camp-expand-metros">
+                                Include surrounding suburbs (auto-expands major cities like Phoenix → Phoenix + Scottsdale + Mesa + 15 more). Check this if you typed a metro name and want suburbs added.
+                            </label>
+                            <div style="font-size:11px;color:#888;margin-top:4px">Currently targeting ${(c.locations || []).length} ${(c.locations || []).length === 1 ? 'city' : 'cities'}.</div>
+                        </div>
+
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
                             <div class="form-group"><label>Max Prospects / Day</label><input type="number" id="edit-camp-max-day" value="${c.max_prospects_per_day}" min="1" max="500"></div>
                             <div class="form-group">
@@ -10822,10 +10917,18 @@ hmac.compare_digest(expected, header)</pre>
         }
 
         async function submitEditCampaign(id) {
+            const locsText = document.getElementById('edit-camp-locations').value;
+            const locations = locsText.split('\n').map(l => l.trim()).filter(Boolean);
+            const expandMetros = document.getElementById('edit-camp-expand-metros').checked;
+
+            if (!locations.length) { toast('Locations cannot be empty', 'hot'); return; }
+
             const data = await api('/api/campaigns/' + id, {
                 method: 'PATCH',
                 body: JSON.stringify({
                     name: document.getElementById('edit-camp-name').value,
+                    locations: locations,
+                    expand_metros: expandMetros,
                     max_prospects_per_day: parseInt(document.getElementById('edit-camp-max-day').value) || 10,
                     mode: document.getElementById('edit-camp-mode').value,
                     min_reviews: parseInt(document.getElementById('edit-camp-min-rev').value) || 0,
@@ -10837,7 +10940,8 @@ hmac.compare_digest(expected, header)</pre>
                 }),
             });
             if (data) {
-                toast('Campaign updated');
+                const expansionMsg = expandMetros && locations.length === 1 ? ` (expanded to suburbs)` : '';
+                toast('Campaign updated' + expansionMsg);
                 document.getElementById('modal-root').innerHTML = '';
                 loadCampaigns();
             }
