@@ -171,7 +171,7 @@
     <span class="label">{{ services.section_label }}</span>
     <h2>{{ services.section_headline }}</h2>
     <div class="services-grid">
-      {% for service in services.items %}
+      {% for service in services['items'] %}
       <div class="service">
         <span class="service-num">{{ "%02d"|format(loop.index) }}</span>
         <h3>{{ service.name }}</h3>
