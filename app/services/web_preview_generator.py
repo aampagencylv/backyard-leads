@@ -106,17 +106,19 @@ def _assemble_business_data(company) -> dict:
     }
 
 
-def _assemble_photo_data(brand_assets: dict, fallback: list[str]) -> dict:
+def _assemble_photo_data(brand_assets: dict, fallback: list[str], curation: Optional[dict] = None) -> dict:
     """Pick the hero, about, and gallery photos from a brand-asset bundle.
 
-    Preference order:
+    Preference order for the candidate pool:
       1. Google Places photos (real work, real venue, public)
       2. Site-scraped images (real, but mixed quality — often hero shots)
       3. Caller-supplied fallback (vertical-specific generic, last resort)
 
-    The first photo wins the hero slot. Second photo wins about. The
-    remaining 6 fill the gallery. Returns photo URLs only — selection
-    refinement (LLM-assisted hero pick) is a follow-up step.
+    Slot assignment:
+      - If `curation` is provided (Claude-vision photo curation output),
+        use its hero_idx/about_idx/gallery_idx — Claude picked the best
+        hero, the best about, and ordered the gallery by visual quality.
+      - Otherwise fall back to pool[0]/pool[1]/pool[2:8] (arbitrary).
     """
     pool: list[str] = []
     # Places photos first — they're the most likely to be real work
@@ -146,10 +148,20 @@ def _assemble_photo_data(brand_assets: dict, fallback: list[str]) -> dict:
     # or fall back to template defaults if it failed / wasn't generated.
     dna = brand_assets.get("design_dna") or {}
 
+    # Apply Claude's curation if available. Otherwise positional fallback.
+    if curation and curation.get("hero_url"):
+        hero = curation["hero_url"]
+        about = curation.get("about_url") or (pool[1] if len(pool) > 1 else pool[0])
+        gallery = curation.get("gallery_urls") or pool[2:8]
+    else:
+        hero = pool[0]
+        about = pool[1] if len(pool) > 1 else pool[0]
+        gallery = pool[2:8] if len(pool) > 2 else []
+
     return {
-        "hero": pool[0],
-        "about": pool[1] if len(pool) > 1 else pool[0],
-        "gallery": pool[2:8] if len(pool) > 2 else [],
+        "hero": hero,
+        "about": about,
+        "gallery": gallery,
         # Expose the full pool so the editor can let the BDR swap any photo
         "pool": pool,
         # Brand color + logo + per-prospect design DNA — template uses
@@ -313,7 +325,38 @@ async def generate_web_preview(
         log.exception("brand_extractor failed — falling back to empty assets")
         brand_assets = {"google_photos": [], "site_images": [], "site_logo_url": None, "site_brand_color": None}
 
-    photos = _assemble_photo_data(brand_assets, fallback_photos or [])
+    # Build the candidate pool the way _assemble_photo_data will see it
+    # (Places photos first, then site images, then fallback) so the
+    # indices Claude returns line up with the pool we render from.
+    candidate_pool: list[str] = []
+    for p in (brand_assets.get("google_photos") or []):
+        if p:
+            candidate_pool.append(p)
+    for img in (brand_assets.get("site_images") or []):
+        u = img.get("url") if isinstance(img, dict) else img
+        if u and u not in candidate_pool:
+            candidate_pool.append(u)
+    for u in (fallback_photos or []):
+        if u and u not in candidate_pool:
+            candidate_pool.append(u)
+    candidate_pool = candidate_pool[:10]
+
+    # Claude-vision photo curation — picks the best hero, the best
+    # about, and orders the gallery. Skipped when we have fewer than 3
+    # candidate photos (not enough signal to be worth a vision call).
+    curation = None
+    if len(candidate_pool) >= 3:
+        try:
+            from app.services.design_dna_generator import curate_photos
+            curation = await curate_photos(
+                business_name=company.name or "",
+                business_type=company.business_type,
+                candidate_urls=candidate_pool,
+            )
+        except Exception as e:
+            log.warning(f"photo curation failed — using positional fallback: {e}")
+
+    photos = _assemble_photo_data(brand_assets, fallback_photos or [], curation=curation)
 
     try:
         slots = await _generate_slots(design_md, business_data)

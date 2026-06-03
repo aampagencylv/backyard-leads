@@ -222,6 +222,116 @@ async def generate_design_dna(
     }
 
 
+PHOTO_CURATION_SYSTEM_PROMPT = """\
+You are a photo editor curating images for a single-page website
+preview. The site has three photo slots:
+
+  - HERO: full-bleed background at the top. Wants wide, cinematic,
+    establishing shot. The viewer's first impression. Prefer outdoor,
+    wide-angle, finished-work shots. Avoid close-up product shots,
+    people-only portraits, or interior-only photos for outdoor builders.
+  - ABOUT: ~50% width, shown next to text. Wants portrait or context —
+    a team shot, a craftsperson at work, a quality detail. Vertical or
+    square framing works best.
+  - GALLERY: 6 thumbnails in a grid. Pick 6 that together SHOW THE
+    RANGE OF THEIR WORK. Avoid duplicates of the same project.
+
+You will be shown a numbered list of candidate photos. Look at each
+one and assign indices to each slot.
+
+CRITICAL:
+  - Return indices from the provided list ONLY. The first photo is
+    index 0, the second is 1, and so on.
+  - Hero and About should be different photos.
+  - Gallery is an ORDERED list of 6 indices. They will render in this
+    order in a grid.
+  - If fewer than 8 photos are provided, repeat indices is fine
+    (gallery can include the same photo twice in worst case).
+  - Return ONLY JSON, no fences, no prose.
+
+Output shape:
+{
+  "hero_idx": <int>,
+  "hero_rationale": "<1 short sentence>",
+  "about_idx": <int>,
+  "about_rationale": "<1 short sentence>",
+  "gallery_idx": [<int>, <int>, <int>, <int>, <int>, <int>]
+}
+"""
+
+
+async def curate_photos(
+    *,
+    business_name: str,
+    business_type: Optional[str],
+    candidate_urls: list[str],
+) -> Optional[dict]:
+    """Have Claude (with vision) pick the best hero/about/gallery
+    photos from a pool of candidates. Returns the curation dict or
+    None on failure (caller falls back to [0]/[1]/[2:8])."""
+    if not candidate_urls:
+        return None
+    # Cap at 10 images per request to keep Claude vision fast + cheap
+    candidates = candidate_urls[:10]
+
+    user_text = (
+        f"BUSINESS: {business_name} ({business_type or 'unknown type'})\n\n"
+        f"Below are {len(candidates)} candidate photos in numbered order. "
+        "Look at each one and pick the best assignments for the three slots.\n\n"
+        + "\n".join(f"  {i}: {u}" for i, u in enumerate(candidates))
+        + "\n\nReturn the JSON now."
+    )
+
+    try:
+        raw = await chat_with_vision(
+            model=MODEL_BALANCED,
+            system=PHOTO_CURATION_SYSTEM_PROMPT,
+            user_text=user_text,
+            image_urls=candidates,
+            max_tokens=400,
+            cacheable=True,
+        )
+    except Exception as e:
+        log.warning(f"Photo curation call failed: {e}")
+        return None
+
+    txt = raw.strip()
+    if "```json" in txt:
+        txt = txt.split("```json", 1)[1].split("```", 1)[0]
+    elif "```" in txt:
+        txt = txt.split("```", 1)[1].split("```", 1)[0]
+    try:
+        choice = json.loads(txt.strip())
+    except json.JSONDecodeError:
+        log.warning(f"Photo curation JSON parse failed; raw: {raw[:200]}")
+        return None
+
+    # Validate + clamp indices to the candidate pool
+    n = len(candidates)
+    def _safe_idx(i, default):
+        try:
+            i = int(i)
+            return i if 0 <= i < n else default
+        except Exception:
+            return default
+
+    hero_idx = _safe_idx(choice.get("hero_idx"), 0)
+    about_idx = _safe_idx(choice.get("about_idx"), 1 if n > 1 else 0)
+    gallery_raw = choice.get("gallery_idx") or list(range(2, min(8, n)))
+    gallery = [_safe_idx(i, j) for j, i in enumerate(gallery_raw[:6])]
+
+    return {
+        "hero_idx": hero_idx,
+        "hero_url": candidates[hero_idx],
+        "hero_rationale": choice.get("hero_rationale", ""),
+        "about_idx": about_idx,
+        "about_url": candidates[about_idx],
+        "about_rationale": choice.get("about_rationale", ""),
+        "gallery_idx": gallery,
+        "gallery_urls": [candidates[i] for i in gallery],
+    }
+
+
 def fallback_design_dna() -> dict:
     """When DNA generation fails or no logo is available, fall back to
     template defaults so the preview still renders."""

@@ -28,14 +28,14 @@
   body { font-family: var(--font-body); color: var(--ink-soft); background: var(--paper); font-size: 17px; line-height: 1.65; }
   .container { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
 
-  h1, h2, h3 { font-family: var(--font-display); color: var(--ink); font-weight: 600; line-height: 1.1; letter-spacing: -0.01em; }
-  h1 { font-size: clamp(40px, 6vw, 72px); }
-  h2 { font-size: clamp(32px, 4.5vw, 48px); margin-bottom: 16px; }
-  h3 { font-size: 22px; }
+  h1, h2, h3 { font-family: var(--font-display); color: var(--ink); font-weight: 600; line-height: 1.05; letter-spacing: -0.02em; }
+  h1 { font-size: clamp(48px, 7vw, 88px); }
+  h2 { font-size: clamp(36px, 5vw, 56px); margin-bottom: 20px; }
+  h3 { font-size: 24px; letter-spacing: -0.01em; }
   p { color: var(--ink-soft); }
   a { color: var(--moss); text-decoration: none; }
 
-  .label { font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em; color: var(--moss); }
+  .label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.18em; color: var(--moss); }
 
   .btn { display: inline-block; padding: 14px 32px; font-family: var(--font-body); font-size: 16px; font-weight: 600; border-radius: 4px; cursor: pointer; transition: background 0.15s ease; text-decoration: none; border: 0; }
   .btn-primary { background: var(--moss); color: var(--cream); }
@@ -54,14 +54,15 @@
   .brand-tag { font-size: 12px; color: var(--ink-soft); margin-top: 2px; letter-spacing: 0.04em; text-transform: uppercase; }
   .header-cta { font-size: 14px; font-weight: 600; color: var(--moss); }
 
-  /* Hero */
-  .hero { position: relative; min-height: 88vh; background: var(--moss-deep); color: var(--cream); display: flex; align-items: flex-end; overflow: hidden; }
-  .hero-bg { position: absolute; inset: 0; background-size: cover; background-position: center; }
-  .hero-overlay { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(12, 22, 18, 0.25) 0%, rgba(12, 22, 18, 0.05) 40%, rgba(12, 22, 18, 0.85) 100%); }
-  .hero-content { position: relative; padding: 128px 0 96px; width: 100%; }
-  .hero-content .label { color: var(--gold); margin-bottom: 24px; }
-  .hero h1 { color: var(--cream); max-width: 900px; margin-bottom: 24px; }
-  .hero .subhead { font-size: 19px; max-width: 640px; color: rgba(248, 246, 241, 0.85); margin-bottom: 40px; line-height: 1.55; }
+  /* Hero — full-bleed photo, editorial scale, dark gradient toward base */
+  .hero { position: relative; min-height: 92vh; background: var(--ink); color: var(--cream); display: flex; align-items: flex-end; overflow: hidden; }
+  .hero-bg { position: absolute; inset: 0; background-size: cover; background-position: center; transform: scale(1.06); transition: transform 8s ease; filter: saturate(1.05) contrast(1.02); }
+  .hero:hover .hero-bg { transform: scale(1.0); }
+  .hero-overlay { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(12, 22, 18, 0.20) 0%, rgba(12, 22, 18, 0.05) 35%, rgba(12, 22, 18, 0.92) 100%); }
+  .hero-content { position: relative; padding: 144px 0 112px; width: 100%; }
+  .hero-content .label { color: var(--gold); margin-bottom: 28px; }
+  .hero h1 { color: var(--cream); max-width: 980px; margin-bottom: 28px; font-weight: 500; }
+  .hero .subhead { font-size: 20px; max-width: 640px; color: rgba(248, 246, 241, 0.92); margin-bottom: 44px; line-height: 1.55; font-weight: 400; }
 
   /* Trust strip */
   .trust { padding: 64px 0; background: var(--cream); }
@@ -80,18 +81,25 @@
   .service p { font-size: 15px; line-height: 1.6; color: var(--ink-soft); }
   .service-num { font-family: var(--font-display); font-size: 14px; color: var(--gold); font-weight: 600; margin-bottom: 16px; display: block; }
 
-  /* About */
+  /* About — taller portrait shot, more breathing room */
   .about { background: var(--paper); }
-  .about-grid { display: grid; grid-template-columns: 1.1fr 1fr; gap: 64px; align-items: center; }
-  .about-grid img { width: 100%; height: 100%; max-height: 480px; object-fit: cover; border-radius: 12px; }
-  .about .body { font-size: 17px; line-height: 1.7; color: var(--ink-soft); margin-top: 16px; }
-  .about .body p + p { margin-top: 16px; }
+  .about-grid { display: grid; grid-template-columns: 1.05fr 1fr; gap: 80px; align-items: center; }
+  .about-grid img { width: 100%; height: 100%; max-height: 560px; object-fit: cover; border-radius: 4px; filter: saturate(1.05); }
+  .about .body { font-size: 18px; line-height: 1.75; color: var(--ink-soft); margin-top: 20px; max-width: 540px; }
+  .about .body p + p { margin-top: 20px; }
 
-  /* Gallery */
+  /* Gallery — asymmetric editorial grid (big + small mix, magazine-style) */
   .gallery { background: var(--cream); }
-  .gallery-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 48px; }
-  .gallery-grid img { width: 100%; height: 240px; object-fit: cover; border-radius: 12px; transition: box-shadow 0.15s ease; }
-  .gallery-grid img:hover { box-shadow: var(--shadow-strong); }
+  .gallery-grid { display: grid; grid-template-columns: 2fr 1fr 1fr; grid-template-rows: 280px 280px; gap: 16px; margin-top: 48px; }
+  .gallery-grid img { width: 100%; height: 100%; object-fit: cover; border-radius: 4px; transition: transform 0.45s ease, box-shadow 0.3s ease; }
+  .gallery-grid img:hover { transform: scale(1.02); box-shadow: var(--shadow-strong); }
+  /* First image spans 2 rows tall on the left — the "magazine cover" shot */
+  .gallery-grid img:first-child { grid-row: span 2; }
+  @media (max-width: 768px) {
+    .gallery-grid { grid-template-columns: repeat(2, 1fr) !important; grid-template-rows: auto !important; }
+    .gallery-grid img { height: 180px !important; }
+    .gallery-grid img:first-child { grid-row: auto !important; grid-column: span 2; height: 240px !important; }
+  }
 
   /* Testimonial */
   .testimonial { background: var(--paper); padding: 128px 0; text-align: center; }
