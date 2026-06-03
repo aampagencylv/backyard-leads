@@ -110,19 +110,48 @@ async def send_email(
         ],
     }
 
-    async with httpx.AsyncClient(timeout=15) as client:
-        response = await client.post(
-            "https://api.resend.com/emails",
-            headers={
-                "Authorization": f"Bearer {settings.resend_api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
+    # Structured timeout. Resend's body delivery is usually <2s but the
+    # response-header phase can take longer under their load — bump read
+    # to 30s while keeping connect short so we fail fast on DNS/network.
+    # The whole call is wrapped in a broad except so a transient Resend
+    # blip doesn't bubble up as an unhandled exception (Sentry incident
+    # 970c574 from 2026-06-03 was a ReadTimeout that escaped this path).
+    # Transient failures return success=False with retryable=True; the
+    # sequence engine treats those as "leave the step pending, retry on
+    # next tick" instead of marking the step errored.
+    timeout = httpx.Timeout(connect=8.0, read=30.0, write=15.0, pool=5.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {settings.resend_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+    except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as e:
+        # Transient — Resend was slow / network hiccup. Engine should retry.
+        import logging
+        logging.getLogger("bmp.email_sender").warning(
+            f"Resend transient failure for email_id={email_id}: {type(e).__name__}: {e}"
         )
-        if response.status_code in (200, 201):
-            data = response.json()
-            return {"success": True, "resend_id": data.get("id"), "message": "Email sent successfully"}
-        return {"success": False, "error": response.text, "status_code": response.status_code}
+        return {"success": False, "error": f"Resend transient: {type(e).__name__}", "retryable": True}
+    except httpx.HTTPError as e:
+        # Anything else httpx raises — log + treat as non-retryable so the
+        # operator can investigate (likely a bug, not a transient blip).
+        import logging
+        logging.getLogger("bmp.email_sender").exception(
+            f"Resend HTTPError for email_id={email_id}: {type(e).__name__}: {e}"
+        )
+        return {"success": False, "error": f"{type(e).__name__}: {e}", "retryable": False}
+
+    if response.status_code in (200, 201):
+        data = response.json()
+        return {"success": True, "resend_id": data.get("id"), "message": "Email sent successfully"}
+    # 5xx from Resend = their problem, retry on next tick
+    retryable = 500 <= response.status_code < 600
+    return {"success": False, "error": response.text, "status_code": response.status_code, "retryable": retryable}
 
 
 def get_sender_info(first_name: str, full_name: str) -> dict:

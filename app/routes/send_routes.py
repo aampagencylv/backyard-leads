@@ -113,6 +113,17 @@ async def send_single_email(
         await db.commit()
         return {"success": True, "email_id": email.id, "resend_id": result.get("resend_id"),
                 "sent_to": contact.email, "from": sender["from_email"], "reply_to": sender["reply_to"]}
+    # Failure path. If Resend reported a transient failure (timeout, 5xx,
+    # network blip), surface 503 + Retry-After so callers retry without
+    # treating the email as permanently failed. The step stays unsent —
+    # engine's next tick re-attempts. Previously raised httpx.ReadTimeout
+    # escaped all the way to Sentry (incident 970c574 from 2026-06-03).
+    if result.get("retryable"):
+        raise HTTPException(
+            status_code=503,
+            detail=f"Resend transient — retry queued: {result.get('error', '')}",
+            headers={"Retry-After": "60"},
+        )
     raise HTTPException(status_code=500, detail=f"Failed to send: {result.get('error', 'Unknown error')}")
 
 
@@ -217,6 +228,17 @@ async def send_next_in_sequence(
             "sent_to": contact.email,
             "remaining_in_sequence": len(remaining),
         }
+    # Failure path. If Resend reported a transient failure (timeout, 5xx,
+    # network blip), surface 503 + Retry-After so callers retry without
+    # treating the email as permanently failed. The step stays unsent —
+    # engine's next tick re-attempts. Previously raised httpx.ReadTimeout
+    # escaped all the way to Sentry (incident 970c574 from 2026-06-03).
+    if result.get("retryable"):
+        raise HTTPException(
+            status_code=503,
+            detail=f"Resend transient — retry queued: {result.get('error', '')}",
+            headers={"Retry-After": "60"},
+        )
     raise HTTPException(status_code=500, detail=f"Failed to send: {result.get('error', 'Unknown error')}")
 
 

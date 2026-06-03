@@ -198,6 +198,13 @@ async def _handle_email(db: AsyncSession, step: GeneratedEmail, contact: Contact
         unsubscribe_token=contact.unsubscribe_token,
     )
     if not result.get("success"):
+        # Transient Resend failure (timeout, 5xx, network blip) — return
+        # a TRANSIENT: prefix the dispatch loop can detect, so the step
+        # stays pending and the next engine tick re-attempts. Without
+        # this, every Resend hiccup burned an error counter + the step
+        # would sit "errored" forever (Sentry 970c574, 2026-06-03).
+        if result.get("retryable"):
+            return False, f"TRANSIENT:{result.get('error', 'transient')}"
         return False, f"Email send failed: {result.get('error', 'unknown')}"
     # Stamp the sender so future cap-checks count this email correctly
     step.sent_by_user_id = sender_user.id
@@ -638,6 +645,14 @@ async def process_pending_steps(db: AsyncSession, max_per_tick: int = 50) -> dic
                     elif msg == "DEFER_SEND_CAP":
                         counters.setdefault("deferred", 0)
                         counters["deferred"] += 1
+                    elif msg.startswith("TRANSIENT:"):
+                        # Resend timeout / 5xx / network blip. Leave the
+                        # step pending so the next engine tick retries.
+                        # Don't burn the error counter — this isn't an
+                        # error in OUR system, just upstream slowness.
+                        counters.setdefault("transient_retry", 0)
+                        counters["transient_retry"] += 1
+                        logger.info(f"Email step #{step.id} transient — will retry next tick: {msg[10:]}")
                     else:
                         counters["errors"] += 1
                         logger.warning(f"Email step #{step.id} failed: {msg}")
