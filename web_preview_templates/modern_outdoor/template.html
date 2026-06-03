@@ -14,8 +14,8 @@
     --ink-soft: #2a3a30;
     --paper: #ffffff;
     --cream: #f8f6f1;
-    --moss: #2d5a3d;
-    --moss-deep: #1f3f2b;
+    --moss: {{ photos.brand_color or '#2d5a3d' }};
+    --moss-deep: {{ photos.brand_color or '#1f3f2b' }};
     --gold: #c89344;
     --mist: #e6ebe7;
     --shadow: 0 8px 24px rgba(12, 22, 18, 0.08);
@@ -134,9 +134,14 @@
 
 <header class="site-header">
   <div class="container row">
-    <div>
-      <div class="brand-name">{{ business.name }}</div>
-      <div class="brand-tag">{{ business.tagline }}</div>
+    <div style="display:flex;align-items:center;gap:14px">
+      {% if photos.logo_url %}
+      <img src="{{ photos.logo_url }}" alt="{{ business.name }} logo" style="height:44px;width:auto;max-width:160px;object-fit:contain">
+      {% endif %}
+      <div>
+        <div class="brand-name">{{ business.name }}</div>
+        <div class="brand-tag">{{ business.tagline }}</div>
+      </div>
     </div>
     <a href="{{ cta_url }}" class="header-cta">{{ hero.cta_text }} →</a>
   </div>

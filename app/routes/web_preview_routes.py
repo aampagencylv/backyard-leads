@@ -103,18 +103,18 @@ async def generate_preview(
     # for now. (Later we add a dedicated per-tenant preview_cta_url.)
     cta_url = (req.cta_url_override or agency_url or "").strip()
 
-    # Photos: for v1 we pass empty lists; data assembly inside
-    # web_preview_generator falls back to a known-good Unsplash url so
-    # the preview always renders. Wiring Places + Unsplash live happens
-    # in the next iteration.
+    # The generator now pulls real assets via brand_extractor:
+    #   - Google Places photos (from google_place_id → Places API)
+    #   - Site-scraped images (homepage HTTP fetch + BeautifulSoup)
+    #   - Logo + dominant brand color (extracted from logo pixels)
+    # Cached on the company with a 30-day TTL.
     from app.services.web_preview_generator import generate_web_preview
     result = await generate_web_preview(
+        db=db,
         company=company,
         agency_name=agency_name,
         agency_url=agency_url,
         cta_url=cta_url,
-        places_photos=[],
-        unsplash_fallback=[],
         template_override=req.template_override,
     )
     if "error" in result:

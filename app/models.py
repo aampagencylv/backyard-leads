@@ -265,6 +265,13 @@ class Company(TenantMixin, Base):
     # 7 days (Instagram posts — these turn over faster).
     company_insights_json = Column(Text, nullable=True)
     insights_fetched_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Brand asset cache for the Web Preview generator: Google Places
+    # photos, site-scraped images, extracted logo URL, and the dominant
+    # brand color. One JSON blob so we don't churn the schema as we add
+    # asset types. See app/services/brand_extractor.py for the shape +
+    # the 30-day TTL refresh logic.
+    brand_assets_json = Column(Text, nullable=True)
     instagram_posts_json = Column(Text, nullable=True)
     instagram_posts_fetched_at = Column(DateTime(timezone=True), nullable=True)
 

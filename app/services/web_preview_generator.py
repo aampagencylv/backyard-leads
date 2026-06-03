@@ -106,39 +106,51 @@ def _assemble_business_data(company) -> dict:
     }
 
 
-def _assemble_photo_data(company, places_photos: list[str], unsplash_fallback: list[str]) -> dict:
-    """Pick the hero, about, and gallery photos.
+def _assemble_photo_data(brand_assets: dict, fallback: list[str]) -> dict:
+    """Pick the hero, about, and gallery photos from a brand-asset bundle.
 
     Preference order:
-      1. Scraped photos from their actual site (best — real work)
-      2. Google Places photos (good — public, professional)
-      3. Unsplash by business type (last resort — generic but consistent)
-    """
-    photos = []
-    # Existing site scrape (TODO: wire in once site_scrape stores image_urls)
-    if hasattr(company, "image_urls_json") and company.image_urls_json:
-        try:
-            photos.extend(json.loads(company.image_urls_json)[:9])
-        except Exception:
-            pass
-    # Google Places
-    photos.extend(places_photos[:9 - len(photos)])
-    # Unsplash fallback
-    photos.extend(unsplash_fallback[:9 - len(photos)])
+      1. Google Places photos (real work, real venue, public)
+      2. Site-scraped images (real, but mixed quality — often hero shots)
+      3. Caller-supplied fallback (vertical-specific generic, last resort)
 
-    photos = [p for p in photos if p]
-    if not photos:
-        # Last-ditch: a known-good Unsplash fallback so the preview never
-        # renders with broken images.
-        photos = [
+    The first photo wins the hero slot. Second photo wins about. The
+    remaining 6 fill the gallery. Returns photo URLs only — selection
+    refinement (LLM-assisted hero pick) is a follow-up step.
+    """
+    pool: list[str] = []
+    # Places photos first — they're the most likely to be real work
+    pool.extend([p for p in (brand_assets.get("google_photos") or []) if p])
+    # Then site-scraped images
+    for img in (brand_assets.get("site_images") or []):
+        u = img.get("url") if isinstance(img, dict) else img
+        if u and u not in pool:
+            pool.append(u)
+    # Finally fallback URLs (vertical-generic Unsplash, etc.)
+    for u in (fallback or []):
+        if u and u not in pool:
+            pool.append(u)
+
+    pool = pool[:12]  # hard cap so we don't render an 80-image gallery
+
+    if not pool:
+        # Last-ditch fallback. Better than broken images but obviously
+        # generic — the BDR should see a warning in the editor that no
+        # real photos were found.
+        pool = [
             "https://images.unsplash.com/photo-1614632537423-1e6c2e7e0e8e?w=1600",
             "https://images.unsplash.com/photo-1568605114967-8130f3a36994?w=1200",
         ]
 
     return {
-        "hero": photos[0],
-        "about": photos[1] if len(photos) > 1 else photos[0],
-        "gallery": photos[2:8] if len(photos) > 2 else [],
+        "hero": pool[0],
+        "about": pool[1] if len(pool) > 1 else pool[0],
+        "gallery": pool[2:8] if len(pool) > 2 else [],
+        # Expose the full pool so the editor can let the BDR swap any photo
+        "pool": pool,
+        # Brand color + logo for the template's CSS override
+        "brand_color": brand_assets.get("site_brand_color"),
+        "logo_url": brand_assets.get("site_logo_url"),
     }
 
 
@@ -248,13 +260,14 @@ def _render(template_slug: str, ctx: dict) -> str:
 
 async def generate_web_preview(
     *,
+    db,
     company,
     agency_name: str,
     agency_url: str,
     cta_url: str,
-    places_photos: Optional[list[str]] = None,
-    unsplash_fallback: Optional[list[str]] = None,
+    fallback_photos: Optional[list[str]] = None,
     template_override: Optional[str] = None,
+    force_refresh_assets: bool = False,
 ) -> dict:
     """Generate a single-page web preview for `company`.
 
@@ -279,7 +292,17 @@ async def generate_web_preview(
     design_md = design_md_path.read_text()
 
     business_data = _assemble_business_data(company)
-    photos = _assemble_photo_data(company, places_photos or [], unsplash_fallback or [])
+
+    # Fetch real brand assets (Google Places photos + site scrape +
+    # logo + brand color). Cached on the Company with a 30-day TTL.
+    from app.services.brand_extractor import ensure_brand_assets
+    try:
+        brand_assets = await ensure_brand_assets(db, company, force=force_refresh_assets)
+    except Exception as e:
+        log.exception("brand_extractor failed — falling back to empty assets")
+        brand_assets = {"google_photos": [], "site_images": [], "site_logo_url": None, "site_brand_color": None}
+
+    photos = _assemble_photo_data(brand_assets, fallback_photos or [])
 
     try:
         slots = await _generate_slots(design_md, business_data)
@@ -320,7 +343,18 @@ async def generate_web_preview(
         "html": html,
         "slots": slots,
         "photos": photos,
+        "brand_assets": brand_assets,
+        # Quality signal — surfaces in the editor so the BDR knows whether
+        # the preview is using real photos or fell back to generic stock.
+        "asset_quality": {
+            "places_photo_count": len(brand_assets.get("google_photos") or []),
+            "site_image_count":   len(brand_assets.get("site_images") or []),
+            "has_logo":           bool(brand_assets.get("site_logo_url")),
+            "has_brand_color":    bool(brand_assets.get("site_brand_color")),
+            "used_fallback":      not (brand_assets.get("google_photos") or brand_assets.get("site_images")),
+        },
         # Rough cost estimate — Sonnet w/ caching:
         # Input ~3K (mostly cached) + Output ~2K → ~$0.04-0.06
+        # Plus Places photo URLs (1 details call, free at this volume)
         "cost_estimate_usd": 0.05,
     }
