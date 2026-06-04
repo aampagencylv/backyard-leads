@@ -183,10 +183,10 @@ async def cmd_backfill(args) -> int:
                 )
             if len(rows) > 5:
                 log.info("[DRY RUN] ... and %d more", len(rows) - 5)
-            return 0
+            # Fall through to the Path A direct backfill below.
 
         created = 0
-        for r in rows:
+        for r in (rows if not args.dry_run else []):
             try:
                 # Map legacy enrollment status → engagement phase + status
                 phase = "cold_outreach"
