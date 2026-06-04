@@ -626,11 +626,13 @@ async def _create_ai_decisions(conn) -> None:
 
 async def _ensure_ai_decisions_partition(conn, months_ahead: int) -> None:
     """Create a monthly partition table for ai_decisions, idempotent."""
+    # INTERVAL multiplication avoids the string-concat type ambiguity that
+    # bites bound integer parameters under asyncpg.
     sql = text("""
         WITH bounds AS (
             SELECT
-                date_trunc('month', NOW() + (:m || ' months')::interval) AS start_dt,
-                date_trunc('month', NOW() + ((:m + 1) || ' months')::interval) AS end_dt
+                date_trunc('month', NOW() + (:m * INTERVAL '1 month')) AS start_dt,
+                date_trunc('month', NOW() + (:m_plus_1 * INTERVAL '1 month')) AS end_dt
         )
         SELECT
             'ai_decisions_' || to_char(start_dt, 'YYYY_MM') AS partition_name,
@@ -638,7 +640,8 @@ async def _ensure_ai_decisions_partition(conn, months_ahead: int) -> None:
             to_char(end_dt, 'YYYY-MM-DD') AS end_iso
         FROM bounds
     """)
-    result = (await conn.execute(sql, {"m": months_ahead})).first()
+    result = (await conn.execute(sql, {"m": months_ahead,
+                                       "m_plus_1": months_ahead + 1})).first()
     partition_name = result.partition_name
     start_iso = result.start_iso
     end_iso = result.end_iso
