@@ -130,7 +130,17 @@ async def cmd_backfill(args) -> int:
             created = [r.tenant_id for r in result]
             log.info("created tenant_ai_config defaults for: %s", created)
 
-    # 3) Create engagement rows from active seq_enrollments
+    # 2b) Path A: import sequence_templates (the LEGACY direct schema, not
+    # seq_templates which is the seq_v2 abstraction). This is what BMP prod
+    # actually uses. We translate each sequence_template into a playbook +
+    # set of playbook_actions. Steps come from sequence_templates.steps_json
+    # (a JSON list of {day, step_type, label, skip_if, auto, subject_html?,
+    # body_html?} dicts). Idempotent: skips templates already linked via
+    # ai_strategy_json.legacy_sequence_template_id.
+    log.info("--- importing sequence_templates (legacy) → playbooks ---")
+    await _import_sequence_templates(args.dry_run)
+
+    # 3) Create engagement rows from active seq_enrollments (seq_v2 path)
     log.info("--- creating engagements from active seq_enrollments ---")
     async with engine.begin() as conn:
         # Find active seq_enrollments NOT yet backfilled.
@@ -217,12 +227,237 @@ async def cmd_backfill(args) -> int:
                     r.contact_id, e,
                 )
 
-        log.info("backfill complete: %d engagements created", created)
+        log.info("backfill complete: %d engagements created from seq_enrollments", created)
+
+    # 4) Path A direct: create engagement rows from contacts with pending
+    # generated_emails (the original prod-direct path; no seq_v2 abstraction).
+    log.info("--- creating engagements from contacts with pending generated_emails (Path A) ---")
+    await _backfill_engagements_from_generated_emails(args.dry_run)
 
     log.info("--- ensuring cutover_audit table exists ---")
     await _ensure_cutover_audit_table()
     log.info("Phase 7 BACKFILL done.")
     return 0
+
+
+async def _import_sequence_templates(dry_run: bool) -> None:
+    """Import sequence_templates (LEGACY direct schema) → playbooks.
+
+    Each template's steps_json is parsed into playbook_actions. Step types
+    are mapped:  email → email, imessage → manual (no native iMessage in
+    new engine; BDR handles), call → call_task, linkedin → linkedin.
+
+    The linkage `ai_strategy_json.legacy_sequence_template_id` is the
+    idempotency check — re-running this is a no-op for already-imported
+    templates.
+    """
+    async with engine.begin() as conn:
+        # Channel codes → ids
+        ch_rows = await conn.execute(text(
+            "SELECT id, code FROM channel_types WHERE is_active = TRUE"
+        ))
+        ch_map = {r.code: r.id for r in ch_rows}
+        STEP_TYPE_TO_CHANNEL = {
+            "email":    "email",
+            "imessage": "manual",
+            "call":     "call_task",
+            "linkedin": "linkedin",
+        }
+
+        # Find unimported active sequence_templates
+        templates = await conn.execute(text("""
+            SELECT id, tenant_id, name, steps_json, is_active, created_by
+            FROM sequence_templates
+            WHERE is_active = TRUE
+              AND NOT EXISTS (
+                  SELECT 1 FROM playbooks p
+                  WHERE p.ai_strategy_json ? 'legacy_sequence_template_id'
+                    AND CAST(p.ai_strategy_json ->> 'legacy_sequence_template_id' AS INTEGER) = sequence_templates.id
+              )
+            ORDER BY id
+        """))
+        tmpls = list(templates)
+        log.info("found %d sequence_templates pending import", len(tmpls))
+
+        for tmpl in tmpls:
+            try:
+                steps = json.loads(tmpl.steps_json) if tmpl.steps_json else []
+            except Exception:
+                log.warning("sequence_template %s has malformed steps_json; skipping", tmpl.id)
+                continue
+
+            if dry_run:
+                log.info(
+                    "[DRY RUN] would import sequence_template %s %r (%d steps)",
+                    tmpl.id, tmpl.name, len(steps),
+                )
+                continue
+
+            # Create the playbook
+            strategy_json = json.dumps({
+                "legacy_sequence_template_id": tmpl.id,
+                "imported_via": "cutover_phase7_path_a",
+            })
+            pb_row = await conn.execute(text("""
+                INSERT INTO playbooks (
+                    tenant_id, name, description, phase, mode,
+                    ai_strategy_json, is_active, version, created_by_user_id
+                )
+                VALUES (
+                    :t, :name, :desc, 'cold_outreach', 'linear_sequence',
+                    CAST(:strategy AS jsonb), TRUE, 1, :user_id
+                )
+                RETURNING id
+            """), {
+                "t": tmpl.tenant_id, "name": tmpl.name,
+                "desc": f"Imported from legacy sequence_template id={tmpl.id}",
+                "strategy": strategy_json,
+                "user_id": tmpl.created_by,
+            })
+            new_pb_id = pb_row.first().id
+
+            # Insert the steps as playbook_actions
+            step_order = 0
+            for idx, step in enumerate(steps):
+                step_type = step.get("step_type") or step.get("type") or "email"
+                channel_code = STEP_TYPE_TO_CHANNEL.get(step_type, "manual")
+                channel_id = ch_map.get(channel_code)
+                if channel_id is None:
+                    log.warning(
+                        "template %s step %d: unknown channel %r; skipping",
+                        tmpl.id, idx, channel_code,
+                    )
+                    continue
+                step_order += 1
+                day_offset = step.get("day", step.get("day_offset", 0))
+                subject = step.get("subject") or step.get("subject_html")
+                body = step.get("body") or step.get("body_html")
+                task = step.get("task") or step.get("label")
+                ai_mode = "augmented" if channel_code == "email" else "none"
+
+                await conn.execute(text("""
+                    INSERT INTO playbook_actions (
+                        playbook_id, tenant_id, action_order, channel_id, trigger,
+                        trigger_config_json, ai_personalization_mode,
+                        subject_template, body_template, task_template, day_offset,
+                        skip_conditions_json, is_active
+                    )
+                    VALUES (
+                        :pb, :t, :ord, :ch, 'scheduled',
+                        '{}'::jsonb, :pmode,
+                        :subj, :body, :task, :offset,
+                        '{}'::jsonb, TRUE
+                    )
+                """), {
+                    "pb": new_pb_id, "t": tmpl.tenant_id, "ord": step_order,
+                    "ch": channel_id, "pmode": ai_mode,
+                    "subj": subject, "body": body, "task": task,
+                    "offset": day_offset,
+                })
+            log.info(
+                "imported sequence_template %s → playbook %s (%d steps)",
+                tmpl.id, new_pb_id, step_order,
+            )
+
+
+async def _backfill_engagements_from_generated_emails(dry_run: bool) -> None:
+    """For each contact with pending non-skipped generated_emails AND no
+    existing engagement, create an engagement row pointing at the default
+    playbook (the first active playbook for the tenant).
+
+    This is the Path A backfill for prod, where seq_v2 was never deployed."""
+    async with engine.begin() as conn:
+        # Default playbook per tenant (first active cold_outreach playbook).
+        # If no playbook exists for the tenant, the contact gets no engagement —
+        # the sequence_templates import above should have created at least one
+        # per tenant.
+        candidates = await conn.execute(text("""
+            SELECT DISTINCT
+                c.id        AS contact_id,
+                c.company_id,
+                c.tenant_id,
+                (SELECT p.id FROM playbooks p
+                 WHERE p.tenant_id = c.tenant_id
+                   AND p.phase = 'cold_outreach'
+                   AND p.is_active = TRUE
+                 ORDER BY p.id LIMIT 1) AS default_playbook_id,
+                (SELECT p.version FROM playbooks p
+                 WHERE p.tenant_id = c.tenant_id
+                   AND p.phase = 'cold_outreach'
+                   AND p.is_active = TRUE
+                 ORDER BY p.id LIMIT 1) AS default_playbook_version,
+                (SELECT MIN(ge2.scheduled_send_at) FROM generated_emails ge2
+                 WHERE ge2.contact_id = c.id
+                   AND ge2.is_sent = FALSE
+                   AND ge2.skipped_at IS NULL
+                   AND ge2.paused_at IS NULL) AS next_pending_at
+            FROM contacts c
+            JOIN generated_emails ge ON ge.contact_id = c.id
+            WHERE ge.is_sent = FALSE
+              AND ge.skipped_at IS NULL
+              AND ge.paused_at IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM engagements e
+                  WHERE e.contact_id = c.id
+                    AND e.status != 'terminal'
+              )
+            ORDER BY c.id
+        """))
+        rows = list(candidates)
+        log.info(
+            "found %d contacts with pending generated_emails and no engagement",
+            len(rows),
+        )
+
+        if dry_run:
+            for r in rows[:5]:
+                log.info(
+                    "[DRY RUN] would create engagement: contact=%s company=%s "
+                    "playbook=%s next_send=%s",
+                    r.contact_id, r.company_id,
+                    r.default_playbook_id, r.next_pending_at,
+                )
+            if len(rows) > 5:
+                log.info("[DRY RUN] ... and %d more", len(rows) - 5)
+            return
+
+        created = 0
+        skipped_no_playbook = 0
+        for r in rows:
+            if r.default_playbook_id is None:
+                skipped_no_playbook += 1
+                continue
+            try:
+                await conn.execute(text("""
+                    INSERT INTO engagements (
+                        tenant_id, contact_id, company_id, sequence_number,
+                        current_phase, status,
+                        current_playbook_id, current_playbook_version,
+                        current_action_index, next_action_due_at,
+                        last_transition_by
+                    )
+                    VALUES (
+                        :t, :c, :co, 1,
+                        'cold_outreach', 'active',
+                        :pb, :pbver,
+                        0, :next,
+                        'system'
+                    )
+                """), {
+                    "t": r.tenant_id, "c": r.contact_id, "co": r.company_id,
+                    "pb": r.default_playbook_id, "pbver": r.default_playbook_version,
+                    "next": r.next_pending_at,
+                })
+                created += 1
+            except Exception as e:
+                log.error(
+                    "failed to create engagement for contact %s: %s",
+                    r.contact_id, e,
+                )
+        log.info(
+            "created %d engagements from generated_emails; skipped %d (no default playbook)",
+            created, skipped_no_playbook,
+        )
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -276,15 +511,31 @@ async def cmd_flip_batch(args) -> int:
         """), {"ids": target_ids})
 
         # 2) Pause any legacy seq_enrollments for these contacts so the
-        # old engine doesn't keep marching forward in parallel
-        await conn.execute(text("""
-            UPDATE seq_enrollments
-            SET status = 'paused',
-                paused_at = NOW(),
-                paused_reason = 'cutover_phase7_flip'
-            WHERE contact_id = ANY(:ids)
-              AND status IN ('active')
-        """), {"ids": target_ids})
+        # old engine doesn't keep marching forward in parallel.
+        # seq_enrollments only exists on installs that ran the seq_v2
+        # migration; on the original prod schema it's absent (the legacy
+        # engine reads generated_emails directly).
+        try:
+            await conn.execute(text("""
+                UPDATE seq_enrollments
+                SET status = 'paused',
+                    paused_at = NOW(),
+                    paused_reason = 'cutover_phase7_flip'
+                WHERE contact_id = ANY(:ids)
+                  AND status IN ('active')
+            """), {"ids": target_ids})
+        except Exception as e:
+            # Table doesn't exist on this DB — fine, skip.
+            log.debug("seq_enrollments pause skipped: %s", e)
+
+        # 2b) Path A handoff: for each flipped contact, take their NEXT
+        # pending generated_emails row, copy its content + scheduled_at
+        # into a new-engine `actions` row, and pause the legacy row so it
+        # doesn't double-send. This preserves outreach continuity (BMP's
+        # 178 emails scheduled for tomorrow still go out, just through
+        # the new engine).
+        handoff_n = await _handoff_pending_sends(conn, target_ids)
+        log.info("handed off %d pending sends to new engine", handoff_n)
 
         # 3) Audit log row
         await conn.execute(text("""
@@ -304,6 +555,136 @@ async def cmd_flip_batch(args) -> int:
 
     log.info("flip complete. Watch metrics, then run flip-batch again to expand.")
     return 0
+
+
+async def _handoff_pending_sends(conn, contact_ids: list[int]) -> int:
+    """For each flipped contact, hand off their next pending generated_emails
+    row to the new engine as an action. Pause the legacy row.
+
+    Maps step_type → channel_code:
+        email → email, imessage → manual, call → call_task, linkedin → linkedin
+
+    Idempotency key: ge-{generated_email_id}. Re-running for the same
+    legacy row is a no-op thanks to the UNIQUE constraint on
+    actions.idempotency_key.
+
+    Returns the count of successful handoffs.
+    """
+    STEP_TO_CHANNEL = {
+        "email":    "email",
+        "imessage": "manual",
+        "call":     "call_task",
+        "linkedin": "linkedin",
+    }
+
+    # Channel code → id map
+    ch_rows = await conn.execute(text(
+        "SELECT id, code FROM channel_types WHERE is_active = TRUE"
+    ))
+    ch_map = {r.code: r.id for r in ch_rows}
+
+    # Find the next pending row per contact + their engagement_id
+    rows = await conn.execute(text("""
+        WITH ranked AS (
+            SELECT
+                ge.id AS ge_id, ge.contact_id, ge.company_id,
+                ge.step_type, ge.subject, ge.body,
+                ge.scheduled_send_at, ge.recipient_email,
+                ROW_NUMBER() OVER (
+                    PARTITION BY ge.contact_id
+                    ORDER BY ge.scheduled_send_at
+                ) AS rn
+            FROM generated_emails ge
+            WHERE ge.contact_id = ANY(:ids)
+              AND ge.is_sent = FALSE
+              AND ge.skipped_at IS NULL
+              AND ge.paused_at IS NULL
+        )
+        SELECT
+            r.ge_id, r.contact_id, r.company_id, r.step_type, r.subject,
+            r.body, r.scheduled_send_at, r.recipient_email,
+            c.email AS contact_email, c.phone AS contact_phone,
+            c.linkedin_url AS contact_linkedin, c.timezone AS contact_tz,
+            e.id AS engagement_id, e.tenant_id
+        FROM ranked r
+        JOIN contacts c ON c.id = r.contact_id
+        JOIN engagements e ON e.contact_id = r.contact_id
+                           AND e.status != 'terminal'
+        WHERE r.rn = 1
+    """), {"ids": contact_ids})
+    pending = list(rows)
+
+    handoff_count = 0
+    for p in pending:
+        channel_code = STEP_TO_CHANNEL.get(p.step_type, "manual")
+        channel_id = ch_map.get(channel_code)
+        if channel_id is None:
+            log.warning(
+                "handoff skipped contact=%s ge=%s: no channel for step_type=%r",
+                p.contact_id, p.ge_id, p.step_type,
+            )
+            continue
+
+        # Resolve recipient. For email, use the contact's email (the
+        # recipient-lock trigger requires recipient_email == contact.email).
+        # The generated_emails row may have its own recipient — we use the
+        # contact's current email to match the trigger's expectation.
+        recipient_email = p.contact_email if channel_code == "email" else None
+        recipient_phone = p.contact_phone if channel_code in ("sms",) else None
+        recipient_linkedin = p.contact_linkedin if channel_code == "linkedin" else None
+
+        scheduled_at = p.scheduled_send_at
+        stale_after = scheduled_at + (datetime.now(timezone.utc) - datetime.now(timezone.utc))  # placeholder
+        # Stale-after = 7 days from scheduled (handoff actions live longer
+        # since they're inherited)
+        from datetime import timedelta
+        stale_after = scheduled_at + timedelta(days=7) if scheduled_at else \
+                      datetime.now(timezone.utc) + timedelta(days=7)
+
+        try:
+            result = await conn.execute(text("""
+                INSERT INTO actions (
+                    tenant_id, engagement_id, contact_id,
+                    channel_id, status,
+                    scheduled_at, stale_after, contact_timezone,
+                    subject, body,
+                    recipient_email, recipient_phone, recipient_linkedin_url,
+                    idempotency_key, ai_strategy_used
+                )
+                VALUES (
+                    :t, :eng, :c, :ch, 'scheduled',
+                    :sched, :stale, :tz,
+                    :subj, :body,
+                    :re, :rp, :rl,
+                    :idem, 'cutover_phase7_handoff'
+                )
+                ON CONFLICT (idempotency_key) DO NOTHING
+                RETURNING id
+            """), {
+                "t": p.tenant_id, "eng": p.engagement_id, "c": p.contact_id,
+                "ch": channel_id,
+                "sched": scheduled_at,
+                "stale": stale_after,
+                "tz": p.contact_tz,
+                "subj": p.subject, "body": p.body,
+                "re": recipient_email, "rp": recipient_phone,
+                "rl": recipient_linkedin,
+                "idem": f"ge-{p.ge_id}",
+            })
+            if result.first() is not None:
+                handoff_count += 1
+                # Pause the legacy row so it doesn't double-send
+                await conn.execute(text("""
+                    UPDATE generated_emails
+                    SET paused_at = NOW()
+                    WHERE id = :id AND paused_at IS NULL
+                """), {"id": p.ge_id})
+        except Exception as e:
+            log.error(
+                "handoff failed contact=%s ge=%s: %s",
+                p.contact_id, p.ge_id, e,
+            )
+    return handoff_count
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -353,15 +734,36 @@ async def cmd_rollback(args) -> int:
               AND status IN ('scheduled', 'awaiting_approval')
         """), {"ids": target_ids})
 
-        # 3) Resume the legacy seq_enrollments that we paused at flip time
+        # 3a) Resume the legacy seq_enrollments that we paused at flip time
+        # (seq_v2 schema only; safe no-op when table absent)
+        try:
+            await conn.execute(text("""
+                UPDATE seq_enrollments
+                SET status = 'active',
+                    paused_at = NULL,
+                    paused_reason = NULL
+                WHERE contact_id = ANY(:ids)
+                  AND paused_reason = 'cutover_phase7_flip'
+                  AND status = 'paused'
+            """), {"ids": target_ids})
+        except Exception:
+            pass
+
+        # 3b) Un-pause legacy generated_emails handoff rows so the old
+        # engine resumes from where the cutover handoff left off.
+        # We identify handoff-paused rows by the corresponding new-engine
+        # action's idempotency_key=ge-{ge_id}; any generated_email whose
+        # paused_at was set while a new-engine action referenced it should
+        # resume.
         await conn.execute(text("""
-            UPDATE seq_enrollments
-            SET status = 'active',
-                paused_at = NULL,
-                paused_reason = NULL
+            UPDATE generated_emails
+            SET paused_at = NULL
             WHERE contact_id = ANY(:ids)
-              AND paused_reason = 'cutover_phase7_flip'
-              AND status = 'paused'
+              AND paused_at IS NOT NULL
+              AND EXISTS (
+                  SELECT 1 FROM actions a
+                  WHERE a.idempotency_key = 'ge-' || generated_emails.id
+              )
         """), {"ids": target_ids})
 
         # 4) Audit log row
