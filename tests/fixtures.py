@@ -89,7 +89,7 @@ async def db_session():
 # Entity factories
 # ============================================================
 
-async def make_tenant(db: AsyncSession, name: str = "TestCo", tenant_id: int = 1):
+async def make_tenant(db: AsyncSession, name: str = "TestCo", tenant_id: int = 1, slug: Optional[str] = None):
     """Create or get a tenant row. SQLite doesn't enforce FKs by default,
     but we still want the row to exist for joins."""
     from app.models import Tenant
@@ -97,7 +97,8 @@ async def make_tenant(db: AsyncSession, name: str = "TestCo", tenant_id: int = 1
     existing = (await db.execute(select(Tenant).where(Tenant.id == tenant_id))).scalar_one_or_none()
     if existing:
         return existing
-    t = Tenant(id=tenant_id, name=name, status="active", plan="standard")
+    t = Tenant(id=tenant_id, name=name, slug=slug or f"test-{tenant_id}",
+               status="active", plan="standard")
     db.add(t)
     await db.flush()
     return t
