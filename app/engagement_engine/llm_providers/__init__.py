@@ -148,15 +148,24 @@ async def get_model_for_decision_type(
       - what_to_send, when_to_send, draft_reply,
         recommend_phase_transition, recommend_playbook_switch → model_decision_making
     """
-    async with async_session() as session:
-        row = await session.execute(text("""
-            SELECT model_signal_scoring, model_reply_classification,
-                   model_content_generation, model_decision_making,
-                   model_engagement_summary
-            FROM tenant_ai_config
-            WHERE tenant_id = :t
-        """), {"t": tenant_id})
-        config = row.first()
+    config = None
+    try:
+        async with async_session() as session:
+            row = await session.execute(text("""
+                SELECT model_signal_scoring, model_reply_classification,
+                       model_content_generation, model_decision_making,
+                       model_engagement_summary
+                FROM tenant_ai_config
+                WHERE tenant_id = :t
+            """), {"t": tenant_id})
+            config = row.first()
+    except Exception as e:
+        # tenant_ai_config may not exist yet (fresh install, CI test DB, etc).
+        # Fall through to the defaults below so callers always get a model.
+        log.warning(
+            "tenant_ai_config query failed for tenant %s, using defaults: %s",
+            tenant_id, e,
+        )
 
     if config is None:
         # Default to Claude tier mapping

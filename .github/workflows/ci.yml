@@ -65,8 +65,12 @@ jobs:
         run: |
           # Extract registered migrations from database.py
           REGISTERED=$(grep -oE 'scripts\.migrate_[a-z0-9_]+' app/database.py | sort -u)
-          # List actual migration files
-          ACTUAL=$(ls scripts/migrate_*.py | sed 's|^|scripts.|; s|\.py$||' | sort -u)
+          # List actual migration files. The sed turns 'scripts/migrate_x.py'
+          # into 'scripts.migrate_x' (replace '/' with '.', strip '.py').
+          # Earlier 's|^|scripts.|' was a bug: it prepended 'scripts.' to a
+          # path that already started with 'scripts/', producing duplicate
+          # 'scripts.scripts/...' that never matched the registered list.
+          ACTUAL=$(ls scripts/migrate_*.py | sed 's|/|.|; s|\.py$||' | sort -u)
 
           # Every registered migration must have a file
           for m in $REGISTERED; do
