@@ -72,6 +72,14 @@ jobs:
           # 'scripts.scripts/...' that never matched the registered list.
           ACTUAL=$(ls scripts/migrate_*.py | sed 's|/|.|; s|\.py$||' | sort -u)
 
+          # Legacy orphan files (intentionally not in the migration chain):
+          # Either pre-date the chain runner or use a different entrypoint
+          # signature (`def migrate()` instead of `def main()`). The table
+          # they describe is now created via Base.metadata.create_all.
+          LEGACY_ORPHANS=(
+            "scripts.migrate_audit_reports"
+          )
+
           # Every registered migration must have a file
           for m in $REGISTERED; do
             f=$(echo "$m" | sed 's|\.|/|g').py
@@ -81,8 +89,19 @@ jobs:
             fi
           done
 
-          # Every migration file must be registered
+          # Every migration file must be registered (or be on the legacy
+          # orphan allowlist).
           for m in $ACTUAL; do
+            is_legacy=0
+            for orphan in "${LEGACY_ORPHANS[@]}"; do
+              if [ "$m" = "$orphan" ]; then
+                is_legacy=1
+                break
+              fi
+            done
+            if [ "$is_legacy" -eq 1 ]; then
+              continue
+            fi
             if ! grep -q "\"$m\"" app/database.py; then
               echo "❌ Migration file $m exists but isn't in app/database.py migration chain"
               exit 1
