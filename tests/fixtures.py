@@ -40,21 +40,38 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 
 @pytest_asyncio.fixture
 async def db_session():
-    """Fresh in-memory SQLite + all tables + a session, per-test isolated."""
-    # SQLite in-memory + StaticPool so the same connection is used across
-    # the session's queries (in-memory DBs are per-connection).
+    """Fresh in-memory SQLite + all tables + a session, per-test isolated.
+
+    The models use `server_default=sa_text("NOW()")` (PG-specific) on
+    timestamp columns, which SQLite chokes on at CREATE TABLE time. We
+    patch those to `func.now()` (dialect-aware) before create_all runs
+    so the test schema renders cleanly on SQLite. Production schema is
+    untouched — this is a test-fixture-only swap.
+    """
     from sqlalchemy.pool import StaticPool
+    from sqlalchemy import func
+    from sqlalchemy.sql.elements import TextClause
+
     engine = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
 
-    # Apply the full schema from the models. We use Base.metadata.create_all
-    # since our migration scripts target PG-specific syntax (PARTIAL INDEX
-    # WHERE, ALTER TABLE ... ADD COLUMN with IF NOT EXISTS quirks).
     from app.database import Base
-    from app import models  # noqa: F401 — import to register all model classes
+    from app import models  # noqa: F401
+
+    # Patch all NOW() text defaults to func.now() so SQLite can create the
+    # schema. Iterate every table/column once before create_all.
+    for table in Base.metadata.tables.values():
+        for col in table.columns:
+            if isinstance(col.server_default, type(None)):
+                continue
+            sd = col.server_default
+            arg = getattr(sd, "arg", None)
+            if isinstance(arg, TextClause) and "NOW()" in str(arg):
+                from sqlalchemy.schema import DefaultClause
+                col.server_default = DefaultClause(func.now())
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
