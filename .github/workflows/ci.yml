@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+
+      - name: Run tests
+        env:
+          # Minimal env so app/config can load. None of these point at
+          # real services — the tests use in-memory SQLite and stub
+          # external calls.
+          DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+          RESEND_API_KEY: "test-key"
+          SECRET_KEY: "test-secret-key-for-ci-only"
+          BMP_POSTAL_ADDRESS: "Test Address"
+          SEND_DOMAIN: "test.example.com"
+          REPLY_DOMAIN: "reply.test.example.com"
+          PUBLIC_URL: "https://test.example.com"
+        run: pytest tests/ -v --tb=short
+
+  compile-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Syntax + import check on all app modules
+        run: |
+          python -m compileall -q app/ scripts/
+          echo "All Python modules parse cleanly."
+
+  migration-chain-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify every migration script exists + every script is registered
+        run: |
+          # Extract registered migrations from database.py
+          REGISTERED=$(grep -oE 'scripts\.migrate_[a-z0-9_]+' app/database.py | sort -u)
+          # List actual migration files
+          ACTUAL=$(ls scripts/migrate_*.py | sed 's|^|scripts.|; s|\.py$||' | sort -u)
+
+          # Every registered migration must have a file
+          for m in $REGISTERED; do
+            f=$(echo "$m" | sed 's|\.|/|g').py
+            if [ ! -f "$f" ]; then
+              echo "❌ Registered migration $m has no file at $f"
+              exit 1
+            fi
+          done
+
+          # Every migration file must be registered
+          for m in $ACTUAL; do
+            if ! grep -q "\"$m\"" app/database.py; then
+              echo "❌ Migration file $m exists but isn't in app/database.py migration chain"
+              exit 1
+            fi
+          done
+
+          echo "✓ Migration chain is consistent."
