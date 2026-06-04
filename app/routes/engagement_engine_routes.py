@@ -87,6 +87,8 @@ class SignalFeedItem(BaseModel):
 
 
 class DecisionAuditItem(BaseModel):
+    # `model_used` collides with Pydantic's default 'model_' protected namespace
+    model_config = ConfigDict(protected_namespaces=())
     id: int
     engagement_id: int
     signal_id: Optional[int]
@@ -121,6 +123,7 @@ class ActionItem(BaseModel):
 
 
 class TenantAIConfigOut(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
     tenant_id: int
     provider: str
     has_custom_key: bool
@@ -140,7 +143,7 @@ class TenantAIConfigOut(BaseModel):
 
 class TenantAIConfigUpdate(BaseModel):
     """All fields optional — partial update."""
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
     provider: Optional[str] = None
     api_key_plaintext: Optional[str] = None  # encrypted before write
     base_url: Optional[str] = None
