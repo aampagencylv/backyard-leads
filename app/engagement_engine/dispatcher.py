@@ -180,8 +180,9 @@ async def _process_one_action(
 
     # 1. Run kill-switch + stale-action + recipient-drift checks
     async with async_session() as session:
+        conn = await session.connection()
         eligibility = await check_dispatch_eligibility(
-            session.connection(), action_id=action_id,
+            conn, action_id=action_id,
         )
         if not eligibility.eligible:
             await _mark_action(
