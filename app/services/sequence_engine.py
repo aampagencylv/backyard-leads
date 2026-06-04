@@ -612,6 +612,22 @@ async def process_pending_steps(db: AsyncSession, max_per_tick: int = 50) -> dic
             counters["skipped"] += 1
             continue
 
+        # Phase 7 cutover gate: the new engagement engine owns this contact
+        # iff contacts.outreach_owner == 'engagement_engine'. Any other value
+        # (legacy, none, paused, white_glove, disputed) means the old engine
+        # is in charge — but only 'legacy' counts as "actively pursue".
+        # The default for every existing contact is 'legacy' so this gate
+        # is a no-op until the cutover script flips an individual contact.
+        # When flipped: the new engine takes over (via its own dispatcher),
+        # and this old engine refuses to send for that contact — preventing
+        # dual-send during the parallel-run window.
+        owner = getattr(contact, "outreach_owner", None) or "legacy"
+        if owner != "legacy":
+            step.skipped_at = now
+            step.skip_reason = f"outreach_owner={owner}"
+            counters["skipped"] += 1
+            continue
+
         # Skip-if check
         skip_conds = []
         try:
@@ -739,6 +755,13 @@ async def execute_step_now(
     company = (await db.execute(select(Company).where(Company.id == step.company_id))).scalar_one_or_none()
     if not contact or not company:
         return {"fired": False, "reason": "missing_contact_or_company"}
+
+    # Phase 7 cutover gate — same as the auto-run path. A BDR-clicked send
+    # for a contact owned by the new engine bounces out here so the BDR
+    # uses the new engagement engine surface instead.
+    owner = getattr(contact, "outreach_owner", None) or "legacy"
+    if owner != "legacy":
+        return {"fired": False, "reason": f"outreach_owner={owner}"}
 
     # Skip-if check — same as auto-run path
     skip_conds = []
