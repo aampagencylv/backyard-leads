@@ -44,8 +44,8 @@ async def main() -> int:
     skipped = 0
     errored = 0
 
-    async with engine.connect() as conn:
-        # Find seq_templates not yet imported
+    # Read pending templates first (separate read-only connection)
+    async with engine.begin() as conn:
         rows = await conn.execute(text("""
             SELECT st.id, st.tenant_id, st.name, st.description,
                    st.is_default, st.is_active, st.created_by_user_id
@@ -56,21 +56,22 @@ async def main() -> int:
             )
             ORDER BY st.id
         """))
-        templates = list(rows)
-        log.info("found %d seq_templates pending import", len(templates))
+        templates = [r for r in rows]
+    log.info("found %d seq_templates pending import", len(templates))
 
-        for tmpl in templates:
-            try:
-                async with conn.begin():
-                    new_pb_id = await _import_one_template(conn, tmpl)
-                    log.info(
-                        "imported seq_template %s -> playbook %s (%r)",
-                        tmpl.id, new_pb_id, tmpl.name,
-                    )
-                    imported += 1
-            except Exception as e:
-                log.error("failed to import seq_template %s: %s", tmpl.id, e)
-                errored += 1
+    # Per-template fresh transaction so a failure on one doesn't poison others
+    for tmpl in templates:
+        try:
+            async with engine.begin() as conn:
+                new_pb_id = await _import_one_template(conn, tmpl)
+                log.info(
+                    "imported seq_template %s -> playbook %s (%r)",
+                    tmpl.id, new_pb_id, tmpl.name,
+                )
+                imported += 1
+        except Exception as e:
+            log.error("failed to import seq_template %s: %s", tmpl.id, e)
+            errored += 1
 
     log.info("import complete: %d imported, %d skipped, %d errored",
              imported, skipped, errored)
