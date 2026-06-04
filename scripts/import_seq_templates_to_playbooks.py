@@ -123,8 +123,21 @@ async def _import_one_template(conn, tmpl) -> int:
     ))
     ch_map = {r.code: r.id for r in ch_rows}
 
+    # Legacy channel-code renames (old seq schema → new engagement schema)
+    LEGACY_CHANNEL_ALIASES = {
+        "call": "call_task",     # old: just 'call'; new: 'call_task'
+        # imessage is staying as 'imessage' in legacy table but the new
+        # engine doesn't have iMessage as a channel — those steps become
+        # 'manual' tasks for the BDR to send via the old iMessage UI for
+        # now. Phase 8 may add native iMessage if value warrants.
+        "imessage": "manual",
+        "linkedin": "linkedin",  # same name in both schemas
+        "email": "email",
+    }
+
     for step in steps:
-        channel_id = ch_map.get(step.channel)
+        resolved_code = LEGACY_CHANNEL_ALIASES.get(step.channel, step.channel)
+        channel_id = ch_map.get(resolved_code)
         if channel_id is None:
             log.warning(
                 "skipping seq_template_step %s: unknown channel %r",
