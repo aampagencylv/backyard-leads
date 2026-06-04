@@ -65,6 +65,7 @@ from app.routes import (
     admin_routes,
     onboard_routes,
     web_preview_routes,
+    engagement_engine_routes,
 )
 
 
@@ -462,6 +463,7 @@ app.include_router(admin_routes.router)
 app.include_router(onboard_routes.router)
 app.include_router(web_preview_routes.router)         # /api/web-previews/* (auth)
 app.include_router(web_preview_routes.public_router)  # /sitepreview/{slug} (public)
+app.include_router(engagement_engine_routes.router)   # /api/engagement/* (auth)
 
 # Serve static frontend + user-uploaded files (logos, etc.).
 # var/uploads/ is gitignored and persists across deploys; ensure the
