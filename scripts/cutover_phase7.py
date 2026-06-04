@@ -157,7 +157,7 @@ async def cmd_backfill(args) -> int:
               AND NOT EXISTS (
                   SELECT 1 FROM engagements e
                   WHERE e.contact_id = se.contact_id
-                    AND e.status NOT IN ('terminal',)
+                    AND e.status != 'terminal'
               )
             ORDER BY se.id
         """))
