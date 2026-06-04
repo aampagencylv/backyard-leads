@@ -1502,3 +1502,158 @@ class PendingDeletion(TenantMixin, Base):
     reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     reviewed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+
+
+# ============================================================
+# Sequence v2 — normalized template + enrollment + execution log
+# ============================================================
+#
+# These replace the polymorphic GeneratedEmail row + JSON-blob
+# SequenceTemplate in Phase 5 of the rebuild. For now they coexist
+# additively; no prod code reads/writes to them yet.
+#
+# Why these tables and not extensions of the existing schema:
+#
+#   - GeneratedEmail's subject/body fields are polymorphic — the same
+#     row holds an email subject for email rows, a "Call 3" placeholder
+#     for call rows, and a LinkedIn DM draft for linkedin rows. The
+#     Texas Remodel Team incident (2026-06-03) was a direct symptom.
+#     SeqStepExecution captures the ACTUAL sent content per-execution,
+#     so there's no template-vs-execution confusion.
+#
+#   - State is encoded across 5 fields on GeneratedEmail (is_sent,
+#     paused_at, skipped_at, scheduled_send_at, sent_at) plus
+#     denormalized fields on Company (sequence_resume_at,
+#     sequence_snooze_*). SeqEnrollment.status is a single explicit
+#     CHECK-constrained enum.
+#
+#   - The legacy schema has no way to prevent double-sends at the DB
+#     level. SeqStepExecution.idempotency_key is UNIQUE — a second
+#     INSERT with the same key fails the constraint, period.
+
+class SeqTemplate(TenantMixin, Base):
+    """The recipe — 'Default 30-Day Pool Builder Sequence.' Has many steps.
+    Mutable: editing this row affects new enrollments + active enrollments
+    that haven't passed each edited step yet (content is rendered at send
+    time from the template, not captured at enrollment)."""
+    __tablename__ = "seq_templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(200), nullable=False)
+    description = Column(Text, nullable=True)
+    is_default = Column(Boolean, nullable=False, default=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+
+class SeqTemplateStep(TenantMixin, Base):
+    """A single step in a template's plan. Reorderable via step_order,
+    soft-deletable via is_active (we never physically delete because
+    SeqStepExecution rows may reference it).
+
+    channel ∈ {email, imessage, call, linkedin} — DB-enforced via CHECK.
+    auto_execute=True means the engine fires it; False means it creates
+    a BDR Task and waits for completion.
+    """
+    __tablename__ = "seq_template_steps"
+
+    id = Column(Integer, primary_key=True, index=True)
+    template_id = Column(Integer, ForeignKey("seq_templates.id", ondelete="CASCADE"),
+                         nullable=False, index=True)
+    step_order = Column(Integer, nullable=False)
+    channel = Column(String(20), nullable=False)  # CHECK in DB
+    day_offset_from_enroll = Column(Integer, nullable=False, default=0)
+    step_label = Column(String(60), nullable=True)
+    subject_template = Column(Text, nullable=True)   # NULL for non-email
+    body_template = Column(Text, nullable=True)
+    skip_conditions_json = Column(Text, nullable=True)  # JSON array of strings
+    auto_execute = Column(Boolean, nullable=False, default=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+
+class SeqEnrollment(TenantMixin, Base):
+    """One row per (contact, template). The state machine that says
+    'where is this contact in the sequence right now?' — a single
+    explicit status field instead of 5 nullable timestamps spread
+    across multiple tables.
+
+    status ∈ {active, paused, snoozed, completed, replied, cancelled}.
+    current_step_index points into the template's ordered step list.
+    next_due_at is denormalized so the dispatch query is a single
+    indexed scan.
+    """
+    __tablename__ = "seq_enrollments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    template_id = Column(Integer, ForeignKey("seq_templates.id"), nullable=False)
+    contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=False, index=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
+    status = Column(String(20), nullable=False, default="active")  # CHECK in DB
+    current_step_index = Column(Integer, nullable=False, default=0)
+    next_due_at = Column(DateTime(timezone=True), nullable=True)
+    enrolled_at = Column(DateTime(timezone=True), nullable=False,
+                         default=lambda: datetime.now(timezone.utc))
+    enrolled_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    paused_at = Column(DateTime(timezone=True), nullable=True)
+    paused_reason = Column(String(200), nullable=True)
+    snooze_resume_at = Column(DateTime(timezone=True), nullable=True)
+    snooze_reason = Column(String(200), nullable=True)
+    snooze_set_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    reply_received_at = Column(DateTime(timezone=True), nullable=True)
+    reply_pause_reason = Column(String(200), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    completion_reason = Column(String(100), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+
+class SeqStepExecution(TenantMixin, Base):
+    """Immutable log of every dispatch attempt. Captures the ACTUAL
+    content sent (subject + body at render time) rather than referencing
+    the template — so editing a template later doesn't change history.
+
+    idempotency_key is UNIQUE: f'{enrollment_id}-{template_step_id}-{attempt_n}'.
+    A second INSERT with the same key fails the DB constraint. This
+    structurally prevents the Texas Remodel Team class of bug — even a
+    code path that calls send twice cannot produce two sent emails.
+
+    status ∈ {scheduled, sent, failed, skipped, transient, blocked}.
+    """
+    __tablename__ = "seq_step_executions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    enrollment_id = Column(Integer, ForeignKey("seq_enrollments.id"),
+                           nullable=False, index=True)
+    template_step_id = Column(Integer, ForeignKey("seq_template_steps.id"),
+                              nullable=False)
+    attempt_n = Column(Integer, nullable=False, default=1)
+    idempotency_key = Column(String(200), nullable=False, unique=True)
+    status = Column(String(20), nullable=False, default="scheduled")  # CHECK in DB
+    channel = Column(String(20), nullable=False)
+    scheduled_at = Column(DateTime(timezone=True), nullable=False)
+    executed_at = Column(DateTime(timezone=True), nullable=True)
+    subject = Column(String(500), nullable=True)
+    body = Column(Text, nullable=True)
+    recipient_email = Column(String(320), nullable=True)
+    recipient_phone = Column(String(40), nullable=True)
+    sent_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    resend_message_id = Column(String(80), nullable=True)
+    twilio_call_sid = Column(String(80), nullable=True)
+    blooio_message_id = Column(String(80), nullable=True)
+    error_message = Column(Text, nullable=True)
+    skip_reason = Column(String(80), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc), index=True)
