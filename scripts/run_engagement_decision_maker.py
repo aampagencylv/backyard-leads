@@ -20,6 +20,13 @@ import logging
 import os
 import sys
 
+# Cron runs commands without sourcing systemd's EnvironmentFile.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from app.engagement_engine.decision_maker import run_decision_maker_tick
 
 

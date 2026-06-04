@@ -26,6 +26,15 @@ import os
 import sys
 import json
 
+# Cron runs commands without sourcing systemd's EnvironmentFile, so we
+# load .env here to pick up DATABASE_URL, API keys, and the kill-switch
+# env vars. dotenv is silent when there's no .env file.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from app.engagement_engine.dispatcher import run_dispatcher_tick
 
 
