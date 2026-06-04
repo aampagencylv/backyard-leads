@@ -210,6 +210,27 @@ async def send_email(
     # belt + suspenders so a future route that forgets to filter STILL
     # can't reach Resend with non-email content.
     # ----------------------------------------------------------------
+    # STAGING SAFETY GUARD — when STAGING_FORCE_RECIPIENT is set in the
+    # environment (staging only — NEVER set in prod), every outbound
+    # email's recipient gets rewritten to that single staging mailbox.
+    # This makes staging code STRUCTURALLY incapable of emailing a real
+    # prospect, even if PII sanitization missed a row or a bug introduces
+    # a real address from outside the DB. The original intended recipient
+    # is logged + appended to the subject so we can verify routing in
+    # the staging mailbox.
+    import os
+    _force_to = os.environ.get("STAGING_FORCE_RECIPIENT", "").strip()
+    if _force_to:
+        original_to = to_email
+        to_email = _force_to
+        # Prefix subject so the audit log + recipient inbox show original target
+        subject = f"[STAGING → was: {original_to}] {subject}"
+        import logging
+        logging.getLogger("bmp.email_sender").info(
+            f"STAGING_FORCE_RECIPIENT active — rewrote to_email "
+            f"{original_to!r} → {to_email!r} for email_id={email_id}"
+        )
+
     # Compute anomaly score ONCE — used by guards + audit log + digest.
     anomaly_score, anomaly_flags = _score_email_anomaly(subject, body, to_email)
 
