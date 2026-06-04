@@ -142,11 +142,15 @@ class EmailChannel:
         """
         # Import here to avoid circular import at module load (email_sender
         # may import from models which we're not ready for).
-        from app.services.email_sender import send_email
+        from app.services.email_sender import send_email, get_sender_info
 
-        # Look up tenant-level send identity (from_name, from_firstname,
-        # reply_to_email). For Phase 2, use the tenant's first email_identity
-        # as the source of truth. Future: per-engagement identity routing.
+        # Resolve sender identity. Resolution order:
+        #   1. tenant's email_identities row (the future-correct path; BYO
+        #      identity via the CRM UI)
+        #   2. fallback: look up the engagement's assigned BDR and use
+        #      get_sender_info(first_name, full_name) — exactly the same
+        #      derivation the legacy engine uses, so cutover preserves
+        #      sender continuity without any data seeding
         async with async_session() as session:
             ident_row = await session.execute(text("""
                 SELECT sender_email, sender_name
@@ -156,19 +160,42 @@ class EmailChannel:
             """), {"t": action.tenant_id})
             ident = ident_row.first()
 
-        if ident is None:
-            raise PermanentChannelError(
-                f"no active email_identity for tenant {action.tenant_id}"
-            )
+            if ident is not None:
+                from_name = ident.sender_name or "Backyard Marketing Pros"
+                from_firstname = (ident.sender_name or "BMP").split(" ")[0]
+                reply_to_email = ident.sender_email
+            else:
+                # Legacy fallback: derive from the engagement's assigned BDR.
+                # Look up the BDR via engagement.assigned_bdr_id; if absent,
+                # use the company's assigned_to; if absent, fail.
+                bdr_row = await session.execute(text("""
+                    SELECT u.first_name, u.full_name
+                    FROM engagements e
+                    LEFT JOIN companies co ON co.id = e.company_id
+                    LEFT JOIN users u ON u.id = COALESCE(
+                        e.assigned_bdr_id, co.assigned_to
+                    )
+                    WHERE e.id = :eng
+                """), {"eng": action.engagement_id})
+                bdr = bdr_row.first()
+                if bdr is None or not (bdr.first_name or bdr.full_name):
+                    raise PermanentChannelError(
+                        f"no email_identity AND no assignable BDR for "
+                        f"engagement {action.engagement_id}"
+                    )
+                derived = get_sender_info(bdr.first_name, bdr.full_name)
+                from_name = derived["from_name"]
+                from_firstname = derived["from_firstname"]
+                reply_to_email = derived["reply_to"]
 
         try:
             result = await send_email(
                 to_email=action.recipient_email,
                 subject=action.subject,
                 body=action.body,
-                from_name=ident.sender_name or "Backyard Marketing Pros",
-                from_firstname=(ident.sender_name or "BMP").split(" ")[0],
-                reply_to_email=ident.sender_email,
+                from_name=from_name,
+                from_firstname=from_firstname,
+                reply_to_email=reply_to_email,
                 company_id=action.engagement_id,  # legacy field; eng_id works
                 contact_id=action.contact_id,
                 email_id=action.id,  # for legacy audit-log keying

@@ -583,13 +583,16 @@ async def _handoff_pending_sends(conn, contact_ids: list[int]) -> int:
     ))
     ch_map = {r.code: r.id for r in ch_rows}
 
-    # Find the next pending row per contact + their engagement_id
+    # Find the next pending row per contact + their engagement_id.
+    # Recipient email is NOT stored on generated_emails on prod schema —
+    # the legacy engine resolves it at send-time from the contact. We use
+    # contacts.email below, which also matches the recipient-lock trigger.
     rows = await conn.execute(text("""
         WITH ranked AS (
             SELECT
                 ge.id AS ge_id, ge.contact_id, ge.company_id,
                 ge.step_type, ge.subject, ge.body,
-                ge.scheduled_send_at, ge.recipient_email,
+                ge.scheduled_send_at,
                 ROW_NUMBER() OVER (
                     PARTITION BY ge.contact_id
                     ORDER BY ge.scheduled_send_at
@@ -602,7 +605,7 @@ async def _handoff_pending_sends(conn, contact_ids: list[int]) -> int:
         )
         SELECT
             r.ge_id, r.contact_id, r.company_id, r.step_type, r.subject,
-            r.body, r.scheduled_send_at, r.recipient_email,
+            r.body, r.scheduled_send_at,
             c.email AS contact_email, c.phone AS contact_phone,
             c.linkedin_url AS contact_linkedin, c.timezone AS contact_tz,
             e.id AS engagement_id, e.tenant_id
