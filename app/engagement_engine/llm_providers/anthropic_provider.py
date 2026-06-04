@@ -36,6 +36,15 @@ ANTHROPIC_API_BASE = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
 DEFAULT_TIMEOUT = 60.0  # the decision_maker calls can take 30s+
 
+# Models that no longer accept the `temperature` parameter (Anthropic
+# deprecated it on the Opus 4.7+ family — the API returns HTTP 400
+# 'temperature is deprecated for this model' when included). We omit
+# temperature for these models; they use a fixed internal value.
+MODELS_NO_TEMPERATURE: set[str] = {
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+}
+
 
 class AnthropicProvider:
     """Direct Anthropic API adapter. Used by tenant_ai_config.provider='anthropic'
@@ -77,9 +86,11 @@ class AnthropicProvider:
         payload: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
-            "temperature": temperature,
             "messages": [{"role": "user", "content": prompt}],
         }
+        # Opus 4.7+ family rejects the temperature param entirely.
+        if model not in MODELS_NO_TEMPERATURE:
+            payload["temperature"] = temperature
         if system:
             payload["system"] = system
 
