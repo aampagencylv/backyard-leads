@@ -33,7 +33,10 @@ async def test_snooze_sets_resume_at_and_metadata(bmp_world):
     await db.commit()
     await db.refresh(co)
 
-    assert co.sequence_resume_at == resume
+    # SQLite strips tzinfo on roundtrip; compare epoch seconds instead.
+    assert co.sequence_resume_at is not None
+    assert int(co.sequence_resume_at.timestamp() if co.sequence_resume_at.tzinfo
+               else co.sequence_resume_at.replace(tzinfo=timezone.utc).timestamp()) == int(resume.timestamp())
     assert co.sequence_snoozed_at is not None
     assert co.sequence_snooze_days == 30
     assert co.sequence_snoozed_by_user_id == bdr.id
