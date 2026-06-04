@@ -73,11 +73,46 @@ jobs:
           ACTUAL=$(ls scripts/migrate_*.py | sed 's|/|.|; s|\.py$||' | sort -u)
 
           # Legacy orphan files (intentionally not in the migration chain):
-          # Either pre-date the chain runner or use a different entrypoint
-          # signature (`def migrate()` instead of `def main()`). The table
-          # they describe is now created via Base.metadata.create_all.
+          # These pre-date the chain runner; their tables/columns are now
+          # created via Base.metadata.create_all OR they're one-shot historical
+          # scripts that already ran. Frozen at the snapshot taken when the
+          # chain-check sed bug was fixed (2026-06-04). New migrations must
+          # be registered in app/database.py and will fail CI if orphaned.
           LEGACY_ORPHANS=(
             "scripts.migrate_audit_reports"
+            "scripts.migrate_blooio_key"
+            "scripts.migrate_blooio_signing_secret"
+            "scripts.migrate_booking_tz"
+            "scripts.migrate_call_availability"
+            "scripts.migrate_call_fields"
+            "scripts.migrate_call_ratings"
+            "scripts.migrate_campaigns"
+            "scripts.migrate_company_domain"
+            "scripts.migrate_credit_ledger"
+            "scripts.migrate_deepgram_key"
+            "scripts.migrate_dial_modes"
+            "scripts.migrate_email_reply_tokens"
+            "scripts.migrate_feedback_deletions"
+            "scripts.migrate_is_archived"
+            "scripts.migrate_leads_to_companies"
+            "scripts.migrate_messaging_direction"
+            "scripts.migrate_netrows_caches"
+            "scripts.migrate_notification_prefs"
+            "scripts.migrate_onboarding"
+            "scripts.migrate_page_views"
+            "scripts.migrate_pageview_events"
+            "scripts.migrate_phone_type"
+            "scripts.migrate_resend_webhook_secret"
+            "scripts.migrate_roles_and_views"
+            "scripts.migrate_runtime_config"
+            "scripts.migrate_send_cap"
+            "scripts.migrate_sequence_engine"
+            "scripts.migrate_signature_fields"
+            "scripts.migrate_sms_optout"
+            "scripts.migrate_snooze"
+            "scripts.migrate_tracking_links"
+            "scripts.migrate_twilio_fields"
+            "scripts.migrate_voicemail_greeting"
           )
 
           # Every registered migration must have a file
