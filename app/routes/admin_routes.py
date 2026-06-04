@@ -1395,6 +1395,7 @@ async def caddy_ask(domain: str, db: AsyncSession = Depends(get_db)):
 async def trigger_outbound_digest(
     hours: int = 24,
     recipient: Optional[str] = None,
+    force: bool = True,
     _: User = Depends(require_super_admin),
 ):
     """Manually fire the outbound audit digest right now.
@@ -1402,7 +1403,10 @@ async def trigger_outbound_digest(
     Defaults: last 24 hours, to steve@aamp.agency. Pass `?hours=168`
     to get a weekly retrospective; pass `?recipient=...` to redirect.
     The digest also auto-fires daily via the background loop in main.py.
+
+    `force=True` (default for manual triggers) bypasses the 18h dedup
+    check so super_admin can re-fire on demand.
     """
     from app.services.outbound_digest import send_digest, DIGEST_RECIPIENT
-    result = await send_digest(hours=hours, recipient=recipient or DIGEST_RECIPIENT)
+    result = await send_digest(hours=hours, recipient=recipient or DIGEST_RECIPIENT, force=force)
     return result

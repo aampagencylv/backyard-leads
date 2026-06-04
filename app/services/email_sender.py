@@ -26,7 +26,15 @@ from app.config import settings
 # Score >= 60 → refuse + log. Score >= 30 → allow but flag in audit.
 
 _SUBJECT_PLACEHOLDER_RE = _re.compile(
-    r"^(\s*\[skipped\]|\s*(?:call|imessage|linkedin)\s+(?:step\s+)?\d+\s*$|\s*linkedin\s+message:\s*)",
+    # Three placeholder shapes we know about:
+    #   - "[Skipped] ..."
+    #   - "Call 3" / "iMessage step 5" / "LinkedIn step 2" (exact)
+    # The "LinkedIn message: <name>" alternative was REMOVED 2026-06-04
+    # because re.match treated it as a prefix and refused legitimate BDR
+    # subjects beginning "LinkedIn message: re your Sedona pool post".
+    # The body marker + step_type guards still catch the placeholder case.
+    # Code-review #6.
+    r"^(\s*\[skipped\]|\s*(?:call|imessage|linkedin)\s+(?:step\s+)?\d+\s*$)",
     _re.I,
 )
 _BODY_NONEMAIL_PREFIXES = ("📞", "Connect note (under 280 chars):", "Connect note:")
@@ -243,6 +251,13 @@ async def send_email(
     if step_type and step_type != "email":
         return await _refuse("step_type_not_email",
                              f"step_type={step_type} cannot be sent through send_email — caller bug")
+    # Empty subject = guaranteed bad. Gmail/Outlook penalize empty-subject
+    # senders aggressively for reputation; the soft anomaly score (40)
+    # was below the 60 hard-threshold so empties were dispatching.
+    # Code-review #5.
+    if not (subject or "").strip():
+        return await _refuse("empty_subject",
+                             "Refused to send email with empty subject (mailbox-provider penalty)")
     if subject and _SUBJECT_PLACEHOLDER_RE.match(subject):
         return await _refuse("placeholder_subject",
                              f"Refused to send placeholder subject: {subject!r}")

@@ -234,9 +234,40 @@ def _render_digest_html(data: dict) -> tuple[str, str]:
     return subject, "".join(parts)
 
 
-async def send_digest(*, hours: int = 24, recipient: str = DIGEST_RECIPIENT) -> dict:
+async def _already_sent_today(recipient: str) -> bool:
+    """Check the outbound_email_audit table for a digest already sent to
+    this recipient in the last 18 hours. Persistent dedup across process
+    restarts — replaces the in-memory last_sent_date in main.py which
+    re-fired on every deploy after the 13:00 UTC threshold.
+    Code-review #7."""
+    try:
+        from sqlalchemy import text
+        from app.database import async_session
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=18)
+        async with async_session() as s:
+            r = await s.execute(text("""
+                SELECT 1 FROM outbound_email_audit
+                WHERE caller_module LIKE '%outbound_digest%'
+                  AND recipient_email = :r
+                  AND created_at >= :cutoff
+                  AND status = 'sent'
+                LIMIT 1
+            """), {"r": recipient, "cutoff": cutoff})
+            return r.fetchone() is not None
+    except Exception as e:
+        log.warning(f"digest dedup check failed (non-fatal, allowing send): {e}")
+        return False
+
+
+async def send_digest(*, hours: int = 24, recipient: str = DIGEST_RECIPIENT, force: bool = False) -> dict:
     """Build + send the daily digest via Resend directly. Returns
-    {sent, subject, totals} on success."""
+    {sent, subject, totals} on success.
+
+    Pass force=True to bypass the 18h dedup window (useful for ad-hoc
+    weekly retrospectives via the manual admin endpoint)."""
+    if not force and await _already_sent_today(recipient):
+        log.info(f"digest skipped: already sent to {recipient} in the last 18h")
+        return {"sent": False, "skipped": "deduped"}
     data = await _query_summary(hours=hours)
     subject, html = _render_digest_html(data)
 
@@ -267,7 +298,35 @@ async def send_digest(*, hours: int = 24, recipient: str = DIGEST_RECIPIENT) -> 
             )
         if r.status_code in (200, 201):
             log.info(f"digest sent to {recipient}: {subject}")
-            return {"sent": True, "subject": subject, "resend_id": r.json().get("id"),
+            resend_id = r.json().get("id")
+            # Write an audit row tagged caller_module='outbound_digest' so
+            # _already_sent_today() above can dedup on the next loop tick.
+            # This is the persistent state that replaces the in-memory
+            # last_sent_date check in main.py. Code-review #7.
+            try:
+                from sqlalchemy import text
+                from app.database import async_session
+                async with async_session() as s:
+                    await s.execute(text("""
+                        INSERT INTO outbound_email_audit (
+                            sender_user_id, company_id, contact_id, email_id,
+                            step_type, subject, body_preview, recipient_email,
+                            status, anomaly_score, resend_id, caller_module
+                        ) VALUES (
+                            NULL, NULL, NULL, NULL,
+                            'internal', :subject, :preview, :recipient,
+                            'sent', 0, :resend_id, 'outbound_digest'
+                        )
+                    """), {
+                        "subject": subject[:500],
+                        "preview": "[outbound audit digest]"[:300],
+                        "recipient": recipient,
+                        "resend_id": resend_id,
+                    })
+                    await s.commit()
+            except Exception as e:
+                log.warning(f"digest audit-row write failed (non-fatal): {e}")
+            return {"sent": True, "subject": subject, "resend_id": resend_id,
                     "totals": {
                         "sent": sum(x["sent"] for x in data["per_bdr"]),
                         "blocked": sum(x["blocked"] for x in data["per_bdr"]),

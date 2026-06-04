@@ -1047,6 +1047,7 @@ async def send_adhoc_email(
         company_id=company.id,
         contact_id=contact.id,
         email_id=ge.id,
+        step_type="email",  # defense in depth — ad-hoc is always email. Code-review #13.
         signature_html=tracked_signature,
         unsubscribe_token=contact.unsubscribe_token,
     )

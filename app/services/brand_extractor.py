@@ -168,7 +168,15 @@ _IMG_NOISE_PATTERNS = [
 
 
 def _looks_like_real_image(url: str, alt: str) -> bool:
-    """Filter out obvious noise — sprites, social icons, tracking pixels."""
+    """Filter out obvious noise — sprites, social icons, tracking pixels.
+
+    Accepts modern image-CDN patterns that omit the extension at the
+    path tail: Next.js `/_next/image?url=...`, Cloudflare `/cdn-cgi/image/`,
+    weserv `/images.weserv.nl/?url=...`, Wordpress jetpack `/i*.wp.com/`.
+    Without this, every photo-rich Next.js or Cloudflare-fronted site
+    has its homepage images filtered out and the preview falls back to
+    Unsplash generics. Code-review #12.
+    """
     if not url:
         return False
     u = url.lower()
@@ -176,9 +184,29 @@ def _looks_like_real_image(url: str, alt: str) -> bool:
         return False
     # Strip query strings before extension check
     path = u.split("?", 1)[0]
-    if not any(path.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".avif")):
-        return False
-    return True
+    if any(path.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".avif")):
+        return True
+    # Modern image-CDN paths that don't carry an extension at the tail
+    cdn_markers = (
+        "/_next/image",       # Next.js Image
+        "/cdn-cgi/image/",    # Cloudflare Image Resizing
+        "images.weserv.nl",   # weserv proxy
+        ".wp.com/",           # WordPress Jetpack CDN (i0.wp.com etc.)
+        "/wp-content/uploads/",  # WP uploads without extension on the path
+        "/imgproxy/",         # imgproxy
+        "/_image/",           # Nuxt @nuxt/image
+    )
+    if any(m in u for m in cdn_markers):
+        # Also require the query string to mention an image-y param,
+        # otherwise we'd accept any /_image/ admin page too.
+        q = url.split("?", 1)[1].lower() if "?" in url else ""
+        if any(t in q for t in ("url=", "format=", "w=", "width=", "fit=", "quality=", "q=")):
+            return True
+        # Or the path itself ends in an extension AFTER the CDN segment
+        for ext in (".jpg", ".jpeg", ".png", ".webp", ".avif"):
+            if ext in path:
+                return True
+    return False
 
 
 def _absolutize(base_url: str, src: str) -> str:

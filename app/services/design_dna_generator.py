@@ -311,9 +311,16 @@ async def curate_photos(
     def _safe_idx(i, default):
         try:
             i = int(i)
-            return i if 0 <= i < n else default
+            if 0 <= i < n:
+                return i
         except Exception:
-            return default
+            pass
+        # Clamp the DEFAULT into range too — without this, gallery fallback
+        # 'j' (enumeration position 0..5) can exceed pool size n when n<6,
+        # causing candidates[i] to raise IndexError. Code-review #4.
+        if n <= 0:
+            return 0
+        return max(0, min(default, n - 1))
 
     hero_idx = _safe_idx(choice.get("hero_idx"), 0)
     about_idx = _safe_idx(choice.get("about_idx"), 1 if n > 1 else 0)

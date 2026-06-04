@@ -426,11 +426,15 @@ async def process_pending_steps(db: AsyncSession, max_per_tick: int = 50) -> dic
     # clear the snooze fields. The first email of the new sequence
     # references the agreed timeframe ("you asked me to follow back up
     # in N days — circling back as promised").
+    # Cap WAY down (was 20) because wake_sequence_for_company runs Claude
+    # email-body generation INLINE per contact — blocking the dispatch
+    # loop for tens of seconds per company at scale. Code-review #2.
+    # Lift back up when wake is moved to a background queue.
     waking_companies = (await db.execute(
         select(Company).where(
             Company.sequence_resume_at.is_not(None),
             Company.sequence_resume_at <= now,
-        ).limit(20)  # cap per tick — protects against thundering-herd
+        ).order_by(Company.sequence_resume_at).limit(3)
     )).scalars().all()
     for company in waking_companies:
         try:
@@ -852,6 +856,32 @@ async def wake_sequence_for_company(db: AsyncSession, company: Company) -> int:
         select(Contact).where(Contact.company_id == company.id)
     )).scalars().all()
     contact_ids = [c.id for c in contacts]
+    # Identify contacts who ENGAGED during the snooze (any paused_at step).
+    # A paused_at row is the well-defined 'reply detected, halt cadence'
+    # signal — set by pause_sequence() from the inbound webhook. We do
+    # NOT regenerate for these contacts; they explicitly engaged, and
+    # blasting them with a "circling back" cold email would un-do the
+    # whole point of the reply-pause signal. Code-review #1.
+    engaged_contact_ids: set[int] = set()
+    if contact_ids:
+        engaged_rows = (await db.execute(
+            select(GeneratedEmail.contact_id).where(
+                GeneratedEmail.contact_id.in_(contact_ids),
+                GeneratedEmail.paused_at.is_not(None),
+                GeneratedEmail.is_sent == False,
+            ).distinct()
+        )).scalars().all()
+        engaged_contact_ids = set(engaged_rows)
+        if engaged_contact_ids:
+            logger.info(
+                f"Wake on company #{company.id}: skipping regen for "
+                f"{len(engaged_contact_ids)} engaged contact(s) — they have "
+                f"paused_at steps (reply-detected)."
+            )
+
+    # 1) Mark pending unsent NON-PAUSED steps as skipped. Critically, we
+    #    EXCLUDE paused_at IS NOT NULL — those are the reply-paused steps
+    #    that represent a contact's engagement and must not be wiped.
     if contact_ids:
         from sqlalchemy import update as _update
         await db.execute(
@@ -860,17 +890,21 @@ async def wake_sequence_for_company(db: AsyncSession, company: Company) -> int:
                 GeneratedEmail.contact_id.in_(contact_ids),
                 GeneratedEmail.is_sent == False,
                 GeneratedEmail.skipped_at.is_(None),
+                GeneratedEmail.paused_at.is_(None),  # preserve reply-pause signal
             )
             .values(skipped_at=now, skip_reason="regenerated_post_snooze")
         )
 
-    # 2) For each contact, materialize a fresh DEFAULT_30DAY_TEMPLATE.
-    #    start_sequence_from_template handles opt-out / no-email contacts
-    #    + pre-generates email bodies for non-day-0 steps.
+    # 2) For each contact NOT engaged, materialize a fresh
+    #    DEFAULT_30DAY_TEMPLATE. start_sequence_from_template handles
+    #    opt-out / no-email contacts + pre-generates email bodies for
+    #    non-day-0 steps.
     total_created = 0
     for contact in contacts:
         if contact.unsubscribed_at:
             continue
+        if contact.id in engaged_contact_ids:
+            continue  # engaged contact — leave their existing paused steps alone
         try:
             n = await start_sequence_from_template(db, contact, template=DEFAULT_30DAY_TEMPLATE)
             total_created += n
@@ -878,9 +912,16 @@ async def wake_sequence_for_company(db: AsyncSession, company: Company) -> int:
             logger.warning(f"Wake regenerate failed for contact #{contact.id}: {e}")
             continue
 
+        # Flush so the rows from start_sequence_from_template are visible
+        # to the next SELECT (autoflush timing varies; this avoids the
+        # race documented in code-review #3).
+        await db.flush()
+
         # 3) Replace the freshly-created day-0 "cold" email with the
-        #    re-engagement copy that references the snooze timeframe.
-        #    Match by contact + email_type='cold' + most-recent.
+        #    re-engagement copy. Match by sequence_order=1 (deterministic
+        #    in DEFAULT_30DAY_TEMPLATE) instead of id.desc() (which races
+        #    with start_sequence_from_template's insert ordering when
+        #    multiple steps are pre-generated). Code-review #3.
         freshly_made = (await db.execute(
             select(GeneratedEmail)
             .where(
@@ -888,7 +929,7 @@ async def wake_sequence_for_company(db: AsyncSession, company: Company) -> int:
                 GeneratedEmail.is_sent == False,
                 GeneratedEmail.skipped_at.is_(None),
                 GeneratedEmail.step_type == "email",
-                GeneratedEmail.email_type == "cold",
+                GeneratedEmail.sequence_order == 1,
             )
             .order_by(GeneratedEmail.id.desc())
             .limit(1)
@@ -898,6 +939,16 @@ async def wake_sequence_for_company(db: AsyncSession, company: Company) -> int:
             freshly_made.subject = reeng["subject"]
             freshly_made.body = reeng["body"]
             freshly_made.email_type = "re_engagement"
+        else:
+            # Loudly log — if the day-0 step isn't found, the prospect
+            # gets the generic cold-intro instead of the agreed
+            # 'circling back as promised' copy. Surface this so we can
+            # debug before any rep gets confused feedback from a prospect.
+            logger.warning(
+                f"Wake on company #{company.id} contact #{contact.id}: "
+                f"could not find freshly-created day-0 email to overwrite "
+                f"with re-engagement copy. Prospect will get generic cold."
+            )
 
     # 4) Clear snooze fields + log Activity.
     prior_resume_at = company.sequence_resume_at
