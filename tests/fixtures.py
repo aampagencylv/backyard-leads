@@ -114,6 +114,7 @@ async def make_user(
         email = f"{first_name.lower()}@test.example.com"
     u = User(
         id=user_id, tenant_id=tenant_id, role=role, email=email,
+        hashed_password="$2b$12$test.fake.bcrypt.hash.for.test.fixtures.only",
         first_name=first_name, last_name="User",
         is_active=True, sending_enabled=True,
         twilio_identity=f"bmp_user_{user_id or 0}",
