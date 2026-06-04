@@ -159,6 +159,14 @@ def test_parse_to_schema_rejects_no_json():
 
 def test_parse_to_schema_rejects_malformed_json():
     raw = '{"score": 75, "summary": "broken'  # unterminated string
+    # Unbalanced braces → extractor can't isolate a JSON object → "no JSON"
+    with pytest.raises(ParseError, match="no JSON"):
+        parse_to_schema(raw, _ExampleSchema)
+
+
+def test_parse_to_schema_rejects_balanced_but_invalid_json():
+    """Balanced braces but malformed JSON content → JSON decode error."""
+    raw = '{score: 75}'  # unquoted key — extractor finds braces, json.loads fails
     with pytest.raises(ParseError, match="JSON decode"):
         parse_to_schema(raw, _ExampleSchema)
 
@@ -179,7 +187,7 @@ def test_build_repair_prompt_includes_schema_and_error():
     assert "score" in repair  # schema property name
     assert "summary" in repair
     assert original in repair
-    assert "valid JSON" in repair.lower()
+    assert "valid json" in repair.lower()
 
 
 # ── Model selection ────────────────────────────────────────────────────────
