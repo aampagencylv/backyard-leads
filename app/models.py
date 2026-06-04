@@ -1,4 +1,8 @@
-from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, Boolean, Table, LargeBinary, UniqueConstraint, text as sa_text
+from sqlalchemy import (
+    Column, Integer, String, Text, Float, DateTime, ForeignKey, Boolean, Table,
+    LargeBinary, UniqueConstraint, BigInteger, SmallInteger, Date, Numeric, JSON,
+    text as sa_text,
+)
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 from app.database import Base
@@ -1657,3 +1661,493 @@ class SeqStepExecution(TenantMixin, Base):
     skip_reason = Column(String(80), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False,
                         default=lambda: datetime.now(timezone.utc), index=True)
+
+
+# ============================================================================
+# ENGAGEMENT ENGINE v1 — Phase 1 ORM models
+#
+# These models mirror tables created in scripts/migrate_engagement_engine_v1.py.
+# No production code reads or writes them yet — they exist so future engine
+# code (Phase 2 dispatcher, Phase 3 signal watcher, Phase 4 decision maker)
+# has typed access, and so CRM UI work in Phase 5 can be drafted in parallel.
+#
+# Design reference: docs/ENGAGEMENT_ENGINE_DESIGN.md v3
+# ============================================================================
+
+
+class ChannelType(Base):
+    """Lookup: outbound channel types (email, sms, linkedin, etc).
+    SMALLINT surrogate PK so extending the table is one INSERT, no ACCESS
+    EXCLUSIVE on high-volume FK tables.
+    """
+    __tablename__ = "channel_types"
+
+    id = Column(SmallInteger, primary_key=True)
+    code = Column(String(20), nullable=False, unique=True)
+    label = Column(String(60), nullable=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+    is_paused = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
+
+
+class SignalType(Base):
+    """Lookup: inbound signal types (linkedin_post, gmb_review, email_reply...).
+    Categorized: external (polled) / transport (our own send events) / manual.
+    """
+    __tablename__ = "signal_types"
+
+    id = Column(SmallInteger, primary_key=True)
+    code = Column(String(40), nullable=False, unique=True)
+    label = Column(String(80), nullable=False)
+    category = Column(String(20), nullable=False)  # CHECK in DB
+    default_relevance = Column(SmallInteger, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
+
+
+class SourceType(Base):
+    """Lookup: signal source adapters (linkedin_profile, gmb_listing, ...).
+    adapter_class points at the SignalSource implementation for the source.
+    """
+    __tablename__ = "source_types"
+
+    id = Column(SmallInteger, primary_key=True)
+    code = Column(String(40), nullable=False, unique=True)
+    label = Column(String(80), nullable=False)
+    adapter_class = Column(String(120), nullable=False)
+    default_poll_days = Column(SmallInteger, nullable=False, default=7)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
+
+
+class PhaseTransition(Base):
+    """Lookup: legal engagement-phase transitions, by actor.
+    Composite PK (from_phase, to_phase, allowed_by) lets a transition be
+    allowed by multiple actors with different status preconditions.
+    """
+    __tablename__ = "phase_transitions"
+
+    from_phase = Column(String(40), primary_key=True)
+    to_phase = Column(String(40), primary_key=True)
+    allowed_by = Column(String(20), primary_key=True)  # CHECK in DB: ai|bdr|system
+    requires_status = Column(String(20), nullable=True)
+
+
+class Engagement(TenantMixin, Base):
+    """The central entity: a long-running pursuit of a single contact.
+    May span 12+ months. Status transitions enforced by DB trigger
+    (enforce_phase_transition) against phase_transitions lookup.
+    """
+    __tablename__ = "engagements"
+
+    id = Column(BigInteger, primary_key=True)
+    contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=False)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    sequence_number = Column(Integer, nullable=False, default=1)
+
+    current_phase = Column(String(40), nullable=False, default="cold_outreach")
+    last_transition_by = Column(String(20), nullable=False, default="system")
+    status = Column(String(20), nullable=False, default="active")
+    terminal_reason = Column(String(60), nullable=True)
+    terminal_at = Column(DateTime(timezone=True), nullable=True)
+
+    current_playbook_id = Column(Integer, ForeignKey("playbooks.id"), nullable=True)
+    current_playbook_version = Column(Integer, nullable=True)
+    current_action_index = Column(Integer, nullable=False, default=0)
+
+    next_action_due_at = Column(DateTime(timezone=True), nullable=True)
+    last_outreach_at = Column(DateTime(timezone=True), nullable=True)
+    last_signal_at = Column(DateTime(timezone=True), nullable=True)
+    last_reply_at = Column(DateTime(timezone=True), nullable=True)
+
+    assigned_bdr_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    engagement_score = Column(Integer, nullable=False, default=50)
+    engagement_score_updated_by = Column(String(20), nullable=True)
+    engagement_score_updated_at = Column(DateTime(timezone=True), nullable=True)
+    tier = Column(String(10), nullable=False, default="warm")
+
+    ai_engagement_summary = Column(Text, nullable=True)
+    summary_version = Column(Integer, nullable=False, default=0)
+    summary_updated_at = Column(DateTime(timezone=True), nullable=True)
+    summary_stale_at = Column(DateTime(timezone=True), nullable=True)
+
+    notes = Column(Text, nullable=True)
+
+    monthly_ai_cost_usd = Column(Numeric(10, 4), nullable=False, default=0)
+    monthly_ai_cost_reset_at = Column(DateTime(timezone=True), nullable=False,
+                                      default=lambda: datetime.now(timezone.utc))
+
+    started_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+
+class Playbook(TenantMixin, Base):
+    """Reusable engagement strategy: linear sequence, signal-driven nurture,
+    hybrid, or trigger-response. Versioned via parent_playbook_id; existing
+    engagements pin to the version they were enrolled into.
+    """
+    __tablename__ = "playbooks"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(200), nullable=False)
+    description = Column(Text, nullable=True)
+    phase = Column(String(40), nullable=False)  # CHECK in DB
+    mode = Column(String(20), nullable=False)   # CHECK in DB
+    duration_max_days = Column(Integer, nullable=True)
+    ai_strategy_json = Column(JSON, nullable=False, default=dict)
+    legacy_seq_template_id = Column(Integer, ForeignKey("seq_templates.id"), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    version = Column(Integer, nullable=False, default=1)
+    parent_playbook_id = Column(Integer, ForeignKey("playbooks.id"), nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+
+class PlaybookAction(TenantMixin, Base):
+    """A step in a playbook. day_offset is required for linear_sequence mode,
+    forbidden for signal_driven mode (DB trigger enforces). Triggered by
+    schedule, signal, no-engagement timeout, phase transition, or reply intent.
+    """
+    __tablename__ = "playbook_actions"
+
+    id = Column(Integer, primary_key=True)
+    playbook_id = Column(Integer, ForeignKey("playbooks.id", ondelete="CASCADE"),
+                         nullable=False)
+    action_order = Column(Integer, nullable=False)
+    channel_id = Column(SmallInteger, ForeignKey("channel_types.id"), nullable=False)
+    trigger = Column(String(40), nullable=False, default="scheduled")
+    trigger_config_json = Column(JSON, nullable=False, default=dict)
+    ai_personalization_mode = Column(String(20), nullable=False, default="augmented")
+    subject_template = Column(Text, nullable=True)
+    body_template = Column(Text, nullable=True)
+    task_template = Column(Text, nullable=True)
+    day_offset = Column(Integer, nullable=True)  # required iff mode=linear_sequence
+    skip_conditions_json = Column(JSON, nullable=False, default=dict)
+    legacy_seq_step_id = Column(Integer, ForeignKey("seq_template_steps.id"),
+                                nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+
+class Observation(TenantMixin, Base):
+    """Polling-scheduler row: which sources do we watch for which contact, and
+    when's the next poll due? Per-contact (not per-engagement) so re-engagement
+    after dormancy doesn't orphan polling history.
+    """
+    __tablename__ = "observations"
+
+    id = Column(Integer, primary_key=True)
+    contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=False)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=True)
+    current_engagement_id = Column(BigInteger, ForeignKey("engagements.id"),
+                                   nullable=True)
+    source_type_id = Column(SmallInteger, ForeignKey("source_types.id"),
+                            nullable=False)
+    source_url = Column(Text, nullable=False)
+    last_polled_at = Column(DateTime(timezone=True), nullable=True)
+    next_poll_at = Column(DateTime(timezone=True), nullable=False)
+    poll_interval_days = Column(Integer, nullable=False, default=7)
+    last_snapshot_hash = Column(String(64), nullable=True)
+    last_snapshot_at = Column(DateTime(timezone=True), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    consecutive_failures = Column(Integer, nullable=False, default=0)
+    last_error = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+
+class Signal(TenantMixin, Base):
+    """Immutable observation about a prospect. High-volume table (BIGINT PK).
+    Tenant-consistency trigger enforces signals.tenant_id == engagement.tenant_id.
+    raw_data_json stores extracted facts + hashes (NOT raw third-party HTML)
+    unless flagged is_untrusted_content=True (e.g., inbound reply bodies).
+    """
+    __tablename__ = "signals"
+
+    id = Column(BigInteger, primary_key=True)
+    engagement_id = Column(BigInteger, ForeignKey("engagements.id"), nullable=False)
+    contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=False)
+    signal_type_id = Column(SmallInteger, ForeignKey("signal_types.id"),
+                            nullable=False)
+    source_url = Column(Text, nullable=True)
+    source_endpoint = Column(String(80), nullable=True)
+    raw_data_json = Column(JSON, nullable=False)
+    raw_data_hash = Column(String(64), nullable=True)
+    is_untrusted_content = Column(Boolean, nullable=False, default=True)
+    observed_at = Column(DateTime(timezone=True), nullable=False)
+    detected_at = Column(DateTime(timezone=True), nullable=False,
+                         default=lambda: datetime.now(timezone.utc))
+    relevance_score = Column(Integer, nullable=True)
+    ai_summary = Column(Text, nullable=True)
+    ai_scored_by_model = Column(String(60), nullable=True)
+    ai_scoring_cost_usd = Column(Numeric(8, 5), nullable=True)
+    triggered_action_id = Column(BigInteger, ForeignKey("actions.id"), nullable=True)
+    idempotency_key = Column(String(200), nullable=False, unique=True)
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
+
+
+class Action(TenantMixin, Base):
+    """Outbound dispatch row. recipient_* fields locked by DB trigger to
+    match engagement's contact (unless manual + BDR-attributed). Stale-action
+    detection via stale_after + supersedes/superseded_by + dispatcher's
+    last_reply_at check. Heartbeat fields support crash recovery.
+    """
+    __tablename__ = "actions"
+
+    id = Column(BigInteger, primary_key=True)
+    engagement_id = Column(BigInteger, ForeignKey("engagements.id"), nullable=False)
+    contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=False)
+    playbook_action_id = Column(Integer, ForeignKey("playbook_actions.id"),
+                                nullable=True)
+    triggered_by_signal_id = Column(BigInteger, ForeignKey("signals.id"),
+                                    nullable=True)
+    triggered_by_decision_id = Column(BigInteger, nullable=True)  # no FK: partitioned
+
+    channel_id = Column(SmallInteger, ForeignKey("channel_types.id"), nullable=False)
+    status = Column(String(20), nullable=False, default="scheduled")
+    requires_human_review = Column(Boolean, nullable=False, default=False)
+    approved_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    approved_at = Column(DateTime(timezone=True), nullable=True)
+
+    scheduled_at = Column(DateTime(timezone=True), nullable=False)
+    local_scheduled_at = Column(DateTime(timezone=False), nullable=True)
+    contact_timezone = Column(String(50), nullable=True)
+    executed_at = Column(DateTime(timezone=True), nullable=True)
+
+    stale_after = Column(DateTime(timezone=True), nullable=False)
+    supersedes_action_id = Column(BigInteger, ForeignKey("actions.id"),
+                                  nullable=True)
+    superseded_by_action_id = Column(BigInteger, ForeignKey("actions.id"),
+                                     nullable=True)
+
+    subject = Column(String(500), nullable=True)
+    body = Column(Text, nullable=True)
+    task_description = Column(Text, nullable=True)
+    recipient_email = Column(String(320), nullable=True)
+    recipient_phone = Column(String(40), nullable=True)
+    recipient_linkedin_url = Column(String(500), nullable=True)
+
+    idempotency_key = Column(String(200), nullable=False, unique=True)
+    external_id = Column(String(120), nullable=True)
+    dispatch_heartbeat_at = Column(DateTime(timezone=True), nullable=True)
+    dispatch_worker_id = Column(String(40), nullable=True)
+    error_message = Column(Text, nullable=True)
+    skip_reason = Column(String(80), nullable=True)
+    outcome = Column(String(40), nullable=True)
+    outcome_observed_at = Column(DateTime(timezone=True), nullable=True)
+
+    ai_strategy_used = Column(String(40), nullable=True)
+    ai_generation_cost_usd = Column(Numeric(8, 5), nullable=True)
+    send_cost_usd = Column(Numeric(8, 5), nullable=True)
+    sent_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+
+class AIDecision(TenantMixin, Base):
+    """Audit trail of every LLM call that affected a prospect. Partitioned
+    monthly by created_at — composite PK (id, created_at) and composite
+    UNIQUE (idempotency_key, created_at). 13 decision_type values cover the
+    full AI surface; each maps to a Pydantic schema enforcing the output
+    shape.
+    """
+    __tablename__ = "ai_decisions"
+
+    id = Column(BigInteger, primary_key=True)
+    engagement_id = Column(BigInteger, nullable=False)  # no FK (cross-partition)
+    signal_id = Column(BigInteger, nullable=True)
+    decision_type = Column(String(40), nullable=False)
+    input_context_json = Column(JSON, nullable=False)
+    output_choice_json = Column(JSON, nullable=False)
+    reasoning = Column(Text, nullable=True)
+    provider = Column(String(40), nullable=False)
+    model_used = Column(String(80), nullable=False)
+    tokens_in = Column(Integer, nullable=True)
+    tokens_out = Column(Integer, nullable=True)
+    cost_usd = Column(Numeric(8, 5), nullable=True)
+    estimated_cost_usd = Column(Numeric(8, 5), nullable=True)
+    latency_ms = Column(Integer, nullable=True)
+    json_parse_attempts = Column(Integer, nullable=False, default=1)
+    json_parse_succeeded = Column(Boolean, nullable=False, default=True)
+    fallback_provider_used = Column(String(40), nullable=True)
+    output_validation_passed = Column(Boolean, nullable=False, default=True)
+    output_validation_errors = Column(JSON, nullable=True)
+    human_override_action_id = Column(BigInteger, nullable=True)
+    idempotency_key = Column(String(200), nullable=False)
+    created_at = Column(DateTime(timezone=True), primary_key=True,
+                        default=lambda: datetime.now(timezone.utc))
+
+
+class TenantAIConfig(Base):
+    """Per-tenant BYO AI configuration (Rule #11). Provider + encrypted key +
+    per-task model assignment + monthly + per-engagement budget caps.
+    Default: 'aamp_default' uses our Anthropic key, billed back to tenant.
+    """
+    __tablename__ = "tenant_ai_config"
+
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), primary_key=True)
+    provider = Column(String(40), nullable=False, default="aamp_default")
+    api_key_kms_arn = Column(String(200), nullable=True)
+    api_key_encrypted = Column(Text, nullable=True)
+    api_key_last_validated_at = Column(DateTime(timezone=True), nullable=True)
+    api_key_last_error = Column(Text, nullable=True)
+    base_url = Column(String(200), nullable=True)
+    model_signal_scoring = Column(String(80), nullable=False, default="claude-haiku-4-5")
+    model_reply_classification = Column(String(80), nullable=False, default="claude-haiku-4-5")
+    model_content_generation = Column(String(80), nullable=False, default="claude-sonnet-4-6")
+    model_decision_making = Column(String(80), nullable=False, default="claude-opus-4-7")
+    model_engagement_summary = Column(String(80), nullable=False, default="claude-sonnet-4-6")
+    monthly_budget_usd = Column(Numeric(10, 2), nullable=True)
+    per_engagement_budget_usd = Column(Numeric(8, 4), nullable=False, default=5.00)
+    fallback_provider = Column(String(40), nullable=True)
+    dedupe_email_per_day = Column(Integer, nullable=False, default=1)
+    dedupe_sms_per_day = Column(Integer, nullable=False, default=1)
+    dedupe_linkedin_per_day = Column(Integer, nullable=False, default=1)
+    tcpa_b2b_override = Column(Boolean, nullable=False, default=False)
+    default_timezone = Column(String(50), nullable=False, default="America/New_York")
+    current_month_spent_usd = Column(Numeric(10, 4), nullable=False, default=0)
+    current_month_reset_at = Column(DateTime(timezone=True), nullable=False,
+                                    default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+
+class EmailIdentity(TenantMixin, Base):
+    """Per-tenant sending identity with deliverability tracking. warmup_stage
+    drives daily_send_cap; sent_today increments atomically per send;
+    sent_today_date resets at midnight in reset_timezone (default tenant TZ).
+    """
+    __tablename__ = "email_identities"
+
+    id = Column(Integer, primary_key=True)
+    sender_email = Column(String(320), nullable=False)
+    sender_name = Column(String(200), nullable=True)
+    domain = Column(String(253), nullable=False)
+    spf_verified = Column(Boolean, nullable=False, default=False)
+    dkim_verified = Column(Boolean, nullable=False, default=False)
+    dmarc_policy = Column(String(20), nullable=True)
+    warmup_stage = Column(String(20), nullable=False, default="new")
+    daily_send_cap = Column(Integer, nullable=False, default=50)
+    sent_today = Column(Integer, nullable=False, default=0)
+    sent_today_date = Column(Date, nullable=False,
+                             default=lambda: datetime.now(timezone.utc).date())
+    reset_timezone = Column(String(50), nullable=False, default="America/New_York")
+    bounce_rate_24h = Column(Numeric(5, 4), nullable=True)
+    complaint_rate_24h = Column(Numeric(5, 4), nullable=True)
+    last_validated_at = Column(DateTime(timezone=True), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+
+class EmailSuppression(TenantMixin, Base):
+    """Per-tenant email suppression list. is_currently_active toggled by cron
+    when expires_at < NOW() — we don't use NOW() in the partial index because
+    it's not IMMUTABLE.
+    """
+    __tablename__ = "email_suppressions"
+
+    id = Column(Integer, primary_key=True)
+    recipient_email = Column(String(320), nullable=False)
+    reason = Column(String(40), nullable=False)  # CHECK in DB
+    source = Column(String(40), nullable=True)
+    suppressed_at = Column(DateTime(timezone=True), nullable=False,
+                           default=lambda: datetime.now(timezone.utc))
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    is_currently_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
+
+
+class TenantReplyInbox(Base):
+    """Per-tenant inbound reply ingestion config. webhook (Resend Inbound) or
+    imap (per-tenant credentials). Reply-to address scheme:
+    reply+eng{id}.{action_id}@{reply_domain}.
+    """
+    __tablename__ = "tenant_reply_inboxes"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
+    ingestion_mode = Column(String(20), nullable=False, default="webhook")
+    reply_domain = Column(String(253), nullable=False)
+    imap_host = Column(String(253), nullable=True)
+    imap_port = Column(Integer, nullable=True)
+    imap_user = Column(String(320), nullable=True)
+    imap_password_kms_arn = Column(String(200), nullable=True)
+    imap_password_encrypted = Column(Text, nullable=True)
+    last_poll_at = Column(DateTime(timezone=True), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+
+class InboundUnattributed(Base):
+    """Inbound replies that couldn't be parsed back to an engagement. BDR
+    reviews + manually attributes or marks resolution.
+    """
+    __tablename__ = "inbound_unattributed"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True)
+    envelope_from = Column(String(320), nullable=True)
+    envelope_to = Column(String(320), nullable=True)
+    subject = Column(String(998), nullable=True)
+    cleaned_body = Column(Text, nullable=True)
+    raw_payload = Column(JSON, nullable=True)
+    received_at = Column(DateTime(timezone=True), nullable=False,
+                         default=lambda: datetime.now(timezone.utc))
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+    reviewed_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    resolution = Column(String(40), nullable=True)
+    attributed_engagement_id = Column(BigInteger, ForeignKey("engagements.id"),
+                                      nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
+
+
+class ActionDedupeCounter(Base):
+    """Per-engagement per-channel per-day send counter. Decision-maker
+    UPSERTs +1; if returned count exceeds tenant cap, drops the action.
+    Prevents 3 simultaneous signals from producing 3 emails same day.
+    """
+    __tablename__ = "action_dedupe_counters"
+
+    engagement_id = Column(BigInteger, ForeignKey("engagements.id"),
+                           primary_key=True)
+    channel_id = Column(SmallInteger, ForeignKey("channel_types.id"),
+                        primary_key=True)
+    date = Column(Date, primary_key=True)
+    count = Column(Integer, nullable=False, default=0)
