@@ -656,9 +656,10 @@ async def unsnooze_company(
     user: User = Depends(get_current_user),
 ):
     """Manually wake a snoozed company before its scheduled wake date.
-    Regenerates the sequence immediately (same as the engine's auto-wake)."""
+    Re-enrolls every contact whose engagement is terminal (declined) or
+    absent, via the engagement engine's lifecycle module."""
     from app.scoping import scope_companies
-    from app.services.sequence_engine import wake_sequence_for_company
+    from app.engagement_engine.lifecycle import wake_engagement_for_company
     company = (await db.execute(
         scope_companies(select(Company).where(Company.id == company_id), user, None)
     )).scalar_one_or_none()
@@ -668,7 +669,12 @@ async def unsnooze_company(
         return {"ok": True, "company_id": company_id, "already_awake": True, "steps_created": 0}
 
     woke_early = company.sequence_resume_at > datetime.now(timezone.utc)
-    n = await wake_sequence_for_company(db, company)
+    # Clear legacy snooze flags so downstream queries see the company awake.
+    company.sequence_resume_at = None
+    company.sequence_snoozed_at = None
+    company.sequence_snooze_days = None
+    company.sequence_snooze_reason = None
+    n = await wake_engagement_for_company(db, company, initiated_by="bdr_unsnooze")
     db.add(Activity(
         company_id=company_id,
         user_id=user.id,
@@ -710,24 +716,13 @@ async def restore_disqualified_company(
     company.status = "pursuing"
     company.lost_reason = None
 
-    # Un-pause every future-scheduled step that was paused. Limiting to
-    # 'scheduled_send_at > now' is conservative: steps that were due during
-    # the disqualified window stay skipped (those are missed opportunities;
-    # BDR can manually re-queue if they want).
-    now = datetime.now(timezone.utc)
-    paused_steps = (await db.execute(
-        select(GeneratedEmail).where(
-            GeneratedEmail.company_id == company_id,
-            GeneratedEmail.is_sent == False,
-            GeneratedEmail.skipped_at.is_(None),
-            GeneratedEmail.paused_at.is_not(None),
-            GeneratedEmail.scheduled_send_at > now,
-        )
-    )).scalars().all()
-    resumed_count = 0
-    for step in paused_steps:
-        step.paused_at = None
-        resumed_count += 1
+    # Engagement engine: re-enroll every contact whose engagement is
+    # terminal (declined) or absent. wake_engagement_for_company is
+    # idempotent for contacts whose engagement is already active.
+    from app.engagement_engine.lifecycle import wake_engagement_for_company
+    resumed_count = await wake_engagement_for_company(
+        db, company, initiated_by="bdr_restore_disqualify",
+    )
 
     db.add(Activity(
         company_id=company_id,
@@ -735,7 +730,7 @@ async def restore_disqualified_company(
         activity_type="status_change",
         content=(
             f"Restored from disqualified (reason was: {old_reason or 'not recorded'}). "
-            f"Auto-resumed {resumed_count} future sequence step(s)."
+            f"Re-enrolled {resumed_count} contact(s) in the engagement engine."
         ),
     ))
 
@@ -1151,68 +1146,19 @@ async def upload_contacts(
                     )).scalars().first()
 
                     if not existing_emails:
-                        problems = json.loads(company.problems_found) if company.problems_found else []
-                        if problems:
-                            try:
-                                now = datetime.now(timezone.utc)
-                                company.sequence_started_at = now
-                                first_subject = None
-
-                                for step in SEQUENCE_SCHEDULE:
-                                    stype = step.get("step_type", "email")
-                                    if stype == "linkedin":
-                                        msg_type = "connect" if "connect" in step["type"] else "message"
-                                        edata = await generate_linkedin_message(
-                                            business_name=company.name,
-                                            business_type=company.business_type or "home services",
-                                            problems=problems,
-                                            contact_name=primary.full_name,
-                                            message_type=msg_type,
-                                        )
-                                    elif step["type"] == "cold":
-                                        edata = await generate_cold_email(
-                                            business_name=company.name,
-                                            business_type=company.business_type or "home services",
-                                            website=company.website or "",
-                                            problems=problems,
-                                            contact_name=primary.full_name,
-                                            location=f"{company.city}, {company.state}" if company.city else None,
-                                        )
-                                        first_subject = edata["subject"]
-                                    else:
-                                        edata = await generate_follow_up(
-                                            business_name=company.name,
-                                            business_type=company.business_type or "home services",
-                                            problems=problems,
-                                            previous_email_subject=first_subject or company.name,
-                                            follow_up_number=step["order"] - 1,
-                                            contact_name=primary.full_name,
-                                        )
-
-                                    db.add(GeneratedEmail(
-                                        contact_id=primary.id, company_id=company.id,
-                                        step_type=stype, subject=edata["subject"], body=edata["body"],
-                                        email_type=step["type"], sequence_order=step["order"],
-                                        send_delay_days=step["delay_days"],
-                                        scheduled_send_at=now + timedelta(days=step["delay_days"]),
-                                    ))
-
-                                    if stype != "email":
-                                        db.add(Task(
-                                            company_id=company.id, contact_id=primary.id,
-                                            user_id=req.assigned_to or user.id,
-                                            description=f"{stype.title()}: {edata['subject']}",
-                                            due_date=now + timedelta(days=step["delay_days"]),
-                                        ))
-
-                                company.email_generated = True
-                                company.status = "sequencing"
-                                from app.services.send_window import snap_pending_steps_to_window
-                                await snap_pending_steps_to_window(db, contact_id=primary.id)
-                                await db.commit()
+                        try:
+                            from app.engagement_engine.lifecycle import start_engagement
+                            n = await start_engagement(
+                                db, primary,
+                                sequence_label="main",
+                                pre_generate_content=True,
+                                assigned_bdr_id=req.assigned_to or user.id,
+                                initiated_by=f"bulk_import:{user.email[:20]}",
+                            )
+                            if n > 0:
                                 results["sequences"] += 1
-                            except Exception:
-                                pass
+                        except Exception:
+                            pass
 
         except Exception as e:
             results["errors"].append(f"Row {i+1}: {str(e)[:80]}")
@@ -2143,19 +2089,13 @@ async def pursue_companies(
             db.add(primary)
             await db.flush()
 
-        # Step 3: generate sequence
+        # Step 3: enroll the primary contact via the engagement engine.
+        # All the per-step generation, audit URL injection, skip-if
+        # evaluation, and recipient locking lives inside
+        # lifecycle.start_engagement — same template, single call.
         problems = json.loads(company.problems_found) if company.problems_found else []
         if problems:
-            now = datetime.now(timezone.utc)
-            company.sequence_started_at = now
-            first_subject = None
-            emails_created = 0
-
-            # Get LinkedIn URL + AI Findability audit URL up-front so
-            # follow-up emails / iMessage steps can be generated with
-            # the link baked in naturally (instead of crudely appended
-            # after the fact, which was the previous behavior).
-            contact_linkedin = primary.linkedin_url or ""
+            from app.engagement_engine.lifecycle import start_engagement
             audit_url = None
             try:
                 from app.services.audit_report import ensure_audit_for_company
@@ -2163,119 +2103,17 @@ async def pursue_companies(
             except Exception:
                 pass
 
-            for step in SEQUENCE_SCHEDULE:
-                try:
-                    stype = step.get("step_type", "email")
-
-                    if stype == "linkedin":
-                        msg_type = "connect" if "connect" in step["type"] else "message"
-                        email_data = await generate_linkedin_message(
-                            business_name=company.name,
-                            business_type=company.business_type or "home services",
-                            problems=problems,
-                            contact_name=primary.full_name or None,
-                            message_type=msg_type,
-                        )
-                        # Add LinkedIn profile link for BDR convenience
-                        if contact_linkedin:
-                            email_data["body"] = email_data["body"].rstrip() + f"\n\n---\nLinkedIn: {contact_linkedin}"
-                        # Add audit link to LinkedIn message (not connect request)
-                        if msg_type == "message" and audit_url:
-                            email_data["body"] = email_data["body"].rstrip() + f"\n\nAudit report to reference: {audit_url}"
-
-                    elif stype == "imessage":
-                        # iMessage step — the generator weaves the audit
-                        # URL into the body naturally when provided.
-                        from app.services.email_generator import generate_imessage
-                        try:
-                            email_data = await generate_imessage(
-                                business_name=company.name,
-                                business_type=company.business_type or "home services",
-                                contact_name=primary.full_name or None,
-                                problems=problems,
-                                intent="after_email",
-                                audit_url=audit_url,
-                            )
-                            email_data["subject"] = email_data.get("subject", f"iMessage to {primary.full_name or 'contact'}")
-                        except Exception:
-                            email_data = {
-                                "subject": f"iMessage to {primary.full_name or 'contact'}",
-                                "body": (
-                                    f"Hey{(' ' + primary.first_name) if primary.first_name else ''}, "
-                                    f"I sent you an email about your online presence — here's what I found: {audit_url}"
-                                ) if audit_url else (
-                                    f"Hey{(' ' + primary.first_name) if primary.first_name else ''}, "
-                                    f"did you get my email? Would love to show you what I found about your website."
-                                ),
-                            }
-
-                    elif step["type"] == "cold":
-                        email_data = await generate_cold_email(
-                            business_name=company.name,
-                            business_type=company.business_type or "home services",
-                            website=company.website or "",
-                            problems=problems,
-                            contact_name=primary.full_name or None,
-                            location=f"{company.city}, {company.state}" if company.city else None,
-                        )
-                        first_subject = email_data["subject"]
-                    else:
-                        email_data = await generate_follow_up(
-                            business_name=company.name,
-                            business_type=company.business_type or "home services",
-                            problems=problems,
-                            previous_email_subject=first_subject or company.name,
-                            follow_up_number=step["order"] - 1,
-                            contact_name=primary.full_name or None,
-                            audit_url=audit_url,
-                        )
-
-                    # Set skip conditions and auto_execute based on step type
-                    skip_map = {
-                        "email": ["no_email", "opted_out"],
-                        "imessage": ["no_phone", "opted_out", "landline"],
-                        "linkedin": ["no_linkedin"],
-                        "call": ["no_phone"],
-                    }
-                    auto_map = {"email": True, "imessage": True, "linkedin": False, "call": False, "custom": False}
-
-                    gen_step = GeneratedEmail(
-                        contact_id=primary.id,
-                        company_id=company.id,
-                        step_type=stype,
-                        subject=email_data["subject"],
-                        body=email_data["body"],
-                        email_type=step["type"],
-                        sequence_order=step["order"],
-                        send_delay_days=step["delay_days"],
-                        scheduled_send_at=now + timedelta(days=step["delay_days"]),
-                        problems_referenced=json.dumps(problems[:2]),
-                        skip_if_json=json.dumps(skip_map.get(stype, [])),
-                        auto_execute=auto_map.get(stype, False),
-                    )
-                    db.add(gen_step)
-                    await db.flush()
-
-                    # Auto-create BDR task for non-email steps
-                    if stype != "email":
-                        db.add(Task(
-                            company_id=company.id,
-                            contact_id=primary.id,
-                            user_id=company.assigned_to or user.id,
-                            description=f"{stype.title()}: {email_data['subject']}",
-                            due_date=now + timedelta(days=step["delay_days"]),
-                        ))
-
-                    emails_created += 1
-                except Exception:
-                    continue
-
-            # Snap the just-created steps to the configured send window
-            from app.services.send_window import snap_pending_steps_to_window
-            await snap_pending_steps_to_window(db, contact_id=primary.id)
-
-            company.email_generated = True
-            company.status = "sequencing"
+            try:
+                emails_created = await start_engagement(
+                    db, primary,
+                    template=SEQUENCE_SCHEDULE,
+                    sequence_label="main",
+                    pre_generate_content=True,
+                    assigned_bdr_id=company.assigned_to or user.id,
+                    initiated_by=f"manual_pursue:{user.email[:20]}",
+                )
+            except Exception as _e:
+                emails_created = 0
 
             # Auto-create Deal so it appears on the kanban
             existing_deal = (await db.execute(

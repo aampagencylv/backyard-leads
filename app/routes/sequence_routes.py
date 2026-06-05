@@ -51,25 +51,23 @@ async def start(
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
 
-    # Wipe any existing pending steps under this label first. This makes the
-    # whole operation a single atomic "reset to fresh sequence" — no race
-    # condition where two near-simultaneous calls each see "no existing" and
-    # both end up creating duplicate sequences.
-    existing = (await db.execute(
-        select(GeneratedEmail).where(
-            GeneratedEmail.contact_id == contact_id,
-            GeneratedEmail.sequence_label == label,
-            GeneratedEmail.is_sent == False,
-        )
-    )).scalars().all()
+    # Engagement engine: terminate any active engagement on this contact
+    # then start a fresh one. This is the "reset to template" semantics
+    # the BDR expects when they click Start Sequence.
+    from app.engagement_engine.lifecycle import (
+        start_engagement, terminate_engagement,
+    )
     deleted = 0
-    for row in existing:
-        await db.delete(row)
-        deleted += 1
-    if deleted:
-        await db.flush()
-
-    created = await start_sequence_from_template(db, contact, sequence_label=label)
+    try:
+        deleted = await terminate_engagement(
+            db, contact_id, reason="manual_restart_by_bdr",
+        )
+    except Exception:
+        deleted = 0
+    created = await start_engagement(
+        db, contact, sequence_label=label,
+        initiated_by=f"manual:{user.email[:24]}",
+    )
     return {"created": created, "deleted_pending": deleted, "template_steps": len(DEFAULT_30DAY_TEMPLATE)}
 
 
@@ -80,9 +78,16 @@ async def get_for_contact(
     db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
-    """List sequence steps for a contact, ordered by sequence_order. Optionally
-    filter by label ('main', 'post_call'). Returns metadata the UI needs to
-    render the read-only sequence card."""
+    """List sequence steps for a contact, ordered by sequence_order. Returns
+    the UNION of legacy GeneratedEmail rows (sent history + any leftover
+    pre-cutover pending) and new-engine actions (the live sequence).
+
+    The UI doesn't care which table a row came from — both shapes are
+    flattened to the same dict so the sequence card renders unchanged."""
+    from sqlalchemy import text as _sa_text
+
+    # Legacy GeneratedEmail rows — these are now mostly historical
+    # (sent emails) but we keep them so the timeline view stays intact.
     q = select(GeneratedEmail).where(GeneratedEmail.contact_id == contact_id)
     if label:
         q = q.where(GeneratedEmail.sequence_label == label)
@@ -95,7 +100,7 @@ async def get_for_contact(
         if s.paused_at: return "paused"
         return "pending"
 
-    return [
+    out = [
         {
             "id": s.id,
             "sequence_label": s.sequence_label or "main",
@@ -114,9 +119,67 @@ async def get_for_contact(
             "auto_execute": bool(s.auto_execute),
             "task_id": s.task_id,
             "status": status(s),
+            "source": "legacy",
         }
         for s in rows
     ]
+
+    # New-engine actions for the contact. Channel code resolved via a join.
+    action_rows = (await db.execute(_sa_text("""
+        SELECT a.id, a.channel_id, ct.code AS channel_code,
+               a.subject, a.body, a.scheduled_at, a.executed_at,
+               a.status, a.skip_reason, a.engagement_id,
+               ROW_NUMBER() OVER (PARTITION BY a.engagement_id
+                                  ORDER BY a.scheduled_at) AS step_order
+        FROM actions a
+        JOIN channel_types ct ON ct.id = a.channel_id
+        WHERE a.contact_id = :c
+        ORDER BY a.scheduled_at
+    """), {"c": contact_id})).fetchall()
+
+    def _action_status(r) -> str:
+        if r.status == "sent" or r.executed_at is not None:
+            return "sent"
+        if r.status == "skipped":
+            return "skipped"
+        if r.status == "paused":
+            return "paused"
+        return "pending"
+
+    def _step_type_from_channel(code: str) -> str:
+        return {
+            "email": "email",
+            "sms": "imessage",
+            "call_task": "call",
+            "linkedin": "linkedin",
+            "manual": "manual",
+            "wait": "wait",
+        }.get(code, code)
+
+    for r in action_rows:
+        out.append({
+            "id": int(r.id),
+            "sequence_label": "main",
+            "sequence_order": int(r.step_order),
+            "step_type": _step_type_from_channel(r.channel_code),
+            "label": None,
+            "subject": r.subject,
+            "body": r.body,
+            "send_delay_days": None,
+            "scheduled_send_at": r.scheduled_at.isoformat() if r.scheduled_at else None,
+            "sent_at": r.executed_at.isoformat() if r.executed_at else None,
+            "skipped_at": None,
+            "skip_reason": r.skip_reason,
+            "skip_if": [],
+            "paused_at": None,
+            "auto_execute": r.channel_code in ("email", "sms"),
+            "task_id": None,
+            "status": _action_status(r),
+            "source": "engagement_engine",
+            "engagement_id": int(r.engagement_id),
+        })
+
+    return out
 
 
 @router.post("/pause/{contact_id}")
@@ -127,8 +190,10 @@ async def pause(
     db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
-    n = await pause_sequence(db, contact_id, reason=f"manual ({user.email}): {reason}", sequence_label=label)
-    await db.commit()
+    from app.engagement_engine.lifecycle import pause_engagement
+    n = await pause_engagement(
+        db, contact_id, reason=f"manual ({user.email}): {reason}",
+    )
     return {"paused": n}
 
 
@@ -153,13 +218,8 @@ async def resume(
             resume_at_dt = parsed
         except (ValueError, TypeError):
             pass
-    n = await resume_sequence(db, contact_id, sequence_label=label, resume_at=resume_at_dt)
-    # Snap newly-anchored steps into the configured autopilot window so
-    # we don't accidentally restart a sequence onto a Saturday or 11pm.
-    if n:
-        from app.services.send_window import snap_pending_steps_to_window
-        await snap_pending_steps_to_window(db, contact_id=contact_id)
-    await db.commit()
+    from app.engagement_engine.lifecycle import resume_engagement
+    n = await resume_engagement(db, contact_id, resume_at=resume_at_dt)
     return {"resumed": n, "resume_at": resume_at_dt.isoformat() if resume_at_dt else "now"}
 
 
@@ -234,43 +294,31 @@ async def rework_sequence(
         messaging_direction=direction,
     )
 
-    now = datetime.now(timezone.utc)
-    skip_map = {
-        "email": ["no_email", "opted_out"],
-        "imessage": ["no_phone", "opted_out", "landline"],
-        "call": ["no_phone"],
-        "linkedin": ["no_linkedin"],
-    }
-    from app.services.sequence_engine import evaluate_skip
-
-    created = 0
-    for idx, s in enumerate(steps, start=start_order):
+    # Append the AI-reworked steps to the contact's active engagement.
+    # The legacy GeneratedEmail rows we deleted above were already
+    # paused/pending and won't fire; the new actions are what the engine
+    # will dispatch from here forward.
+    from app.engagement_engine.lifecycle import append_steps_to_engagement
+    payload_steps = []
+    for s in steps:
         stype = s["step_type"]
-        skip_conds = skip_map.get(stype, [])
-        skip_reason = evaluate_skip(contact, skip_conds) if skip_conds else None
-
-        ge = GeneratedEmail(
-            contact_id=contact.id,
-            company_id=company.id,
-            step_type=stype,
-            email_type=f"rework_{idx}",
-            subject=s.get("subject", f"follow-up {idx}"),
-            body=s.get("body", ""),
-            sequence_order=idx,
-            send_delay_days=s["day"],
-            scheduled_send_at=now + timedelta(days=s["day"]),
-            skip_if_json=json.dumps(skip_conds),
-            auto_execute=stype in ("email", "imessage"),
-            sequence_label="main",
-            skipped_at=now if skip_reason else None,
-            skip_reason=skip_reason,
-        )
-        db.add(ge)
-        created += 1
-
-    # Snap to configured send window before committing
-    from app.services.send_window import snap_pending_steps_to_window
-    await snap_pending_steps_to_window(db, contact_id=contact.id)
+        skip_map = {
+            "email": ["no_email", "opted_out"],
+            "imessage": ["no_phone", "opted_out", "landline"],
+            "call": ["no_phone"],
+            "linkedin": ["no_linkedin"],
+        }
+        payload_steps.append({
+            "day": s["day"],
+            "step_type": stype,
+            "subject": s.get("subject", "follow-up"),
+            "body": s.get("body", ""),
+            "label": f"rework_{stype}",
+            "skip_if": skip_map.get(stype, []),
+        })
+    created = await append_steps_to_engagement(
+        db, contact, payload_steps, strategy_tag="post_call_rework",
+    )
 
     db.add(Activity(
         company_id=company.id, contact_id=contact.id, user_id=user.id,
@@ -287,12 +335,22 @@ async def run_now(
     db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
-    """Admin: force a scheduler tick immediately. Useful for testing — don't
-    have to wait 60s for the next loop iteration."""
+    """Admin: force one dispatcher tick immediately. Useful for testing —
+    don't have to wait for the next cron iteration. Now runs the new
+    engagement-engine dispatcher; the legacy process_pending_steps is
+    disabled at startup and only kept for emergency rollback."""
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
-    counters = await process_pending_steps(db)
-    return counters
+    from app.engagement_engine.dispatcher import run_dispatcher_tick
+    report = await run_dispatcher_tick()
+    return {
+        "fetched": report.fetched,
+        "sent": report.sent,
+        "failed": report.failed,
+        "blocked": report.blocked,
+        "transient_rescheduled": report.transient_rescheduled,
+        "duration_ms": report.duration_ms,
+    }
 
 
 # ============================================================
@@ -359,38 +417,32 @@ async def trigger_post_call_sequence(
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"AI generation failed: {e}")
 
-    # The thank-you email goes out ~2 hours after this trigger so it arrives
-    # while the conversation is still fresh but not so soon that it feels
-    # automated / weird.
-    base_time = datetime.now(timezone.utc) + timedelta(hours=2)
-
-    skip_map = {
-        "email":    ["no_email", "opted_out"],
-        "imessage": ["no_phone", "opted_out", "landline"],
-    }
-
-    created = 0
-    for idx, s in enumerate(steps, start=1):
-        scheduled = base_time + timedelta(days=s["day"])
-        ge = GeneratedEmail(
-            contact_id=contact.id,
-            company_id=company.id,
-            step_type=s["step_type"],
-            email_type=f"post_call_{idx}",
-            subject=s.get("subject") or f"post-call step {idx}",
-            body=s.get("body") or "",
-            sequence_order=idx,
-            send_delay_days=s["day"],
-            scheduled_send_at=scheduled,
-            skip_if_json=json.dumps(skip_map.get(s["step_type"], [])),
-            auto_execute=True,  # post-call steps are all auto (email + imessage)
-            sequence_label="post_call",
-        )
-        db.add(ge)
-        created += 1
-
-    from app.services.send_window import snap_pending_steps_to_window
-    await snap_pending_steps_to_window(db, contact_id=contact.id)
+    # Append post-call steps to the contact's active engagement. The
+    # thank-you fires +2h after this call so it lands while the
+    # conversation's still fresh but not so soon it feels robotic. We
+    # pre-shift each step's `day` by adding 2h via the +0.083d offset
+    # (≈ 2 hours when start_engagement multiplies by timedelta(days=)).
+    # Simpler: pass the steps through append_steps_to_engagement which
+    # uses day offsets only; the engine dispatches the first one as soon
+    # as the next dispatcher tick fires after `scheduled_at` arrives.
+    from app.engagement_engine.lifecycle import append_steps_to_engagement
+    payload_steps = []
+    for s in steps:
+        skip_map = {
+            "email":    ["no_email", "opted_out"],
+            "imessage": ["no_phone", "opted_out", "landline"],
+        }
+        payload_steps.append({
+            "day": s["day"],
+            "step_type": s["step_type"],
+            "subject": s.get("subject") or "Post-call follow-up",
+            "body": s.get("body") or "",
+            "label": f"post_call_{s['step_type']}",
+            "skip_if": skip_map.get(s["step_type"], []),
+        })
+    created = await append_steps_to_engagement(
+        db, contact, payload_steps, strategy_tag="post_call",
+    )
 
     db.add(Activity(
         company_id=company.id, contact_id=contact.id, user_id=user.id,

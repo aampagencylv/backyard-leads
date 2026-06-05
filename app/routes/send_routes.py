@@ -398,11 +398,26 @@ async def add_sequence_step(
     else:
         new_order = (max(s.sequence_order for s in existing) + 1) if existing else 1
 
-    scheduled_at = None
-    if company and company.sequence_started_at:
-        from datetime import timedelta
-        scheduled_at = company.sequence_started_at + timedelta(days=req.delay_days)
+    # Engagement engine: append the step to the contact's active
+    # engagement. For non-email channels (call_task, manual, linkedin),
+    # the channel adapter creates the BDR Task row when dispatched, so
+    # we no longer need the legacy task-creation block here.
+    from app.engagement_engine.lifecycle import append_steps_to_engagement
+    appended = await append_steps_to_engagement(
+        db, contact,
+        steps=[{
+            "day": req.delay_days,
+            "step_type": req.step_type,
+            "subject": req.subject,
+            "body": req.body,
+            "label": f"manual_added_{req.step_type}",
+        }],
+        strategy_tag="manual_add_step",
+    )
 
+    # Legacy GeneratedEmail row for back-compat (so the timeline + sent
+    # logic still see the step). Stays SKIPPED so the legacy engine
+    # never tries to dispatch it.
     step = GeneratedEmail(
         contact_id=contact_id,
         company_id=contact.company_id,
@@ -412,22 +427,13 @@ async def add_sequence_step(
         email_type=req.step_type,
         sequence_order=new_order,
         send_delay_days=req.delay_days,
-        scheduled_send_at=scheduled_at,
+        scheduled_send_at=datetime.now(timezone.utc) + timedelta(days=req.delay_days),
+        skipped_at=datetime.now(timezone.utc),
+        skip_reason="dispatched_via_engagement_engine",
     )
     db.add(step)
 
-    # For non-email steps, auto-create a BDR task
     if req.step_type != "email":
-        assigned_user = company.assigned_to if company else user.id
-        task = Task(
-            company_id=contact.company_id,
-            contact_id=contact_id,
-            user_id=assigned_user or user.id,
-            description=f"{req.step_type.title()}: {req.subject}",
-            due_date=scheduled_at,
-        )
-        db.add(task)
-
         db.add(Activity(
             company_id=contact.company_id, contact_id=contact_id, user_id=user.id,
             activity_type="step_added",

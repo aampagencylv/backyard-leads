@@ -894,74 +894,32 @@ async def _execute_batch(campaign_id: int, db: AsyncSession, user: User):
             )
             db.add(deal)
 
-        # Step 4: Generate sequence for primary contact
+        # Step 4: Enroll primary contact in the engagement engine.
+        # Pre-cutover this called start_sequence_from_template which wrote
+        # GeneratedEmail rows for the legacy sequence_engine cron to dispatch.
+        # The legacy cron is disabled, so we route directly to the new engine
+        # via lifecycle.start_engagement — same template, same Claude pre-gen,
+        # but writes engagements + actions for the new dispatcher to pick up.
         if primary_contact:
-            existing_emails = await db.execute(
-                select(GeneratedEmail).where(GeneratedEmail.contact_id == primary_contact.id)
-            )
-            if not existing_emails.scalars().first():
+            existing_eng = (await db.execute(text(
+                "SELECT 1 FROM engagements WHERE contact_id = :c LIMIT 1"
+            ), {"c": primary_contact.id})).first()
+            if existing_eng is None and not company.email_generated:
                 try:
-                    # Generate AI Findability Audit so emails can reference it
-                    audit_url = None
-                    try:
-                        from app.services.audit_report import ensure_audit_for_company
-                        audit_url = await ensure_audit_for_company(db, company)
-                    except Exception:
-                        pass  # audit failure shouldn't block the sequence
-
-                    first_subject = None
-                    emails_created = 0
-                    seq_now = datetime.now(timezone.utc)
-
-                    # Use the full sequence engine to create steps — handles
-                    # call talk tracks with phone numbers, audit URL injection,
-                    # skip-if evaluation, iMessage pre-generation, etc.
-                    from app.services.sequence_engine import start_sequence_from_template
-                    emails_created = await start_sequence_from_template(
+                    from app.engagement_engine.lifecycle import start_engagement
+                    actions_created = await start_engagement(
                         db, primary_contact,
                         template=SEQUENCE_SCHEDULE,
                         sequence_label="main",
-                        pre_generate_emails=True,
+                        pre_generate_content=True,
+                        assigned_bdr_id=assigned_user.id,
+                        initiated_by="autopilot",
                     )
-                    # Override auto_execute based on campaign mode
-                    if campaign.mode == "moderate":
-                        pending = (await db.execute(
-                            select(GeneratedEmail).where(
-                                GeneratedEmail.contact_id == primary_contact.id,
-                                GeneratedEmail.is_sent == False,
-                            )
-                        )).scalars().all()
-                        for ge in pending:
-                            ge.auto_execute = False
-
-                        # Auto-create BDR task for non-email steps
-                        if stype != "email":
-                            db.add(Task(
-                                company_id=company.id,
-                                contact_id=primary_contact.id,
-                                user_id=assigned_user.id,
-                                description=f"{stype.title()}: {email_data['subject']}",
-                                due_date=seq_now + timedelta(days=step["delay_days"]),
-                            ))
-
-                        emails_created += 1
-
-                    from app.services.send_window import snap_pending_steps_to_window
-                    await snap_pending_steps_to_window(db, contact_id=primary_contact.id)
-
-                    company.email_generated = True
-                    company.status = "sequencing"
                     campaign.total_sequences_created += 1
                     batch_results["sequences_created"] += 1
 
-                    db.add(Activity(
-                        company_id=company.id, contact_id=primary_contact.id,
-                        user_id=assigned_user.id, activity_type="sequence_created",
-                        content=f"Auto Pilot: Sequence created for {primary_contact.full_name} ({emails_created} emails) — Campaign: {campaign.name}",
-                    ))
-
                     _log(db, campaign.id, "sequence_created",
-                         f"Sequence for {primary_contact.full_name} at {company.name} (assigned to {assigned_user.full_name})",
+                         f"Sequence for {primary_contact.full_name} at {company.name} (assigned to {assigned_user.full_name}) — {actions_created} actions",
                          company_id=company.id, contact_id=primary_contact.id)
                 except Exception as e:
                     _log(db, campaign.id, "error", f"Sequence generation failed: {str(e)[:80]}", company_id=company.id)
@@ -1172,56 +1130,29 @@ async def _process_business_through_pipeline(
         )
         db.add(deal)
 
-    # Sequence gen
+    # Sequence gen — enroll via the engagement engine.
     if not primary_contact:
         return "enriched_no_seq"
 
-    existing_emails = await db.execute(
-        select(GeneratedEmail).where(GeneratedEmail.contact_id == primary_contact.id)
-    )
-    if existing_emails.scalars().first():
+    existing_eng = (await db.execute(text(
+        "SELECT 1 FROM engagements WHERE contact_id = :c LIMIT 1"
+    ), {"c": primary_contact.id})).first()
+    if existing_eng is not None:
         return "enrolled"  # already enrolled; treat as success without re-genning
 
     try:
-        # Generate AI Findability Audit so emails can reference it
-        audit_url = None
-        try:
-            from app.services.audit_report import ensure_audit_for_company
-            audit_url = await ensure_audit_for_company(db, company)
-        except Exception:
-            pass
-
-        from app.services.sequence_engine import start_sequence_from_template
-        emails_created = await start_sequence_from_template(
+        from app.engagement_engine.lifecycle import start_engagement
+        actions_created = await start_engagement(
             db, primary_contact,
             template=SEQUENCE_SCHEDULE,
             sequence_label="main",
-            pre_generate_emails=True,
+            pre_generate_content=True,
+            assigned_bdr_id=assigned_user.id,
+            initiated_by="autopilot",
         )
-        if campaign.mode == "moderate":
-            pending = (await db.execute(
-                select(GeneratedEmail).where(
-                    GeneratedEmail.contact_id == primary_contact.id,
-                    GeneratedEmail.is_sent == False,
-                )
-            )).scalars().all()
-            for ge in pending:
-                ge.auto_execute = False
-
-        from app.services.send_window import snap_pending_steps_to_window
-        await snap_pending_steps_to_window(db, contact_id=primary_contact.id)
-
-        company.email_generated = True
-        company.status = "sequencing"
         campaign.total_sequences_created += 1
-
-        db.add(Activity(
-            company_id=company.id, contact_id=primary_contact.id,
-            user_id=assigned_user.id, activity_type="sequence_created",
-            content=f"Auto Pilot: Sequence created for {primary_contact.full_name} — Campaign: {campaign.name}",
-        ))
         _log(db, campaign.id, "sequence_created",
-             f"Sequence for {primary_contact.full_name} at {company.name} (assigned to {assigned_user.full_name})",
+             f"Sequence for {primary_contact.full_name} at {company.name} (assigned to {assigned_user.full_name}) — {actions_created} actions",
              company_id=company.id, contact_id=primary_contact.id)
         return "enrolled"
     except Exception as e:

@@ -918,24 +918,16 @@ async def pause_sequence(
     contact = await _contact_for_write(db, user, int(contact_id))
     if not contact:
         return {"error": "contact_not_found_or_out_of_scope"}
-    rows = (await db.execute(
-        select(GeneratedEmail).where(
-            GeneratedEmail.contact_id == contact.id,
-            GeneratedEmail.is_sent == False,
-        )
-    )).scalars().all()
-    paused_count = 0
-    for r in rows:
-        if not r.paused_at:
-            r.paused_at = datetime.now(timezone.utc)
-            paused_count += 1
+    from app.engagement_engine.lifecycle import pause_engagement
+    paused_count = await pause_engagement(
+        db, contact.id, reason=f"mcp_tool:{user.email[:24]}",
+    )
     from app.services.audit_log import record_audit
     await record_audit(
         db, actor=user, action="sequence.paused_via_mcp",
         target_type="contact", target_id=contact.id, target_label=contact.full_name,
         metadata={"steps_paused": paused_count},
     )
-    await db.commit()
     return {"ok": True, "contact_id": contact.id, "steps_paused": paused_count}
 WRITE_TOOL_NAMES.add("pause_sequence")
 
@@ -946,23 +938,15 @@ async def resume_sequence(
     contact = await _contact_for_write(db, user, int(contact_id))
     if not contact:
         return {"error": "contact_not_found_or_out_of_scope"}
-    rows = (await db.execute(
-        select(GeneratedEmail).where(
-            GeneratedEmail.contact_id == contact.id,
-            GeneratedEmail.is_sent == False,
-            GeneratedEmail.paused_at.isnot(None),
-        )
-    )).scalars().all()
-    for r in rows:
-        r.paused_at = None
+    from app.engagement_engine.lifecycle import resume_engagement
+    resumed_count = await resume_engagement(db, contact.id)
     from app.services.audit_log import record_audit
     await record_audit(
         db, actor=user, action="sequence.resumed_via_mcp",
         target_type="contact", target_id=contact.id, target_label=contact.full_name,
-        metadata={"steps_resumed": len(rows)},
+        metadata={"steps_resumed": resumed_count},
     )
-    await db.commit()
-    return {"ok": True, "contact_id": contact.id, "steps_resumed": len(rows)}
+    return {"ok": True, "contact_id": contact.id, "steps_resumed": resumed_count}
 WRITE_TOOL_NAMES.add("resume_sequence")
 
 

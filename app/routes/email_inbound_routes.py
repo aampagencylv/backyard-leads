@@ -402,8 +402,22 @@ async def email_inbound(request: Request):
                 }),
             ))
 
-        # Auto-pause + status bump only on REAL replies
+        # Auto-pause + status bump only on REAL replies.
+        # Routes through the engagement engine's lifecycle.pause_engagement
+        # which freezes pending action rows. The legacy pause_sequence is
+        # kept as a fallback for contacts with paused_at-aware legacy
+        # GeneratedEmail rows (back-compat for the cutover window).
         if not is_auto_response:
+            from app.engagement_engine.lifecycle import pause_engagement
+            try:
+                await pause_engagement(
+                    db, ge.contact_id,
+                    reason=f"prospect replied to '{ge.subject}'",
+                )
+            except Exception as e:
+                log.exception(f"[inbound] pause_engagement failed: {e}")
+            # Legacy fallback — no-op for engagement_engine-owned contacts
+            # (whose generated_emails are all marked is_sent or paused_at).
             from app.services.sequence_engine import pause_sequence
             try:
                 await pause_sequence(
@@ -412,7 +426,7 @@ async def email_inbound(request: Request):
                     sequence_label=(ge.sequence_label or "main"),
                 )
             except Exception as e:
-                log.exception(f"[inbound] pause_sequence failed: {e}")
+                log.exception(f"[inbound] legacy pause_sequence fallback failed: {e}")
             if company and company.status in ("sequencing", "contacted", "new"):
                 company.status = "replied"
 

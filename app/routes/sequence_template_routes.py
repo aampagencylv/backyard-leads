@@ -283,54 +283,60 @@ async def apply_to_existing(
     if payload.dry_run:
         return report
 
+    # Engagement engine: terminate existing engagement + start a fresh
+    # one using the new template. Preserves `sent` legacy GeneratedEmail
+    # rows on the timeline (we don't delete them) but lets the new
+    # engine drive everything going forward.
+    from app.engagement_engine.lifecycle import (
+        start_engagement, terminate_engagement,
+    )
     for contact_id, company_id in contact_pairs:
-        existing = (await db.execute(
-            select(GeneratedEmail).where(GeneratedEmail.contact_id == contact_id)
-            .order_by(GeneratedEmail.sequence_order)
-        )).scalars().all()
-        if not existing:
+        contact = (await db.execute(
+            select(Contact).where(Contact.id == contact_id)
+        )).scalar_one_or_none()
+        if not contact:
             continue
-        last_sent_order = max((e.sequence_order for e in existing if e.is_sent), default=0)
-        # Delete remaining unsent, non-paused, non-skipped steps. Preserve
-        # paused/skipped rows so resume + skip history stays intact.
-        to_delete = [e for e in existing if not e.is_sent and e.paused_at is None and e.skipped_at is None]
-        if to_delete:
-            await db.execute(
-                delete(GeneratedEmail).where(GeneratedEmail.id.in_([e.id for e in to_delete]))
+
+        # Count what we're about to retire so the report stays meaningful.
+        legacy_pending = (await db.execute(
+            select(GeneratedEmail).where(
+                GeneratedEmail.contact_id == contact_id,
+                GeneratedEmail.is_sent == False,
+                GeneratedEmail.skipped_at.is_(None),
+                GeneratedEmail.paused_at.is_(None),
             )
-            report["steps_deleted"] += len(to_delete)
-        # Materialize template steps with sequence_order > last_sent_order.
-        # Anchor day=0 to "now"; future days shift forward by their relative
-        # day delta. Skip steps whose order is <= last_sent_order — those
-        # rows are kept (sent or paused or skipped).
-        next_order = last_sent_order + 1
-        anchor_day = template_steps[last_sent_order]["day"] if last_sent_order < len(template_steps) else 0
-        for tstep in template_steps[last_sent_order:]:
-            day_offset = tstep["day"] - anchor_day
-            scheduled = now + timedelta(days=max(day_offset, 0))
-            auto = bool(tstep.get("auto", tstep["step_type"] in {"email", "imessage"}))
-            ge = GeneratedEmail(
-                company_id=company_id,
-                contact_id=contact_id,
-                sequence_order=next_order,
-                step_type=tstep["step_type"],
-                email_type=tstep.get("label") or "",
-                sequence_label="main",
-                skip_if_json=json.dumps(tstep.get("skip_if") or []),
-                auto_execute=auto,
-                scheduled_send_at=scheduled,
-                subject="",  # email steps that get auto-fired will fill in via generator on send
-                body="",
+        )).scalars().all()
+        report["steps_deleted"] += len(legacy_pending)
+        # Mark legacy pending rows skipped so they don't ghost-fire if
+        # the legacy engine ever gets re-enabled for rollback.
+        for ge in legacy_pending:
+            ge.skipped_at = now
+            ge.skip_reason = f"superseded_by_template:{t.name}"
+
+        # Terminate the active engagement so start_engagement is allowed
+        # to create a fresh one.
+        try:
+            await terminate_engagement(
+                db, contact_id, reason=f"admin_apply_template:{t.name}",
             )
-            db.add(ge)
-            report["steps_created"] += 1
-            next_order += 1
-        db.add(Activity(
-            company_id=company_id, contact_id=contact_id,
-            activity_type="sequence_resumed",
-            content=f"[Admin] Re-anchored onto template '{t.name}' — {report['steps_created']} steps re-scheduled.",
-        ))
-        report["contacts_updated"] += 1
+        except Exception:
+            pass
+
+        created = await start_engagement(
+            db, contact,
+            template=template_steps,
+            sequence_label="main",
+            pre_generate_content=False,  # template steps may not match cold/follow_up shape
+            initiated_by=f"admin_apply:{user.email[:24]}",
+        )
+        report["steps_created"] += created
+        if created > 0:
+            report["contacts_updated"] += 1
+            db.add(Activity(
+                company_id=company_id, contact_id=contact_id,
+                activity_type="sequence_resumed",
+                content=f"[Admin] Re-anchored onto template '{t.name}' — {created} steps re-scheduled.",
+            ))
 
     await db.commit()
     return report

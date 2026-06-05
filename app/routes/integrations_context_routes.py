@@ -801,31 +801,43 @@ async def sidebar_send_next_step(
     db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ) -> dict:
-    """Find the next unsent step for this contact and fire it now via
-    the sequence engine. No-op when there's no pending step."""
-    next_step = (await db.execute(
-        select(GeneratedEmail).where(
-            GeneratedEmail.contact_id == req.contact_id,
-            GeneratedEmail.is_sent == False,
-            GeneratedEmail.paused_at.is_(None),
-            GeneratedEmail.skipped_at.is_(None),
-        ).order_by(GeneratedEmail.sequence_order.asc(), GeneratedEmail.id.asc()).limit(1)
-    )).scalar_one_or_none()
-    if not next_step:
-        return {"fired": False, "reason": "no pending step"}
+    """Pull the soonest-scheduled pending action for this contact and
+    fire it now via the engagement engine dispatcher. We bump the
+    action's scheduled_at to NOW so the next dispatcher tick claims it,
+    then run a tick inline so the caller gets immediate feedback. No-op
+    when there's no pending action."""
+    from sqlalchemy import text as _sa_text
+    from app.engagement_engine.dispatcher import run_dispatcher_tick
 
-    # Defer to the sequence engine so all the same gating/skip-rules
-    # apply that auto-execution uses (deliverability caps, opt-out
-    # checks, audit URL weaving, etc).
-    try:
-        from app.services.sequence_engine import execute_step_now
-        result = await execute_step_now(db, next_step.id, triggered_by_user_id=user.id)
-        return {"fired": True, "step_id": next_step.id, "result": result}
-    except ImportError:
-        # execute_step_now hasn't been added yet — fall back to a
-        # direct send via send_email. This will be wired properly in
-        # a follow-up.
-        return {"fired": False, "reason": "manual trigger not yet wired in sequence engine"}
+    # Find the soonest scheduled action for this contact.
+    row = (await db.execute(_sa_text("""
+        SELECT id FROM actions
+        WHERE contact_id = :c AND status = 'scheduled'
+        ORDER BY scheduled_at ASC, id ASC
+        LIMIT 1
+    """), {"c": req.contact_id})).first()
+    if row is None:
+        return {"fired": False, "reason": "no pending action"}
+    action_id = int(row[0])
+
+    # Pull scheduled_at into NOW so the dispatcher claims it on this tick.
+    await db.execute(_sa_text("""
+        UPDATE actions
+        SET scheduled_at = NOW(),
+            sent_by_user_id = COALESCE(sent_by_user_id, :uid)
+        WHERE id = :aid
+    """), {"aid": action_id, "uid": user.id})
+    await db.commit()
+
+    # Run one dispatcher tick now; it'll find the bumped action.
+    report = await run_dispatcher_tick()
+    return {
+        "fired": report.sent > 0,
+        "action_id": action_id,
+        "sent": report.sent,
+        "blocked": report.blocked,
+        "failed": report.failed,
+    }
 
 
 def _serialize_company(c: Company) -> dict:

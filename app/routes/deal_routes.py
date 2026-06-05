@@ -402,6 +402,21 @@ async def update_deal(
         deal.probability = await pipeline_cfg.get_stage_probability(db, req.stage)
         if req.stage in ("closed_won", "closed_lost"):
             deal.closed_at = datetime.now(timezone.utc)
+            # Terminate any active engagements at this company — the
+            # deal is closed so outbound sequencing must stop. For
+            # closed_won we still mark the engagement terminal (the
+            # post-sale relationship is handled outside the engine).
+            try:
+                from app.engagement_engine.lifecycle import terminate_engagement
+                from app.models import Contact as _C
+                contacts = (await db.execute(
+                    select(_C.id).where(_C.company_id == deal.company_id)
+                )).scalars().all()
+                terminal_reason = "deal_won" if req.stage == "closed_won" else f"deal_lost:{req.lost_reason or 'unspecified'}"
+                for cid in contacts:
+                    await terminate_engagement(db, cid, reason=terminal_reason)
+            except Exception as _e:
+                pass  # don't block deal close on engagement teardown
         changes.append(f"stage: {old} → {req.stage}")
         stage_changed_from = old
         stage_changed_to = req.stage
@@ -735,12 +750,21 @@ async def snooze_deal(
     deal.stage = "snoozed"
     deal.probability = 0
 
-    # Pause active sequences for all contacts at this company
+    # Pause active sequences for all contacts at this company.
+    # Engagement engine: pause every active engagement at the company.
+    # Legacy fallback: also paused_at-stamp legacy GeneratedEmail rows
+    # so the cutover-era data stays consistent.
     if req.pause_sequence:
         from app.models import GeneratedEmail, Contact
+        from app.engagement_engine.lifecycle import pause_engagement
         contacts = (await db.execute(
             select(Contact.id).where(Contact.company_id == deal.company_id)
         )).scalars().all()
+        for cid in contacts:
+            try:
+                await pause_engagement(db, cid, reason="deal snoozed")
+            except Exception:
+                pass
         if contacts:
             from sqlalchemy import update
             await db.execute(
@@ -797,6 +821,18 @@ async def wake_deal(
     # Re-assign package value if it was zeroed
     if deal.value == 0 and deal.package:
         deal.value = package_monthly_value(deal.package)
+
+    # Resume any paused engagements at this company.
+    try:
+        from app.engagement_engine.lifecycle import resume_engagement
+        from app.models import Contact as _C
+        contacts = (await db.execute(
+            select(_C.id).where(_C.company_id == deal.company_id)
+        )).scalars().all()
+        for cid in contacts:
+            await resume_engagement(db, cid)
+    except Exception:
+        pass  # don't block deal wake on engagement resume
 
     db.add(Activity(
         company_id=deal.company_id, user_id=user.id, deal_id=deal.id,

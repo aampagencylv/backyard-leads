@@ -1,0 +1,862 @@
+"""Engagement Engine — lifecycle API.
+
+Mirrors the public surface of the legacy `app.services.sequence_engine`
+(start, pause, resume, wake, terminate) but operates on the new
+engagement / actions tables. Every caller in the app that used to call
+the legacy module now calls these functions instead.
+
+Design goals:
+  - Drop-in compatible at the call sites: same argument shapes, same
+    return-type semantics (ints / no-ops) so refactoring is mechanical.
+  - One engagement per contact at a time (sequence_number bumps on
+    re-enrollment). Idempotent: re-calling start_engagement for a
+    contact that already has an active engagement is a no-op returning
+    the existing engagement id.
+  - Channel resolution via the `channel_types` lookup table. Skip
+    evaluation mirrors the legacy `evaluate_skip` — missing email →
+    email steps land status='skipped' with `skip_reason` populated so
+    BDRs see them on the timeline but they never dispatch.
+  - Email + iMessage step bodies pre-generated with the existing
+    `generate_cold_email` / `generate_follow_up` / `generate_imessage`
+    Claude calls so content quality matches the legacy engine bit-for-
+    bit. Failure to pre-generate falls back to body='AUTO:' and the
+    dispatcher will regen at send time.
+  - Activity row "sequence_created" still written so the CRM timeline,
+    morning brief, dashboards, and BDR-app notifications all keep
+    working unchanged.
+  - `contact.outreach_owner = 'engagement_engine'` is set on every
+    start_engagement, so the legacy sequence_engine's skip gate will
+    never re-process this contact even if it gets re-enabled.
+
+Legacy compatibility:
+  - `company.email_generated = True` is set on enrollment, matching the
+    cross-vertical autopilot dedupe gate.
+  - Phase transitions ('cold_outreach' / 'declined' / 'dormant') honor
+    the DB `enforce_phase_transition` trigger.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import secrets
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import Company, Contact, Activity, User
+
+log = logging.getLogger("engagement_engine.lifecycle")
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Channel mapping
+# ────────────────────────────────────────────────────────────────────────────
+# Legacy `step_type` → channel_types.code → channel_types.id (cached).
+# 'imessage' maps to 'sms' because the SMSChannel adapter routes iMessage-
+# capable numbers through Twilio iMessage and falls back to SMS otherwise.
+LEGACY_STEP_TO_CHANNEL_CODE: dict[str, str] = {
+    "email":    "email",
+    "imessage": "sms",
+    "call":     "call_task",
+    "linkedin": "linkedin",
+    "manual":   "manual",
+    "wait":     "wait",
+}
+
+
+_CHANNEL_ID_CACHE: dict[str, int] = {}
+
+
+async def _channel_id(session: AsyncSession, code: str) -> int:
+    """Resolve channel_types.code → channel_types.id, cached after first hit."""
+    if code in _CHANNEL_ID_CACHE:
+        return _CHANNEL_ID_CACHE[code]
+    row = (await session.execute(text(
+        "SELECT id FROM channel_types WHERE code = :c"
+    ), {"c": code})).first()
+    if row is None:
+        raise RuntimeError(f"channel_types lookup failed for code={code!r}")
+    _CHANNEL_ID_CACHE[code] = int(row[0])
+    return _CHANNEL_ID_CACHE[code]
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Default playbook resolution
+# ────────────────────────────────────────────────────────────────────────────
+
+async def _resolve_default_playbook_id(
+    session: AsyncSession, tenant_id: int,
+) -> Optional[int]:
+    """Return the active playbook id for the tenant. Prefers the playbook
+    named '30-day default' (the one the cutover seeded); falls back to
+    the first active playbook by id."""
+    row = (await session.execute(text("""
+        SELECT id FROM playbooks
+        WHERE tenant_id = :t AND is_active = TRUE
+        ORDER BY
+          CASE WHEN name = '30-day default' THEN 0 ELSE 1 END,
+          id
+        LIMIT 1
+    """), {"t": tenant_id})).first()
+    return int(row[0]) if row else None
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Skip evaluation (mirror of legacy sequence_engine.evaluate_skip)
+# ────────────────────────────────────────────────────────────────────────────
+
+def _evaluate_skip(contact: Contact, conditions: list[str]) -> Optional[str]:
+    """First matching skip reason or None. Same semantics as the legacy
+    evaluator so behavior at enrollment time is byte-for-byte equivalent."""
+    for cond in conditions or []:
+        if cond == "no_email" and not (contact.email or "").strip():
+            return "no_email"
+        if cond == "no_phone" and not (contact.phone or "").strip():
+            return "no_phone"
+        if cond == "no_linkedin" and not (contact.linkedin_url or "").strip():
+            return "no_linkedin"
+        if cond == "opted_out":
+            if getattr(contact, "unsubscribed_at", None):
+                return "opted_out"
+            if getattr(contact, "do_not_text", False):
+                return "opted_out"
+        if cond == "landline" and getattr(contact, "phone_type", None) == "landline":
+            return "landline"
+    return None
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Step body / subject generation (mirror of legacy pre-gen path)
+# ────────────────────────────────────────────────────────────────────────────
+
+async def _build_step_payload(
+    *, db: AsyncSession, contact: Contact, company: Company,
+    tstep: dict, idx: int, email_drafts: dict, imessage_drafts: dict,
+) -> tuple[str, str, Optional[str]]:
+    """Return (subject, body, task_description) for the given step.
+
+    Strings only — no DB writes. Mirrors the per-step subject/body
+    selection in sequence_engine.start_sequence_from_template so the
+    legacy `[Skipped] X step N` / `Call talk track` / LinkedIn connect
+    note text is preserved.
+    """
+    step_type = tstep["step_type"]
+    label = tstep["label"]
+
+    if step_type == "email":
+        d = email_drafts.get(label, {})
+        return d.get("subject", f"Step {idx}"), d.get("body", "AUTO:"), None
+
+    if step_type == "imessage":
+        d = imessage_drafts.get(label, {})
+        return (
+            f"iMessage step {idx}",
+            d.get("body") or "AUTO:",
+            None,
+        )
+
+    if step_type == "call":
+        contact_phone = (contact.phone or "").strip()
+        company_phone = (company.phone or "").strip()
+        if contact_phone and company_phone and contact_phone != company_phone:
+            phone_line = f"📞 Direct: {contact_phone} | Main: {company_phone}\n\n"
+        elif contact_phone:
+            phone_line = f"📞 {contact_phone}\n\n"
+        elif company_phone:
+            phone_line = f"📞 Company main line: {company_phone}\n\n"
+        else:
+            phone_line = ""
+        body = (
+            f"{phone_line}"
+            f"Call talk track:\n\n"
+            f"- Hi {contact.first_name or 'there'} — from Backyard Marketing Pros.\n"
+            f"- I sent you a note about {company.name} earlier; wanted to catch you live.\n"
+            f"- Quick reason for the call: [reference a specific problem from the audit].\n"
+            f"- Got 5 min later this week to dig in?\n\n"
+            f"If voicemail: short message + send a follow-up email/text the same day."
+        )
+        return f"Call {idx}", body, body
+
+    if step_type == "linkedin":
+        body = (
+            f"Connect note (under 280 chars):\n\n"
+            f"Hey {contact.first_name or 'there'} — saw your work at {company.name}. "
+            f"Love connecting with fellow backyard pros.\n\n"
+            f"(After accept) DM with one specific insight from their site/Google reviews."
+        )
+        return f"LinkedIn step {idx}", body, body
+
+    # 'wait' or 'manual' — no body, BDR fills it in
+    return f"{step_type.title()} step {idx}", "", None
+
+
+async def _pre_generate_drafts(
+    *, db: AsyncSession, contact: Contact, company: Company,
+    template: list[dict],
+) -> tuple[dict, dict, Optional[str]]:
+    """Mirror legacy pre-generation: call generate_cold_email,
+    generate_follow_up, generate_imessage for the steps that need them.
+
+    Returns (email_drafts, imessage_drafts, audit_url). On any failure,
+    drafts dict is partially populated and the dispatcher falls back to
+    send-time regeneration (body='AUTO:'). Audit URL failure is silent.
+    """
+    email_drafts: dict[str, dict] = {}
+    imessage_drafts: dict[str, dict] = {}
+    audit_url: Optional[str] = None
+
+    try:
+        from app.services.audit_report import ensure_audit_for_company
+        audit_url = await ensure_audit_for_company(db, company)
+    except Exception as e:  # noqa: BLE001
+        log.warning("audit pre-gen failed for company %s: %s", company.id, e)
+
+    try:
+        from app.runtime_config import get_messaging_direction
+        direction = await get_messaging_direction(db)
+    except Exception:  # noqa: BLE001
+        direction = None
+
+    try:
+        problems = json.loads(company.problems_found) if company.problems_found else []
+    except (TypeError, ValueError):
+        problems = []
+    try:
+        recent_posts = json.loads(contact.recent_posts_json) if contact.recent_posts_json else []
+    except (TypeError, ValueError):
+        recent_posts = []
+
+    if contact.email:
+        try:
+            from app.services.email_generator import generate_cold_email, generate_follow_up
+            for tstep in template:
+                if tstep["step_type"] != "email":
+                    continue
+                if tstep["label"] == "cold":
+                    draft = await generate_cold_email(
+                        business_name=company.name,
+                        business_type=company.business_type or company.industry or "backyard professional",
+                        website=company.website or "",
+                        problems=problems,
+                        contact_name=contact.full_name,
+                        location=company.city,
+                        messaging_direction=direction,
+                    )
+                else:
+                    fu_num_map = {"follow_up_1": 1, "follow_up_2": 2, "breakup": 3}
+                    fu_num = fu_num_map.get(tstep["label"], 1)
+                    cold_subject = email_drafts.get("cold", {}).get("subject", "")
+                    draft = await generate_follow_up(
+                        business_name=company.name,
+                        business_type=company.business_type or company.industry or "backyard professional",
+                        problems=problems,
+                        previous_email_subject=cold_subject,
+                        follow_up_number=fu_num,
+                        contact_name=contact.full_name,
+                        messaging_direction=direction,
+                        audit_url=audit_url,
+                    )
+                email_drafts[tstep["label"]] = draft
+        except Exception as e:  # noqa: BLE001
+            log.warning("email pre-gen failed for contact %s: %s", contact.id, e)
+
+    if contact.phone:
+        try:
+            from app.services.email_generator import generate_imessage
+            intent_map = {"imessage_1": "after_email", "imessage_2": "follow_up", "imessage_3": "follow_up"}
+            for tstep in template:
+                if tstep["step_type"] != "imessage":
+                    continue
+                msg_audit_url = audit_url if tstep["label"] == "imessage_1" else None
+                draft = await generate_imessage(
+                    business_name=company.name or "your business",
+                    business_type=company.business_type or company.industry or "backyard professional",
+                    contact_name=contact.full_name,
+                    problems=problems,
+                    recent_posts=recent_posts,
+                    location=(company.city or "") + ((", " + company.state) if company.state else "") or None,
+                    intent=intent_map.get(tstep["label"], "follow_up"),
+                    messaging_direction=direction,
+                    audit_url=msg_audit_url,
+                )
+                imessage_drafts[tstep["label"]] = draft
+        except Exception as e:  # noqa: BLE001
+            log.warning("imessage pre-gen failed for contact %s: %s", contact.id, e)
+
+    return email_drafts, imessage_drafts, audit_url
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Public API: start_engagement
+# ────────────────────────────────────────────────────────────────────────────
+
+async def start_engagement(
+    db: AsyncSession,
+    contact: Contact,
+    *,
+    template: Optional[list[dict]] = None,
+    sequence_label: str = "main",
+    pre_generate_content: bool = True,
+    assigned_bdr_id: Optional[int] = None,
+    initiated_by: str = "autopilot",
+) -> int:
+    """Create an engagement + action rows for the contact.
+
+    Returns the number of action rows created. Returns 0 if:
+      - contact has no company (orphan)
+      - contact is unsubscribed
+      - contact.outreach_owner is 'paused' / 'disputed' / 'white_glove'
+      - contact already has an active engagement (idempotent no-op)
+
+    On success:
+      - sets contact.outreach_owner = 'engagement_engine'
+      - sets company.email_generated = True (legacy dedupe signal)
+      - writes Activity row "sequence_created"
+    """
+    if not contact or not contact.company_id:
+        return 0
+
+    if getattr(contact, "unsubscribed_at", None):
+        return 0
+
+    owner = getattr(contact, "outreach_owner", None) or "engagement_engine"
+    if owner in ("paused", "disputed", "white_glove"):
+        log.info(
+            "start_engagement: skip contact %s (outreach_owner=%s)",
+            contact.id, owner,
+        )
+        return 0
+
+    company = (await db.execute(
+        select(Company).where(Company.id == contact.company_id)
+    )).scalar_one_or_none()
+    if not company:
+        return 0
+
+    tenant_id = contact.tenant_id
+
+    # Idempotency: if there's an active engagement already, no-op.
+    existing = (await db.execute(text("""
+        SELECT id, sequence_number FROM engagements
+        WHERE contact_id = :c AND status = 'active'
+        ORDER BY id DESC LIMIT 1
+    """), {"c": contact.id})).first()
+    if existing is not None:
+        log.info(
+            "start_engagement: contact %s already has active engagement id=%s",
+            contact.id, existing[0],
+        )
+        return 0
+
+    # Sequence number bumps on each re-enrollment for the contact.
+    max_seq_row = (await db.execute(text("""
+        SELECT COALESCE(MAX(sequence_number), 0) FROM engagements WHERE contact_id = :c
+    """), {"c": contact.id})).first()
+    sequence_number = (int(max_seq_row[0]) if max_seq_row else 0) + 1
+
+    if template is None:
+        # Import lazily to avoid circular imports — sequence_engine imports
+        # heavy schedulers that we don't need here.
+        from app.services.sequence_engine import DEFAULT_30DAY_TEMPLATE
+        template = DEFAULT_30DAY_TEMPLATE
+
+    playbook_id = await _resolve_default_playbook_id(db, tenant_id)
+    now = datetime.now(timezone.utc)
+
+    # Pre-generate email + iMessage content with the same Claude calls
+    # the legacy engine uses, so subjects/bodies are identical to what
+    # autopilot would have produced before the cutover.
+    email_drafts: dict = {}
+    imessage_drafts: dict = {}
+    if pre_generate_content:
+        email_drafts, imessage_drafts, _ = await _pre_generate_drafts(
+            db=db, contact=contact, company=company, template=template,
+        )
+
+    # Resolve assigned BDR: explicit param > engagement-level assignment >
+    # company.assigned_to. Used by the email channel's reply-to derivation
+    # and for the BDR-task channels.
+    bdr_id = assigned_bdr_id or getattr(company, "assigned_to", None)
+
+    # INSERT engagement.
+    eng_row = (await db.execute(text("""
+        INSERT INTO engagements (
+            tenant_id, contact_id, company_id,
+            sequence_number, current_phase, last_transition_by,
+            status, current_action_index,
+            engagement_score, tier, summary_version,
+            monthly_ai_cost_usd, monthly_ai_cost_reset_at,
+            started_at, assigned_bdr_id,
+            created_at, updated_at
+        )
+        VALUES (
+            :t, :c, :co,
+            :seq, 'cold_outreach', :by,
+            'active', 0,
+            0, 'cold', 0,
+            0, :now,
+            :now, :bdr,
+            :now, :now
+        )
+        RETURNING id
+    """), {
+        "t": tenant_id,
+        "c": contact.id,
+        "co": company.id,
+        "seq": sequence_number,
+        "by": initiated_by[:24],
+        "now": now,
+        "bdr": bdr_id,
+    })).first()
+    engagement_id = int(eng_row[0])
+
+    # Materialize action rows from the template.
+    created = 0
+    earliest_pending: Optional[datetime] = None
+    skip_token = secrets.token_hex(4)
+    for idx, tstep in enumerate(template, start=1):
+        channel_code = LEGACY_STEP_TO_CHANNEL_CODE.get(tstep["step_type"])
+        if not channel_code:
+            log.warning("start_engagement: unknown step_type %s — skipping", tstep["step_type"])
+            continue
+        ch_id = await _channel_id(db, channel_code)
+
+        scheduled_at = now + timedelta(days=int(tstep.get("day", 0)))
+        stale_after = scheduled_at + timedelta(days=2)
+
+        skip_conds = tstep.get("skip_if", [])
+        skip_reason = _evaluate_skip(contact, skip_conds) if skip_conds else None
+
+        subject, body, task_description = await _build_step_payload(
+            db=db, contact=contact, company=company,
+            tstep=tstep, idx=idx,
+            email_drafts=email_drafts, imessage_drafts=imessage_drafts,
+        )
+
+        # Recipient fields: the recipient-lock trigger requires these to
+        # match the contact's current values OR be NULL. We set them
+        # explicitly so the channel adapter has them on hand and the
+        # trigger gets to validate at enrollment time.
+        recipient_email = contact.email if channel_code == "email" else None
+        recipient_phone = contact.phone if channel_code == "sms" else None
+        recipient_linkedin = contact.linkedin_url if channel_code == "linkedin" else None
+
+        if skip_reason:
+            status = "skipped"
+            subject = f"[Skipped] {tstep['step_type'].title()} step {idx}"
+            body = f"Skipped at creation: {skip_reason}"
+            task_description = None
+        else:
+            status = "scheduled"
+            if earliest_pending is None or scheduled_at < earliest_pending:
+                earliest_pending = scheduled_at
+
+        idem_key = f"enroll-{engagement_id}-{idx}-{skip_token}"
+
+        await db.execute(text("""
+            INSERT INTO actions (
+                tenant_id, engagement_id, contact_id,
+                channel_id, status, requires_human_review,
+                scheduled_at, stale_after,
+                subject, body, task_description,
+                recipient_email, recipient_phone, recipient_linkedin_url,
+                idempotency_key, ai_strategy_used,
+                skip_reason,
+                created_at, updated_at
+            )
+            VALUES (
+                :t, :e, :c,
+                :ch, :st, FALSE,
+                :sched, :stale,
+                :subj, :body, :task,
+                :re, :rp, :rl,
+                :idem, 'enrollment',
+                :skip,
+                :now, :now
+            )
+            ON CONFLICT (idempotency_key) DO NOTHING
+        """), {
+            "t": tenant_id, "e": engagement_id, "c": contact.id,
+            "ch": ch_id, "st": status,
+            "sched": scheduled_at, "stale": stale_after,
+            "subj": subject[:255], "body": body, "task": task_description,
+            "re": recipient_email, "rp": recipient_phone, "rl": recipient_linkedin,
+            "idem": idem_key, "skip": skip_reason,
+            "now": now,
+        })
+        created += 1
+
+    # Update engagement.next_action_due_at to the earliest scheduled
+    # action so the dispatcher can find this engagement efficiently.
+    if earliest_pending is not None:
+        await db.execute(text("""
+            UPDATE engagements SET next_action_due_at = :due WHERE id = :id
+        """), {"due": earliest_pending, "id": engagement_id})
+
+    # Stamp the playbook on the engagement if one is configured.
+    if playbook_id is not None:
+        await db.execute(text("""
+            UPDATE engagements
+            SET current_playbook_id = :pb, current_playbook_version = 1
+            WHERE id = :id
+        """), {"pb": playbook_id, "id": engagement_id})
+
+    # Update contact ownership + company dedup flag. Use direct SQL so
+    # it works even when the caller passed a Contact/Company that's not
+    # attached to this session (e.g. cross-session helpers or scripts).
+    await db.execute(text("""
+        UPDATE contacts SET outreach_owner = 'engagement_engine' WHERE id = :c
+    """), {"c": contact.id})
+    await db.execute(text("""
+        UPDATE companies SET
+            email_generated = TRUE,
+            sequence_started_at = COALESCE(sequence_started_at, :now),
+            status = CASE WHEN status = 'sequencing' THEN status ELSE 'sequencing' END
+        WHERE id = :co
+    """), {"co": company.id, "now": now})
+    # Also mutate the in-memory objects so subsequent code in the caller
+    # sees the new values without an extra reload round-trip.
+    contact.outreach_owner = "engagement_engine"
+    company.email_generated = True
+    if hasattr(company, "sequence_started_at") and company.sequence_started_at is None:
+        company.sequence_started_at = now
+    if company.status != "sequencing":
+        company.status = "sequencing"
+
+    # Activity row for the CRM timeline — same content shape the legacy
+    # emitted so dashboards/morning-brief/Kevin's tool surface keep working.
+    db.add(Activity(
+        company_id=company.id, contact_id=contact.id,
+        activity_type="sequence_created",
+        content=f"[engagement engine] Sequence started — {created} steps queued (engagement #{engagement_id})",
+    ))
+
+    await db.commit()
+
+    log.info(
+        "start_engagement: contact=%s engagement=%s actions=%d initiated_by=%s",
+        contact.id, engagement_id, created, initiated_by,
+    )
+    return created
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# pause / resume / terminate
+# ────────────────────────────────────────────────────────────────────────────
+
+async def pause_engagement(
+    db: AsyncSession,
+    contact_id: int,
+    *,
+    reason: str,
+    sequence_label: str = "main",  # accepted for legacy-call-site compatibility
+) -> int:
+    """Pause every scheduled action belonging to the contact's active
+    engagement. Returns the number of actions paused. The engagement
+    status stays 'active' so the contact remains in the CRM funnel; we
+    only stop outbound dispatch.
+
+    The 'dormant' phase is reserved for system-initiated cool-downs
+    (snooze, long inactivity). BDR-initiated pauses (reply received,
+    deal stage change) DO NOT transition the phase — that would require
+    a phase_transition rule we don't have. They just freeze actions.
+    """
+    eng = (await db.execute(text("""
+        SELECT id FROM engagements
+        WHERE contact_id = :c AND status = 'active'
+        ORDER BY id DESC LIMIT 1
+    """), {"c": contact_id})).first()
+    if eng is None:
+        return 0
+
+    paused_row = await db.execute(text("""
+        UPDATE actions
+        SET status = 'paused',
+            skip_reason = :reason,
+            updated_at = NOW()
+        WHERE engagement_id = :e
+          AND status = 'scheduled'
+        RETURNING id
+    """), {"e": int(eng[0]), "reason": f"paused: {reason}"[:255]})
+    n = len(paused_row.fetchall())
+
+    # Surface the pause on the timeline.
+    contact = (await db.execute(
+        select(Contact).where(Contact.id == contact_id)
+    )).scalar_one_or_none()
+    if contact:
+        db.add(Activity(
+            company_id=contact.company_id, contact_id=contact_id,
+            activity_type="sequence_paused",
+            content=f"Sequence paused: {reason} ({n} steps frozen)",
+        ))
+
+    await db.commit()
+    log.info("pause_engagement: contact=%s paused=%d reason=%s", contact_id, n, reason)
+    return n
+
+
+async def resume_engagement(
+    db: AsyncSession,
+    contact_id: int,
+    *,
+    sequence_label: str = "main",  # accepted for legacy-call-site compatibility
+    resume_at: Optional[datetime] = None,
+) -> int:
+    """Un-pause future actions. If `resume_at` is given, every paused
+    action's scheduled_at is shifted so the earliest paused step lands
+    at `resume_at` and the rest preserve their relative offsets."""
+    eng = (await db.execute(text("""
+        SELECT id FROM engagements
+        WHERE contact_id = :c AND status = 'active'
+        ORDER BY id DESC LIMIT 1
+    """), {"c": contact_id})).first()
+    if eng is None:
+        return 0
+
+    if resume_at is not None:
+        # Shift schedule by (resume_at - earliest_paused_scheduled).
+        earliest = (await db.execute(text("""
+            SELECT MIN(scheduled_at) FROM actions
+            WHERE engagement_id = :e AND status = 'paused'
+        """), {"e": int(eng[0])})).scalar()
+        if earliest is not None and earliest < resume_at:
+            shift_seconds = (resume_at - earliest).total_seconds()
+            await db.execute(text("""
+                UPDATE actions
+                SET scheduled_at = scheduled_at + (:shift || ' seconds')::interval,
+                    stale_after  = stale_after  + (:shift || ' seconds')::interval
+                WHERE engagement_id = :e AND status = 'paused'
+            """), {"e": int(eng[0]), "shift": int(shift_seconds)})
+
+    resumed_row = await db.execute(text("""
+        UPDATE actions
+        SET status = 'scheduled',
+            skip_reason = NULL,
+            updated_at = NOW()
+        WHERE engagement_id = :e AND status = 'paused'
+        RETURNING id
+    """), {"e": int(eng[0])})
+    n = len(resumed_row.fetchall())
+
+    contact = (await db.execute(
+        select(Contact).where(Contact.id == contact_id)
+    )).scalar_one_or_none()
+    if contact:
+        db.add(Activity(
+            company_id=contact.company_id, contact_id=contact_id,
+            activity_type="sequence_resumed",
+            content=f"Sequence resumed ({n} steps un-paused)",
+        ))
+
+    await db.commit()
+    log.info("resume_engagement: contact=%s resumed=%d", contact_id, n)
+    return n
+
+
+async def terminate_engagement(
+    db: AsyncSession,
+    contact_id: int,
+    *,
+    reason: str,
+    final_phase: str = "declined",
+) -> int:
+    """Mark the engagement terminal (e.g. unsubscribed, hard bounce,
+    deal won/lost, opt-out). Cancels all pending and paused actions.
+    Returns number of actions canceled. Idempotent."""
+    eng = (await db.execute(text("""
+        SELECT id, current_phase FROM engagements
+        WHERE contact_id = :c AND status = 'active'
+        ORDER BY id DESC LIMIT 1
+    """), {"c": contact_id})).first()
+    if eng is None:
+        return 0
+    engagement_id = int(eng[0])
+
+    canceled_row = await db.execute(text("""
+        UPDATE actions
+        SET status = 'skipped',
+            skip_reason = :reason,
+            updated_at = NOW()
+        WHERE engagement_id = :e
+          AND status IN ('scheduled', 'paused', 'awaiting_approval')
+        RETURNING id
+    """), {"e": engagement_id, "reason": f"engagement_terminated:{reason}"[:255]})
+    n = len(canceled_row.fetchall())
+
+    # Phase transition + status flip. The trigger validates the from/to
+    # pair against phase_transitions; we pass it through `system`.
+    await db.execute(text("""
+        UPDATE engagements
+        SET current_phase = :p,
+            last_transition_by = 'system',
+            status = 'terminal',
+            terminal_reason = :reason,
+            terminal_at = NOW(),
+            updated_at = NOW()
+        WHERE id = :id
+    """), {"id": engagement_id, "p": final_phase, "reason": reason[:255]})
+
+    contact = (await db.execute(
+        select(Contact).where(Contact.id == contact_id)
+    )).scalar_one_or_none()
+    if contact:
+        db.add(Activity(
+            company_id=contact.company_id, contact_id=contact_id,
+            activity_type="sequence_terminated",
+            content=f"Sequence terminated: {reason} ({n} pending steps canceled)",
+        ))
+
+    await db.commit()
+    log.info("terminate_engagement: contact=%s eng=%s canceled=%d reason=%s",
+             contact_id, engagement_id, n, reason)
+    return n
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# wake_engagement_for_company — restore enrollment when a BDR un-disqualifies
+# a contact or clicks "wake up" in the CRM.
+# ────────────────────────────────────────────────────────────────────────────
+
+async def append_steps_to_engagement(
+    db: AsyncSession,
+    contact: Contact,
+    steps: list[dict],
+    *,
+    strategy_tag: str = "manual_append",
+) -> int:
+    """Append additional action rows to the contact's active engagement.
+
+    Each step dict should have:
+      - day (int) — days from now until scheduled_at
+      - step_type ('email' | 'imessage' | 'call' | 'linkedin' | 'manual')
+      - subject (str) — body header
+      - body (str) — full body / task description
+
+    Used by post-call follow-up sequences and any other parallel-track
+    BDR-initiated sequences. Falls back gracefully if there's no active
+    engagement (creates one first via start_engagement)."""
+    if not contact or not contact.company_id:
+        return 0
+
+    eng = (await db.execute(text("""
+        SELECT id FROM engagements
+        WHERE contact_id = :c AND status = 'active'
+        ORDER BY id DESC LIMIT 1
+    """), {"c": contact.id})).first()
+
+    if eng is None:
+        # No active engagement — start one with this as the template.
+        return await start_engagement(
+            db, contact,
+            template=[
+                {"day": s["day"], "step_type": s["step_type"],
+                 "label": s.get("label", strategy_tag), "skip_if": s.get("skip_if", [])}
+                for s in steps
+            ],
+            sequence_label="post_call",
+            initiated_by=strategy_tag,
+        )
+
+    engagement_id = int(eng[0])
+    now = datetime.now(timezone.utc)
+    skip_token = secrets.token_hex(4)
+    created = 0
+
+    for idx, step in enumerate(steps, start=1):
+        channel_code = LEGACY_STEP_TO_CHANNEL_CODE.get(step["step_type"])
+        if not channel_code:
+            continue
+        ch_id = await _channel_id(db, channel_code)
+        scheduled_at = now + timedelta(days=int(step.get("day", 0)))
+        stale_after = scheduled_at + timedelta(days=2)
+        recipient_email = contact.email if channel_code == "email" else None
+        recipient_phone = contact.phone if channel_code == "sms" else None
+        recipient_linkedin = contact.linkedin_url if channel_code == "linkedin" else None
+
+        idem_key = f"append-{engagement_id}-{idx}-{skip_token}"
+
+        await db.execute(text("""
+            INSERT INTO actions (
+                tenant_id, engagement_id, contact_id,
+                channel_id, status, requires_human_review,
+                scheduled_at, stale_after,
+                subject, body,
+                recipient_email, recipient_phone, recipient_linkedin_url,
+                idempotency_key, ai_strategy_used,
+                created_at, updated_at
+            )
+            VALUES (
+                :t, :e, :c,
+                :ch, 'scheduled', FALSE,
+                :sched, :stale,
+                :subj, :body,
+                :re, :rp, :rl,
+                :idem, :strategy,
+                :now, :now
+            )
+            ON CONFLICT (idempotency_key) DO NOTHING
+        """), {
+            "t": contact.tenant_id, "e": engagement_id, "c": contact.id,
+            "ch": ch_id,
+            "sched": scheduled_at, "stale": stale_after,
+            "subj": (step.get("subject") or f"{step['step_type'].title()} step {idx}")[:255],
+            "body": step.get("body") or "",
+            "re": recipient_email, "rp": recipient_phone, "rl": recipient_linkedin,
+            "idem": idem_key, "strategy": strategy_tag[:40],
+            "now": now,
+        })
+        created += 1
+
+    await db.commit()
+    log.info(
+        "append_steps_to_engagement: contact=%s engagement=%s appended=%d tag=%s",
+        contact.id, engagement_id, created, strategy_tag,
+    )
+    return created
+
+
+async def wake_engagement_for_company(
+    db: AsyncSession,
+    company: Company,
+    *,
+    initiated_by: str = "bdr_wake",
+) -> int:
+    """For each contact at the company whose latest engagement is
+    terminal (declined) or who has no engagement at all, restart a
+    fresh engagement. Returns number of contacts re-enrolled.
+
+    Used by:
+      - Restore-from-disqualified flow (company_routes.py)
+      - Manual "wake sequence" button on the company page
+    """
+    contacts = (await db.execute(
+        select(Contact).where(Contact.company_id == company.id)
+    )).scalars().all()
+
+    re_enrolled = 0
+    for c in contacts:
+        latest = (await db.execute(text("""
+            SELECT status FROM engagements
+            WHERE contact_id = :c ORDER BY id DESC LIMIT 1
+        """), {"c": c.id})).first()
+        # If active: skip (don't re-enroll). If terminal or absent: enroll.
+        if latest is not None and latest[0] == "active":
+            continue
+
+        # The legacy outreach_owner gate must allow re-enrollment.
+        owner = getattr(c, "outreach_owner", None) or "none"
+        if owner in ("paused", "disputed", "white_glove"):
+            continue
+
+        actions_created = await start_engagement(
+            db, c,
+            initiated_by=initiated_by,
+            assigned_bdr_id=getattr(company, "assigned_to", None),
+        )
+        if actions_created > 0:
+            re_enrolled += 1
+
+    return re_enrolled

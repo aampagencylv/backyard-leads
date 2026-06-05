@@ -445,74 +445,42 @@ async def generate_contact_sequence(
     if not problems:
         raise HTTPException(status_code=400, detail="No problems found to reference in sequence.")
 
-    # Skip if this contact already has emails
-    existing = (await db.execute(
+    # Skip if this contact already has an active engagement (the new
+    # engine source of truth) or any legacy GeneratedEmail rows
+    # (back-compat for pre-cutover sequences).
+    from sqlalchemy import text as _sa_text
+    has_active_eng = (await db.execute(_sa_text(
+        "SELECT 1 FROM engagements WHERE contact_id = :c AND status = 'active' LIMIT 1"
+    ), {"c": contact_id})).first()
+    existing_legacy = (await db.execute(
         select(GeneratedEmail).where(GeneratedEmail.contact_id == contact_id)
     )).first()
-    if existing:
+    if has_active_eng or existing_legacy:
         raise HTTPException(status_code=400, detail="This contact already has a sequence. Delete it first to regenerate.")
 
-    now = datetime.now(timezone.utc)
-    first_subject = None
-    created = 0
-
-    # Get-or-create the AI Findability audit so follow-up emails can
-    # share the link. ensure_audit_for_company returns None if anything
-    # fails — the sequence still generates, just without the link.
-    from app.services.audit_report import ensure_audit_for_company
-    audit_url = await ensure_audit_for_company(db, company)
-
-    for step in CONTACT_SEQUENCE_SCHEDULE:
-        try:
-            if step["order"] == 1:
-                email_data = await generate_cold_email(
-                    business_name=company.name,
-                    business_type=company.business_type or "home services",
-                    website=company.website or "",
-                    problems=problems,
-                    contact_name=contact.full_name or None,
-                    location=f"{company.city}, {company.state}" if company.city else None,
-                )
-                first_subject = email_data["subject"]
-            else:
-                email_data = await generate_follow_up(
-                    business_name=company.name,
-                    business_type=company.business_type or "home services",
-                    problems=problems,
-                    previous_email_subject=first_subject or company.name,
-                    follow_up_number=step["order"] - 1,
-                    contact_name=contact.full_name or None,
-                    audit_url=audit_url,
-                )
-
-            email = GeneratedEmail(
-                contact_id=contact.id,
-                company_id=company.id,
-                subject=email_data["subject"],
-                body=email_data["body"],
-                email_type=step["type"],
-                sequence_order=step["order"],
-                send_delay_days=step["delay_days"],
-                scheduled_send_at=now + timedelta(days=step["delay_days"]),
-                problems_referenced=json.dumps(problems[:2]),
-            )
-            db.add(email)
-            await db.flush()
-            created += 1
-        except Exception:
-            continue
-
-    # Snap newly-created steps to the configured send window so the UI
-    # never shows midnight queueings.
-    from app.services.send_window import snap_pending_steps_to_window
-    await snap_pending_steps_to_window(db, contact_id=contact.id)
-
-    db.add(Activity(company_id=company.id, contact_id=contact.id, user_id=user.id,
-                    activity_type="sequence_created",
-                    content=f"Sequence created for {contact.full_name or contact.email or 'contact'} ({created} emails)"))
-    company.email_generated = True
-    if company.status == "new":
-        company.status = "sequencing"
+    # Build a 4-step email-only template and enroll via the new engine.
+    # Labels map onto the email pre-gen branches in lifecycle._pre_generate_drafts
+    # so the AI subject/body comes out the same shape as before.
+    label_by_order = {1: "cold", 2: "follow_up_1", 3: "follow_up_2", 4: "breakup"}
+    contact_template = [
+        {
+            "day": step["delay_days"],
+            "step_type": "email",
+            "label": label_by_order.get(step["order"], step["type"]),
+            "skip_if": ["no_email", "opted_out"],
+            "auto": True,
+        }
+        for step in CONTACT_SEQUENCE_SCHEDULE
+    ]
+    from app.engagement_engine.lifecycle import start_engagement
+    created = await start_engagement(
+        db, contact,
+        template=contact_template,
+        sequence_label="main",
+        pre_generate_content=True,
+        assigned_bdr_id=getattr(company, "assigned_to", None),
+        initiated_by=f"manual_contact:{user.email[:24]}",
+    )
 
     try:
         from app.services.webhook_dispatch import dispatch_event

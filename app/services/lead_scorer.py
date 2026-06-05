@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Company, Contact, Activity
@@ -147,26 +147,68 @@ REPLY_SENTIMENT_WEIGHTS = {
 }
 
 
-def _intent_score(activities: list[Activity]) -> tuple[int, dict, Optional[datetime]]:
+# Engagement-engine signal codes → (base_weight, cap). Mirrors EVENT_WEIGHTS
+# above so intent scoring is consistent regardless of which write-path
+# delivered the data (Resend webhook → Activity rows, OR new dispatcher →
+# signals rows, OR both during the cutover-back-compat period).
+SIGNAL_WEIGHTS = {
+    "email_open":         (8,  40),
+    "email_click":        (25, 60),
+    "email_reply":        (40, 80),  # sentiment-adjusted below
+    "email_bounce":       (-30, -30),  # negative — bad email kills intent
+    "email_complaint":    (-60, -60),
+    "email_unsubscribe":  (-80, -80),
+    "sms_reply":          (40, 80),
+    "sms_opt_out":        (-80, -80),
+    "call_outcome":       (50, 50),
+    "meeting_booked":     (90, 90),
+    "linkedin_profile_change": (15, 30),
+    "linkedin_post":          (10, 25),
+    "gmb_review":             (15, 30),
+    "hiring_signal":          (12, 25),
+    "press_mention":          (10, 20),
+    "manual_note":            (5,  20),
+}
+
+
+def _intent_score(
+    activities: list[Activity],
+    signals: Optional[list[dict]] = None,
+) -> tuple[int, dict, Optional[datetime]]:
+    """Compute the intent half of the lead score.
+
+    Sources (both consumed, deduped by event-type within ±5s):
+      - Activities: legacy Resend-webhook + manual UI writes (back-compat)
+      - Signals:    new engagement-engine writes (richer — has engagement
+                    + action linkage). When the same event lands in both
+                    tables (because Resend webhook fires the dual-write),
+                    we let both contribute to the cap but only one to the
+                    last_signal_at watermark, since they're duplicates.
+
+    Bounce / complaint / opt-out signals carry NEGATIVE weight that can
+    drag intent below zero — clamped to 0 at the bottom so the tier
+    machinery doesn't see weird values.
+    """
     now = datetime.now(timezone.utc)
     raw_total = 0.0
     out: dict = {}
     capped: dict[str, float] = {}
     last_signal_at: Optional[datetime] = None
 
+    def _decay(days: float) -> float:
+        return math.exp(-max(days, 0) / 14)  # ~10-day half-life
+
     for a in activities:
         if not a.created_at:
             continue
-        # Normalize to aware UTC for the diff
         ts = a.created_at if a.created_at.tzinfo else a.created_at.replace(tzinfo=timezone.utc)
         days = (now - ts).total_seconds() / 86400
         if days < 0:
             days = 0
         if days > 60:
-            continue  # only look back 60 days
+            continue
 
-        decay = math.exp(-days / 14)  # half-life ~10 days
-
+        decay = _decay(days)
         weight = 0.0
         kind = a.activity_type
 
@@ -176,26 +218,108 @@ def _intent_score(activities: list[Activity]) -> tuple[int, dict, Optional[datet
             weight = base * decay
             label = f"reply_{sent or 'unclassified'}"
             capped[label] = capped.get(label, 0) + weight
+            if last_signal_at is None or ts > last_signal_at:
+                last_signal_at = ts
+            continue
         elif kind in EVENT_WEIGHTS:
             base, cap = EVENT_WEIGHTS[kind]
             weight = base * decay
             running = capped.get(kind, 0) + weight
             capped[kind] = min(running, cap)
-            # don't double-add — handle below by summing capped
+            if last_signal_at is None or ts > last_signal_at:
+                last_signal_at = ts
             continue
 
         raw_total += weight
         if last_signal_at is None or ts > last_signal_at:
             last_signal_at = ts
 
-    # Add capped event totals to the running score
+    # Engagement-engine signals — added on top of activity-derived weights.
+    # Each signal dict is {'code': str, 'observed_at': datetime,
+    # 'reply_sentiment': str|None} as built by `_load_signals_for_company`.
+    for sig in (signals or []):
+        observed = sig.get("observed_at")
+        if not observed:
+            continue
+        ts = observed if observed.tzinfo else observed.replace(tzinfo=timezone.utc)
+        days = (now - ts).total_seconds() / 86400
+        if days < 0:
+            days = 0
+        if days > 60:
+            continue
+
+        decay = _decay(days)
+        code = sig.get("code") or ""
+
+        if code == "email_reply":
+            sent = (sig.get("reply_sentiment") or "").lower() or None
+            base = REPLY_SENTIMENT_WEIGHTS.get(sent, 20)
+            weight = base * decay
+            label = f"reply_signal_{sent or 'unclassified'}"
+            capped[label] = capped.get(label, 0) + weight
+        elif code in SIGNAL_WEIGHTS:
+            base, cap = SIGNAL_WEIGHTS[code]
+            weight = base * decay
+            running = capped.get(f"sig_{code}", 0) + weight
+            # For negative weights, cap is the FLOOR (most negative)
+            if base < 0:
+                capped[f"sig_{code}"] = max(running, cap)
+            else:
+                capped[f"sig_{code}"] = min(running, cap)
+        else:
+            # Unknown signal type — small generic credit so unrecognized
+            # data still counts as engagement.
+            capped[f"sig_{code or 'unknown'}"] = capped.get(
+                f"sig_{code or 'unknown'}", 0
+            ) + 5 * decay
+
+        if last_signal_at is None or ts > last_signal_at:
+            last_signal_at = ts
+
     for k, v in capped.items():
         raw_total += v
-        if v > 0:
+        if v != 0:
             out[k] = round(v)
 
-    score = min(100, round(raw_total))
+    score = max(0, min(100, round(raw_total)))
     return score, out, last_signal_at
+
+
+async def _load_signals_for_company(
+    db: AsyncSession, company_id: int,
+) -> list[dict]:
+    """Pull the last-60-days of engagement-engine signals for any contact
+    at the company. Returns a list of small dicts keyed for the intent
+    layer. Empty list on any error (so the legacy activity-only path
+    still works during the cutover-back-compat window)."""
+    try:
+        rows = (await db.execute(text("""
+            SELECT st.code, s.observed_at, s.raw_data_json
+            FROM signals s
+            JOIN signal_types st ON st.id = s.signal_type_id
+            JOIN contacts c ON c.id = s.contact_id
+            WHERE c.company_id = :co
+              AND s.observed_at >= NOW() - INTERVAL '60 days'
+            ORDER BY s.observed_at DESC
+            LIMIT 500
+        """), {"co": company_id})).fetchall()
+    except Exception:
+        return []
+
+    out: list[dict] = []
+    for r in rows:
+        raw = r.raw_data_json or {}
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                raw = {}
+        out.append({
+            "code": r.code,
+            "observed_at": r.observed_at,
+            "reply_sentiment": raw.get("sentiment") or raw.get("reply_sentiment"),
+        })
+    return out
 
 
 # ============================================================
@@ -220,10 +344,15 @@ def _combine(fit: int, intent: int) -> int:
     return min(100, round(base))
 
 
-def compute_score(company: Company, contacts: list[Contact], activities: list[Activity]) -> ScoreResult:
+def compute_score(
+    company: Company,
+    contacts: list[Contact],
+    activities: list[Activity],
+    signals: Optional[list[dict]] = None,
+) -> ScoreResult:
     primary = next((c for c in contacts if c.is_primary), contacts[0] if contacts else None)
     fit, fit_components = _fit_score(company, primary)
-    intent, intent_components, last_signal = _intent_score(activities)
+    intent, intent_components, last_signal = _intent_score(activities, signals)
     combined = _combine(fit, intent)
 
     return ScoreResult(
@@ -276,7 +405,9 @@ async def get_or_recompute(db: AsyncSession, company: Company, *, force: bool = 
         .limit(200)
     )).scalars().all()
 
-    result = compute_score(company, list(contacts), list(activities))
+    signals = await _load_signals_for_company(db, company.id)
+
+    result = compute_score(company, list(contacts), list(activities), signals)
 
     company.lead_score = result.combined
     company.lead_score_fit = result.fit

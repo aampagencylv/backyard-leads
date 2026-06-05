@@ -963,16 +963,24 @@ async def log_call(
         except Exception:
             pass  # don't block the call log
 
-    # Sequence-engine listener: a real conversation pauses the sequence, just
-    # like an email/iMessage reply does. Definition of "real": connected outcome
-    # AND duration > 30s (filters out voicemails / no-answers / 5-second misdials).
+    # Engagement-engine listener: a real conversation pauses the engagement,
+    # just like an email/iMessage reply does. Definition of "real": connected
+    # outcome AND duration > 30s (filters out voicemails / no-answers /
+    # 5-second misdials).
     if contact and (req.outcome or "") == "connected" and (req.duration_seconds or 0) > 30:
+        from app.engagement_engine.lifecycle import pause_engagement
+        try:
+            await pause_engagement(db, contact.id, reason="connected call >30s")
+            await db.commit()
+        except Exception:
+            pass  # listener failure shouldn't block the call log
+        # Legacy fallback for any back-compat paused_at-aware rows.
         from app.services.sequence_engine import pause_sequence
         try:
             await pause_sequence(db, contact.id, reason="connected call >30s")
             await db.commit()
         except Exception:
-            pass  # listener failure shouldn't block the call log
+            pass
 
     return _activity_to_dict(activity)
 
