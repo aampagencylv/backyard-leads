@@ -1273,6 +1273,24 @@ async def sms_inbound(request: Request):
 
         await db.commit()
 
+    # Fire async sentiment classification — same path as inbound email
+    # replies. The classifier writes the sentiment onto the SMS signal's
+    # raw_data_json and any matching Activity rows in the last 5 minutes.
+    # SMS-specific note: short replies ("k", "no thx", "👍") classify
+    # reliably with the same 6-bucket model.
+    if contact and (body or "").strip():
+        import asyncio as _asyncio
+        from app.routes.email_inbound_routes import _classify_engagement_reply_async
+        _asyncio.create_task(_classify_engagement_reply_async(
+            tenant_id=contact.tenant_id,
+            engagement_id=0,  # SMS path doesn't carry engagement_id directly
+            contact_id=contact.id,
+            action_id=None,
+            body_text=body,
+            subject="",  # SMS has no subject; classifier handles empty
+            channel="sms",
+        ))
+
     return Response(content="<Response/>", media_type="application/xml")
 
 

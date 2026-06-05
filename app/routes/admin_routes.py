@@ -1410,3 +1410,185 @@ async def trigger_outbound_digest(
     from app.services.outbound_digest import send_digest, DIGEST_RECIPIENT
     result = await send_digest(hours=hours, recipient=recipient or DIGEST_RECIPIENT, force=force)
     return result
+
+
+# ============================================================
+# Engagement-engine cost view — separate from /api/admin/costs which
+# reads credit_ledger (platform-wide vendor cost). This view reads the
+# engagement engine's own counters: actions.ai_generation_cost_usd,
+# signals.ai_scoring_cost_usd, and rolls them up against the
+# per-tenant budget in tenant_ai_config.
+#
+# The split matters because BYO-AI tenants will eventually pay their own
+# Anthropic/OpenAI bills directly; the engine cost is what THEY see
+# on their LLM provider invoice. credit_ledger cost is what BMP eats
+# on behalf of all customers (transport + tooling that BMP can't
+# offload to the customer's account).
+# ============================================================
+
+async def _engagement_costs_summary(*, days: int, db: AsyncSession) -> dict:
+    """Per-tenant engagement-engine AI burn for the last N days, with
+    budget status.
+
+    For each tenant returns:
+      - actions_cost_usd:        sum(actions.ai_generation_cost_usd) in window
+      - signals_cost_usd:        sum(signals.ai_scoring_cost_usd) in window
+      - engagement_running_usd:  sum(engagements.monthly_ai_cost_usd) — the
+                                 engine's running per-month counter, NOT
+                                 limited to the requested window
+      - monthly_budget_usd:      tenant_ai_config.monthly_budget_usd (NULL → uncapped)
+      - current_month_spent_usd: tenant_ai_config.current_month_spent_usd
+      - budget_pct_used:         current/budget * 100 (NULL when no budget)
+      - over_budget:             bool
+
+    Sorted by total spend descending.
+    """
+    from datetime import datetime, timezone, timedelta
+    from sqlalchemy import text as _sa_text
+
+    now = datetime.now(timezone.utc)
+    window_start = now - timedelta(days=max(1, min(days, 365)))
+
+    rows = (await db.execute(_sa_text("""
+        WITH
+        action_costs AS (
+            SELECT tenant_id,
+                   COALESCE(SUM(ai_generation_cost_usd), 0) AS usd,
+                   COUNT(*) AS events
+            FROM actions
+            WHERE created_at >= :since
+            GROUP BY tenant_id
+        ),
+        signal_costs AS (
+            SELECT tenant_id,
+                   COALESCE(SUM(ai_scoring_cost_usd), 0) AS usd,
+                   COUNT(*) AS events
+            FROM signals
+            WHERE observed_at >= :since
+            GROUP BY tenant_id
+        ),
+        eng_running AS (
+            SELECT tenant_id,
+                   COALESCE(SUM(monthly_ai_cost_usd), 0) AS usd,
+                   COUNT(*) AS active_engagements
+            FROM engagements
+            WHERE status = 'active'
+            GROUP BY tenant_id
+        )
+        SELECT t.id AS tenant_id,
+               t.name AS tenant_name,
+               COALESCE(a.usd, 0)    AS actions_cost_usd,
+               COALESCE(a.events, 0) AS actions_count,
+               COALESCE(s.usd, 0)    AS signals_cost_usd,
+               COALESCE(s.events, 0) AS signals_count,
+               COALESCE(r.usd, 0)    AS engagement_running_usd,
+               COALESCE(r.active_engagements, 0) AS active_engagements,
+               c.monthly_budget_usd,
+               c.per_engagement_budget_usd,
+               c.current_month_spent_usd,
+               c.current_month_reset_at,
+               c.provider AS llm_provider
+        FROM tenants t
+        LEFT JOIN action_costs a    ON a.tenant_id = t.id
+        LEFT JOIN signal_costs s    ON s.tenant_id = t.id
+        LEFT JOIN eng_running r     ON r.tenant_id = t.id
+        LEFT JOIN tenant_ai_config c ON c.tenant_id = t.id
+        ORDER BY (
+            COALESCE(a.usd, 0) + COALESCE(s.usd, 0)
+        ) DESC, t.id
+    """), {"since": window_start})).fetchall()
+
+    breakdown = []
+    grand_actions = 0.0
+    grand_signals = 0.0
+    grand_running = 0.0
+
+    for r in rows:
+        actions_usd = float(r.actions_cost_usd or 0)
+        signals_usd = float(r.signals_cost_usd or 0)
+        running_usd = float(r.engagement_running_usd or 0)
+        budget     = float(r.monthly_budget_usd) if r.monthly_budget_usd is not None else None
+        spent      = float(r.current_month_spent_usd or 0)
+        pct        = (spent / budget * 100.0) if (budget and budget > 0) else None
+        over       = bool(budget and budget > 0 and spent > budget)
+        grand_actions += actions_usd
+        grand_signals += signals_usd
+        grand_running += running_usd
+        breakdown.append({
+            "tenant_id":              int(r.tenant_id),
+            "tenant_name":            r.tenant_name,
+            "llm_provider":           r.llm_provider,
+            "window_actions_usd":     round(actions_usd, 6),
+            "window_actions_count":   int(r.actions_count or 0),
+            "window_signals_usd":     round(signals_usd, 6),
+            "window_signals_count":   int(r.signals_count or 0),
+            "window_total_usd":       round(actions_usd + signals_usd, 6),
+            "engagement_running_usd": round(running_usd, 6),
+            "active_engagements":     int(r.active_engagements or 0),
+            "monthly_budget_usd":     budget,
+            "per_engagement_budget_usd": (
+                float(r.per_engagement_budget_usd)
+                if r.per_engagement_budget_usd is not None else None
+            ),
+            "current_month_spent_usd":  round(spent, 6),
+            "budget_pct_used":          round(pct, 1) if pct is not None else None,
+            "over_budget":              over,
+            "month_resets_at":          (
+                r.current_month_reset_at.isoformat()
+                if r.current_month_reset_at else None
+            ),
+        })
+
+    # Tenants currently over budget surface for easy alerting.
+    over_budget_tenants = [b for b in breakdown if b["over_budget"]]
+
+    return {
+        "window_days":      days,
+        "window_start":     window_start.isoformat(),
+        "generated_at":     now.isoformat(),
+        "totals": {
+            "actions_usd":  round(grand_actions, 6),
+            "signals_usd":  round(grand_signals, 6),
+            "window_total_usd": round(grand_actions + grand_signals, 6),
+            "engagement_running_usd": round(grand_running, 6),
+            "tenants_counted": len(breakdown),
+            "tenants_over_budget": len(over_budget_tenants),
+        },
+        "by_tenant":           breakdown,
+        "over_budget_tenants": over_budget_tenants,
+    }
+
+
+@router.get("/engagement-costs")
+async def engagement_costs(
+    days: int = 30,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_super_admin),
+):
+    """Per-tenant engagement-engine AI burn for the last N days, with
+    budget status. Public super_admin endpoint; delegates to
+    _engagement_costs_summary which is also reused by the per-tenant
+    detail view."""
+    return await _engagement_costs_summary(days=days, db=db)
+
+
+@router.get("/tenants/{tenant_id}/engagement-cost")
+async def tenant_engagement_cost(
+    tenant_id: int,
+    days: int = 30,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_super_admin),
+):
+    """Single-tenant engagement-engine cost view — used by the tenant
+    detail panel. Same shape as one entry in /admin/engagement-costs."""
+    summary = await _engagement_costs_summary(days=days, db=db)
+    match = next((b for b in summary["by_tenant"] if b["tenant_id"] == tenant_id), None)
+    if not match:
+        from fastapi import HTTPException
+        raise HTTPException(404, f"tenant {tenant_id} not found")
+    return {
+        "window_days":  summary["window_days"],
+        "window_start": summary["window_start"],
+        "generated_at": summary["generated_at"],
+        "tenant":       match,
+    }

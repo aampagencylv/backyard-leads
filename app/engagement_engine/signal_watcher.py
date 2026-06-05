@@ -237,18 +237,33 @@ async def _process_one_observation(
     # 7. Persist new signals (idempotent — UNIQUE(idempotency_key))
     signals_written = 0
     async with async_session() as session:
-        # Resolve current_engagement_id once (may be None if no active
-        # engagement on this contact yet)
+        # Resolve current engagement dynamically from the contact's
+        # active engagement (not the stale observations.current_engagement_id).
+        # Seeded observations may not have it populated; engagements rotate
+        # over time (terminate → restore → new id). Dynamic lookup
+        # keeps observation rows stable while routing signals to the
+        # currently-live engagement.
         eng_id = obs.current_engagement_id
+        if eng_id is None:
+            eng_row = (await session.execute(text("""
+                SELECT e.id FROM engagements e
+                JOIN contacts c ON c.id = e.contact_id
+                WHERE e.contact_id = :c
+                  AND e.status = 'active'
+                  AND e.tenant_id = c.tenant_id
+                ORDER BY e.id DESC LIMIT 1
+            """), {"c": obs.contact_id})).first()
+            if eng_row is not None:
+                eng_id = int(eng_row[0])
         if eng_id is None:
             # No active engagement — signals can't be attached. We still
             # update the observation hash so we don't keep re-emitting.
-            # The watcher might emit signals later once an engagement
-            # is created (e.g., from the CRM UI).
+            # The next poll-tick can pick up signals once the contact
+            # gets enrolled (e.g., autopilot brings them in).
             log.info(
-                "observation %s has no current_engagement_id; "
+                "observation %s has no active engagement for contact %s; "
                 "skipping %d extracted signals",
-                obs_id, len(extracted_signals),
+                obs_id, obs.contact_id, len(extracted_signals),
             )
         else:
             for idx, sig in enumerate(extracted_signals):

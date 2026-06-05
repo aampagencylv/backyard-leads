@@ -229,11 +229,126 @@ async def _route_reply_to_engagement_engine(
         ))
 
         await db.commit()
+
+    # Fire async sentiment classification for real replies. We don't await
+    # — the AI roundtrip should not block the webhook ack. The classifier
+    # writes the result onto BOTH the signal's raw_data_json (so the
+    # decision_maker + lead_scorer see it) AND any Activity rows for this
+    # contact created in the last 60 seconds (so the CRM timeline badges
+    # show the right color without a refresh delay). Idempotent.
+    if not is_auto_response and (body_text or "").strip():
+        import asyncio as _asyncio
+        _asyncio.create_task(_classify_engagement_reply_async(
+            tenant_id=a.tenant_id,
+            engagement_id=a.engagement_id,
+            contact_id=a.contact_id,
+            action_id=action_id,
+            body_text=body_text,
+            subject=subject,
+            channel="email",
+        ))
+
     log.info(
         f"[inbound:engine] action={action_id} from={bare_from} "
         f"auto={is_auto_response}"
     )
     return {"ok": True, "engine": "engagement_engine", "action_id": action_id}
+
+
+async def _classify_engagement_reply_async(
+    *,
+    tenant_id: int,
+    engagement_id: int,
+    contact_id: int,
+    action_id: int | None,
+    body_text: str,
+    subject: str,
+    channel: str = "email",
+) -> None:
+    """Classify the reply intent and persist the result onto the
+    matching engagement-engine signal + any recent Activity row.
+
+    Best-effort: silent on failure (the signal simply stays without a
+    sentiment field; lead_scorer + decision_maker treat that as
+    'unclassified', which is the same as today's no-op behavior).
+
+    Channel: 'email' or 'sms' — both classify with the same Haiku model
+    via reply_classifier.classify_reply since the sentiment buckets
+    apply equally to short SMS replies.
+    """
+    try:
+        from app.services.reply_classifier import classify_reply
+        from app.database import async_session as _async_session
+        from sqlalchemy import text as _sa_text
+        import json as _json
+
+        result = await classify_reply(body_text, subject)
+        if not result:
+            return
+
+        sentiment = result.get("sentiment")
+        summary = (result.get("summary") or "").strip()[:200]
+        if not sentiment:
+            return
+
+        signal_code = "email_reply" if channel == "email" else "sms_reply"
+
+        async with _async_session() as db:
+            # Patch the most-recent matching signal for this contact —
+            # jsonb_set merges so we don't clobber the existing payload.
+            # Window is 5 minutes back to be safe on slow webhook acks.
+            await db.execute(_sa_text("""
+                UPDATE signals
+                SET raw_data_json = COALESCE(raw_data_json, '{}'::jsonb)
+                                    || jsonb_build_object(
+                                        'sentiment',         :sentiment,
+                                        'reply_sentiment',   :sentiment,
+                                        'summary',           :summary
+                                    )
+                WHERE id = (
+                    SELECT s.id FROM signals s
+                    JOIN signal_types st ON st.id = s.signal_type_id
+                    WHERE s.tenant_id = :t
+                      AND s.contact_id = :c
+                      AND st.code = :code
+                      AND s.observed_at >= NOW() - INTERVAL '5 minutes'
+                    ORDER BY s.observed_at DESC
+                    LIMIT 1
+                )
+            """), {
+                "t": tenant_id, "c": contact_id,
+                "code": signal_code,
+                "sentiment": sentiment,
+                "summary": summary,
+            })
+
+            # Also stamp Activity rows for the same contact in the same
+            # window (legacy CRM timeline badges).
+            await db.execute(_sa_text("""
+                UPDATE activities
+                SET reply_sentiment = :sentiment,
+                    reply_sentiment_summary = :summary
+                WHERE contact_id = :c
+                  AND created_at >= NOW() - INTERVAL '5 minutes'
+                  AND activity_type IN ('email_replied', 'sms_inbound', 'email_auto_response')
+                  AND reply_sentiment IS NULL
+            """), {
+                "c": contact_id,
+                "sentiment": sentiment,
+                "summary": summary,
+            })
+
+            await db.commit()
+
+        log.info(
+            "[classify] contact=%s channel=%s sentiment=%s",
+            contact_id, channel, sentiment,
+        )
+    except Exception as e:
+        log.warning(
+            "[classify] async classification failed (contact=%s channel=%s): %s",
+            contact_id, channel, e,
+        )
 
 
 @router.post("/inbound")
