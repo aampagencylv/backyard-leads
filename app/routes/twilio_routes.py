@@ -1067,6 +1067,66 @@ async def sms_send(
     }
 
 
+async def _emit_sms_signal_to_engine(
+    db, contact_id: int, signal_code: str, body: str, from_number: str,
+    message_sid: str, is_opt_out: bool,
+):
+    """Write an SMS-related signal for the contact's active engagement.
+    Signal codes: 'sms_reply' (regular inbound) or 'sms_opt_out' (STOP).
+    Idempotent on message_sid so Twilio retries can't dupe.
+    Also updates engagement state (terminal on STOP, last_reply_at on reply).
+    """
+    import json as _json
+    from sqlalchemy import text as _sa_text
+
+    eng_row = await db.execute(_sa_text("""
+        SELECT id, tenant_id FROM engagements
+        WHERE contact_id = :c AND status != 'terminal'
+        ORDER BY id DESC LIMIT 1
+    """), {"c": contact_id})
+    eng = eng_row.first()
+    if eng is None:
+        return
+
+    st_row = await db.execute(_sa_text(
+        "SELECT id FROM signal_types WHERE code = :c"
+    ), {"c": signal_code})
+    st = st_row.first()
+    if st is None:
+        return
+
+    idem = f"sms-{signal_code}-{message_sid or contact_id}-{abs(hash(body[:200])) % (10**10)}"
+    await db.execute(_sa_text("""
+        INSERT INTO signals (
+            tenant_id, engagement_id, contact_id, signal_type_id,
+            raw_data_json, observed_at, idempotency_key,
+            is_untrusted_content
+        )
+        VALUES (:t, :eng, :c, :st, CAST(:raw AS jsonb), NOW(), :idem, TRUE)
+        ON CONFLICT (idempotency_key) DO NOTHING
+    """), {
+        "t": eng.tenant_id, "eng": eng.id, "c": contact_id, "st": st.id,
+        "raw": _json.dumps({
+            "from": from_number, "body": body[:8192],
+            "message_sid": message_sid, "is_opt_out": is_opt_out,
+        }, default=str),
+        "idem": idem,
+    })
+
+    if is_opt_out:
+        await db.execute(_sa_text("""
+            UPDATE engagements
+            SET status = 'terminal', terminal_at = NOW(),
+                terminal_reason = 'sms_opt_out',
+                last_transition_by = 'system'
+            WHERE id = :id AND status != 'terminal'
+        """), {"id": eng.id})
+    else:
+        await db.execute(_sa_text("""
+            UPDATE engagements SET last_reply_at = NOW() WHERE id = :id
+        """), {"id": eng.id})
+
+
 @router.post("/sms/inbound")
 async def sms_inbound(request: Request):
     """
@@ -1076,6 +1136,8 @@ async def sms_inbound(request: Request):
     3. Auto-handle STOP keywords → set do_not_text + log opt-out
     4. Auto-handle START keywords → clear do_not_text
     5. Auto-pause active email sequence (parallel to email reply behavior)
+    6. Emit signals.sms_reply / sms_opt_out so the engagement engine
+       sees the inbound and can react.
     Returns TwiML; on STOP we send a short confirmation to the sender.
     """
     form = await request.form()
@@ -1126,6 +1188,12 @@ async def sms_inbound(request: Request):
             now = datetime.now(timezone.utc)
             for e in pending:
                 e.paused_at = now
+            # NEW: emit sms_opt_out signal + terminate the engagement
+            await _emit_sms_signal_to_engine(
+                db, contact_id=contact.id, signal_code="sms_opt_out",
+                body=body, from_number=from_number,
+                message_sid=message_sid, is_opt_out=True,
+            )
             await db.commit()
             return Response(
                 content="<Response><Message>You're unsubscribed. Reply START to resume.</Message></Response>",
@@ -1181,6 +1249,14 @@ async def sms_inbound(request: Request):
                 activity_type="sequence_paused",
                 content=f"Email sequence auto-paused — contact replied via SMS ({len(pending)} emails)",
             ))
+
+        # NEW: emit sms_reply signal + update engagement.last_reply_at so
+        # the new engine's stale-action check blocks pending sends
+        await _emit_sms_signal_to_engine(
+            db, contact_id=contact.id, signal_code="sms_reply",
+            body=body, from_number=from_number,
+            message_sid=message_sid, is_opt_out=False,
+        )
 
         # Mark the company as 'replied' if the engagement justifies it
         company = (await db.execute(select(Company).where(Company.id == contact.company_id))).scalar_one_or_none()
