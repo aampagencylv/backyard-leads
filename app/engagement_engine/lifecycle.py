@@ -86,6 +86,69 @@ async def _channel_id(session: AsyncSession, code: str) -> int:
 # Default playbook resolution
 # ────────────────────────────────────────────────────────────────────────────
 
+async def _ensure_company_observation(
+    db: AsyncSession, *,
+    tenant_id: int, company_id: int, contact_id: int,
+    website: Optional[str],
+) -> None:
+    """Auto-seed a website_homepage observation when a company first
+    enters the engine. Idempotent — no-op when an observation already
+    exists for this company. Failures are silent: observation seeding
+    must NEVER block enrollment.
+
+    The signal_watcher polls these on a 14-day cadence (jittered) and
+    emits `website_change` signals to the contact's currently-active
+    engagement. With this hook in place, every new tenant that enrolls
+    contacts via start_engagement gets signal coverage from day one,
+    without operator intervention.
+    """
+    from urllib.parse import urlparse as _urlparse
+
+    if not website:
+        return
+    raw = (website or "").strip()
+    if not raw:
+        return
+    if not raw.startswith(("http://", "https://")):
+        raw = "https://" + raw
+    try:
+        parsed = _urlparse(raw)
+        if not parsed.netloc:
+            return
+    except Exception:
+        return
+    normalized = raw[:500]
+
+    try:
+        await db.execute(text("""
+            INSERT INTO observations (
+                tenant_id, contact_id, company_id,
+                source_type_id, source_url,
+                next_poll_at, poll_interval_days,
+                is_active, consecutive_failures,
+                created_at, updated_at
+            )
+            SELECT :t, :c, :co,
+                   st.id, :url,
+                   NOW() + INTERVAL '15 minutes', 14,
+                   TRUE, 0,
+                   NOW(), NOW()
+            FROM source_types st
+            WHERE st.code = 'website_homepage'
+              AND NOT EXISTS (
+                  SELECT 1 FROM observations o
+                  WHERE o.company_id = :co
+                    AND o.source_type_id = st.id
+                    AND o.is_active = TRUE
+              )
+        """), {"t": tenant_id, "c": contact_id, "co": company_id, "url": normalized})
+    except Exception as e:  # noqa: BLE001
+        log.warning(
+            "_ensure_company_observation failed (silent) tenant=%s company=%s: %s",
+            tenant_id, company_id, e,
+        )
+
+
 async def _resolve_default_playbook_id(
     session: AsyncSession, tenant_id: int,
 ) -> Optional[int]:
@@ -559,6 +622,16 @@ async def start_engagement(
         activity_type="sequence_created",
         content=f"[engagement engine] Sequence started — {created} steps queued (engagement #{engagement_id})",
     ))
+
+    # Auto-seed a website observation so signal_watcher polls this
+    # company's homepage and emits website_change signals to this
+    # engagement. Idempotent + silent on failure — never blocks
+    # enrollment. Works for every tenant without operator intervention.
+    await _ensure_company_observation(
+        db,
+        tenant_id=tenant_id, company_id=company.id, contact_id=contact.id,
+        website=getattr(company, "website", None),
+    )
 
     await db.commit()
 

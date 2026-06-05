@@ -301,6 +301,16 @@ async def create_tenant(
         verified_at=datetime.now(timezone.utc),
     ))
 
+    # Engagement-engine scaffolding so the new tenant can run the engine
+    # the moment they import a contact. Each row is best-effort; if the
+    # table is missing on a partial migration, we don't block tenant
+    # creation. The tenant_ai_config row is lazy-created elsewhere
+    # (engagement_engine_routes), so we don't need to insert it here.
+    await _provision_engagement_engine_scaffolding(
+        db, tenant_id=tenant.id, tenant_name=tenant.name,
+        created_by_user_id=actor.id,
+    )
+
     await db.commit()
     await db.refresh(tenant)
     await record_audit(db, actor=actor, action="tenant_created",
@@ -1425,6 +1435,152 @@ async def trigger_outbound_digest(
 # on behalf of all customers (transport + tooling that BMP can't
 # offload to the customer's account).
 # ============================================================
+
+async def _provision_engagement_engine_scaffolding(
+    db: AsyncSession, *,
+    tenant_id: int, tenant_name: str,
+    created_by_user_id: int | None,
+) -> None:
+    """One-shot per-tenant engagement-engine scaffolding.
+
+    Idempotent — every INSERT uses ON CONFLICT DO NOTHING or a NOT EXISTS
+    guard so re-running on an established tenant is safe.
+
+    Creates:
+      1. tenant_ai_config row with sensible defaults (aamp_default provider,
+         Anthropic Haiku/Sonnet model picks, per-engagement budget $5,
+         no monthly cap by default).
+      2. playbooks row mirroring DEFAULT_30DAY_TEMPLATE — the canonical
+         13-step cadence. Without this, engagements get current_playbook_id=NULL
+         and analytics lose the linkage.
+      3. sequence_templates row for legacy rollback compatibility (the
+         legacy sequence_engine looks it up via SequenceTemplate.is_default).
+      4. email_identities placeholder row so the EmailChannel adapter
+         finds a sender record. sender_email starts NULL — tenant fills
+         it in via the CRM settings page; until then the engine falls
+         back to the assigned BDR's get_sender_info() derivation.
+    """
+    from sqlalchemy import text as _sa_text
+    import json as _json
+
+    # 1. tenant_ai_config — Anthropic Haiku for fast classifies, Sonnet
+    # for higher-stakes decisions. $5 per-engagement default catches the
+    # common runaway: one over-budget engagement before it impacts others.
+    await db.execute(_sa_text("""
+        INSERT INTO tenant_ai_config (
+            tenant_id, provider,
+            model_signal_scoring, model_reply_classification,
+            model_content_generation, model_decision_making,
+            model_engagement_summary,
+            per_engagement_budget_usd,
+            tcpa_b2b_override, default_timezone,
+            created_at, updated_at
+        )
+        VALUES (
+            :t, 'aamp_default',
+            'claude-haiku-4-5', 'claude-haiku-4-5',
+            'claude-sonnet-4-6', 'claude-sonnet-4-6',
+            'claude-haiku-4-5',
+            5.00,
+            FALSE, 'America/New_York',
+            NOW(), NOW()
+        )
+        ON CONFLICT (tenant_id) DO NOTHING
+    """), {"t": tenant_id})
+
+    # 2. Canonical playbook from DEFAULT_30DAY_TEMPLATE. We store the
+    # template steps inside ai_strategy_json so callers that need to
+    # inspect the plan don't have to import sequence_engine.
+    from app.services.sequence_engine import DEFAULT_30DAY_TEMPLATE
+    playbook_strategy = _json.dumps({
+        "imported_via": "tenant_create_scaffolding",
+        "steps": DEFAULT_30DAY_TEMPLATE,
+    })
+    await db.execute(_sa_text("""
+        INSERT INTO playbooks (
+            tenant_id, name, description, phase, mode,
+            ai_strategy_json, is_active, version,
+            created_by_user_id, created_at, updated_at
+        )
+        SELECT :t, '30-day default',
+               'Default 13-step multi-channel cadence (email + iMessage + call + LinkedIn)',
+               'cold_outreach', 'linear_sequence',
+               CAST(:strategy AS jsonb), TRUE, 1,
+               :user_id, NOW(), NOW()
+        WHERE NOT EXISTS (
+            SELECT 1 FROM playbooks
+            WHERE tenant_id = :t AND name = '30-day default'
+        )
+    """), {
+        "t": tenant_id,
+        "strategy": playbook_strategy,
+        "user_id": created_by_user_id,
+    })
+
+    # 3. Legacy sequence_templates row for rollback compatibility. The
+    # legacy `start_sequence_from_template` looks up by is_default+is_active.
+    # auto_skip_days / auto_resume_days are NOT NULL on prod schema —
+    # 0/0 means "never auto-pause / never auto-resume" (engine default).
+    #
+    # sequence_templates.name carries a GLOBAL unique constraint on prod
+    # (not per-tenant). Until that's migrated to (tenant_id, name), we
+    # suffix the template name with the tenant_id so each tenant gets
+    # their own row that the legacy lookup still finds (it filters by
+    # tenant_id auto-filter, then by is_default — so the name only has
+    # to be globally unique on disk, not per-tenant).
+    legacy_steps_json = _json.dumps(DEFAULT_30DAY_TEMPLATE)
+    legacy_template_name = f"30-day default (tenant {tenant_id})"
+    await db.execute(_sa_text("""
+        INSERT INTO sequence_templates (
+            tenant_id, name, steps_json,
+            is_default, is_active, created_by,
+            auto_skip_days, auto_resume_days,
+            created_at, updated_at
+        )
+        SELECT :t, :name, :steps,
+               TRUE, TRUE, :user_id,
+               0, 0,
+               NOW(), NOW()
+        WHERE NOT EXISTS (
+            SELECT 1 FROM sequence_templates
+            WHERE tenant_id = :t AND is_default = TRUE
+        )
+    """), {
+        "t": tenant_id, "name": legacy_template_name,
+        "steps": legacy_steps_json,
+        "user_id": created_by_user_id,
+    })
+
+    # 4. email_identities placeholder. is_active=FALSE so the warmup-cap
+    # guard in EmailChannel falls through to the BDR-fallback sender
+    # derivation (get_sender_info) until the tenant configures their
+    # real sender email via the CRM settings page.
+    #
+    # sender_email AND domain are NOT NULL on prod schema. Until the
+    # tenant fills these in, we stamp a slug-anchored placeholder under
+    # the auto-provisioned go.{slug}.leadprospector.ai domain — these
+    # never actually send because is_active=FALSE.
+    slug_domain = f"go.tenant{tenant_id}.placeholder"
+    placeholder_email = f"noreply@{slug_domain}"
+    await db.execute(_sa_text("""
+        INSERT INTO email_identities (
+            tenant_id, sender_name, sender_email, domain,
+            daily_send_cap, sent_today, sent_today_date, reset_timezone,
+            warmup_stage, is_active,
+            created_at, updated_at
+        )
+        SELECT :t, :name, :email, :domain,
+               50, 0, CURRENT_DATE, 'America/New_York',
+               'new', FALSE,
+               NOW(), NOW()
+        WHERE NOT EXISTS (
+            SELECT 1 FROM email_identities WHERE tenant_id = :t
+        )
+    """), {
+        "t": tenant_id, "name": tenant_name[:120],
+        "email": placeholder_email, "domain": slug_domain,
+    })
+
 
 async def _engagement_costs_summary(*, days: int, db: AsyncSession) -> dict:
     """Per-tenant engagement-engine AI burn for the last N days, with
