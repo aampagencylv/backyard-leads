@@ -168,8 +168,10 @@ class EmailChannel:
                 # Legacy fallback: derive from the engagement's assigned BDR.
                 # Look up the BDR via engagement.assigned_bdr_id; if absent,
                 # use the company's assigned_to; if absent, fail.
+                # NOTE: users.full_name is a Python @property on the ORM,
+                # not a DB column — assemble from first_name + last_name.
                 bdr_row = await session.execute(text("""
-                    SELECT u.first_name, u.full_name
+                    SELECT u.first_name, u.last_name
                     FROM engagements e
                     LEFT JOIN companies co ON co.id = e.company_id
                     LEFT JOIN users u ON u.id = COALESCE(
@@ -178,12 +180,13 @@ class EmailChannel:
                     WHERE e.id = :eng
                 """), {"eng": action.engagement_id})
                 bdr = bdr_row.first()
-                if bdr is None or not (bdr.first_name or bdr.full_name):
+                if bdr is None or not (bdr.first_name or bdr.last_name):
                     raise PermanentChannelError(
                         f"no email_identity AND no assignable BDR for "
                         f"engagement {action.engagement_id}"
                     )
-                derived = get_sender_info(bdr.first_name, bdr.full_name)
+                full_name = f"{bdr.first_name or ''} {bdr.last_name or ''}".strip()
+                derived = get_sender_info(bdr.first_name, full_name)
                 from_name = derived["from_name"]
                 from_firstname = derived["from_firstname"]
                 reply_to_email = derived["reply_to"]
