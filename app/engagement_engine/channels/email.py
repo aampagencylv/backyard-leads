@@ -191,6 +191,17 @@ class EmailChannel:
                 from_firstname = derived["from_firstname"]
                 reply_to_email = derived["reply_to"]
 
+        # Build a reply-to that routes prospect replies back to THIS action.
+        # Format: r-a{action_id}_{16-hex}@{reply_domain}. The "a" prefix +
+        # underscore separator lets the inbound webhook distinguish new-
+        # engine tokens from legacy generated_emails.reply_token (which is
+        # pure hex with no underscore). The underscore is in the regex
+        # allowlist ([A-Za-z0-9_-]) so the token passes the format check.
+        from app.services.email_sender import reply_to_for_token
+        import secrets as _secrets
+        new_engine_token = f"a{action.id}_{_secrets.token_hex(8)}"
+        new_reply_to = reply_to_for_token(new_engine_token)
+
         try:
             result = await send_email(
                 to_email=action.recipient_email,
@@ -198,7 +209,7 @@ class EmailChannel:
                 body=action.body,
                 from_name=from_name,
                 from_firstname=from_firstname,
-                reply_to_email=reply_to_email,
+                reply_to_email=new_reply_to,
                 company_id=action.engagement_id,  # legacy field; eng_id works
                 contact_id=action.contact_id,
                 email_id=action.id,  # for legacy audit-log keying

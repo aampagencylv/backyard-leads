@@ -124,6 +124,118 @@ def _verify_signature(raw_body: bytes, headers: dict, secret: str) -> bool:
         return False
 
 
+async def _route_reply_to_engagement_engine(
+    *, action_id: int,
+    from_addr: str, bare_from: str,
+    subject: str, body_text: str, html_body: str,
+    body_preview: str, is_auto_response: bool,
+):
+    """Attribute an inbound reply to a new-engine action. Writes:
+      - signals.email_reply (the prospect's response is now an AI-actionable signal)
+      - actions.outcome='replied' + outcome_observed_at=NOW()
+      - engagements.last_reply_at=NOW() (triggers stale-action detection on
+        future pending actions for this contact — so we don't keep sending
+        if they've replied)
+      - Activity row for legacy CRM timeline visibility
+    """
+    import json as _json
+    from sqlalchemy import text as _sa_text
+    async with async_session() as db:
+        # Resolve action → tenant/engagement/contact/company
+        a_row = await db.execute(_sa_text("""
+            SELECT a.id, a.tenant_id, a.engagement_id, a.contact_id,
+                   e.company_id, e.contact_id AS eng_contact_id
+            FROM actions a
+            JOIN engagements e ON e.id = a.engagement_id
+            WHERE a.id = :id
+        """), {"id": action_id})
+        a = a_row.first()
+        if a is None:
+            log.warning(f"[inbound] new-engine token references missing action_id={action_id}; silent drop")
+            return {"ok": True, "ignored": "unknown_action"}
+
+        # signal_type_id for email_reply
+        st_row = await db.execute(_sa_text(
+            "SELECT id FROM signal_types WHERE code = 'email_reply'"
+        ))
+        st = st_row.first()
+
+        # Insert signal — idempotent by Resend message id (when available)
+        # else a hash of the subject+body for dedupe.
+        idem_hash = abs(hash(f"{action_id}|{subject}|{body_text[:200]}")) % (10 ** 12)
+        idem = f"reply-{action_id}-{idem_hash}"
+        raw_data = {
+            "from": bare_from,
+            "subject": subject,
+            "preview": body_preview,
+            "is_auto_response": is_auto_response,
+            # Body in untrusted_content per Rule #12 — the decision_maker
+            # will wrap it before feeding to any LLM.
+            "body_text": body_text[:8192],
+        }
+        await db.execute(_sa_text("""
+            INSERT INTO signals (
+                tenant_id, engagement_id, contact_id, signal_type_id,
+                raw_data_json, observed_at, idempotency_key,
+                is_untrusted_content
+            )
+            VALUES (:t, :eng, :c, :st,
+                    CAST(:raw AS jsonb), NOW(), :idem, TRUE)
+            ON CONFLICT (idempotency_key) DO NOTHING
+        """), {
+            "t": a.tenant_id, "eng": a.engagement_id, "c": a.contact_id,
+            "st": st.id if st else None,
+            "raw": _json.dumps(raw_data, default=str),
+            "idem": idem,
+        })
+
+        # Update the action's outcome
+        await db.execute(_sa_text("""
+            UPDATE actions
+            SET outcome = COALESCE(outcome, :o),
+                outcome_observed_at = COALESCE(outcome_observed_at, NOW())
+            WHERE id = :id
+        """), {"id": action_id,
+               "o": "auto_response" if is_auto_response else "replied"})
+
+        # Update engagement.last_reply_at so the dispatcher's stale-action
+        # check blocks any further pending sends for this contact.
+        if not is_auto_response:
+            await db.execute(_sa_text("""
+                UPDATE engagements
+                SET last_reply_at = NOW()
+                WHERE id = :id
+            """), {"id": a.engagement_id})
+
+        # Legacy CRM timeline visibility — keeps the existing reply UI working
+        activity_type = "email_auto_response" if is_auto_response else "email_replied"
+        prefix = "[Auto-response]" if is_auto_response else "[Reply]"
+        db.add(Activity(
+            company_id=a.company_id,
+            contact_id=a.contact_id,
+            activity_type=activity_type,
+            content=f"{prefix} {subject or '(no subject)'} — {body_preview or '(empty body)'}",
+            metadata_json=_json.dumps({
+                "from": bare_from,
+                "from_raw": from_addr,
+                "subject": subject,
+                "preview": body_preview,
+                "body_text": body_text,
+                "body_html": html_body,
+                "engagement_action_id": action_id,
+                "is_auto_response": is_auto_response,
+                "engine": "engagement_engine",
+            }),
+        ))
+
+        await db.commit()
+    log.info(
+        f"[inbound:engine] action={action_id} from={bare_from} "
+        f"auto={is_auto_response}"
+    )
+    return {"ok": True, "engine": "engagement_engine", "action_id": action_id}
+
+
 @router.post("/inbound")
 async def email_inbound(request: Request):
     """Resend Inbound webhook receiver. Public — no auth. Optionally
@@ -192,6 +304,23 @@ async def email_inbound(request: Request):
     # Auto-responder / bounce detection — common patterns in From or Subject.
     # We still log these but DON'T auto-pause (the human didn't actually engage).
     is_auto_response = _looks_like_auto_response(from_addr, subject, body_for_log)
+
+    # New-engine token detection. Format: `a{action_id}_{hex}`. The "a" prefix +
+    # underscore separator distinguishes from legacy tokens (pure hex, no
+    # underscore). When detected, route the reply through the engagement engine
+    # — create an `email_reply` signal, mark the action's outcome=replied,
+    # update engagement.last_reply_at — and short-circuit the legacy path.
+    import re as _re
+    _new_engine_token_re = _re.compile(r"^a(\d+)_[a-f0-9]+$", _re.IGNORECASE)
+    new_engine_match = _new_engine_token_re.match(token or "")
+    if new_engine_match:
+        action_id = int(new_engine_match.group(1))
+        return await _route_reply_to_engagement_engine(
+            action_id=action_id,
+            from_addr=from_addr, bare_from=bare_from,
+            subject=subject, body_text=body_for_log, html_body=html_body,
+            body_preview=body_preview, is_auto_response=is_auto_response,
+        )
 
     async with async_session() as db:
         ge = (await db.execute(
