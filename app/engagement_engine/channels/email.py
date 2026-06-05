@@ -203,6 +203,10 @@ class EmailChannel:
                 contact_id=action.contact_id,
                 email_id=action.id,  # for legacy audit-log keying
                 step_type="email",
+                # New: distinct tag so Resend webhooks route opens/clicks/
+                # bounces to the new-engine signals table rather than to a
+                # random generated_emails row that happens to share the id.
+                engagement_action_id=action.id,
             )
         except Exception as e:
             # Distinguish transient (5xx, network) from permanent (4xx, hard

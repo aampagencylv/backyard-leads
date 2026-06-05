@@ -194,6 +194,7 @@ async def send_email(
     signature_html: str = "",
     unsubscribe_token: str | None = None,
     step_type: str | None = None,
+    engagement_action_id: int | None = None,
 ) -> dict:
     # ----------------------------------------------------------------
     # Defense in depth: refuse to send obvious non-email content.
@@ -359,11 +360,21 @@ async def send_email(
         "text": text_body,
         "reply_to": reply_to_value,
         "headers": headers,
-        "tags": [
-            {"name": "company_id", "value": str(company_id)},
-            {"name": "contact_id", "value": str(contact_id)},
-            {"name": "email_id", "value": str(email_id)},
-        ],
+        "tags": (
+            [
+                {"name": "company_id", "value": str(company_id)},
+                {"name": "contact_id", "value": str(contact_id)},
+                {"name": "email_id", "value": str(email_id)},
+            ]
+            # When this send came from the new engagement engine, add a
+            # distinct tag so the webhook routes it to actions/signals
+            # instead of generated_emails. action.id and generated_emails.id
+            # share the same INT space and overlap heavily (~2000 collisions
+            # on prod at cutover), so the email_id tag alone is ambiguous.
+            + ([{"name": "engagement_action_id",
+                 "value": str(engagement_action_id)}]
+               if engagement_action_id is not None else [])
+        ),
     }
 
     # Structured timeout. Resend's body delivery is usually <2s but the

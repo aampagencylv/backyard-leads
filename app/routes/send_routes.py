@@ -730,6 +730,148 @@ def _verify_svix(raw_body: bytes, headers: dict, secret: str) -> bool:
         return False
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# New-engine signal emission for Resend webhook events
+# ════════════════════════════════════════════════════════════════════════════
+
+# Map Resend event type → signal_type code
+RESEND_EVENT_TO_SIGNAL = {
+    "email.opened":        "email_open",
+    "email.clicked":       "email_click",
+    "email.bounced":       "email_bounce",
+    "email.complained":    "email_complaint",
+    "email.delivery_delayed": None,  # not a signal we react to
+    "email.sent":          None,
+    "email.delivered":     None,
+}
+
+# Email suppression triggers — these events permanently kill future sends
+SUPPRESSION_EVENTS = {"email.bounced", "email.complained"}
+SUPPRESSION_REASON = {
+    "email.bounced":    "hard_bounce",
+    "email.complained": "complaint",
+}
+
+
+async def _emit_engagement_engine_signal(
+    db, engagement_action_id: int, event_type: str, data: dict, log,
+):
+    """Write a signals row + side effects for a new-engine email event.
+
+    For opens/clicks: create a 'email_open' or 'email_click' signal, update
+    actions.outcome.
+
+    For bounces/complaints: also add to email_suppressions so future sends
+    to that recipient are blocked.
+
+    Idempotency: each event gets a unique key based on the email_id +
+    event-specific identifier (Resend's message_id, click URL, etc).
+    """
+    from sqlalchemy import text as _sa_text
+    signal_code = RESEND_EVENT_TO_SIGNAL.get(event_type)
+    if signal_code is None:
+        return
+
+    # Resolve action → engagement/contact/tenant
+    action_row = await db.execute(_sa_text("""
+        SELECT id, tenant_id, engagement_id, contact_id, recipient_email
+        FROM actions WHERE id = :id
+    """), {"id": engagement_action_id})
+    a = action_row.first()
+    if a is None:
+        log.warning(
+            f"resend webhook: no action found for engagement_action_id={engagement_action_id}"
+        )
+        return
+
+    # Look up signal_type_id
+    st_row = await db.execute(_sa_text(
+        "SELECT id FROM signal_types WHERE code = :c"
+    ), {"c": signal_code})
+    st = st_row.first()
+    if st is None:
+        log.error(f"signal_type {signal_code!r} missing from lookup table")
+        return
+
+    # Build idempotency key. For opens: use the event timestamp at minute
+    # granularity (Apple Mail Privacy / Gmail proxies fire repeats within
+    # seconds). For clicks: include the URL. For bounces/complaints: one
+    # per action lifetime.
+    import json as _json
+    now_iso = data.get("created_at") or data.get("timestamp") or ""
+    if event_type == "email.opened":
+        # Minute-bucket so prefetch storms dedupe
+        bucket = (now_iso[:16] or "x").replace(":", "_")
+        idem = f"webhook-open-{engagement_action_id}-{bucket}"
+    elif event_type == "email.clicked":
+        url = (data.get("click") or {}).get("link") or data.get("url") or ""
+        url_hash = (url[:64] or "x").replace(" ", "_")
+        idem = f"webhook-click-{engagement_action_id}-{url_hash}"
+    else:
+        idem = f"webhook-{event_type.replace('.', '-')}-{engagement_action_id}"
+
+    raw_data = {
+        "event_type": event_type,
+        "resend_data": {
+            k: v for k, v in data.items()
+            if k in ("email_id", "from", "to", "subject", "click", "bounce")
+        },
+    }
+
+    # Insert signal (ON CONFLICT DO NOTHING for idempotency)
+    await db.execute(_sa_text("""
+        INSERT INTO signals (
+            tenant_id, engagement_id, contact_id, signal_type_id,
+            raw_data_json, observed_at, idempotency_key,
+            is_untrusted_content
+        )
+        VALUES (
+            :t, :eng, :c, :st,
+            CAST(:raw AS jsonb), NOW(), :idem, FALSE
+        )
+        ON CONFLICT (idempotency_key) DO NOTHING
+    """), {
+        "t": a.tenant_id, "eng": a.engagement_id, "c": a.contact_id,
+        "st": st.id, "raw": _json.dumps(raw_data, default=str),
+        "idem": idem,
+    })
+
+    # For replies / clicks, update the action's outcome
+    if event_type in ("email.opened", "email.clicked"):
+        outcome = "opened" if event_type == "email.opened" else "clicked"
+        await db.execute(_sa_text("""
+            UPDATE actions
+            SET outcome = COALESCE(outcome, :o),
+                outcome_observed_at = COALESCE(outcome_observed_at, NOW())
+            WHERE id = :id
+        """), {"id": engagement_action_id, "o": outcome})
+
+    # For bounces/complaints, add to suppression list
+    if event_type in SUPPRESSION_EVENTS:
+        await db.execute(_sa_text("""
+            INSERT INTO email_suppressions (
+                tenant_id, recipient_email, reason, source,
+                is_currently_active
+            )
+            VALUES (:t, :r, :reason, 'resend_webhook', TRUE)
+            ON CONFLICT (tenant_id, recipient_email)
+              WHERE is_currently_active = TRUE
+              DO NOTHING
+        """), {
+            "t": a.tenant_id, "r": a.recipient_email,
+            "reason": SUPPRESSION_REASON[event_type],
+        })
+        # Also bump action status
+        await db.execute(_sa_text("""
+            UPDATE actions
+            SET status = 'failed', error_message = :err
+            WHERE id = :id AND status IN ('sent', 'scheduled')
+        """), {
+            "id": engagement_action_id,
+            "err": f"webhook:{event_type}",
+        })
+
+
 @router.post("/webhook/resend")
 async def resend_webhook(request: Request, db: AsyncSession = Depends(get_tenant_db)):
     """
@@ -771,6 +913,20 @@ async def resend_webhook(request: Request, db: AsyncSession = Depends(get_tenant
     contact_id = tags.get("contact_id") or headers.get("X-Contact-ID")
     email_id = tags.get("email_id") or headers.get("X-Email-ID")
 
+    # New-engine emails carry an explicit `engagement_action_id` tag so the
+    # webhook can route to actions/signals instead of generated_emails. The
+    # legacy `email_id` tag aliases with generated_emails.id but actions
+    # also use auto-increment INT IDs that overlap heavily — relying on
+    # email_id alone would misattribute new-engine events to random legacy
+    # rows. When this tag is present, route through the new-engine path
+    # AND still update Activity for the legacy CRM UI to see engagement.
+    engagement_action_id = tags.get("engagement_action_id")
+    if engagement_action_id:
+        try:
+            engagement_action_id = int(engagement_action_id)
+        except (TypeError, ValueError):
+            engagement_action_id = None
+
     # Backwards compat: old emails have lead_id tag (now equals company_id since IDs were preserved)
     if not company_id:
         company_id = tags.get("lead_id")
@@ -778,6 +934,15 @@ async def resend_webhook(request: Request, db: AsyncSession = Depends(get_tenant
     if not company_id:
         return {"status": "ok", "note": "no company_id tag"}
     company_id = int(company_id)
+
+    # New-engine event routing: write a `signals` row + update the matching
+    # `actions` row so the decision_maker can react. This runs BEFORE the
+    # legacy GeneratedEmail update so a misconfigured legacy lookup (e.g.
+    # email_id collision) doesn't poison the new-engine attribution.
+    if engagement_action_id is not None:
+        await _emit_engagement_engine_signal(
+            db, engagement_action_id, event_type, data, log,
+        )
 
     company = (await db.execute(select(Company).where(Company.id == company_id))).scalar_one_or_none()
     if not company:
