@@ -213,10 +213,12 @@ class EmailChannel:
                 raise TransientChannelError(str(e)) from e
             raise PermanentChannelError(str(e)) from e
 
-        # send_email returns a dict; legacy contract has 'resend_message_id'
+        # send_email returns a dict with 'resend_id' (NOT 'resend_message_id'
+        # as I wrote earlier — caught during prod cutover when external_id
+        # came back NULL for all 15 actual Resend sends).
         return SendResult(
             success=True,
-            external_id=result.get("resend_message_id"),
+            external_id=result.get("resend_id"),
             cost_usd=0.0004,  # ~$0.40 per 1000 emails Resend pricing
         )
 
