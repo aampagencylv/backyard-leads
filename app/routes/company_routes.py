@@ -1972,15 +1972,13 @@ class PursueRequest(BaseModel):
     company_ids: list[int]
 
 
-SEQUENCE_SCHEDULE = [
-    {"order": 1, "type": "cold",             "step_type": "email",    "delay_days": 0,  "label": "Initial outreach"},
-    {"order": 2, "type": "linkedin_connect", "step_type": "linkedin", "delay_days": 1,  "label": "LinkedIn connect"},
-    {"order": 3, "type": "follow_up_1",      "step_type": "email",    "delay_days": 3,  "label": "Follow-up #1 (with audit report)"},
-    {"order": 4, "type": "imessage",         "step_type": "imessage", "delay_days": 4,  "label": "iMessage (with audit link)"},
-    {"order": 5, "type": "linkedin_message", "step_type": "linkedin", "delay_days": 5,  "label": "LinkedIn message (with audit link)"},
-    {"order": 6, "type": "follow_up_2",      "step_type": "email",    "delay_days": 7,  "label": "Follow-up #2"},
-    {"order": 7, "type": "breakup",          "step_type": "email",    "delay_days": 14, "label": "Breakup email"},
-]
+## Use the canonical 13-step template from sequence_engine.DEFAULT_30DAY_TEMPLATE.
+## The previous local definition used {"delay_days", "type", ...} keys, but the
+## engagement engine reads `tstep.get("day", 0)` and `tstep.get("skip_if", [])`
+## from each step — under the local shape every step landed at scheduled_at=now
+## with no skip evaluation, so a single BDR-Pursue click fired the whole
+## 14-day sequence at once on the next dispatcher tick.
+from app.services.sequence_engine import DEFAULT_30DAY_TEMPLATE as SEQUENCE_SCHEDULE
 
 
 @router.post("/pursue")

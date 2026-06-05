@@ -335,12 +335,16 @@ async def run_now(
     db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
-    """Admin: force one dispatcher tick immediately. Useful for testing —
-    don't have to wait for the next cron iteration. Now runs the new
-    engagement-engine dispatcher; the legacy process_pending_steps is
-    disabled at startup and only kept for emergency rollback."""
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
+    """super_admin only: force one engagement-engine dispatcher tick
+    immediately. run_dispatcher_tick CLAIMS DUE ACTIONS ACROSS EVERY
+    TENANT — it's the per-minute cron worker, not a per-tenant action.
+    Restricted to super_admin to prevent a tenant-scoped admin from
+    accidentally dispatching another tenant's outbound on demand."""
+    if user.role != "super_admin":
+        raise HTTPException(
+            status_code=403,
+            detail="super_admin only — this endpoint dispatches actions across every tenant. Per-tenant testing should call /api/integrations/sidebar/send-next-step instead, which bumps a single tenant-scoped action and lets the cron tick send it.",
+        )
     from app.engagement_engine.dispatcher import run_dispatcher_tick
     report = await run_dispatcher_tick()
     return {
@@ -418,13 +422,12 @@ async def trigger_post_call_sequence(
         raise HTTPException(status_code=502, detail=f"AI generation failed: {e}")
 
     # Append post-call steps to the contact's active engagement. The
-    # thank-you fires +2h after this call so it lands while the
+    # thank-you fires +2 hours after this call so it lands while the
     # conversation's still fresh but not so soon it feels robotic. We
-    # pre-shift each step's `day` by adding 2h via the +0.083d offset
-    # (≈ 2 hours when start_engagement multiplies by timedelta(days=)).
-    # Simpler: pass the steps through append_steps_to_engagement which
-    # uses day offsets only; the engine dispatches the first one as soon
-    # as the next dispatcher tick fires after `scheduled_at` arrives.
+    # pass offset_hours=2 to append_steps_to_engagement which shifts
+    # every step's scheduled_at by that amount in addition to its `day`
+    # offset (the legacy code used `base_time = now + timedelta(hours=2)`
+    # as the anchor — same behavior, expressed through the engine API).
     from app.engagement_engine.lifecycle import append_steps_to_engagement
     payload_steps = []
     for s in steps:
@@ -441,7 +444,10 @@ async def trigger_post_call_sequence(
             "skip_if": skip_map.get(s["step_type"], []),
         })
     created = await append_steps_to_engagement(
-        db, contact, payload_steps, strategy_tag="post_call",
+        db, contact, payload_steps,
+        strategy_tag="post_call",
+        offset_hours=2.0,
+        sequence_label_hint="post_call",
     )
 
     db.add(Activity(
@@ -487,24 +493,84 @@ async def reorder(
     db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
-    """Reorder steps within a sequence. Only renumbers sequence_order — does
-    NOT touch scheduled_send_at (intentional: dragging a step doesn't auto-shift
-    its date). Use /api/sequences/reschedule/{step_id} for date changes."""
-    rows = (await db.execute(
+    """Reorder steps within a sequence. The GET /api/sequences/contact/{id}
+    endpoint returns a UNION of legacy GeneratedEmail rows and new-engine
+    `actions` rows, so the IDs in `ordered_step_ids` may be from either
+    namespace. We split them:
+
+    - Legacy GeneratedEmail rows → renumber sequence_order in place
+      (the legacy semantic: drag changes display order, not scheduled_send_at)
+    - New-engine actions → reflow scheduled_at to enforce the new order
+      (actions have no sequence_order column; their order IS scheduled_at,
+      so reorder MUST shift dates to preserve the new sequence)
+
+    Mixed lists are handled: legacy IDs renumber, action IDs reflow.
+    Duplicates and unknown IDs are silently skipped (no 400 — the frontend
+    sends action IDs that won't appear in the legacy query, and that's
+    expected post-cutover)."""
+    from sqlalchemy import text as _sa_text
+    legacy_rows = (await db.execute(
         select(GeneratedEmail).where(
             GeneratedEmail.contact_id == req.contact_id,
             GeneratedEmail.sequence_label == req.sequence_label,
         )
     )).scalars().all()
-    by_id = {r.id: r for r in rows}
-    seen_ids = set()
-    for idx, step_id in enumerate(req.ordered_step_ids, start=1):
-        step = by_id.get(step_id)
-        if not step:
-            raise HTTPException(status_code=400, detail=f"Step {step_id} not in this sequence")
+    legacy_by_id = {r.id: r for r in legacy_rows}
+
+    # Pull this contact's actions ordered by current scheduled_at so we
+    # know which IDs are in the action namespace and what their current
+    # times are — we'll redistribute those times in the new order.
+    action_rows = (await db.execute(_sa_text("""
+        SELECT a.id, a.scheduled_at FROM actions a
+        JOIN contacts c ON c.id = a.contact_id
+        WHERE a.contact_id = :c
+          AND a.tenant_id = c.tenant_id
+          AND a.status IN ('scheduled', 'paused', 'awaiting_approval')
+        ORDER BY a.scheduled_at ASC, a.id ASC
+    """), {"c": req.contact_id})).fetchall()
+    action_by_id = {int(r.id): r.scheduled_at for r in action_rows}
+    action_times_sorted = sorted(action_by_id.values())
+
+    seen_ids: set[int] = set()
+    legacy_renumbered = 0
+    actions_reflowed = 0
+
+    # First pass: legacy renumbering
+    legacy_order_idx = 0
+    for step_id in req.ordered_step_ids:
         if step_id in seen_ids:
-            raise HTTPException(status_code=400, detail=f"Step {step_id} listed twice")
+            continue
         seen_ids.add(step_id)
-        step.sequence_order = idx
+        step = legacy_by_id.get(step_id)
+        if step is not None:
+            legacy_order_idx += 1
+            step.sequence_order = legacy_order_idx
+            legacy_renumbered += 1
+
+    # Second pass: reflow action scheduled_at by reassigning the existing
+    # set of timestamps to the new ID order. This preserves the calendar
+    # footprint (no steps newly created or rescheduled into the past) but
+    # honors the BDR's drag.
+    action_order_idx = 0
+    seen_ids.clear()
+    for step_id in req.ordered_step_ids:
+        if step_id in seen_ids:
+            continue
+        seen_ids.add(step_id)
+        if step_id in action_by_id and action_order_idx < len(action_times_sorted):
+            new_time = action_times_sorted[action_order_idx]
+            await db.execute(_sa_text("""
+                UPDATE actions
+                SET scheduled_at = :sched,
+                    updated_at = NOW()
+                WHERE id = :aid
+            """), {"aid": step_id, "sched": new_time})
+            action_order_idx += 1
+            actions_reflowed += 1
+
     await db.commit()
-    return {"reordered": len(req.ordered_step_ids)}
+    return {
+        "reordered": legacy_renumbered + actions_reflowed,
+        "legacy_renumbered": legacy_renumbered,
+        "actions_reflowed": actions_reflowed,
+    }

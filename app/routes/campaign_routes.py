@@ -901,8 +901,12 @@ async def _execute_batch(campaign_id: int, db: AsyncSession, user: User):
         # via lifecycle.start_engagement — same template, same Claude pre-gen,
         # but writes engagements + actions for the new dispatcher to pick up.
         if primary_contact:
+            # Only ACTIVE engagements should block re-enrollment.
+            # Terminal engagements (closed_lost, opted-out) must allow
+            # restore-from-disqualified to start a fresh enrollment;
+            # otherwise the contact gets stuck in 'pursuing' forever.
             existing_eng = (await db.execute(text(
-                "SELECT 1 FROM engagements WHERE contact_id = :c LIMIT 1"
+                "SELECT 1 FROM engagements WHERE contact_id = :c AND status = 'active' LIMIT 1"
             ), {"c": primary_contact.id})).first()
             if existing_eng is None and not company.email_generated:
                 try:
@@ -1134,8 +1138,10 @@ async def _process_business_through_pipeline(
     if not primary_contact:
         return "enriched_no_seq"
 
+    # Only ACTIVE engagements should block re-enrollment — see comment in
+    # _execute_batch for why we don't gate on terminal engagements.
     existing_eng = (await db.execute(text(
-        "SELECT 1 FROM engagements WHERE contact_id = :c LIMIT 1"
+        "SELECT 1 FROM engagements WHERE contact_id = :c AND status = 'active' LIMIT 1"
     ), {"c": primary_contact.id})).first()
     if existing_eng is not None:
         return "enrolled"  # already enrolled; treat as success without re-genning

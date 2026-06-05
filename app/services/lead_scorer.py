@@ -171,6 +171,20 @@ SIGNAL_WEIGHTS = {
 }
 
 
+# Activity.activity_type → canonical signal code. When BOTH an Activity row
+# AND a Signal row carry the same event (Resend webhook dual-write during the
+# back-compat window), we count it ONCE. The match is by canonical code +
+# ±5-second observed_at bucket.
+ACTIVITY_TO_SIGNAL_CODE = {
+    "email_opened":   "email_open",
+    "email_clicked":  "email_click",
+    "email_replied":  "email_reply",
+    "email_bounced":  "email_bounce",
+    "email_complained": "email_complaint",
+    "email_unsubscribed": "email_unsubscribe",
+}
+
+
 def _intent_score(
     activities: list[Activity],
     signals: Optional[list[dict]] = None,
@@ -182,8 +196,7 @@ def _intent_score(
       - Signals:    new engagement-engine writes (richer — has engagement
                     + action linkage). When the same event lands in both
                     tables (because Resend webhook fires the dual-write),
-                    we let both contribute to the cap but only one to the
-                    last_signal_at watermark, since they're duplicates.
+                    only the signal counts.
 
     Bounce / complaint / opt-out signals carry NEGATIVE weight that can
     drag intent below zero — clamped to 0 at the bottom so the tier
@@ -198,6 +211,23 @@ def _intent_score(
     def _decay(days: float) -> float:
         return math.exp(-max(days, 0) / 14)  # ~10-day half-life
 
+    def _bucket(ts: datetime) -> int:
+        """5-second bucket from epoch for dedup key."""
+        return int(ts.timestamp()) // 5
+
+    # First pass: index signal (code, bucket) keys so activities can dedup.
+    # We iterate signals FIRST below so the bucket set is populated when we
+    # consult it from the activity loop.
+    signal_buckets: set[tuple[str, int]] = set()
+    for sig in (signals or []):
+        observed = sig.get("observed_at")
+        if not observed:
+            continue
+        ts = observed if observed.tzinfo else observed.replace(tzinfo=timezone.utc)
+        code = sig.get("code") or ""
+        if code:
+            signal_buckets.add((code, _bucket(ts)))
+
     for a in activities:
         if not a.created_at:
             continue
@@ -208,9 +238,22 @@ def _intent_score(
         if days > 60:
             continue
 
+        kind = a.activity_type
+
+        # Dedup: if there's a matching signal within ±5s, skip the activity
+        # (the signal will be counted in the next loop with richer data).
+        sig_equivalent = ACTIVITY_TO_SIGNAL_CODE.get(kind)
+        if sig_equivalent:
+            act_bucket = _bucket(ts)
+            if (
+                (sig_equivalent, act_bucket) in signal_buckets
+                or (sig_equivalent, act_bucket - 1) in signal_buckets
+                or (sig_equivalent, act_bucket + 1) in signal_buckets
+            ):
+                continue
+
         decay = _decay(days)
         weight = 0.0
-        kind = a.activity_type
 
         if kind == "email_replied":
             sent = (a.reply_sentiment or "").lower() or None

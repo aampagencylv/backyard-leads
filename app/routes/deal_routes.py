@@ -402,19 +402,31 @@ async def update_deal(
         deal.probability = await pipeline_cfg.get_stage_probability(db, req.stage)
         if req.stage in ("closed_won", "closed_lost"):
             deal.closed_at = datetime.now(timezone.utc)
-            # Terminate any active engagements at this company — the
-            # deal is closed so outbound sequencing must stop. For
-            # closed_won we still mark the engagement terminal (the
-            # post-sale relationship is handled outside the engine).
+            # Terminate any active engagements at this company — the deal
+            # is closed so outbound sequencing must stop. We DO NOT force
+            # a phase transition here: phase_transitions requires actor
+            # rules per (from_phase, to_phase) pair, and a closed_won
+            # contact may be in any phase (cold_outreach all the way to
+            # qualified). Passing final_phase=None tells the lifecycle
+            # to leave current_phase alone and only flip status='terminal',
+            # which sidesteps the trigger entirely.
             try:
                 from app.engagement_engine.lifecycle import terminate_engagement
                 from app.models import Contact as _C
                 contacts = (await db.execute(
                     select(_C.id).where(_C.company_id == deal.company_id)
                 )).scalars().all()
-                terminal_reason = "deal_won" if req.stage == "closed_won" else f"deal_lost:{req.lost_reason or 'unspecified'}"
+                if req.stage == "closed_won":
+                    terminal_reason = "deal_won"
+                else:
+                    terminal_reason = f"deal_lost:{req.lost_reason or 'unspecified'}"
                 for cid in contacts:
-                    await terminate_engagement(db, cid, reason=terminal_reason)
+                    await terminate_engagement(
+                        db, cid,
+                        reason=terminal_reason,
+                        final_phase=None,
+                        transition_by="bdr",
+                    )
             except Exception as _e:
                 pass  # don't block deal close on engagement teardown
         changes.append(f"stage: {old} → {req.stage}")

@@ -141,9 +141,25 @@ async def _build_step_payload(
     selection in sequence_engine.start_sequence_from_template so the
     legacy `[Skipped] X step N` / `Call talk track` / LinkedIn connect
     note text is preserved.
+
+    Caller-supplied content takes precedence: when `tstep` carries
+    explicit `subject` / `body` / `task_description`, those win over
+    pre-gen drafts and boilerplate. This is what lets append_steps_to_
+    engagement's fallback-into-start_engagement path preserve the BDR's
+    manually-composed step instead of overwriting it with generic copy.
     """
     step_type = tstep["step_type"]
     label = tstep["label"]
+
+    explicit_subject = tstep.get("subject")
+    explicit_body = tstep.get("body")
+    explicit_task = tstep.get("task_description")
+    if explicit_subject or explicit_body or explicit_task:
+        return (
+            explicit_subject or f"{step_type.title()} step {idx}",
+            explicit_body or "",
+            explicit_task,
+        )
 
     if step_type == "email":
         d = email_drafts.get(label, {})
@@ -338,10 +354,15 @@ async def start_engagement(
     tenant_id = contact.tenant_id
 
     # Idempotency: if there's an active engagement already, no-op.
+    # Tenant-scope through contacts so a coerced contact_id from another
+    # tenant can't pivot through this helper.
     existing = (await db.execute(text("""
-        SELECT id, sequence_number FROM engagements
-        WHERE contact_id = :c AND status = 'active'
-        ORDER BY id DESC LIMIT 1
+        SELECT e.id, e.sequence_number FROM engagements e
+        JOIN contacts c ON c.id = e.contact_id
+        WHERE e.contact_id = :c
+          AND e.status = 'active'
+          AND e.tenant_id = c.tenant_id
+        ORDER BY e.id DESC LIMIT 1
     """), {"c": contact.id})).first()
     if existing is not None:
         log.info(
@@ -352,7 +373,9 @@ async def start_engagement(
 
     # Sequence number bumps on each re-enrollment for the contact.
     max_seq_row = (await db.execute(text("""
-        SELECT COALESCE(MAX(sequence_number), 0) FROM engagements WHERE contact_id = :c
+        SELECT COALESCE(MAX(e.sequence_number), 0) FROM engagements e
+        JOIN contacts c ON c.id = e.contact_id
+        WHERE e.contact_id = :c AND e.tenant_id = c.tenant_id
     """), {"c": contact.id})).first()
     sequence_number = (int(max_seq_row[0]) if max_seq_row else 0) + 1
 
@@ -406,7 +429,8 @@ async def start_engagement(
         "c": contact.id,
         "co": company.id,
         "seq": sequence_number,
-        "by": initiated_by[:24],
+        # last_transition_by is VARCHAR(20) on prod — truncate aggressively.
+        "by": (initiated_by or "system")[:20],
         "now": now,
         "bdr": bdr_id,
     })).first()
@@ -527,8 +551,11 @@ async def start_engagement(
 
     # Activity row for the CRM timeline — same content shape the legacy
     # emitted so dashboards/morning-brief/Kevin's tool surface keep working.
+    # user_id = assigned BDR so per-rep activity feeds + audit trails attribute
+    # the enrollment to whoever owns the contact (matches legacy behavior).
     db.add(Activity(
         company_id=company.id, contact_id=contact.id,
+        user_id=bdr_id,
         activity_type="sequence_created",
         content=f"[engagement engine] Sequence started — {created} steps queued (engagement #{engagement_id})",
     ))
@@ -563,14 +590,23 @@ async def pause_engagement(
     deal stage change) DO NOT transition the phase — that would require
     a phase_transition rule we don't have. They just freeze actions.
     """
+    # Tenant-scoped lookup: join through contacts so a body-supplied
+    # contact_id from another tenant can't pivot through this helper.
     eng = (await db.execute(text("""
-        SELECT id FROM engagements
-        WHERE contact_id = :c AND status = 'active'
-        ORDER BY id DESC LIMIT 1
+        SELECT e.id FROM engagements e
+        JOIN contacts c ON c.id = e.contact_id
+        WHERE e.contact_id = :c
+          AND e.status = 'active'
+          AND e.tenant_id = c.tenant_id
+        ORDER BY e.id DESC LIMIT 1
     """), {"c": contact_id})).first()
     if eng is None:
         return 0
 
+    # actions.skip_reason is VARCHAR(80) on prod — truncate to fit. Past
+    # the column max we'd hit StringDataRightTruncation and the whole
+    # UPDATE fails, so the pause silently drops every action it was
+    # supposed to freeze.
     paused_row = await db.execute(text("""
         UPDATE actions
         SET status = 'paused',
@@ -579,7 +615,7 @@ async def pause_engagement(
         WHERE engagement_id = :e
           AND status = 'scheduled'
         RETURNING id
-    """), {"e": int(eng[0]), "reason": f"paused: {reason}"[:255]})
+    """), {"e": int(eng[0]), "reason": f"paused: {reason}"[:80]})
     n = len(paused_row.fetchall())
 
     # Surface the pause on the timeline.
@@ -608,28 +644,40 @@ async def resume_engagement(
     """Un-pause future actions. If `resume_at` is given, every paused
     action's scheduled_at is shifted so the earliest paused step lands
     at `resume_at` and the rest preserve their relative offsets."""
+    # Normalize resume_at: callers may pass a tz-naive datetime (admin
+    # scripts, CSV parses). Compare aware-vs-naive raises TypeError, so
+    # treat naive input as UTC.
+    if resume_at is not None and resume_at.tzinfo is None:
+        resume_at = resume_at.replace(tzinfo=timezone.utc)
+
     eng = (await db.execute(text("""
-        SELECT id FROM engagements
-        WHERE contact_id = :c AND status = 'active'
-        ORDER BY id DESC LIMIT 1
+        SELECT e.id FROM engagements e
+        JOIN contacts c ON c.id = e.contact_id
+        WHERE e.contact_id = :c
+          AND e.status = 'active'
+          AND e.tenant_id = c.tenant_id
+        ORDER BY e.id DESC LIMIT 1
     """), {"c": contact_id})).first()
     if eng is None:
         return 0
 
     if resume_at is not None:
-        # Shift schedule by (resume_at - earliest_paused_scheduled).
+        # Shift schedule by (resume_at - earliest_paused_scheduled). Use
+        # `(:shift * INTERVAL '1 second')` instead of `(:shift || ' seconds')::interval`
+        # — asyncpg types the bind param as text in the latter and refuses
+        # to coerce an int, which crashes the resume entirely.
         earliest = (await db.execute(text("""
             SELECT MIN(scheduled_at) FROM actions
             WHERE engagement_id = :e AND status = 'paused'
         """), {"e": int(eng[0])})).scalar()
         if earliest is not None and earliest < resume_at:
-            shift_seconds = (resume_at - earliest).total_seconds()
+            shift_seconds = int((resume_at - earliest).total_seconds())
             await db.execute(text("""
                 UPDATE actions
-                SET scheduled_at = scheduled_at + (:shift || ' seconds')::interval,
-                    stale_after  = stale_after  + (:shift || ' seconds')::interval
+                SET scheduled_at = scheduled_at + (:shift * INTERVAL '1 second'),
+                    stale_after  = stale_after  + (:shift * INTERVAL '1 second')
                 WHERE engagement_id = :e AND status = 'paused'
-            """), {"e": int(eng[0]), "shift": int(shift_seconds)})
+            """), {"e": int(eng[0]), "shift": shift_seconds})
 
     resumed_row = await db.execute(text("""
         UPDATE actions
@@ -661,19 +709,39 @@ async def terminate_engagement(
     contact_id: int,
     *,
     reason: str,
-    final_phase: str = "declined",
+    final_phase: Optional[str] = None,
+    transition_by: str = "bdr",
 ) -> int:
     """Mark the engagement terminal (e.g. unsubscribed, hard bounce,
     deal won/lost, opt-out). Cancels all pending and paused actions.
-    Returns number of actions canceled. Idempotent."""
+    Returns number of actions canceled. Idempotent.
+
+    By default the phase is LEFT UNCHANGED — only status flips to
+    'terminal'. Callers can request a phase transition via `final_phase`
+    if they know the (from_phase, final_phase, transition_by) tuple is
+    legal under phase_transitions. The enforce_phase_transition trigger
+    only fires when current_phase actually changes, so skipping the
+    phase update sidesteps the trigger entirely for the common case
+    (closed_won/lost contacts already in cold_outreach get straight to
+    status='terminal' without picking a phase that may not be reachable).
+
+    `transition_by` defaults to 'bdr' because the broader phase_transitions
+    rule set is available to bdr (e.g. meeting_set→declined is allowed by
+    bdr but not by system).
+    """
+    # Tenant-scope through contacts join.
     eng = (await db.execute(text("""
-        SELECT id, current_phase FROM engagements
-        WHERE contact_id = :c AND status = 'active'
-        ORDER BY id DESC LIMIT 1
+        SELECT e.id, e.current_phase FROM engagements e
+        JOIN contacts c ON c.id = e.contact_id
+        WHERE e.contact_id = :c
+          AND e.status = 'active'
+          AND e.tenant_id = c.tenant_id
+        ORDER BY e.id DESC LIMIT 1
     """), {"c": contact_id})).first()
     if eng is None:
         return 0
     engagement_id = int(eng[0])
+    current_phase = eng[1]
 
     canceled_row = await db.execute(text("""
         UPDATE actions
@@ -683,21 +751,40 @@ async def terminate_engagement(
         WHERE engagement_id = :e
           AND status IN ('scheduled', 'paused', 'awaiting_approval')
         RETURNING id
-    """), {"e": engagement_id, "reason": f"engagement_terminated:{reason}"[:255]})
+    """), {
+        "e": engagement_id,
+        # actions.skip_reason is VARCHAR(80).
+        "reason": f"engagement_terminated:{reason}"[:80],
+    })
     n = len(canceled_row.fetchall())
 
-    # Phase transition + status flip. The trigger validates the from/to
-    # pair against phase_transitions; we pass it through `system`.
-    await db.execute(text("""
-        UPDATE engagements
-        SET current_phase = :p,
-            last_transition_by = 'system',
-            status = 'terminal',
-            terminal_reason = :reason,
-            terminal_at = NOW(),
-            updated_at = NOW()
-        WHERE id = :id
-    """), {"id": engagement_id, "p": final_phase, "reason": reason[:255]})
+    # Always flip status. Only touch phase if the caller explicitly asks
+    # for a transition AND it differs from the current phase. last_transition_by
+    # is VARCHAR(20); terminal_reason is VARCHAR(60).
+    if final_phase and final_phase != current_phase:
+        await db.execute(text("""
+            UPDATE engagements
+            SET current_phase = :p,
+                last_transition_by = :by,
+                status = 'terminal',
+                terminal_reason = :reason,
+                terminal_at = NOW(),
+                updated_at = NOW()
+            WHERE id = :id
+        """), {
+            "id": engagement_id, "p": final_phase,
+            "by": (transition_by or "bdr")[:20],
+            "reason": reason[:60],
+        })
+    else:
+        await db.execute(text("""
+            UPDATE engagements
+            SET status = 'terminal',
+                terminal_reason = :reason,
+                terminal_at = NOW(),
+                updated_at = NOW()
+            WHERE id = :id
+        """), {"id": engagement_id, "reason": reason[:60]})
 
     contact = (await db.execute(
         select(Contact).where(Contact.id == contact_id)
@@ -726,6 +813,8 @@ async def append_steps_to_engagement(
     steps: list[dict],
     *,
     strategy_tag: str = "manual_append",
+    offset_hours: float = 0.0,
+    sequence_label_hint: str = "post_call",
 ) -> int:
     """Append additional action rows to the contact's active engagement.
 
@@ -734,30 +823,53 @@ async def append_steps_to_engagement(
       - step_type ('email' | 'imessage' | 'call' | 'linkedin' | 'manual')
       - subject (str) — body header
       - body (str) — full body / task description
+      - skip_if (list[str], optional) — same skip conditions as start_engagement
+
+    `offset_hours` shifts every step's scheduled_at by N hours from now
+    in addition to its `day` offset — used by the post-call thank-you
+    flow which wants the first step to land ~2h after the call, not
+    immediately on the next dispatcher tick.
 
     Used by post-call follow-up sequences and any other parallel-track
     BDR-initiated sequences. Falls back gracefully if there's no active
-    engagement (creates one first via start_engagement)."""
+    engagement (creates one first via start_engagement). The fallback
+    PRESERVES caller-supplied subject/body so manually-composed steps
+    are not silently overwritten with generic pre-gen content."""
     if not contact or not contact.company_id:
         return 0
 
     eng = (await db.execute(text("""
-        SELECT id FROM engagements
-        WHERE contact_id = :c AND status = 'active'
-        ORDER BY id DESC LIMIT 1
+        SELECT e.id FROM engagements e
+        JOIN contacts c ON c.id = e.contact_id
+        WHERE e.contact_id = :c
+          AND e.status = 'active'
+          AND e.tenant_id = c.tenant_id
+        ORDER BY e.id DESC LIMIT 1
     """), {"c": contact.id})).first()
 
     if eng is None:
-        # No active engagement — start one with this as the template.
+        # No active engagement — start one with these steps as the template.
+        # CRITICALLY: pass subject/body/task_description through so the BDR's
+        # composed copy survives. pre_generate_content=False because the
+        # caller has already produced the content; we don't want generic
+        # cold/follow-up Claude calls overwriting it.
         return await start_engagement(
             db, contact,
             template=[
-                {"day": s["day"], "step_type": s["step_type"],
-                 "label": s.get("label", strategy_tag), "skip_if": s.get("skip_if", [])}
+                {
+                    "day": s["day"],
+                    "step_type": s["step_type"],
+                    "label": s.get("label", strategy_tag),
+                    "skip_if": s.get("skip_if", []),
+                    "subject": s.get("subject"),
+                    "body": s.get("body"),
+                    "task_description": s.get("task_description"),
+                }
                 for s in steps
             ],
-            sequence_label="post_call",
-            initiated_by=strategy_tag,
+            sequence_label=sequence_label_hint,
+            pre_generate_content=False,
+            initiated_by=strategy_tag[:20],
         )
 
     engagement_id = int(eng[0])
@@ -770,11 +882,29 @@ async def append_steps_to_engagement(
         if not channel_code:
             continue
         ch_id = await _channel_id(db, channel_code)
-        scheduled_at = now + timedelta(days=int(step.get("day", 0)))
+        scheduled_at = (
+            now
+            + timedelta(days=int(step.get("day", 0)))
+            + timedelta(hours=float(offset_hours))
+        )
         stale_after = scheduled_at + timedelta(days=2)
         recipient_email = contact.email if channel_code == "email" else None
         recipient_phone = contact.phone if channel_code == "sms" else None
         recipient_linkedin = contact.linkedin_url if channel_code == "linkedin" else None
+
+        # Honor skip_if at creation time — same semantics as start_engagement.
+        # Without this, manually-appended email steps to a contact with no
+        # email get enqueued and fail at dispatch instead of being pre-skipped.
+        skip_conds = step.get("skip_if", [])
+        skip_reason = _evaluate_skip(contact, skip_conds) if skip_conds else None
+        if skip_reason:
+            status = "skipped"
+            subject_value = f"[Skipped] {step['step_type'].title()} step {idx}"
+            body_value = f"Skipped at creation: {skip_reason}"
+        else:
+            status = "scheduled"
+            subject_value = step.get("subject") or f"{step['step_type'].title()} step {idx}"
+            body_value = step.get("body") or ""
 
         idem_key = f"append-{engagement_id}-{idx}-{skip_token}"
 
@@ -786,26 +916,28 @@ async def append_steps_to_engagement(
                 subject, body,
                 recipient_email, recipient_phone, recipient_linkedin_url,
                 idempotency_key, ai_strategy_used,
+                skip_reason,
                 created_at, updated_at
             )
             VALUES (
                 :t, :e, :c,
-                :ch, 'scheduled', FALSE,
+                :ch, :st, FALSE,
                 :sched, :stale,
                 :subj, :body,
                 :re, :rp, :rl,
                 :idem, :strategy,
+                :skip,
                 :now, :now
             )
             ON CONFLICT (idempotency_key) DO NOTHING
         """), {
             "t": contact.tenant_id, "e": engagement_id, "c": contact.id,
-            "ch": ch_id,
+            "ch": ch_id, "st": status,
             "sched": scheduled_at, "stale": stale_after,
-            "subj": (step.get("subject") or f"{step['step_type'].title()} step {idx}")[:255],
-            "body": step.get("body") or "",
+            "subj": subject_value[:255], "body": body_value,
             "re": recipient_email, "rp": recipient_phone, "rl": recipient_linkedin,
             "idem": idem_key, "strategy": strategy_tag[:40],
+            "skip": (skip_reason or None),
             "now": now,
         })
         created += 1

@@ -801,26 +801,35 @@ async def sidebar_send_next_step(
     db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ) -> dict:
-    """Pull the soonest-scheduled pending action for this contact and
-    fire it now via the engagement engine dispatcher. We bump the
-    action's scheduled_at to NOW so the next dispatcher tick claims it,
-    then run a tick inline so the caller gets immediate feedback. No-op
-    when there's no pending action."""
-    from sqlalchemy import text as _sa_text
-    from app.engagement_engine.dispatcher import run_dispatcher_tick
+    """Pull the soonest-scheduled pending action for THIS contact and
+    bump its scheduled_at to NOW so the next minute's dispatcher cron
+    tick claims it. We do NOT run a dispatcher tick inline — that would
+    sweep every tenant's due actions on this request and fire them
+    under the wrong tenant scope. The BDR's action goes out within ≤60s
+    when the cron runs.
 
-    # Find the soonest scheduled action for this contact.
+    Tenant scoping: the action must belong to the request's tenant (we
+    verify by joining contacts; an out-of-tenant contact_id returns the
+    same 'no pending action' as one that genuinely has no scheduled
+    work)."""
+    from sqlalchemy import text as _sa_text
+
+    # Tenant-scoped lookup. The contact-join + e.tenant_id = c.tenant_id
+    # guards against accidentally bumping another tenant's action.
     row = (await db.execute(_sa_text("""
-        SELECT id FROM actions
-        WHERE contact_id = :c AND status = 'scheduled'
-        ORDER BY scheduled_at ASC, id ASC
+        SELECT a.id FROM actions a
+        JOIN contacts c ON c.id = a.contact_id
+        WHERE a.contact_id = :c
+          AND a.status = 'scheduled'
+          AND a.tenant_id = c.tenant_id
+        ORDER BY a.scheduled_at ASC, a.id ASC
         LIMIT 1
     """), {"c": req.contact_id})).first()
     if row is None:
         return {"fired": False, "reason": "no pending action"}
     action_id = int(row[0])
 
-    # Pull scheduled_at into NOW so the dispatcher claims it on this tick.
+    # Bump scheduled_at to NOW. The next cron tick (≤60s) will claim it.
     await db.execute(_sa_text("""
         UPDATE actions
         SET scheduled_at = NOW(),
@@ -829,14 +838,11 @@ async def sidebar_send_next_step(
     """), {"aid": action_id, "uid": user.id})
     await db.commit()
 
-    # Run one dispatcher tick now; it'll find the bumped action.
-    report = await run_dispatcher_tick()
     return {
-        "fired": report.sent > 0,
+        "fired": False,
+        "queued_for_next_tick": True,
         "action_id": action_id,
-        "sent": report.sent,
-        "blocked": report.blocked,
-        "failed": report.failed,
+        "reason": "bumped to NOW; dispatcher cron will send within 60s",
     }
 
 
