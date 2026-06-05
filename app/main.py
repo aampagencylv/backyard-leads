@@ -100,6 +100,25 @@ async def _sequence_engine_loop():
     tenant's queue isn't touched until we reach their iteration this
     tick — fair across tenants, and no cross-tenant data leak.
     """
+    # Phase 7 cutover: the legacy sequence_engine is retired. The new
+    # engagement engine handles all orchestration via its own cron-driven
+    # workers (run_engagement_dispatcher / signal_watcher / decision_maker).
+    # Setting LEGACY_SEQUENCE_ENGINE_ENABLED=true in .env temporarily
+    # re-enables it (e.g. for rollback during cutover validation). Default
+    # is OFF — the legacy code path no longer runs.
+    import os as _os
+    legacy_enabled = _os.environ.get("LEGACY_SEQUENCE_ENGINE_ENABLED", "").lower() == "true"
+    if not legacy_enabled:
+        log.info(
+            "legacy sequence_engine DISABLED (LEGACY_SEQUENCE_ENGINE_ENABLED != 'true'). "
+            "All outreach orchestration runs through the engagement engine workers."
+        )
+        # Sleep forever — keep the task alive so the cancel/yield contract
+        # in lifespan() still works correctly. Wakes every 5 min just so a
+        # log entry shows the loop is alive (helps with monitoring).
+        while True:
+            await asyncio.sleep(300)
+
     from app.services.sequence_engine import process_pending_steps
     from app.tenancy import tenant_scope
     tick_count = 0
