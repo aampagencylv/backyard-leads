@@ -638,42 +638,108 @@ async def start_engagement(
     # Fire `contact.enrolled` outbound webhook so subscribers (Zapier ↔
     # Meta Custom Audiences / Google Customer Match / LinkedIn Matched
     # Audiences) get the contact + company info needed for ad audience
-    # building. Payload carries enough match-key fields (email, phone,
-    # name parts, city/state/zip/country) to hit Meta's and Google's
-    # full match-key matrix. Fired POST-commit so subscribers can rely
-    # on the engagement actually existing if they call back to query.
+    # building. Payload carries every useful match-key field on the
+    # contact + company so Zapier filters can decide what to push and
+    # the ad platforms have multiple match options.
+    #
+    # Fired POST-commit so subscribers calling back to query the
+    # engagement see committed data.
     try:
         from app.services.webhook_dispatch import dispatch_event
+
+        # Resolve assigned BDR's email + name once for the payload so
+        # Zapier can route different reps' contacts to different
+        # audiences without an extra API call. NULL if no BDR.
+        bdr_email = None
+        bdr_name = None
+        if bdr_id is not None:
+            try:
+                bdr_row = (await db.execute(text(
+                    "SELECT email, first_name, last_name FROM users WHERE id = :uid"
+                ), {"uid": bdr_id})).first()
+                if bdr_row:
+                    bdr_email = bdr_row.email
+                    bdr_name = f"{bdr_row.first_name or ''} {bdr_row.last_name or ''}".strip() or None
+            except Exception:
+                pass
+
+        contact_full_name = " ".join(
+            p for p in [
+                getattr(contact, "first_name", None),
+                getattr(contact, "last_name", None),
+            ] if p
+        ) or None
+
         async with async_session() as ws_db:
             await dispatch_event(ws_db, "contact.enrolled", {
                 "tenant_id": tenant_id,
                 "engagement_id": engagement_id,
+                # The contact object — every match key the ad platforms accept
                 "contact": {
                     "id": contact.id,
                     "first_name": getattr(contact, "first_name", None),
                     "last_name": getattr(contact, "last_name", None),
+                    "full_name": contact_full_name,
                     "email": getattr(contact, "email", None),
+                    "email_status": getattr(contact, "email_status", None),
                     "phone": getattr(contact, "phone", None),
                     "phone_type": getattr(contact, "phone_type", None),
+                    "phone_carrier": getattr(contact, "phone_carrier", None),
                     "title": getattr(contact, "title", None),
                     "linkedin_url": getattr(contact, "linkedin_url", None),
+                    "timezone": getattr(contact, "timezone", None),
                     "is_primary": bool(getattr(contact, "is_primary", False)),
+                    "notes": getattr(contact, "notes", None),
+                    # Suppression flags — Zapier filter should respect these
+                    "unsubscribed": bool(getattr(contact, "unsubscribed_at", None)),
+                    "do_not_text": bool(getattr(contact, "do_not_text", False)),
+                    "do_not_contact": bool(getattr(contact, "do_not_contact", False)),
                 },
+                # The company object — every targeting signal available.
+                # NOTE: no postal_code/country columns exist on prod schema;
+                # address is a single string + city + state. Country
+                # defaults to "US" for SHA-256 hashing where ad platforms
+                # require it as a match key.
                 "company": {
                     "id": company.id,
                     "name": getattr(company, "name", None),
                     "website": getattr(company, "website", None),
-                    "business_type": getattr(company, "business_type", None),
-                    "industry": getattr(company, "industry", None),
+                    "domain": getattr(company, "domain", None),
+                    "phone": getattr(company, "phone", None),
                     "address": getattr(company, "address", None),
                     "city": getattr(company, "city", None),
                     "state": getattr(company, "state", None),
-                    "postal_code": getattr(company, "postal_code", None) or getattr(company, "zip", None),
-                    "country": getattr(company, "country", None) or "US",
-                    "phone": getattr(company, "phone", None),
+                    "country": "US",
+                    "business_type": getattr(company, "business_type", None),
+                    "industry": getattr(company, "industry", None),
+                    "company_size": getattr(company, "company_size", None),
+                    "employee_count": getattr(company, "employee_count", None),
+                    "founded": getattr(company, "founded", None),
+                    "company_description": getattr(company, "company_description", None),
+                    # Social profile URLs — useful for LinkedIn Matched
+                    # Audiences company match + Meta custom-audience expansion.
+                    "linkedin_url": getattr(company, "linkedin_url", None),
+                    "facebook_url": getattr(company, "facebook_url", None),
+                    "instagram_url": getattr(company, "instagram_url", None),
+                    "youtube_url": getattr(company, "youtube_url", None),
+                    "tiktok_url": getattr(company, "tiktok_url", None),
+                    # Lead score so Zapier can route hot vs cold prospects
+                    # to different audiences / campaigns.
+                    "lead_score": getattr(company, "lead_score", None),
+                    "lead_score_tier": getattr(company, "lead_score_tier", None),
+                    # Google Place ID — Meta + Google can geo-match on this.
+                    "google_place_id": getattr(company, "google_place_id", None),
+                    "rating": getattr(company, "rating", None),
+                    "review_count": getattr(company, "review_count", None),
                 },
+                # Assigned BDR — so audiences can be per-rep or per-territory.
+                "assigned_bdr": {
+                    "id": bdr_id,
+                    "email": bdr_email,
+                    "name": bdr_name,
+                } if bdr_id else None,
+                # Engagement context
                 "playbook_id": playbook_id,
-                "assigned_bdr_id": bdr_id,
                 "actions_count": created,
                 "started_at": now.isoformat(),
             })
