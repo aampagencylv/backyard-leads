@@ -612,16 +612,15 @@ async def process_pending_steps(db: AsyncSession, max_per_tick: int = 50) -> dic
             counters["skipped"] += 1
             continue
 
-        # Phase 7 cutover gate: the new engagement engine owns EMAIL outreach
-        # for any contact with outreach_owner='engagement_engine'. Non-email
-        # steps (call, linkedin, imessage) stay on the legacy engine because
-        # the new engine doesn't have a BDR task-queue UI yet — letting it
-        # dispatch them would silently mark them "sent" without anyone
-        # actually making the call. The split is: new engine = email
-        # dispatch; legacy engine = BDR tasks. Phase 8 follow-up: build the
-        # BDR task surface, then migrate non-email too.
+        # Phase 7 cutover gate: when contacts.outreach_owner != 'legacy',
+        # the new engagement engine owns this contact ENTIRELY — all
+        # channels, all steps. The new engine's CallTaskChannel and
+        # ManualChannel write rows to the existing `tasks` table (linked
+        # via tasks.engagement_action_id), so BDR-handled steps still
+        # surface in the existing CRM task view exactly like before.
+        # Single engine, no split, no slop.
         owner = getattr(contact, "outreach_owner", None) or "legacy"
-        if owner != "legacy" and step.step_type == "email":
+        if owner != "legacy":
             step.skipped_at = now
             step.skip_reason = f"outreach_owner={owner}"
             counters["skipped"] += 1
@@ -755,11 +754,12 @@ async def execute_step_now(
     if not contact or not company:
         return {"fired": False, "reason": "missing_contact_or_company"}
 
-    # Phase 7 cutover gate — same split as the auto-run path. New engine
-    # owns email dispatch only; BDR-handled channels stay on legacy until
-    # the new engine has a BDR task UI.
+    # Phase 7 cutover gate — same as auto-run: the new engine owns
+    # everything when outreach_owner != 'legacy'. BDR-handled actions
+    # surface via the existing CRM task view through the new engine's
+    # tasks.engagement_action_id linkage.
     owner = getattr(contact, "outreach_owner", None) or "legacy"
-    if owner != "legacy" and step.step_type == "email":
+    if owner != "legacy":
         return {"fired": False, "reason": f"outreach_owner={owner}"}
 
     # Skip-if check — same as auto-run path

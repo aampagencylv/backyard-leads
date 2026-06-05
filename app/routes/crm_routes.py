@@ -342,16 +342,33 @@ async def complete_task(
     await log_activity(db, task.company_id, "task_completed", f"Completed: {task.description}", user.id,
                        contact_id=task.contact_id, deal_id=task.deal_id)
 
-    # If this task was created by the sequence engine for a manual step
-    # (linkedin/call), mark the linked sequence step done too. Without this
-    # the step stays is_sent=False and shows up forever in the Stalled tab
-    # even though the BDR already did the work.
+    # Legacy linkage: if this task was created by the LEGACY sequence engine
+    # for a manual step (linkedin/call/imessage), mark the linked
+    # generated_emails row done. Without this the step stays is_sent=False
+    # and shows up forever in the Stalled tab even though the BDR did the work.
     step = (await db.execute(
         select(GeneratedEmail).where(GeneratedEmail.task_id == task.id)
     )).scalar_one_or_none()
     if step and not step.is_sent:
         step.is_sent = True
         step.sent_at = now
+
+    # New engagement engine linkage: if this task was created by the new
+    # engine for a call_task / manual / linkedin action, mark the action
+    # completed so the engagement timeline + future AI decisions see it as
+    # done. Raw SQL avoids importing the engagement_engine ORM module here.
+    from sqlalchemy import text as _sa_text
+    engagement_action_id = getattr(task, "engagement_action_id", None)
+    if engagement_action_id is not None:
+        await db.execute(_sa_text("""
+            UPDATE actions
+            SET status = 'completed',
+                outcome = 'task_completed',
+                executed_at = COALESCE(executed_at, NOW()),
+                sent_by_user_id = COALESCE(sent_by_user_id, :uid),
+                updated_at = NOW()
+            WHERE id = :aid AND status != 'completed'
+        """), {"aid": engagement_action_id, "uid": user.id})
 
     await db.commit()
     return {"id": task.id, "completed": True}

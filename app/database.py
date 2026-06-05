@@ -144,6 +144,7 @@ async def init_db():
         "scripts.migrate_outbound_audit",
         "scripts.migrate_sequence_v2",
         "scripts.migrate_engagement_engine_v1",
+        "scripts.migrate_tasks_engagement_link",
     )
 
     # Decide which actually need to run.
