@@ -52,6 +52,7 @@ NOTIFICATION_EVENTS = {
     "meeting_booked":    {"label": "Meeting booked",                "default": True,  "category": "pipeline"},
     "call":              {"label": "Call logged",                   "default": False, "category": "activity"},
     "deal_update":       {"label": "Deal stage changed",            "default": False, "category": "pipeline"},
+    "system_announcement": {"label": "Platform announcement",       "default": True,  "category": "system"},
 }
 
 # Legacy fallback — used when a user has no prefs set
@@ -59,12 +60,20 @@ DEFAULT_NOTABLE = [k for k, v in NOTIFICATION_EVENTS.items() if v["default"]]
 
 
 def _get_user_notable_types(user: User) -> list[str]:
-    """Return the list of activity types this user wants notifications for."""
+    """Return the list of activity types this user wants notifications for.
+
+    system_announcement is ALWAYS included regardless of user prefs — these
+    are platform-critical messages (cutover notices, incident updates,
+    forced rollbacks) that every BDR must see.
+    """
     if not user.notification_prefs_json:
         return DEFAULT_NOTABLE
     try:
         prefs = json.loads(user.notification_prefs_json)
-        return [k for k, enabled in prefs.items() if enabled]
+        types = [k for k, enabled in prefs.items() if enabled]
+        if "system_announcement" not in types:
+            types.append("system_announcement")
+        return types
     except (json.JSONDecodeError, TypeError):
         return DEFAULT_NOTABLE
 
