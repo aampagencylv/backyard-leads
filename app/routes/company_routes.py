@@ -685,30 +685,66 @@ async def restore_disqualified_company(
     db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
-    """Admin-only: restore a disqualified company back to active pursuit.
-    Sequences remain paused — admin or BDR can manually resume them."""
-    if user.role not in ("admin", "super_admin"):
-        raise HTTPException(403, "Admin only")
+    """Restore a disqualified company back to active pursuit. ALSO un-pauses
+    the future sequence steps the disqualify action paused — so the BDR
+    doesn't have to manually resume them too.
 
+    Opened to all authenticated users 2026-06-04 per team request — BDRs
+    sometimes change their mind about a disqualification and shouldn't
+    need to chase an admin for approval. The Activity log still captures
+    who restored, so misuse is recoverable via admin review of
+    'status_change' activities.
+    """
     company = (await db.execute(
         select(Company).where(Company.id == company_id)
     )).scalar_one_or_none()
     if not company:
         raise HTTPException(404, "Company not found")
 
+    if company.status != "not_interested":
+        raise HTTPException(
+            400, f"Company is not disqualified (current status: {company.status!r})"
+        )
+
     old_reason = company.lost_reason
     company.status = "pursuing"
     company.lost_reason = None
+
+    # Un-pause every future-scheduled step that was paused. Limiting to
+    # 'scheduled_send_at > now' is conservative: steps that were due during
+    # the disqualified window stay skipped (those are missed opportunities;
+    # BDR can manually re-queue if they want).
+    now = datetime.now(timezone.utc)
+    paused_steps = (await db.execute(
+        select(GeneratedEmail).where(
+            GeneratedEmail.company_id == company_id,
+            GeneratedEmail.is_sent == False,
+            GeneratedEmail.skipped_at.is_(None),
+            GeneratedEmail.paused_at.is_not(None),
+            GeneratedEmail.scheduled_send_at > now,
+        )
+    )).scalars().all()
+    resumed_count = 0
+    for step in paused_steps:
+        step.paused_at = None
+        resumed_count += 1
 
     db.add(Activity(
         company_id=company_id,
         user_id=user.id,
         activity_type="status_change",
-        content=f"Restored from disqualified (reason was: {old_reason or 'not recorded'}). Sequences remain paused — resume manually.",
+        content=(
+            f"Restored from disqualified (reason was: {old_reason or 'not recorded'}). "
+            f"Auto-resumed {resumed_count} future sequence step(s)."
+        ),
     ))
 
     await db.commit()
-    return {"company_id": company_id, "status": "pursuing"}
+    return {
+        "company_id": company_id,
+        "status": "pursuing",
+        "resumed_steps": resumed_count,
+    }
 
 
 @router.get("/pending-review")

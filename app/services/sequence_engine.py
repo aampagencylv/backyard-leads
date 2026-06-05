@@ -612,17 +612,16 @@ async def process_pending_steps(db: AsyncSession, max_per_tick: int = 50) -> dic
             counters["skipped"] += 1
             continue
 
-        # Phase 7 cutover gate: the new engagement engine owns this contact
-        # iff contacts.outreach_owner == 'engagement_engine'. Any other value
-        # (legacy, none, paused, white_glove, disputed) means the old engine
-        # is in charge — but only 'legacy' counts as "actively pursue".
-        # The default for every existing contact is 'legacy' so this gate
-        # is a no-op until the cutover script flips an individual contact.
-        # When flipped: the new engine takes over (via its own dispatcher),
-        # and this old engine refuses to send for that contact — preventing
-        # dual-send during the parallel-run window.
+        # Phase 7 cutover gate: the new engagement engine owns EMAIL outreach
+        # for any contact with outreach_owner='engagement_engine'. Non-email
+        # steps (call, linkedin, imessage) stay on the legacy engine because
+        # the new engine doesn't have a BDR task-queue UI yet — letting it
+        # dispatch them would silently mark them "sent" without anyone
+        # actually making the call. The split is: new engine = email
+        # dispatch; legacy engine = BDR tasks. Phase 8 follow-up: build the
+        # BDR task surface, then migrate non-email too.
         owner = getattr(contact, "outreach_owner", None) or "legacy"
-        if owner != "legacy":
+        if owner != "legacy" and step.step_type == "email":
             step.skipped_at = now
             step.skip_reason = f"outreach_owner={owner}"
             counters["skipped"] += 1
@@ -756,11 +755,11 @@ async def execute_step_now(
     if not contact or not company:
         return {"fired": False, "reason": "missing_contact_or_company"}
 
-    # Phase 7 cutover gate — same as the auto-run path. A BDR-clicked send
-    # for a contact owned by the new engine bounces out here so the BDR
-    # uses the new engagement engine surface instead.
+    # Phase 7 cutover gate — same split as the auto-run path. New engine
+    # owns email dispatch only; BDR-handled channels stay on legacy until
+    # the new engine has a BDR task UI.
     owner = getattr(contact, "outreach_owner", None) or "legacy"
-    if owner != "legacy":
+    if owner != "legacy" and step.step_type == "email":
         return {"fired": False, "reason": f"outreach_owner={owner}"}
 
     # Skip-if check — same as auto-run path
