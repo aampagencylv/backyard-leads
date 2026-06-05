@@ -129,6 +129,13 @@ KNOWN_EVENTS = (
     "company.merged",
     "company.deleted",
     "contact.created",
+    # contact.enrolled fires from lifecycle.start_engagement whenever a
+    # contact enters active outreach via the engagement engine. Payload
+    # is enriched with company city/state/zip/website/name so the
+    # subscriber (typically a Zapier catch hook → Meta Custom Audience
+    # / Google Customer Match / LinkedIn Matched Audience) has every
+    # field those platforms need to hash + match.
+    "contact.enrolled",
     "email.replied",
     "meeting.booked",
     "sequence.created",

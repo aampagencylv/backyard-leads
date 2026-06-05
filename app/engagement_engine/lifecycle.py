@@ -635,6 +635,54 @@ async def start_engagement(
 
     await db.commit()
 
+    # Fire `contact.enrolled` outbound webhook so subscribers (Zapier ↔
+    # Meta Custom Audiences / Google Customer Match / LinkedIn Matched
+    # Audiences) get the contact + company info needed for ad audience
+    # building. Payload carries enough match-key fields (email, phone,
+    # name parts, city/state/zip/country) to hit Meta's and Google's
+    # full match-key matrix. Fired POST-commit so subscribers can rely
+    # on the engagement actually existing if they call back to query.
+    try:
+        from app.services.webhook_dispatch import dispatch_event
+        async with async_session() as ws_db:
+            await dispatch_event(ws_db, "contact.enrolled", {
+                "tenant_id": tenant_id,
+                "engagement_id": engagement_id,
+                "contact": {
+                    "id": contact.id,
+                    "first_name": getattr(contact, "first_name", None),
+                    "last_name": getattr(contact, "last_name", None),
+                    "email": getattr(contact, "email", None),
+                    "phone": getattr(contact, "phone", None),
+                    "phone_type": getattr(contact, "phone_type", None),
+                    "title": getattr(contact, "title", None),
+                    "linkedin_url": getattr(contact, "linkedin_url", None),
+                    "is_primary": bool(getattr(contact, "is_primary", False)),
+                },
+                "company": {
+                    "id": company.id,
+                    "name": getattr(company, "name", None),
+                    "website": getattr(company, "website", None),
+                    "business_type": getattr(company, "business_type", None),
+                    "industry": getattr(company, "industry", None),
+                    "address": getattr(company, "address", None),
+                    "city": getattr(company, "city", None),
+                    "state": getattr(company, "state", None),
+                    "postal_code": getattr(company, "postal_code", None) or getattr(company, "zip", None),
+                    "country": getattr(company, "country", None) or "US",
+                    "phone": getattr(company, "phone", None),
+                },
+                "playbook_id": playbook_id,
+                "assigned_bdr_id": bdr_id,
+                "actions_count": created,
+                "started_at": now.isoformat(),
+            })
+    except Exception as e:  # noqa: BLE001
+        log.warning(
+            "contact.enrolled webhook dispatch failed (silent) contact=%s: %s",
+            contact.id, e,
+        )
+
     log.info(
         "start_engagement: contact=%s engagement=%s actions=%d initiated_by=%s",
         contact.id, engagement_id, created, initiated_by,
