@@ -45,6 +45,7 @@ from typing import Optional
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import async_session
 from app.models import Company, Contact, Activity, User
 
 log = logging.getLogger("engagement_engine.lifecycle")
