@@ -1198,15 +1198,79 @@ async def get_company_full(
     contacts = contacts_result.scalars().all()
 
     # Bulk-load all emails for all contacts in ONE query (avoids N+1 over network)
+    # NOTE: The CRM sequence-strip UI reads from this `emails` array. After
+    # the engagement-engine cutover, NEW enrollments write to `actions`,
+    # NOT `generated_emails`. To keep the UI showing every step (legacy +
+    # new), we query both tables, normalize the new-engine actions into
+    # the same dict shape the UI expects, and merge them.
     contact_ids = [c.id for c in contacts]
     all_ge = []
+    engine_steps_by_contact: dict[int, list] = {}
     if contact_ids:
         all_ge = (await db.execute(
             select(GeneratedEmail)
             .where(GeneratedEmail.contact_id.in_(contact_ids))
             .order_by(GeneratedEmail.sequence_order)
         )).scalars().all()
-    # Group by contact
+
+        # New-engine actions for these contacts. Channel code (email/sms/
+        # call_task/linkedin/manual/wait) resolved via channel_types join.
+        # ROW_NUMBER over engagement_id by scheduled_at gives each action
+        # a stable sequence_order the UI can sort/render.
+        from sqlalchemy import text as _sa_text
+        action_rows = (await db.execute(_sa_text("""
+            SELECT a.id, a.engagement_id, a.contact_id,
+                   ct.code AS channel_code,
+                   a.status, a.scheduled_at, a.executed_at,
+                   a.subject, a.body, a.skip_reason,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY a.engagement_id
+                       ORDER BY a.scheduled_at, a.id
+                   ) AS step_order
+            FROM actions a
+            JOIN channel_types ct ON ct.id = a.channel_id
+            WHERE a.contact_id = ANY(:cids)
+            ORDER BY a.contact_id, a.scheduled_at
+        """), {"cids": contact_ids})).fetchall()
+
+        def _step_type_from_channel(code: str) -> str:
+            return {
+                "email": "email",
+                "sms": "imessage",
+                "call_task": "call",
+                "linkedin": "linkedin",
+                "manual": "manual",
+                "wait": "wait",
+            }.get(code, code)
+
+        for r in action_rows:
+            step = {
+                "id": int(r.id),
+                "step_type": _step_type_from_channel(r.channel_code),
+                "subject": r.subject,
+                "body": r.body,
+                "email_type": None,
+                # Offset sequence_order by 10_000 so action rows sort
+                # AFTER any legacy sent steps when the contact has both.
+                # The UI sorts by sequence_order then id, so action steps
+                # appear in scheduled order under any legacy history.
+                "sequence_order": 10000 + int(r.step_order),
+                "send_delay_days": None,
+                "is_sent": r.status == "sent",
+                "paused_at": None,
+                "scheduled_send_at": r.scheduled_at.isoformat() if r.scheduled_at else None,
+                "sent_at": r.executed_at.isoformat() if r.executed_at else None,
+                "created_at": None,
+                "skipped_at": r.executed_at.isoformat() if r.status == "skipped" and r.executed_at else None,
+                "skip_reason": r.skip_reason,
+                "auto_execute": r.channel_code in ("email", "sms"),
+                "task_id": None,
+                "engine": "engagement_engine",
+                "engagement_id": int(r.engagement_id),
+            }
+            engine_steps_by_contact.setdefault(int(r.contact_id), []).append(step)
+
+    # Group legacy emails by contact
     emails_by_contact: dict[int, list] = {}
     for e in all_ge:
         emails_by_contact.setdefault(e.contact_id, []).append(e)
@@ -1230,7 +1294,14 @@ async def get_company_full(
                     seen_orders[key] = e
             else:
                 seen_orders[key] = e
-        emails = sorted(seen_orders.values(), key=lambda e: (e.sequence_order or 0, e.id))
+        legacy_emails = sorted(seen_orders.values(), key=lambda e: (e.sequence_order or 0, e.id))
+
+        # Merge legacy GeneratedEmail rows with new-engine action steps
+        # for this contact. JS renderer sees one unified array, sorted
+        # by sequence_order (legacy <10k, engine >10k).
+        legacy_dicts = [_email_to_dict(e) for e in legacy_emails]
+        engine_dicts = engine_steps_by_contact.get(c.id, [])
+        all_steps = legacy_dicts + engine_dicts
         contacts_data.append({
             "id": c.id,
             "first_name": c.first_name,
@@ -1248,7 +1319,7 @@ async def get_company_full(
             "phone_type": c.phone_type,
             "phone_carrier": c.phone_carrier,
             "phone_type_checked_at": c.phone_type_checked_at.isoformat() if c.phone_type_checked_at else None,
-            "emails": [_email_to_dict(e) for e in emails],
+            "emails": all_steps,
         })
 
     # Deals

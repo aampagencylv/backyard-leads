@@ -58,19 +58,42 @@ async def list_all_contacts(
     from app.models import Activity, company_tags
     from sqlalchemy import or_, exists
 
-    email_count_sq = (
+    # Combined step-count = legacy generated_emails rows + new-engine
+    # email actions. Post-cutover, every new enrollment lives in
+    # `actions`, so counting only legacy rows shows "0 sequence steps"
+    # for engagement-engine-enrolled contacts (Deck and Drive bug).
+    from sqlalchemy import text as _sa_text
+    legacy_email_sq = (
         select(
             GeneratedEmail.contact_id,
-            func.count(GeneratedEmail.id).label("email_count"),
+            func.count(GeneratedEmail.id).label("cnt"),
         )
         .group_by(GeneratedEmail.contact_id)
         .subquery()
     )
+    engine_email_sq = (
+        select(
+            _sa_text("contact_id"),
+            _sa_text("COUNT(*)::int AS cnt"),
+        )
+        .select_from(_sa_text(
+            "actions a JOIN channel_types ct ON ct.id = a.channel_id"
+        ))
+        .where(_sa_text("ct.code = 'email'"))
+        .group_by(_sa_text("contact_id"))
+        .subquery("engine_email_counts")
+    )
     query = (
-        select(Contact, Company.name, Company.status, Company.phone.label("company_phone"),
-               func.coalesce(email_count_sq.c.email_count, 0).label("email_count"))
+        select(
+            Contact, Company.name, Company.status, Company.phone.label("company_phone"),
+            (
+                func.coalesce(legacy_email_sq.c.cnt, 0)
+                + func.coalesce(engine_email_sq.c.cnt, 0)
+            ).label("email_count"),
+        )
         .join(Company, Contact.company_id == Company.id)
-        .outerjoin(email_count_sq, Contact.id == email_count_sq.c.contact_id)
+        .outerjoin(legacy_email_sq, Contact.id == legacy_email_sq.c.contact_id)
+        .outerjoin(engine_email_sq, Contact.id == engine_email_sq.c.contact_id)
     )
 
     # Multi-tenant scoping
@@ -100,9 +123,15 @@ async def list_all_contacts(
         query = query.where(Contact.email_status == email_status)
 
     if has_sequence is True:
-        query = query.where(email_count_sq.c.email_count > 0)
+        query = query.where(
+            (func.coalesce(legacy_email_sq.c.cnt, 0)
+             + func.coalesce(engine_email_sq.c.cnt, 0)) > 0
+        )
     elif has_sequence is False:
-        query = query.where(func.coalesce(email_count_sq.c.email_count, 0) == 0)
+        query = query.where(
+            (func.coalesce(legacy_email_sq.c.cnt, 0)
+             + func.coalesce(engine_email_sq.c.cnt, 0)) == 0
+        )
 
     if phone_type:
         # Treat 'unknown' as "either NULL or literally 'unknown' or 'error'"
