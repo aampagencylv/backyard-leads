@@ -926,7 +926,15 @@ async def resend_webhook(request: Request, db: AsyncSession = Depends(get_tenant
     # email_id alone would misattribute new-engine events to random legacy
     # rows. When this tag is present, route through the new-engine path
     # AND still update Activity for the legacy CRM UI to see engagement.
-    engagement_action_id = tags.get("engagement_action_id")
+    # Look for engagement_action_id in BOTH tags AND headers — Resend's
+    # webhook payload sends tags as a dict so our list-based parsing
+    # often returns {} (none of the entries have a "name" key). Headers
+    # come through reliably as a list of {name, value} pairs so the
+    # X-Engagement-Action-ID header is the dependable attribution channel.
+    engagement_action_id = (
+        tags.get("engagement_action_id")
+        or headers.get("X-Engagement-Action-ID")
+    )
     if engagement_action_id:
         try:
             engagement_action_id = int(engagement_action_id)

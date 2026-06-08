@@ -214,6 +214,11 @@ async def get_dashboard(
     )).scalar() or 0
 
     # ---------- Sequences ready to send (scheduled <= now, not yet sent, not paused) ----------
+    # POST-CUTOVER: must query BOTH legacy GeneratedEmail AND new-engine
+    # `actions` tables. The dispatcher cron will pick up either one when
+    # they come due, but the BDR-facing "what's pending" widget needs to
+    # show both so the team can see today's autopilot enrollments
+    # alongside any remaining legacy pending steps.
     queued_q = (
         select(GeneratedEmail, Contact, Company.name)
         .join(Contact, GeneratedEmail.contact_id == Contact.id)
@@ -238,9 +243,52 @@ async def get_dashboard(
             "contact_id": c.id,
             "contact_name": c.full_name or c.email,
             "scheduled_send_at": e.scheduled_send_at.isoformat() if e.scheduled_send_at else None,
+            "engine": "legacy",
         }
         for e, c, cname in queued_rows
     ]
+
+    # New-engine actions due to dispatch right now (email channel only;
+    # SMS/call_task/manual/linkedin land on the BDR task list, not this
+    # widget). Tenant-safety via the same contacts/companies join +
+    # ORM auto-filter on session.info.tenant_id.
+    from sqlalchemy import text as _sa_text
+    engine_queued_rows = (await db.execute(_sa_text("""
+        SELECT a.id, a.subject, a.scheduled_at,
+               c.id AS contact_id, c.first_name, c.last_name, c.email,
+               co.id AS company_id, co.name AS company_name,
+               co.assigned_to
+        FROM actions a
+        JOIN channel_types ct ON ct.id = a.channel_id
+        JOIN contacts c ON c.id = a.contact_id
+        JOIN companies co ON co.id = c.company_id
+        WHERE a.status = 'scheduled'
+          AND ct.code = 'email'
+          AND a.scheduled_at <= NOW()
+          AND c.unsubscribed_at IS NULL
+        ORDER BY a.scheduled_at
+        LIMIT 10
+    """))).fetchall()
+    # User-scope: non-admins only see actions on companies assigned to them
+    if user.role not in ("admin", "super_admin"):
+        engine_queued_rows = [r for r in engine_queued_rows if r.assigned_to == user.id]
+    for r in engine_queued_rows:
+        contact_name = (
+            f"{r.first_name or ''} {r.last_name or ''}".strip() or r.email
+        )
+        queued_emails.append({
+            "email_id": int(r.id),
+            "subject": r.subject,
+            "company_id": int(r.company_id),
+            "company_name": r.company_name,
+            "contact_id": int(r.contact_id),
+            "contact_name": contact_name,
+            "scheduled_send_at": r.scheduled_at.isoformat() if r.scheduled_at else None,
+            "engine": "engagement_engine",
+        })
+    # Re-sort + cap so legacy + engine are interleaved by send-time
+    queued_emails.sort(key=lambda x: x["scheduled_send_at"] or "")
+    queued_emails = queued_emails[:10]
 
     # ---------- Stuck deals ----------
     stuck_q = (
@@ -270,10 +318,16 @@ async def get_dashboard(
     ]
 
     # ---------- Sent-this-week count ----------
+    # POST-CUTOVER: count from Activity (email_sent), not GeneratedEmail.
+    # New-engine sends write Activity rows via EmailChannel dual-write;
+    # legacy send_routes also writes Activity. Activity is the unified
+    # truth — counting only GeneratedEmail undercounts every engine
+    # send by 100%.
     sent_q = (
-        select(func.count()).select_from(GeneratedEmail)
-        .join(Company, GeneratedEmail.company_id == Company.id)
-        .where(GeneratedEmail.is_sent == True, GeneratedEmail.sent_at >= week_start)
+        select(func.count()).select_from(Activity)
+        .join(Company, Activity.company_id == Company.id)
+        .where(Activity.activity_type == "email_sent",
+               Activity.created_at >= week_start)
     )
     sent_q = scope_companies(sent_q, user)
     sent_this_week = (await db.execute(sent_q)).scalar() or 0
@@ -754,13 +808,33 @@ async def team_dashboard(
         select(Activity).where(Activity.created_at >= thirtyday_ago)
     )).scalars().all()
 
-    # ----- Pull every GeneratedEmail in the last 30 days too -----
-    emails_30d = (await db.execute(
-        select(GeneratedEmail).where(
-            GeneratedEmail.is_sent == True,
-            GeneratedEmail.sent_at >= thirtyday_ago,
+    # ----- Pull every email send in the last 30 days -----
+    # POST-CUTOVER: every send (legacy + new-engine) is now represented
+    # by an Activity row with activity_type='email_sent'. Using Activity
+    # as the source means we don't have to UNION two tables — the team
+    # dashboard counters get accurate per-BDR + total numbers in one query.
+    # `emails_30d` keeps its name + duck-typed shape (sent_at, company_id,
+    # is_sent) so the downstream loops in this function don't need
+    # rewriting.
+    _activity_email_rows = (await db.execute(
+        select(Activity).where(
+            Activity.activity_type == "email_sent",
+            Activity.created_at >= thirtyday_ago,
         )
     )).scalars().all()
+
+    class _EmailLikeFromActivity:
+        """Tiny shim so the downstream loops in this function don't need
+        to be rewritten just for the data-source swap. Exposes sent_at +
+        company_id + is_sent so the existing _count_acts / per-BDR
+        loops below treat Activity rows as if they were GeneratedEmail."""
+        def __init__(self, a):
+            self.sent_at = a.created_at
+            self.company_id = a.company_id
+            self.contact_id = a.contact_id
+            self.user_id = a.user_id
+            self.is_sent = True
+    emails_30d = [_EmailLikeFromActivity(a) for a in _activity_email_rows]
 
     # ----- Bookings (meetings) in the last 30 days -----
     from app.models import Booking, Task as _Task

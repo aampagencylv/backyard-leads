@@ -122,6 +122,41 @@ class SMSChannel:
                 error_message=result.error,
             )
 
+        # Dual-write an Activity row so dashboard / morning brief /
+        # team leaderboard counters that look at imessage_sent /
+        # sms_sent activity counts see new-engine SMS sends.
+        try:
+            from app.models import Activity as _Activity
+            import json as _json
+            async with async_session() as activity_session:
+                ctx = await activity_session.execute(text("""
+                    SELECT e.company_id,
+                           COALESCE(e.assigned_bdr_id, co.assigned_to) AS user_id
+                    FROM engagements e
+                    JOIN companies co ON co.id = e.company_id
+                    WHERE e.id = :eng
+                """), {"eng": action.engagement_id})
+                row = ctx.first()
+                company_id = row.company_id if row else None
+                user_id = row.user_id if row else None
+                activity_session.add(_Activity(
+                    company_id=company_id,
+                    contact_id=action.contact_id,
+                    user_id=user_id,
+                    activity_type="imessage_sent",
+                    content=f"Sent SMS: {(action.body or '')[:200]}",
+                    metadata_json=_json.dumps({
+                        "engagement_action_id": action.id,
+                        "engagement_id": action.engagement_id,
+                        "engine": "engagement_engine",
+                        "twilio_sid": result.message_sid,
+                        "to": action.recipient_phone,
+                    }),
+                ))
+                await activity_session.commit()
+        except Exception:
+            pass  # never block dispatch
+
         return SendResult(
             success=True,
             external_id=result.message_sid,

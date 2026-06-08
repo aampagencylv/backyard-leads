@@ -313,6 +313,16 @@ async def send_email(
         "X-Contact-ID": str(contact_id),
         "X-Email-ID": str(email_id),
     }
+    # Include engagement_action_id as a header too — Resend's webhook
+    # payload sends tags as a dict, not a list, and our handler's
+    # `for t in tags: t["name"]` parsing returns {} on that shape.
+    # X-headers come through cleanly as a list in the webhook payload
+    # so this header is the reliable attribution channel for engine
+    # opens/clicks/bounces. Without it, every new-engine email's
+    # Resend webhook events were routing only via the legacy email_id
+    # path → 0 signals written → decision_maker had nothing to react to.
+    if engagement_action_id is not None:
+        headers["X-Engagement-Action-ID"] = str(engagement_action_id)
     # List-Unsubscribe headers — invisible to recipient, but Gmail/Outlook
     # use them to render a native unsubscribe button at the top of the email
     # AND treat the sender as more legitimate (better inbox placement).

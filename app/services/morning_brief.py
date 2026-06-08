@@ -99,14 +99,23 @@ async def build_brief(db: AsyncSession, user: User) -> BriefData:
         overnight["campaign_ticks"] = 0
         overnight["contacts_enrolled_overnight"] = 0
 
-    # Sequence sends authored by this user since the cutoff
-    sends_count = (await db.execute(
-        select(func.count(GeneratedEmail.id)).where(
-            GeneratedEmail.sent_by_user_id == user.id,
-            GeneratedEmail.is_sent == True,
-            GeneratedEmail.sent_at >= since,
+    # Sequence sends authored by this user since the cutoff.
+    # POST-CUTOVER: read from Activity (activity_type='email_sent')
+    # rather than GeneratedEmail. The new engine writes Activity rows
+    # on every send (via EmailChannel dual-write), and the legacy
+    # send_routes path also writes Activity. So Activity is the single
+    # source of truth for "emails sent" counts; querying GeneratedEmail
+    # alone undercounts every new-engine send by 100%.
+    sends_q = (
+        select(func.count(Activity.id))
+        .where(
+            Activity.activity_type == "email_sent",
+            Activity.created_at >= since,
         )
-    )).scalar() or 0
+    )
+    if user.role not in ("admin", "super_admin"):
+        sends_q = sends_q.where(Activity.user_id == user.id)
+    sends_count = (await db.execute(sends_q)).scalar() or 0
     overnight["sends_overnight"] = int(sends_count)
 
     # Replies on companies assigned to this user (or any if admin)
@@ -232,16 +241,19 @@ async def build_brief(db: AsyncSession, user: User) -> BriefData:
     ]
 
     # ---- Weekly stats (this 7d vs prior 7d) ----
+    # POST-CUTOVER: count from Activity not GeneratedEmail (see above
+    # rationale on overnight sends counter).
     async def _count_user_sends(after: datetime, before: datetime) -> int:
         q = (
-            select(func.count(GeneratedEmail.id))
+            select(func.count(Activity.id))
             .where(
-                GeneratedEmail.sent_by_user_id == user.id,
-                GeneratedEmail.is_sent == True,
-                GeneratedEmail.sent_at >= after,
-                GeneratedEmail.sent_at < before,
+                Activity.activity_type == "email_sent",
+                Activity.created_at >= after,
+                Activity.created_at < before,
             )
         )
+        if user.role not in ("admin", "super_admin"):
+            q = q.where(Activity.user_id == user.id)
         return int((await db.execute(q)).scalar() or 0)
 
     sends_this_week = await _count_user_sends(week_ago, now_utc)

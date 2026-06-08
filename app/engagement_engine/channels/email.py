@@ -231,9 +231,55 @@ class EmailChannel:
         # send_email returns a dict with 'resend_id' (NOT 'resend_message_id'
         # as I wrote earlier — caught during prod cutover when external_id
         # came back NULL for all 15 actual Resend sends).
+        resend_id = result.get("resend_id")
+
+        # Dual-write an Activity row so every dashboard counting
+        # email_sent activity (team dashboard KPIs, BDR leaderboard,
+        # morning brief, sent-this-week widget) sees the new-engine
+        # sends. WITHOUT this dual-write, the dashboards undercount
+        # every new-engine email by 100% — the prod symptom that
+        # showed 0 emails for hours of real autopilot enrollments.
+        # user_id attribution comes from the engagement's assigned
+        # BDR (or the company's assigned_to), falling back to NULL
+        # for system-driven actions with no rep.
+        try:
+            from app.models import Activity as _Activity
+            import json as _json
+            async with async_session() as activity_session:
+                ctx = await activity_session.execute(text("""
+                    SELECT e.company_id,
+                           COALESCE(e.assigned_bdr_id, co.assigned_to) AS user_id
+                    FROM engagements e
+                    JOIN companies co ON co.id = e.company_id
+                    WHERE e.id = :eng
+                """), {"eng": action.engagement_id})
+                row = ctx.first()
+                company_id = row.company_id if row else None
+                user_id = row.user_id if row else None
+                activity_session.add(_Activity(
+                    company_id=company_id,
+                    contact_id=action.contact_id,
+                    user_id=user_id,
+                    activity_type="email_sent",
+                    content=f"Sent: {(action.subject or '(no subject)')[:200]}",
+                    metadata_json=_json.dumps({
+                        "engagement_action_id": action.id,
+                        "engagement_id": action.engagement_id,
+                        "engine": "engagement_engine",
+                        "resend_id": resend_id,
+                        "to": action.recipient_email,
+                        "subject": action.subject,
+                    }),
+                ))
+                await activity_session.commit()
+        except Exception:
+            # Activity logging must NEVER block dispatch — the engine
+            # already recorded the canonical send in `actions`.
+            pass
+
         return SendResult(
             success=True,
-            external_id=result.get("resend_id"),
+            external_id=resend_id,
             cost_usd=0.0004,  # ~$0.40 per 1000 emails Resend pricing
         )
 
