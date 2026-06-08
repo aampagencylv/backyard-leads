@@ -100,26 +100,33 @@ async def _sequence_engine_loop():
     tenant's queue isn't touched until we reach their iteration this
     tick — fair across tenants, and no cross-tenant data leak.
     """
-    # Phase 7 cutover: the legacy sequence_engine is retired. The new
-    # engagement engine handles all orchestration via its own cron-driven
-    # workers (run_engagement_dispatcher / signal_watcher / decision_maker).
-    # Setting LEGACY_SEQUENCE_ENGINE_ENABLED=true in .env temporarily
-    # re-enables it (e.g. for rollback during cutover validation). Default
-    # is OFF — the legacy code path no longer runs.
+    # Phase 7 cutover: the legacy sequence_engine.process_pending_steps
+    # call is retired. The new engagement engine handles outbound
+    # orchestration via its own cron-driven workers.
+    #
+    # HOWEVER, this loop ALSO owns several non-legacy responsibilities:
+    #   - _activate_scheduled_campaigns: flips status='scheduled' →
+    #     'running' when scheduled_start_at passes
+    #   - _advance_full_auto_campaigns: per-tick advance for full_auto
+    #     campaigns (runs the single-pair _execute_batch path which
+    #     itself now routes to lifecycle.start_engagement)
+    #   - reconcile_calls every 5 min
+    #   - _wake_snoozed_deals every 10 min
+    #   - morning_brief every 15 min
+    #
+    # Previously this whole loop was gated behind LEGACY_SEQUENCE_ENGINE_ENABLED,
+    # which meant scheduled campaigns never activated post-cutover. Fixed:
+    # the legacy `process_pending_steps` call is now individually gated,
+    # everything else runs unconditionally.
     import os as _os
     legacy_enabled = _os.environ.get("LEGACY_SEQUENCE_ENGINE_ENABLED", "").lower() == "true"
-    if not legacy_enabled:
-        log.info(
-            "legacy sequence_engine DISABLED (LEGACY_SEQUENCE_ENGINE_ENABLED != 'true'). "
-            "All outreach orchestration runs through the engagement engine workers."
-        )
-        # Sleep forever — keep the task alive so the cancel/yield contract
-        # in lifespan() still works correctly. Wakes every 5 min just so a
-        # log entry shows the loop is alive (helps with monitoring).
-        while True:
-            await asyncio.sleep(300)
+    log.info(
+        "sequence_engine_loop starting (legacy_steps_enabled=%s). Non-legacy "
+        "responsibilities (scheduled-campaign activation, full_auto advance, "
+        "call reconciliation, snooze wake, morning brief) always run.",
+        legacy_enabled,
+    )
 
-    from app.services.sequence_engine import process_pending_steps
     from app.tenancy import tenant_scope
     tick_count = 0
     while True:
@@ -129,19 +136,24 @@ async def _sequence_engine_loop():
             log.exception(f"tenant enumeration failed: {e}")
             tenant_ids = [1]  # don't lose a tick on a transient lookup error
 
-        for tid in tenant_ids:
-            try:
-                async with async_session() as db:
-                    with tenant_scope(db, tid):
-                        try:
-                            counters = await process_pending_steps(db)
-                        except Exception:
-                            await db.rollback()
-                            raise
-                if any(counters[k] for k in ("sent", "skipped", "tasks_created", "errors")):
-                    log.info(f"sequence_engine tick (tenant={tid}): {counters}")
-            except Exception as e:
-                log.exception(f"sequence_engine tick failed (tenant={tid}): {e}")
+        # Legacy sequence_engine step dispatching — gated. This was the
+        # only piece I actually retired during the cutover. The
+        # engagement engine's dispatcher cron now owns outbound sending.
+        if legacy_enabled:
+            from app.services.sequence_engine import process_pending_steps
+            for tid in tenant_ids:
+                try:
+                    async with async_session() as db:
+                        with tenant_scope(db, tid):
+                            try:
+                                counters = await process_pending_steps(db)
+                            except Exception:
+                                await db.rollback()
+                                raise
+                    if any(counters[k] for k in ("sent", "skipped", "tasks_created", "errors")):
+                        log.info(f"sequence_engine tick (tenant={tid}): {counters}")
+                except Exception as e:
+                    log.exception(f"sequence_engine tick failed (tenant={tid}): {e}")
 
         tick_count += 1
 
