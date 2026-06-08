@@ -374,8 +374,15 @@ async def voice_status(request: Request):
         return Response(content="", media_type="application/xml")
 
     async with async_session() as db:
+        # Tolerate the recon-stub race: if multiple rows share the
+        # twilio_call_sid, take the most recent (typically the real
+        # log_call row) and update it. The voice/recording webhook
+        # later collapses the duplicate.
         act = (await db.execute(
-            select(Activity).where(Activity.twilio_call_sid == call_sid)
+            select(Activity)
+            .where(Activity.twilio_call_sid == call_sid)
+            .order_by(Activity.id.desc())
+            .limit(1)
         )).scalar_one_or_none()
         if act:
             if duration:
@@ -419,14 +426,45 @@ async def voice_recording(request: Request):
         recording_url = recording_url + ".mp3"
 
     async with async_session() as db:
-        act = (await db.execute(
-            select(Activity).where(Activity.twilio_call_sid == call_sid)
-        )).scalar_one_or_none()
+        # A race between call_reconciliation (creates a stub) and the
+        # normal call-end webhook can leave two Activity rows with the
+        # same twilio_call_sid. Pick the most-recently-updated row that
+        # has a non-stub content (real log_call output), falling back
+        # to the most recent row of any kind. Delete the others to
+        # collapse the duplicate immediately so the next webhook sees
+        # exactly one match.
+        rows = (await db.execute(
+            select(Activity)
+            .where(Activity.twilio_call_sid == call_sid)
+            .order_by(Activity.id.desc())
+        )).scalars().all()
+
         activity_id: Optional[int] = None
-        if act:
-            act.recording_url = recording_url
+        if rows:
+            # Prefer the row that does NOT look like a reconciliation stub
+            # (those have content starting with "Called the prospect at" +
+            # "[reconciled from Twilio"). Anything else is the real one.
+            def _is_stub(a) -> bool:
+                c = (a.content or "")
+                return "[reconciled from Twilio" in c or c.startswith("Called the prospect at")
+            non_stubs = [a for a in rows if not _is_stub(a)]
+            primary = non_stubs[0] if non_stubs else rows[0]
+
+            primary.recording_url = recording_url
+            activity_id = primary.id
+
+            # Collapse duplicates — delete every other row pointing at
+            # this same CallSid. Safe because we've moved the recording
+            # URL onto `primary` already.
+            for dup in rows:
+                if dup.id != primary.id:
+                    _log.info(
+                        f"[recording-webhook] collapsing duplicate activity "
+                        f"id={dup.id} into primary id={primary.id} for "
+                        f"CallSid={call_sid}"
+                    )
+                    await db.delete(dup)
             await db.commit()
-            activity_id = act.id
 
     # Fire-and-forget transcription pipeline. Don't block the webhook ack.
     if activity_id is not None:
@@ -909,9 +947,14 @@ async def log_call(
     else:
         summary = head
 
-    # Don't double-create — the Twilio status webhook may have made a stub
+    # Don't double-create — the Twilio status webhook OR the call
+    # reconciliation cron may have made a stub. Tolerate duplicates
+    # by picking the most-recent matching row; we update that one.
     existing = (await db.execute(
-        select(Activity).where(Activity.twilio_call_sid == req.call_sid)
+        select(Activity)
+        .where(Activity.twilio_call_sid == req.call_sid)
+        .order_by(Activity.id.desc())
+        .limit(1)
     )).scalar_one_or_none()
 
     if existing:
