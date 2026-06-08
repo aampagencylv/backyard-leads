@@ -31,7 +31,7 @@ async def unsubscribe(
 
     if not contact.unsubscribed_at:
         contact.unsubscribed_at = datetime.now(timezone.utc)
-        # Pause any pending emails for this contact
+        # Pause any pending emails for this contact (legacy table)
         pending = (await db.execute(
             select(GeneratedEmail).where(
                 GeneratedEmail.contact_id == contact.id,
@@ -42,11 +42,51 @@ async def unsubscribe(
         now = datetime.now(timezone.utc)
         for e in pending:
             e.paused_at = now
+
+        # POST-CUTOVER: also terminate the engagement engine engagement
+        # for this contact AND add their email to email_suppressions so
+        # EmailChannel.pre_dispatch_guards blocks any future engine send.
+        # WITHOUT these two steps the legacy half pauses, but the new
+        # engine keeps firing — actively continuing outreach to a
+        # prospect who explicitly opted out (CAN-SPAM violation).
+        engine_actions_canceled = 0
+        try:
+            from app.engagement_engine.lifecycle import terminate_engagement
+            engine_actions_canceled = await terminate_engagement(
+                db, contact.id, reason="unsubscribed_via_link",
+                transition_by="system",
+            )
+        except Exception:
+            pass
+
+        # Add to suppression list so any future re-enrollment doesn't
+        # accidentally re-target the unsubscribed address.
+        if contact.email:
+            try:
+                from sqlalchemy import text as _sa_text
+                await db.execute(_sa_text("""
+                    INSERT INTO email_suppressions (
+                        tenant_id, recipient_email, reason, source,
+                        is_currently_active
+                    )
+                    VALUES (:t, :r, 'unsubscribed', 'unsubscribe_link', TRUE)
+                    ON CONFLICT (tenant_id, recipient_email)
+                      WHERE is_currently_active = TRUE
+                      DO NOTHING
+                """), {"t": contact.tenant_id, "r": contact.email})
+            except Exception:
+                pass
+
         db.add(Activity(
             company_id=contact.company_id,
             contact_id=contact.id,
             activity_type="unsubscribed",
-            content=f"Unsubscribed via email link; {len(pending)} pending email(s) paused",
+            content=(
+                f"Unsubscribed via email link; "
+                f"{len(pending)} legacy email(s) paused, "
+                f"{engine_actions_canceled} engine action(s) canceled, "
+                f"email added to suppression list"
+            ),
         ))
         await db.commit()
 

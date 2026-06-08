@@ -988,7 +988,11 @@ async def log_call(
 
     # Auto-complete the next pending call step in this contact's sequence.
     # Any call logged from the dialer (regardless of outcome) counts as
-    # "the BDR made the call" — the step is done.
+    # "the BDR made the call" — the step is done. POST-CUTOVER: this
+    # auto-completion must advance BOTH the legacy GeneratedEmail row
+    # AND the next scheduled call_task action in the new engine.
+    # Without the new-engine half, BDRs see their dialer log the call
+    # but the contact's next call step stays "queued" forever.
     if contact:
         try:
             next_call_step = (await db.execute(
@@ -1003,6 +1007,29 @@ async def log_call(
                 next_call_step.is_sent = True
                 next_call_step.sent_at = datetime.now(timezone.utc)
                 await db.commit()
+        except Exception:
+            pass  # don't block the call log
+
+        # New-engine call_task advance: find the soonest scheduled
+        # call_task action on this contact and mark it completed.
+        try:
+            from sqlalchemy import text as _sa_text
+            await db.execute(_sa_text("""
+                UPDATE actions
+                SET status = 'completed', outcome = 'call_logged',
+                    executed_at = COALESCE(executed_at, NOW()),
+                    sent_by_user_id = COALESCE(sent_by_user_id, :uid)
+                WHERE id = (
+                    SELECT a.id FROM actions a
+                    JOIN channel_types ct ON ct.id = a.channel_id
+                    WHERE a.contact_id = :c
+                      AND ct.code = 'call_task'
+                      AND a.status = 'scheduled'
+                    ORDER BY a.scheduled_at ASC, a.id ASC
+                    LIMIT 1
+                )
+            """), {"c": contact.id, "uid": user.id})
+            await db.commit()
         except Exception:
             pass  # don't block the call log
 
