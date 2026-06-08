@@ -615,7 +615,12 @@ async def snooze_company(
 
     # Don't mutate generated_emails — the dispatch gate suppresses them
     # until wake, and the wake handler regenerates a fresh sequence then.
-    pending_count = (await db.execute(
+    # POST-CUTOVER: count pending across BOTH legacy GeneratedEmail rows
+    # AND new-engine scheduled actions so the "X steps remaining when
+    # we wake up" snooze message reflects reality for engine-enrolled
+    # companies (most of them now).
+    from sqlalchemy import text as _sa_text
+    legacy_pending = (await db.execute(
         select(func.count(GeneratedEmail.id)).where(
             GeneratedEmail.company_id == company_id,
             GeneratedEmail.is_sent == False,
@@ -623,6 +628,12 @@ async def snooze_company(
             GeneratedEmail.paused_at.is_(None),
         )
     )).scalar() or 0
+    engine_pending = (await db.execute(_sa_text("""
+        SELECT COUNT(*) FROM actions a
+        JOIN engagements e ON e.id = a.engagement_id
+        WHERE e.company_id = :co AND a.status = 'scheduled'
+    """), {"co": company_id})).scalar() or 0
+    pending_count = int(legacy_pending) + int(engine_pending)
 
     audit_msg = (
         f"Snooze extended from {prior_resume.strftime('%b %d, %Y') if prior_resume else '—'} "

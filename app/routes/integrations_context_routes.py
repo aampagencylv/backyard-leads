@@ -192,6 +192,12 @@ async def get_context(
     # Sequence position — next unsent step for this contact (if any)
     sequence = None
     if contact:
+        # POST-CUTOVER: query BOTH legacy generated_emails AND new-engine
+        # actions for this contact's sequence counts + next step. Kevin's
+        # MCP tool surface reads from this endpoint, so without the union
+        # Kevin reports "no sequence" or "0 steps" for every engine-
+        # enrolled contact (i.e. virtually all of them today).
+        from sqlalchemy import text as _sa_text
         next_step = (await db.execute(
             select(GeneratedEmail).where(
                 GeneratedEmail.contact_id == contact.id,
@@ -200,28 +206,72 @@ async def get_context(
                 GeneratedEmail.skipped_at.is_(None),
             ).order_by(GeneratedEmail.sequence_order.asc(), GeneratedEmail.scheduled_send_at.asc()).limit(1)
         )).scalars().first()
-        # Total steps for this contact (helps render "step 3 of 13")
-        total = (await db.execute(
+
+        # Engine action equivalents
+        engine_next = (await db.execute(_sa_text("""
+            SELECT a.id, ct.code AS channel, a.subject, a.scheduled_at,
+                   ROW_NUMBER() OVER (ORDER BY a.scheduled_at, a.id) AS step_order
+            FROM actions a JOIN channel_types ct ON ct.id = a.channel_id
+            WHERE a.contact_id = :c AND a.status = 'scheduled'
+            ORDER BY a.scheduled_at ASC LIMIT 1
+        """), {"c": contact.id})).first()
+        engine_total = (await db.execute(_sa_text(
+            "SELECT COUNT(*) FROM actions WHERE contact_id = :c"
+        ), {"c": contact.id})).scalar() or 0
+        engine_sent = (await db.execute(_sa_text(
+            "SELECT COUNT(*) FROM actions WHERE contact_id = :c AND status = 'sent'"
+        ), {"c": contact.id})).scalar() or 0
+
+        legacy_total = (await db.execute(
             select(func.count(GeneratedEmail.id)).where(
                 GeneratedEmail.contact_id == contact.id,
             )
         )).scalar() or 0
-        sent = (await db.execute(
+        legacy_sent = (await db.execute(
             select(func.count(GeneratedEmail.id)).where(
                 GeneratedEmail.contact_id == contact.id,
                 GeneratedEmail.is_sent == True,
             )
         )).scalar() or 0
-        sequence = {
-            "total_steps": int(total),
-            "sent_steps": int(sent),
-            "next_step": {
+
+        # Pick whichever next-step fires first chronologically
+        legacy_due = (next_step.scheduled_send_at if next_step and next_step.scheduled_send_at else None)
+        engine_due = engine_next.scheduled_at if engine_next else None
+        chosen_next = None
+        if next_step and engine_next:
+            chosen_next = (
+                {"_src": "engine"} if (engine_due and (not legacy_due or engine_due < legacy_due))
+                else {"_src": "legacy"}
+            )
+        elif next_step:
+            chosen_next = {"_src": "legacy"}
+        elif engine_next:
+            chosen_next = {"_src": "engine"}
+
+        next_payload = None
+        if chosen_next and chosen_next["_src"] == "legacy" and next_step:
+            next_payload = {
                 "id": next_step.id,
                 "type": next_step.step_type or "email",
                 "subject": next_step.subject,
-                "scheduled_at": next_step.scheduled_send_at.isoformat() if next_step and next_step.scheduled_send_at else None,
+                "scheduled_at": next_step.scheduled_send_at.isoformat() if next_step.scheduled_send_at else None,
                 "order": next_step.sequence_order,
-            } if next_step else None,
+            }
+        elif chosen_next and chosen_next["_src"] == "engine" and engine_next:
+            step_type_map = {"email": "email", "sms": "imessage", "call_task": "call",
+                             "linkedin": "linkedin", "manual": "manual", "wait": "wait"}
+            next_payload = {
+                "id": int(engine_next.id),
+                "type": step_type_map.get(engine_next.channel, engine_next.channel),
+                "subject": engine_next.subject,
+                "scheduled_at": engine_next.scheduled_at.isoformat() if engine_next.scheduled_at else None,
+                "order": int(engine_next.step_order),
+            }
+
+        sequence = {
+            "total_steps": int(legacy_total + engine_total),
+            "sent_steps": int(legacy_sent + engine_sent),
+            "next_step": next_payload,
         }
 
     # Recent emails sent to this contact (last 5) — gives the BDR a

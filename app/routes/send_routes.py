@@ -877,6 +877,50 @@ async def _emit_engagement_engine_signal(
             "err": f"webhook:{event_type}",
         })
 
+    # Dual-write Activity row so dashboards / morning brief / reputation
+    # widget / company timeline see new-engine email events. The legacy
+    # webhook path only wrote Activity rows when `em` (GeneratedEmail
+    # lookup) succeeded — for new-engine sends `em` is always None since
+    # the action.id isn't a generated_emails.id, so this dual-write here
+    # closes that gap. activity_type names match the legacy convention so
+    # existing dashboard queries Just Work.
+    _activity_type_map = {
+        "email.delivered": "email_delivered",
+        "email.opened":    "email_opened",
+        "email.clicked":   "email_clicked",
+        "email.bounced":   "email_bounced",
+        "email.complained":"email_complained",
+        "email.unsubscribed": "email_unsubscribed",
+    }
+    activity_type = _activity_type_map.get(event_type)
+    if activity_type:
+        # Get company_id via engagement → company for correct timeline
+        # placement (Activity.company_id drives the company-page feed).
+        co_row = await db.execute(_sa_text(
+            "SELECT company_id FROM engagements WHERE id = :e"
+        ), {"e": a.engagement_id})
+        co = co_row.first()
+        co_id = int(co.company_id) if co else None
+        await db.execute(_sa_text("""
+            INSERT INTO activities (
+                tenant_id, company_id, contact_id, activity_type,
+                content, metadata_json, created_at
+            )
+            VALUES (
+                :t, :co, :c, :at,
+                :content, :meta::text, NOW()
+            )
+        """), {
+            "t": a.tenant_id, "co": co_id, "c": a.contact_id,
+            "at": activity_type,
+            "content": f"Email {activity_type.replace('email_','')}",
+            "meta": _json.dumps({
+                "engagement_action_id": engagement_action_id,
+                "engine": "engagement_engine",
+                "event": event_type,
+            }),
+        })
+
 
 @router.post("/webhook/resend")
 async def resend_webhook(request: Request, db: AsyncSession = Depends(get_tenant_db)):

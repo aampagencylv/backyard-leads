@@ -127,6 +127,48 @@ async def reputation_summary(
         )
     )).all()
 
+    # POST-CUTOVER: also pull new-engine email events from Activity.
+    # Engine sends don't have a GeneratedEmail row, so the reputation
+    # widget was undercounting every metric since cutover. Each engine
+    # action's lifecycle produces multiple Activity rows (one per event
+    # type: email_sent / email_delivered / email_opened / email_bounced /
+    # email_complained), which we aggregate per-action below so the same
+    # action contributes at most one count per metric.
+    from sqlalchemy import text as _sa_text
+    engine_rows = (await db.execute(_sa_text("""
+        SELECT
+            (act.metadata_json::jsonb->>'engagement_action_id')::int AS action_id,
+            MIN(CASE WHEN act.activity_type = 'email_sent' THEN act.created_at END) AS sent_at,
+            MIN(CASE WHEN act.activity_type = 'email_delivered' THEN act.created_at END) AS delivered_at,
+            MIN(CASE WHEN act.activity_type = 'email_opened' THEN act.created_at END) AS opened_at,
+            MIN(CASE WHEN act.activity_type = 'email_bounced' THEN act.created_at END) AS bounced_at,
+            MIN(CASE WHEN act.activity_type = 'email_complained' THEN act.created_at END) AS complained_at,
+            MAX(c.email) AS contact_email
+        FROM activities act
+        LEFT JOIN contacts c ON c.id = act.contact_id
+        WHERE act.activity_type IN (
+            'email_sent','email_delivered','email_opened',
+            'email_bounced','email_complained'
+        )
+          AND act.metadata_json::jsonb->>'engine' = 'engagement_engine'
+          AND act.created_at >= :cutoff
+        GROUP BY (act.metadata_json::jsonb->>'engagement_action_id')::int
+    """), {"cutoff": cutoff})).fetchall()
+
+    # Adapt engine_rows to the same duck-typed shape the loop below
+    # iterates. open_count not tracked for engine — treat as 1 if opened.
+    class _EngineRow:
+        def __init__(self, x):
+            self.id = x.action_id
+            self.delivered_at = x.delivered_at
+            self.opened_at = x.opened_at
+            self.open_count = 1 if x.opened_at else 0
+            self.bounced_at = x.bounced_at
+            self.complained_at = x.complained_at
+            self.sent_at = x.sent_at
+            self.email = x.contact_email
+    rows = list(rows) + [_EngineRow(x) for x in engine_rows]
+
     overall = {"sent": 0, "delivered": 0, "opened": 0, "bounced": 0, "complained": 0}
     by_domain: dict[str, dict] = {}
     daily: dict[str, dict] = {}  # iso-date → {sent, delivered, opened, bounced, complained}
