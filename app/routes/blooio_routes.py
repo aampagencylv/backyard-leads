@@ -541,6 +541,11 @@ async def _handle_inbound_message(data: dict) -> None:
 
 
 async def _pause_email_sequence(db: AsyncSession, contact: Contact, channel_label: str = "iMessage") -> None:
+    """Auto-pause the contact's outreach sequence when they reply on
+    a side channel (iMessage via Blooio). Pauses BOTH the legacy
+    GeneratedEmail rows AND the new-engine engagement so we don't
+    keep sending automated outreach to someone who's actively talking
+    to us."""
     pending = (await db.execute(
         select(GeneratedEmail).where(
             GeneratedEmail.contact_id == contact.id,
@@ -548,16 +553,34 @@ async def _pause_email_sequence(db: AsyncSession, contact: Contact, channel_labe
             GeneratedEmail.paused_at.is_(None),
         )
     )).scalars().all()
-    if not pending:
-        return
     now = datetime.now(timezone.utc)
     for e in pending:
         e.paused_at = now
-    db.add(Activity(
-        company_id=contact.company_id, contact_id=contact.id,
-        activity_type="sequence_paused",
-        content=f"Email sequence auto-paused — contact replied via {channel_label} ({len(pending)} emails)",
-    ))
+
+    # POST-CUTOVER: also freeze the new-engine engagement so any
+    # scheduled actions stop firing. Without this the legacy half
+    # pauses but the engine keeps sending — the prospect gets the
+    # automated cold-email follow-up despite already talking to us
+    # over iMessage.
+    engine_paused = 0
+    try:
+        from app.engagement_engine.lifecycle import pause_engagement
+        engine_paused = await pause_engagement(
+            db, contact.id, reason=f"replied via {channel_label}",
+        )
+    except Exception:
+        pass
+
+    if pending or engine_paused:
+        db.add(Activity(
+            company_id=contact.company_id, contact_id=contact.id,
+            activity_type="sequence_paused",
+            content=(
+                f"Email sequence auto-paused — contact replied via "
+                f"{channel_label} ({len(pending)} legacy email(s), "
+                f"{engine_paused} engine action(s) frozen)"
+            ),
+        ))
 
 
 async def _handle_status_update(event_type: str, data: dict) -> None:

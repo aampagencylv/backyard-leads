@@ -1039,12 +1039,26 @@ async def resend_webhook(request: Request, db: AsyncSession = Depends(get_tenant
         # Re-opens of the same email don't accumulate. Flush so this open
         # is visible to the count below.
         await db.flush()
-        distinct_opens = (await db.execute(
+        # POST-CUTOVER: count distinct opens across BOTH legacy (GE.opened_at)
+        # AND new-engine actions (Activity email_opened rows tagged with
+        # engagement_action_id). Without the engine half, every engine open
+        # was invisible to the auto-qualify trigger so engine-enrolled
+        # companies couldn't auto-qualify regardless of open count.
+        from sqlalchemy import text as _sa_text
+        legacy_opens = (await db.execute(
             select(func.count()).select_from(GeneratedEmail).where(
                 GeneratedEmail.company_id == company_id,
                 GeneratedEmail.opened_at.is_not(None),
             )
         )).scalar() or 0
+        engine_opens = (await db.execute(_sa_text("""
+            SELECT COUNT(DISTINCT (metadata_json::jsonb->>'engagement_action_id'))
+            FROM activities
+            WHERE company_id = :co
+              AND activity_type = 'email_opened'
+              AND metadata_json::jsonb->>'engine' = 'engagement_engine'
+        """), {"co": company_id})).scalar() or 0
+        distinct_opens = int(legacy_opens) + int(engine_opens)
 
         already_auto_qualified = "[Auto-qualified: opened" in (company.enrichment_summary or "")
         if (distinct_opens >= 3 and company.status in ("sequencing", "contacted")
