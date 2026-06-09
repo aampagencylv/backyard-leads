@@ -464,7 +464,7 @@ async def trigger_post_call_sequence(
             "company_id": company.id,
             "company_name": company.name,
             "step_count": created,
-            "first_send_at": base_time.isoformat(),
+            "first_send_at": (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
             "kind": "post_call",
         })
     except Exception:

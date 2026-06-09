@@ -228,7 +228,91 @@ async def _route_reply_to_engagement_engine(
             }),
         ))
 
+        # POST-CUTOVER reply side-effects parity with legacy path:
+        #   1. Flip company.status='replied' (drives the Companies filter
+        #      pill + the Missive label auto-sync). Skip auto-responses
+        #      so vacation OOOs don't flip status.
+        #   2. Resolve BDR + forward to their inbox so they see the reply
+        #      in Missive/Gmail alongside the original outbound.
+        #   3. Fire the email.replied outbound webhook so customer
+        #      Zapier/Make flows tied to replies still trigger.
+        # All three were live for legacy emails; engine emails got NONE
+        # until now. Steve found this when 'Replied' tab stayed empty
+        # despite obvious replies landing.
+        bdr_id = None
+        co_obj = None
+        contact_obj = None
+        if not is_auto_response:
+            # status='replied' guarded so we don't downgrade qualified/converted
+            await db.execute(_sa_text("""
+                UPDATE companies
+                SET status = 'replied'
+                WHERE id = :co AND status IN ('new','pursuing','sequencing','contacted')
+            """), {"co": a.company_id})
+
+            # Resolve BDR + the orm objects forward needs
+            ctx = await db.execute(_sa_text("""
+                SELECT COALESCE(e.assigned_bdr_id, co.assigned_to) AS bdr_id
+                FROM engagements e
+                JOIN companies co ON co.id = e.company_id
+                WHERE e.id = :e
+            """), {"e": a.engagement_id})
+            r = ctx.first()
+            bdr_id = r.bdr_id if r else None
+            from app.models import Company as _Company, Contact as _Contact, User as _User
+            co_obj = (await db.execute(
+                select(_Company).where(_Company.id == a.company_id)
+            )).scalar_one_or_none()
+            contact_obj = (await db.execute(
+                select(_Contact).where(_Contact.id == a.contact_id)
+            )).scalar_one_or_none()
+
         await db.commit()
+
+        # Forward + webhook AFTER commit so a failure in either doesn't
+        # roll back the reply-attribution work.
+        if not is_auto_response and bdr_id is not None:
+            try:
+                from app.models import User as _User
+                async with async_session() as bdr_db:
+                    bdr_user = (await bdr_db.execute(
+                        select(_User).where(_User.id == bdr_id)
+                    )).scalar_one_or_none()
+                if bdr_user and bdr_user.email:
+                    await _forward_to_bdr(
+                        sender_user=bdr_user,
+                        prospect_email=bare_from,
+                        prospect_name=(contact_obj.full_name if contact_obj else "") or bare_from,
+                        subject=subject or "(no subject)",
+                        body_text=body_text or "",
+                        body_html=html_body or "",
+                        contact=contact_obj,
+                        company=co_obj,
+                        inbound_id=None,
+                        db=None,
+                    )
+            except Exception as e:
+                log.warning(f"[inbound:engine] BDR forward failed for action={action_id}: {e}")
+
+        if not is_auto_response:
+            try:
+                from app.services.webhook_dispatch import dispatch_event
+                async with async_session() as wh_db:
+                    await dispatch_event(wh_db, "email.replied", {
+                        "tenant_id": a.tenant_id,
+                        "engagement_action_id": action_id,
+                        "engagement_id": a.engagement_id,
+                        "company_id": a.company_id,
+                        "company_name": co_obj.name if co_obj else None,
+                        "contact_id": a.contact_id,
+                        "contact_email": bare_from,
+                        "contact_name": contact_obj.full_name if contact_obj else None,
+                        "subject": subject,
+                        "preview": body_preview,
+                        "engine": "engagement_engine",
+                    })
+            except Exception as e:
+                log.warning(f"[inbound:engine] email.replied webhook dispatch failed for action={action_id}: {e}")
 
     # Fire async sentiment classification for real replies. We don't await
     # — the AI roundtrip should not block the webhook ack. The classifier

@@ -336,10 +336,30 @@ async def _wake_snoozed_deals(tenant_id: int):
                         due_date=now,
                     ))
 
+                # POST-CUTOVER: also resume the engagement-engine engagement
+                # for every contact at this company. The deal stage flips back
+                # but without this the engine stays paused → no outbound
+                # resumes → prospect drops off the radar. Manual wake (in
+                # deal_routes.wake_deal) already does this; the cron path
+                # didn't, so auto-woken deals went dark.
+                try:
+                    from app.engagement_engine.lifecycle import resume_engagement
+                    from app.models import Contact as _Contact
+                    contacts = (await db.execute(
+                        select(_Contact).where(_Contact.company_id == deal.company_id)
+                    )).scalars().all()
+                    for c in contacts:
+                        try:
+                            await resume_engagement(db, c.id)
+                        except Exception:
+                            pass  # individual contact failure must not block other deals
+                except Exception as _re:
+                    log.warning(f"resume_engagement on wake failed for deal {deal.id}: {_re}")
+
                 db.add(Activity(
                     company_id=deal.company_id, deal_id=deal.id,
                     activity_type="deal_woken",
-                    content=f"Deal auto-reactivated from snooze — restored to {restore}. Reason was: {reason}",
+                    content=f"Deal auto-reactivated from snooze — restored to {restore}. Engine engagement resumed. Reason was: {reason}",
                 ))
 
                 log.info(f"Woke snoozed deal {deal.id} for {company_name}")

@@ -8139,14 +8139,26 @@ function verify(secret, rawBody, header) {
                 : '';
             const handle = isDraggable ? '<span style="cursor:grab;user-select:none;color:#aab;margin-right:6px" title="Drag to reorder">⋮⋮</span>' : '';
 
+            // CRITICAL: engine action IDs and legacy GeneratedEmail IDs
+            // share the same int space. Edit/Delete buttons that pass
+            // the engine action ID to /api/send/email/{id}/edit will
+            // silently corrupt an unrelated legacy email row whose id
+            // happens to match. Disable destructive controls on engine
+            // steps until per-channel engine-aware endpoints exist.
+            // (`engine` field set by company_routes.py emails-array fix.)
+            const isEngineStep = e.engine === 'engagement_engine';
+            const disabledNote = 'Engine sequence steps can\\'t be edited from this UI yet — talk to admin if you need to change content';
+
             return `
-                <div class="${klass}" data-email-id="${e.id}" data-sequence-label="${escapeHtml(e.sequence_label || 'main')}" ${dragAttrs}>
+                <div class="${klass}" data-email-id="${e.id}" data-engine="${isEngineStep ? 'engagement_engine' : 'legacy'}" data-sequence-label="${escapeHtml(e.sequence_label || 'main')}" ${dragAttrs}>
                     <div class="meta ${meta}">
-                        <span>${handle}<span class="step-number">${e.sequence_order || '·'}</span>${icon} ${escapeHtml(channelLabel)} <span style="color:#aab">·</span> ${escapeHtml((e.email_type||'').replace(/_/g,' '))} ${stateLabel} ${auto}${skipBadges}</span>
+                        <span>${handle}<span class="step-number">${e.sequence_order || '·'}</span>${icon} ${escapeHtml(channelLabel)} <span style="color:#aab">·</span> ${escapeHtml((e.email_type||'').replace(/_/g,' '))} ${stateLabel} ${auto}${skipBadges}${isEngineStep ? ' <span style="background:#e8f4f8;color:#1e4634;padding:1px 6px;border-radius:8px;font-size:10px;font-weight:600;margin-left:6px" title="Managed by the engagement engine">engine</span>' : ''}</span>
                         <span style="display:flex;gap:4px">
-                            ${!e.is_sent && !isSkipped ? `<button class="btn btn-secondary btn-xs" onclick="editEmail(${e.id})">Edit</button>` : ''}
-                            ${!e.is_sent && !isSkipped && stype === 'linkedin' ? `<button class="btn btn-success btn-xs" onclick="completeStep(${e.id})">Mark Done</button>` : ''}
-                            ${!e.is_sent && !isSkipped ? `<button class="btn btn-danger btn-xs" onclick="deleteEmail(${e.id})">Delete</button>` : ''}
+                            ${!e.is_sent && !isSkipped && !isEngineStep ? `<button class="btn btn-secondary btn-xs" onclick="editEmail(${e.id})">Edit</button>` : ''}
+                            ${!e.is_sent && !isSkipped && !isEngineStep && stype === 'linkedin' ? `<button class="btn btn-success btn-xs" onclick="completeStep(${e.id})">Mark Done</button>` : ''}
+                            ${!e.is_sent && !isSkipped && !isEngineStep ? `<button class="btn btn-danger btn-xs" onclick="deleteEmail(${e.id})">Delete</button>` : ''}
+                            ${!e.is_sent && !isSkipped && isEngineStep ? `<span class="btn btn-secondary btn-xs" style="opacity:0.4;cursor:not-allowed" title="${disabledNote}">Edit</span>` : ''}
+                            ${!e.is_sent && !isSkipped && isEngineStep ? `<span class="btn btn-danger btn-xs" style="opacity:0.4;cursor:not-allowed" title="${disabledNote}">Delete</span>` : ''}
                         </span>
                     </div>
                     <div class="subject">${stype === 'email' ? 'Subject: ' : ''}${escapeHtml(e.subject)}</div>

@@ -876,6 +876,25 @@ async def _emit_engagement_engine_signal(
             "id": engagement_action_id,
             "err": f"webhook:{event_type}",
         })
+        # POST-CUTOVER: bounce / complaint must terminate the engagement.
+        # The suppression list blocks future sends to this address but
+        # leaves the engagement in 'active' state with scheduled future
+        # actions. Without termination: engagement_score, kanban "in
+        # cadence" badge, AI budget allocation all keep showing the
+        # contact as active when they're physically unreachable.
+        try:
+            from app.engagement_engine.lifecycle import terminate_engagement
+            await terminate_engagement(
+                db, a.contact_id,
+                reason=("hard_bounce" if event_type == "email.bounced"
+                        else "complaint"),
+                transition_by="system",
+            )
+        except Exception as _te:
+            log.warning(
+                f"[resend webhook] terminate_engagement after {event_type} "
+                f"failed for action={engagement_action_id}: {_te}"
+            )
 
     # Dual-write Activity row so dashboards / morning brief / reputation
     # widget / company timeline see new-engine email events. The legacy

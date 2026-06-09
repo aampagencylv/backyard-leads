@@ -613,12 +613,15 @@ async def snooze_company(
     company.sequence_snoozed_by_user_id = user.id
     company.sequence_snooze_days = days_chosen
 
-    # Don't mutate generated_emails — the dispatch gate suppresses them
-    # until wake, and the wake handler regenerates a fresh sequence then.
-    # POST-CUTOVER: count pending across BOTH legacy GeneratedEmail rows
-    # AND new-engine scheduled actions so the "X steps remaining when
-    # we wake up" snooze message reflects reality for engine-enrolled
-    # companies (most of them now).
+    # Don't mutate generated_emails — the legacy dispatch gate in
+    # sequence_engine.process_pending_steps blocks them while
+    # sequence_resume_at > now, and the wake handler regenerates a
+    # fresh sequence then.
+    # POST-CUTOVER: the new engagement engine has NO equivalent gate —
+    # it dispatches on action.status='scheduled' + scheduled_at <= now,
+    # ignoring company.sequence_resume_at entirely. So an engine-enrolled
+    # snoozed company would keep sending. We must explicitly pause the
+    # engagement so its action.status flips to 'paused' across the board.
     from sqlalchemy import text as _sa_text
     legacy_pending = (await db.execute(
         select(func.count(GeneratedEmail.id)).where(
@@ -634,6 +637,27 @@ async def snooze_company(
         WHERE e.company_id = :co AND a.status = 'scheduled'
     """), {"co": company_id})).scalar() or 0
     pending_count = int(legacy_pending) + int(engine_pending)
+
+    # Pause every engagement engine engagement at this company so their
+    # actions stop firing during the snooze window. resume happens on
+    # unsnooze OR via the wake cron (_wake_snoozed_deals now resumes too).
+    engine_paused_total = 0
+    try:
+        from app.engagement_engine.lifecycle import pause_engagement
+        from app.models import Contact as _Contact
+        contacts_at_co = (await db.execute(
+            select(_Contact).where(_Contact.company_id == company_id)
+        )).scalars().all()
+        for c in contacts_at_co:
+            try:
+                engine_paused_total += await pause_engagement(
+                    db, c.id,
+                    reason=f"company snoozed via UI until {resume_at.isoformat()}",
+                )
+            except Exception:
+                pass
+    except Exception as _pe:
+        pass  # snooze itself must not fail because of engine bookkeeping
 
     audit_msg = (
         f"Snooze extended from {prior_resume.strftime('%b %d, %Y') if prior_resume else '—'} "
@@ -686,14 +710,37 @@ async def unsnooze_company(
     company.sequence_snooze_days = None
     company.sequence_snooze_reason = None
     n = await wake_engagement_for_company(db, company, initiated_by="bdr_unsnooze")
+
+    # POST-CUTOVER: also resume the engagement-engine engagements so
+    # the paused actions go back to 'scheduled' and start firing again.
+    engine_resumed_total = 0
+    try:
+        from app.engagement_engine.lifecycle import resume_engagement
+        from app.models import Contact as _Contact
+        contacts_at_co = (await db.execute(
+            select(_Contact).where(_Contact.company_id == company_id)
+        )).scalars().all()
+        for c in contacts_at_co:
+            try:
+                engine_resumed_total += await resume_engagement(db, c.id)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     db.add(Activity(
         company_id=company_id,
         user_id=user.id,
         activity_type="sequence_unsnoozed",
-        content=f"Manually woken{'(early)' if woke_early else ''} — regenerated {n} step(s)",
+        content=f"Manually woken{'(early)' if woke_early else ''} — regenerated {n} step(s), resumed {engine_resumed_total} engine action(s)",
     ))
     await db.commit()
-    return {"ok": True, "company_id": company_id, "woke_early": woke_early, "steps_created": n}
+    return {
+        "ok": True, "company_id": company_id,
+        "woke_early": woke_early,
+        "steps_created": n,
+        "engine_actions_resumed": engine_resumed_total,
+    }
 
 
 @router.post("/{company_id}/restore-disqualify")
