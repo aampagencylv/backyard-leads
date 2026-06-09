@@ -271,11 +271,37 @@ async def apply_to_existing(
     except (TypeError, ValueError):
         raise HTTPException(500, "Template has malformed steps_json")
 
-    # Build the contact list
-    q = select(Contact.id, Contact.company_id).join(GeneratedEmail, GeneratedEmail.contact_id == Contact.id)
+    # Build the contact list. POST-CUTOVER: must UNION contacts with
+    # legacy generated_emails rows AND contacts with active engine
+    # engagements. Pre-fix this query only joined GeneratedEmail, so
+    # admin's "Apply template to everyone in cadence" returned 0 contacts
+    # for engine-enrolled cohorts even when hundreds were active.
+    q_legacy = select(Contact.id, Contact.company_id).join(
+        GeneratedEmail, GeneratedEmail.contact_id == Contact.id
+    )
     if payload.company_ids:
-        q = q.where(Contact.company_id.in_(payload.company_ids))
-    contact_pairs = list({(cid, coid) for cid, coid in (await db.execute(q.distinct())).all()})
+        q_legacy = q_legacy.where(Contact.company_id.in_(payload.company_ids))
+    legacy_pairs = (await db.execute(q_legacy.distinct())).all()
+
+    # Engine contacts: join through engagements where status='active'
+    from sqlalchemy import text as _sa_text
+    eng_sql = """
+        SELECT DISTINCT e.contact_id, c.company_id
+        FROM engagements e
+        JOIN contacts c ON c.id = e.contact_id
+        WHERE e.status = 'active'
+    """
+    params = {}
+    if payload.company_ids:
+        eng_sql += " AND c.company_id = ANY(:cids)"
+        params["cids"] = list(payload.company_ids)
+    engine_pairs = (await db.execute(_sa_text(eng_sql), params)).all()
+
+    # Dedup via set so the same contact in both lists processes once.
+    contact_pairs = list({
+        (int(cid), int(coid))
+        for cid, coid in list(legacy_pairs) + list(engine_pairs)
+    })
 
     now = datetime.now(timezone.utc)
     report = {"contacts_considered": len(contact_pairs), "contacts_updated": 0, "steps_deleted": 0, "steps_created": 0}

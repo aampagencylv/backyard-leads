@@ -243,6 +243,85 @@ async def get_stalled_sequences(
         .order_by(Company.name, GeneratedEmail.scheduled_send_at)
     )).all()
 
+    # POST-CUTOVER: also pull engine actions that are stalled. The widget
+    # was completely blind to engine state until now — engine actions
+    # overdue >2h, manual engine steps awaiting BDR, and paused engine
+    # actions all invisible. With most contacts now engine-enrolled, the
+    # widget was reading consistently "all healthy" while the engine
+    # could have been dead behind the scenes.
+    from sqlalchemy import text as _sa_text
+    auto_channels = ("email", "sms")  # engine channels that fire automatically
+    engine_rows = (await db.execute(_sa_text("""
+        SELECT
+          a.id, a.scheduled_at, a.status,
+          ct.code AS channel_code,
+          a.subject,
+          c.id AS contact_id, c.first_name, c.last_name, c.email, c.phone,
+          co.id AS company_id, co.name AS company_name, co.status AS company_status,
+          (SELECT MAX(updated_at) FROM actions WHERE id = a.id) AS paused_at_proxy
+        FROM actions a
+        JOIN channel_types ct ON ct.id = a.channel_id
+        JOIN contacts c ON c.id = a.contact_id
+        JOIN companies co ON co.id = c.company_id
+        JOIN engagements e ON e.id = a.engagement_id
+        WHERE co.status NOT IN ('not_interested','qualified','converted')
+          AND e.status = 'active'
+          AND (
+            (a.status = 'scheduled' AND ct.code IN :auto AND a.scheduled_at < :critical_cutoff)
+            OR (a.status = 'scheduled' AND ct.code NOT IN :auto AND a.scheduled_at < :now)
+            OR (a.status = 'paused')
+          )
+        ORDER BY co.name, a.scheduled_at
+    """).bindparams(
+        # asyncpg requires tuples for IN with bound params
+    ), {
+        "auto": tuple(auto_channels),
+        "critical_cutoff": now - grace,
+        "now": now,
+    })).fetchall()
+
+    # Append engine rows to the grouping using the same dict shape so
+    # the rendering loop below treats them uniformly.
+    engine_grouped: list = []  # list of (synthetic_ge_dict, contact_proxy, company_proxy)
+
+    class _Proxy:
+        def __init__(self, **kw):
+            for k, v in kw.items():
+                setattr(self, k, v)
+
+    for r in engine_rows:
+        is_auto = r.channel_code in auto_channels
+        if r.status == "paused":
+            severity = "paused"
+        elif is_auto:
+            severity = "critical"
+        else:
+            severity = "needs_action"
+        synth_ge = _Proxy(
+            id=int(r.id),
+            step_type={"email":"email","sms":"imessage","call_task":"call",
+                       "linkedin":"linkedin","manual":"manual"}.get(r.channel_code, r.channel_code),
+            sequence_label="engine",
+            email_type=None,
+            sequence_order=None,
+            paused_at=(r.paused_at_proxy if r.status == "paused" else None),
+            scheduled_send_at=r.scheduled_at,
+            auto_execute=is_auto,
+            company_id=int(r.company_id),
+            engine_marker="engagement_engine",
+        )
+        synth_contact = _Proxy(
+            id=int(r.contact_id),
+            first_name=r.first_name, last_name=r.last_name,
+            email=r.email, phone=r.phone,
+        )
+        synth_company = _Proxy(
+            id=int(r.company_id), name=r.company_name, status=r.company_status,
+        )
+        engine_grouped.append((synth_ge, synth_contact, synth_company))
+
+    rows = list(rows) + engine_grouped
+
     # Group by company
     by_company: dict[int, dict] = {}
     for ge, contact, company in rows:

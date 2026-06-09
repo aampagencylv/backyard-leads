@@ -281,12 +281,16 @@ async def get_context(
     last_opened_at = None
     last_clicked_at = None
     if contact:
+        # POST-CUTOVER: pull recent emails from BOTH legacy GeneratedEmail
+        # AND new-engine actions (channel='email'). Pre-fix the Missive
+        # sidebar / Kevin context showed [] for any engine-only contact,
+        # so reps couldn't see what was sent.
         em_rows = (await db.execute(
             select(GeneratedEmail).where(
                 GeneratedEmail.contact_id == contact.id,
             ).order_by(desc(GeneratedEmail.sent_at.is_(None)), desc(GeneratedEmail.sent_at), desc(GeneratedEmail.id)).limit(5)
         )).scalars().all()
-        recent_emails = [{
+        legacy_recent = [{
             "id": e.id,
             "subject": e.subject,
             "step_type": e.step_type or "email",
@@ -297,16 +301,61 @@ async def get_context(
             "bounced_at": e.bounced_at.isoformat() if e.bounced_at else None,
             "complained_at": e.complained_at.isoformat() if e.complained_at else None,
             "is_sent": bool(e.is_sent),
+            "engine": "legacy",
         } for e in em_rows]
-        # Newest open / click — pulled from the activities feed since
-        # clicks live on TrackingLink rows, not GeneratedEmail.
-        last_opened_at_row = (await db.execute(
-            select(GeneratedEmail.opened_at).where(
-                GeneratedEmail.contact_id == contact.id,
-                GeneratedEmail.opened_at.isnot(None),
-            ).order_by(desc(GeneratedEmail.opened_at)).limit(1)
+
+        from sqlalchemy import text as _sa_text
+        # Engine email actions — show sent first, queued next; also pull
+        # per-action open count from Activity rows tagged engagement_action_id.
+        engine_rows = (await db.execute(_sa_text("""
+            SELECT a.id, a.subject, a.status, a.scheduled_at, a.executed_at,
+                   (SELECT COUNT(*) FROM activities act2
+                    WHERE act2.activity_type = 'email_opened'
+                      AND act2.metadata_json::jsonb->>'engagement_action_id' = a.id::text) AS open_count,
+                   (SELECT MIN(act3.created_at) FROM activities act3
+                    WHERE act3.activity_type = 'email_opened'
+                      AND act3.metadata_json::jsonb->>'engagement_action_id' = a.id::text) AS first_opened_at,
+                   (SELECT MIN(act4.created_at) FROM activities act4
+                    WHERE act4.activity_type = 'email_delivered'
+                      AND act4.metadata_json::jsonb->>'engagement_action_id' = a.id::text) AS delivered_at
+            FROM actions a
+            JOIN channel_types ct ON ct.id = a.channel_id
+            WHERE a.contact_id = :c AND ct.code = 'email'
+            ORDER BY a.executed_at DESC NULLS LAST, a.scheduled_at DESC LIMIT 5
+        """), {"c": contact.id})).fetchall()
+        engine_recent = [{
+            "id": int(r.id),
+            "subject": r.subject,
+            "step_type": "email",
+            "sent_at": r.executed_at.isoformat() if r.executed_at else None,
+            "delivered_at": r.delivered_at.isoformat() if r.delivered_at else None,
+            "opened_at": r.first_opened_at.isoformat() if r.first_opened_at else None,
+            "open_count": int(r.open_count or 0),
+            "bounced_at": None,
+            "complained_at": None,
+            "is_sent": r.status == "sent",
+            "engine": "engagement_engine",
+        } for r in engine_rows]
+
+        # Merge + cap to 5 newest by sent_at (or scheduled if not sent)
+        def _ts(d):
+            return d.get("sent_at") or ""
+        recent_emails = sorted(legacy_recent + engine_recent, key=_ts, reverse=True)[:5]
+
+        # Newest open across BOTH sources: Activity table already has both
+        # legacy + engine opens (the Resend webhook dual-writes Activity for
+        # engine events as of 3ed86b9), so reading from Activity gives the
+        # unified answer.
+        last_open_act = (await db.execute(
+            select(Activity).where(
+                Activity.contact_id == contact.id,
+                Activity.activity_type == "email_opened",
+            ).order_by(desc(Activity.created_at)).limit(1)
         )).scalar_one_or_none()
-        last_opened_at = last_opened_at_row.isoformat() if last_opened_at_row else None
+        last_opened_at = (
+            last_open_act.created_at.isoformat()
+            if last_open_act and last_open_act.created_at else None
+        )
         last_click_act = (await db.execute(
             select(Activity).where(
                 Activity.contact_id == contact.id,
