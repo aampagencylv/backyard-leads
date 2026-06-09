@@ -8147,7 +8147,7 @@ function verify(secret, rawBody, header) {
             // steps until per-channel engine-aware endpoints exist.
             // (`engine` field set by company_routes.py emails-array fix.)
             const isEngineStep = e.engine === 'engagement_engine';
-            const disabledNote = 'Engine sequence steps can\\'t be edited from this UI yet — talk to admin if you need to change content';
+            const disabledNote = "Engine sequence steps can't be edited from this UI yet — talk to admin if you need to change content";
 
             return `
                 <div class="${klass}" data-email-id="${e.id}" data-engine="${isEngineStep ? 'engagement_engine' : 'legacy'}" data-sequence-label="${escapeHtml(e.sequence_label || 'main')}" ${dragAttrs}>
