@@ -971,7 +971,7 @@ async def _emit_engagement_engine_signal(
             )
             VALUES (
                 :t, :co, :c, :at,
-                :content, :meta::text, NOW()
+                :content, CAST(:meta AS text), NOW()
             )
         """), {
             "t": a.tenant_id, "co": co_id, "c": a.contact_id,

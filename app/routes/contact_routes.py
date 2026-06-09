@@ -62,7 +62,11 @@ async def list_all_contacts(
     # email actions. Post-cutover, every new enrollment lives in
     # `actions`, so counting only legacy rows shows "0 sequence steps"
     # for engagement-engine-enrolled contacts (Deck and Drive bug).
-    from sqlalchemy import text as _sa_text
+    # Use proper ORM models so subquery columns are addressable via `.c.cnt`
+    # — the earlier text()-fragment build path produced a subquery whose
+    # `.c.cnt` accessor raised AttributeError because no column metadata
+    # was tracked (Sentry AI-PROSPECTOR-A: 2026-06-09 15:07).
+    from app.models import Action, ChannelType
     legacy_email_sq = (
         select(
             GeneratedEmail.contact_id,
@@ -73,14 +77,12 @@ async def list_all_contacts(
     )
     engine_email_sq = (
         select(
-            _sa_text("contact_id"),
-            _sa_text("COUNT(*)::int AS cnt"),
+            Action.contact_id,
+            func.count(Action.id).label("cnt"),
         )
-        .select_from(_sa_text(
-            "actions a JOIN channel_types ct ON ct.id = a.channel_id"
-        ))
-        .where(_sa_text("ct.code = 'email'"))
-        .group_by(_sa_text("contact_id"))
+        .join(ChannelType, ChannelType.id == Action.channel_id)
+        .where(ChannelType.code == "email")
+        .group_by(Action.contact_id)
         .subquery("engine_email_counts")
     )
     query = (
