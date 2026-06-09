@@ -5,9 +5,104 @@ specific marketing problems found on the prospect's website.
 """
 from __future__ import annotations
 import json
+import logging as _logging
+import re
 from typing import Optional
 from app.config import settings
 from app.services.ai_client import chat_with_system, MODEL_BALANCED
+
+_log = _logging.getLogger("bmp.email_generator")
+
+
+class EmailGenerationError(Exception):
+    """Raised when the model output can't be cleanly parsed into
+    subject + body. Callers should treat this as 'skip this send +
+    schedule a retry' — NEVER fall back to sending raw model output
+    as the email (catastrophic prod incident 2026-06-09: 10 prospects
+    received raw JSON in their inbox over 4 days)."""
+
+
+def _parse_email_response(text: str) -> dict:
+    """Robustly extract {'subject', 'body'} from a Claude response.
+
+    Three layers, ordered most-strict → most-lenient:
+      1. strict json.loads (works ~95% of the time)
+      2. regex extraction (works when the body contains unescaped
+         inner quotes that broke json.loads — e.g. Claude embedding
+         a quoted phrase like 'people search "best plumber near me"')
+      3. raise EmailGenerationError — DO NOT return raw text as body.
+
+    The third layer is the contract: if we cannot prove we extracted
+    a real subject + body, we refuse to produce an email rather than
+    sending model garbage to a real prospect.
+    """
+    if not text or not text.strip():
+        raise EmailGenerationError("empty model response")
+
+    # Strip code fences
+    s = text
+    if "```json" in s:
+        s = s.split("```json", 1)[1].split("```", 1)[0]
+    elif "```" in s:
+        s = s.split("```", 1)[1].split("```", 1)[0]
+    s = s.strip()
+
+    # Layer 1: strict JSON
+    try:
+        obj = json.loads(s)
+        if isinstance(obj, dict) and "subject" in obj and "body" in obj:
+            subj = (obj["subject"] or "").strip()
+            body = (obj["body"] or "").rstrip()
+            if subj and body:
+                return {"subject": subj, "body": body}
+    except json.JSONDecodeError:
+        pass
+
+    # Layer 2: regex extraction tolerant of unescaped inner quotes
+    # Subject: first quoted run after "subject":
+    subj_m = re.search(r'"subject"\s*:\s*"([^"\n]+)"', s)
+    # Body: from after "body": " until the LAST " before final } (or end).
+    # Use DOTALL + lazy match anchored at end so inner quotes don't break it.
+    body_m = re.search(
+        r'"body"\s*:\s*"(.+)"\s*[\r\n,]*\s*\}?\s*\Z',
+        s, flags=re.DOTALL,
+    )
+    if subj_m and body_m:
+        subj = subj_m.group(1).strip()
+        # Unescape standard JSON-string escapes the model produced
+        body = body_m.group(1)
+        body = (body
+                .replace(r"\n", "\n")
+                .replace(r"\t", "\t")
+                .replace(r"\"", '"')
+                .replace(r"\\", "\\"))
+        body = body.rstrip()
+        if subj and body:
+            _log.warning(
+                "email_generator: JSON parse failed but regex recovered "
+                "(likely unescaped inner quotes in model body)"
+            )
+            return {"subject": subj, "body": body}
+
+    # Layer 3: refuse to produce garbage. Caller should retry or skip.
+    preview = (text or "")[:160].replace("\n", " ")
+    raise EmailGenerationError(
+        f"cannot parse subject+body from model response (first 160 chars: {preview!r})"
+    )
+
+
+def _strip_signature(body: str) -> str:
+    """Drop any trailing sign-off the model may have added despite the
+    system prompt's instruction not to. The sender_signature is appended
+    by email_sender at send time, so anything model-generated here is
+    a duplicate."""
+    for sign_off in ["Best,", "Thanks,", "Cheers,", "Talk soon,",
+                     "Best regards,", "- ", "—", "Backyard Marketing", "BMP"]:
+        lines = body.split("\n")
+        while lines and lines[-1].strip().startswith(sign_off):
+            lines.pop()
+        body = "\n".join(lines).rstrip()
+    return body
 
 
 SYSTEM_PROMPT = """You are writing cold outreach emails for a BDR at a B2B marketing agency.
@@ -120,23 +215,14 @@ Return as JSON: {{"subject": "...", "body": "..."}}
     from app.services.credit_meter import meter_standalone as _meter_ai
     await _meter_ai(action_type="ai_email_gen", action_ref=f"cold_email:{business_name[:60]}",
                     metadata={"max_tokens": 500, "kind": "cold_email"})
-    try:
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0]
-        elif "```" in text:
-            text = text.split("```")[1].split("```")[0]
-        result = json.loads(text)
-        body = result["body"].rstrip()
-        # Strip any trailing signature the model might add anyway
-        for sign_off in ["Best,", "Thanks,", "Cheers,", "Talk soon,", "Best regards,",
-                         "- ", "—", "Backyard Marketing", "BMP"]:
-            lines = body.split("\n")
-            while lines and lines[-1].strip().startswith(sign_off):
-                lines.pop()
-            body = "\n".join(lines).rstrip()
-        return {"subject": result["subject"], "body": body}
-    except (json.JSONDecodeError, KeyError):
-        return {"subject": f"quick question about {business_name}", "body": text}
+    # Parse model output robustly. _parse_email_response raises
+    # EmailGenerationError if it can't extract a real subject+body —
+    # better to skip the send than to ship raw JSON to a prospect.
+    result = _parse_email_response(text)
+    return {
+        "subject": result["subject"],
+        "body": _strip_signature(result["body"]),
+    }
 
 
 async def generate_follow_up(
@@ -207,22 +293,11 @@ Return as JSON: {{"subject": "...", "body": "..."}}
     await _meter_ai(action_type="ai_email_gen", action_ref=f"follow_up:{business_name[:60]}",
                     metadata={"max_tokens": 400, "kind": "follow_up"})
 
-    try:
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0]
-        elif "```" in text:
-            text = text.split("```")[1].split("```")[0]
-        result = json.loads(text)
-        body = result["body"].rstrip()
-        for sign_off in ["Best,", "Thanks,", "Cheers,", "Talk soon,", "Best regards,",
-                         "- ", "—", "Backyard Marketing", "BMP"]:
-            lines = body.split("\n")
-            while lines and lines[-1].strip().startswith(sign_off):
-                lines.pop()
-            body = "\n".join(lines).rstrip()
-        return {"subject": result["subject"], "body": body}
-    except (json.JSONDecodeError, KeyError):
-        return {"subject": f"re: {previous_email_subject}", "body": text}
+    result = _parse_email_response(text)
+    return {
+        "subject": result["subject"],
+        "body": _strip_signature(result["body"]),
+    }
 
 
 async def generate_linkedin_message(
@@ -288,15 +363,8 @@ Return as JSON: {{"subject": "LinkedIn message: {first_name or business_name}", 
     await _meter_ai(action_type="ai_email_gen", action_ref=f"linkedin:{business_name[:60]}",
                     metadata={"max_tokens": 300, "kind": "linkedin_message"})
 
-    try:
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0]
-        elif "```" in text:
-            text = text.split("```")[1].split("```")[0]
-        result = json.loads(text)
-        return {"subject": result["subject"], "body": result["body"]}
-    except (json.JSONDecodeError, KeyError):
-        return {"subject": f"LinkedIn: {first_name or business_name}", "body": text}
+    result = _parse_email_response(text)
+    return {"subject": result["subject"], "body": result["body"]}
 
 
 IMESSAGE_SYSTEM_PROMPT = """You are writing a personalized iMessage for a BDR at a B2B marketing
@@ -431,16 +499,36 @@ Return as JSON: {{"body": "the text message, under {280 if audit_url else 240} c
             text = text.split("```")[1].split("```")[0]
         result = json.loads(text)
         body = (result.get("body") or "").strip()
-        # Strip any signature the model snuck in despite instructions
-        for sign_off in ["Best,", "Thanks,", "Cheers,", "- ", "—Steve", "— Steve",
-                         "Backyard Marketing", "BMP"]:
-            lines = body.split("\n")
-            while lines and lines[-1].strip().startswith(sign_off):
-                lines.pop()
-            body = "\n".join(lines).rstrip()
-        return {"body": body, "char_count": len(body)}
+        body = _strip_signature(body)
+        if body:
+            return {"body": body, "char_count": len(body)}
+        # Empty body extracted — fall through to regex
+        raise json.JSONDecodeError("empty body in parsed JSON", text, 0)
     except (json.JSONDecodeError, KeyError):
-        return {"body": text.strip(), "char_count": len(text.strip())}
+        # Try regex extraction for body when JSON parsing failed (e.g.
+        # inner quotes broke the parse) BEFORE falling back to raw text.
+        # Same defense as _parse_email_response — never send raw model
+        # garbage to a real prospect.
+        body_m = re.search(
+            r'"body"\s*:\s*"(.+)"\s*[\r\n,]*\s*\}?\s*\Z',
+            text, flags=re.DOTALL,
+        )
+        if body_m:
+            body = (body_m.group(1)
+                    .replace(r"\n", "\n").replace(r"\t", "\t")
+                    .replace(r"\"", '"').replace(r"\\", "\\"))
+            body = _strip_signature(body.rstrip())
+            if body:
+                _log.warning("imessage: regex recovered body after JSON parse failure")
+                return {"body": body, "char_count": len(body)}
+        # No JSON wrapper at all — model returned plain text. Acceptable
+        # ONLY when the text doesn't look like a half-formed JSON object.
+        plain = text.strip()
+        if plain and not plain.startswith("{") and '"body"' not in plain:
+            return {"body": plain, "char_count": len(plain)}
+        raise EmailGenerationError(
+            f"imessage: cannot parse body from model response (first 160 chars: {plain[:160]!r})"
+        )
 
 
 # ============================================================
