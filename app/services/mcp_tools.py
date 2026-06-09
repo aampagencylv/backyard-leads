@@ -432,7 +432,19 @@ async def summarize_company(
             parsed = json.loads(text)
             return {"company_id": full["id"], "company_name": full["name"], **parsed}
         except json.JSONDecodeError:
-            return {"company_id": full["id"], "company_name": full["name"], "summary": text}
+            # Don't ship raw model text as the "summary" field — Kevin
+            # (the BDR's MCP-driven assistant) re-displays this back to
+            # the BDR as if it were a real two-sentence brief. If the
+            # model burped a partial JSON blob, the BDR sees the blob.
+            # Fall back to the heuristic brief that the outer except
+            # would have used anyway. Logged so we can see how often
+            # this fires.
+            log.warning(
+                f"summarize_company AI returned non-JSON for company "
+                f"{company_id} (first 160 chars: {text[:160]!r}); "
+                "falling back to heuristic"
+            )
+            return {**_heuristic_brief(full), "error": "ai_parse_failed"}
     except Exception as e:
         log.warning(f"summarize_company AI call failed for company {company_id}: {e}")
         return {**_heuristic_brief(full), "error": "ai_call_failed"}

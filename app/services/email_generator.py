@@ -523,13 +523,17 @@ Return as JSON: {{"body": "the text message, under {280 if audit_url else 240} c
             if body:
                 _log.warning("imessage: regex recovered body after JSON parse failure")
                 return {"body": body, "char_count": len(body)}
-        # No JSON wrapper at all — model returned plain text. Acceptable
-        # ONLY when the text doesn't look like a half-formed JSON object.
-        plain = text.strip()
-        if plain and not plain.startswith("{") and '"body"' not in plain:
-            return {"body": plain, "char_count": len(plain)}
+        # Previously we accepted "plain text that doesn't look like JSON"
+        # as a valid body — but Claude often returns preamble like
+        # "Sure! Here's a casual iMessage for John:\n\nHey John..."
+        # which doesn't start with `{` and doesn't contain `"body"`,
+        # so it would pass through and that ENTIRE response (preamble
+        # included) would land on the prospect's phone via Blooio.
+        # Blooio has NO anomaly guard analog to email_sender, so the
+        # only defense is here. Raise instead of accepting plain text.
         raise EmailGenerationError(
-            f"imessage: cannot parse body from model response (first 160 chars: {plain[:160]!r})"
+            f"imessage: cannot extract a body field from model response "
+            f"(first 160 chars: {(text or '')[:160]!r})"
         )
 
 
@@ -711,12 +715,20 @@ Return JSON only, no other text:
             },
         ]
     except (json.JSONDecodeError, KeyError, AttributeError):
-        # Parse failed — fall back to generic shells (better than nothing)
-        return [
-            {"step_type": "email",    "day": 0, "subject": "following up on our call", "body": text[:1000]},
-            {"step_type": "imessage", "day": 2, "subject": "iMessage bump (post-call)", "body": f"Hey {first_name or 'there'} — bumping my email from a couple days ago"},
-            {"step_type": "email",    "day": 5, "subject": "next steps?", "body": f"Hey {first_name or 'there'} — let me know if a quick call this week works."},
-        ]
+        # Parse failed — DO NOT ship raw model output as the post-call
+        # email body. The previous version returned `text[:1000]` which
+        # could ship 1000 chars of Claude prose (preamble like
+        # "Here's a 3-step sequence:\n\nStep 1 subject: ..." straight
+        # to a prospect who just spent 30 minutes on a discovery call
+        # — the highest-trust touchpoint in the funnel.
+        # Raise so the route can 502 + the BDR can retry. The other
+        # two shell steps are static text (no model output, no
+        # BDR-typed leakage) so they could safely ship — but for
+        # consistency we raise and let the BDR own the retry.
+        raise EmailGenerationError(
+            f"post_call_sequence: cannot parse 3-step JSON from model "
+            f"response (first 160 chars: {(text or '')[:160]!r})"
+        )
 
 
 REWORK_SYSTEM_PROMPT = """You are a sales copywriter for a marketing agency. You're rewriting a prospect's
@@ -807,9 +819,14 @@ Return JSON only, no other text. Array of objects:
             })
         return result
     except (json.JSONDecodeError, KeyError, AttributeError, ValueError):
-        # Fallback
-        return [
-            {"step_type": "email", "day": 1, "subject": "following up on our conversation", "body": f"Hi {first_name or 'there'} — wanted to follow up on what we discussed. {call_notes[:200]}"},
-            {"step_type": "imessage", "day": 3, "subject": "quick bump", "body": f"Hey {first_name or 'there'} — did you get my email? Let me know your thoughts."},
-            {"step_type": "call", "day": 5, "subject": "follow-up call", "body": f"Call to follow up on conversation. Reference: {call_notes[:150]}"},
-        ]
+        # DO NOT interpolate `call_notes` into the prospect-facing body.
+        # The BDR's notes are internal — e.g. "client was rude, no real
+        # budget" — and would leak straight into the email if the model
+        # output failed to parse. Raise so the route surfaces an error
+        # and the BDR can rewrite or retry. The static iMessage / call-
+        # task shells in the original fallback were safe, but for the
+        # email step the call_notes leak is unacceptable; raise wholesale.
+        raise EmailGenerationError(
+            f"reworked_sequence: cannot parse step list from model "
+            f"response (first 160 chars: {(text or '')[:160]!r})"
+        )
