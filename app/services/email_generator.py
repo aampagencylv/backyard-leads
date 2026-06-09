@@ -61,10 +61,12 @@ def _parse_email_response(text: str) -> dict:
     # Layer 2: regex extraction tolerant of unescaped inner quotes
     # Subject: first quoted run after "subject":
     subj_m = re.search(r'"subject"\s*:\s*"([^"\n]+)"', s)
-    # Body: from after "body": " until the LAST " before final } (or end).
-    # Use DOTALL + lazy match anchored at end so inner quotes don't break it.
+    # Body: from after "body": " until the LAST " before EOS.
+    # Trailing pattern allows arbitrary whitespace, commas, and closing
+    # braces (Claude sometimes emits trailing `}` then `}}` etc. — caught
+    # action #1954 where the model produced ...body": "..."\n  }\n}).
     body_m = re.search(
-        r'"body"\s*:\s*"(.+)"\s*[\r\n,]*\s*\}?\s*\Z',
+        r'"body"\s*:\s*"(.+)"\s*[\r\n,}\s]*\Z',
         s, flags=re.DOTALL,
     )
     if subj_m and body_m:
