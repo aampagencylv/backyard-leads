@@ -26,7 +26,7 @@ from typing import Any, Optional
 from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Activity, Company, Contact, Deal, GeneratedEmail, User
+from app.models import Activity, Company, Contact, Deal, User
 from app.scoping import scope_companies, scope_contacts
 
 log = logging.getLogger("bmp.mcp_tools")

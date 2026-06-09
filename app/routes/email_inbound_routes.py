@@ -207,12 +207,26 @@ async def _route_reply_to_engagement_engine(
                 WHERE id = :id
             """), {"id": a.engagement_id})
 
+        # Look up engagement BDR for per-rep reply attribution. Pre-fix
+        # this was NULL → dashboards attributed via company.assigned_to
+        # which mis-counts when engagement.assigned_bdr_id ≠ company.
+        # assigned_to (cross-rep coverage / round-robin churn cases).
+        bdr_lookup = await db.execute(_sa_text("""
+            SELECT COALESCE(e.assigned_bdr_id, co.assigned_to) AS bdr_id
+            FROM engagements e
+            JOIN companies co ON co.id = e.company_id
+            WHERE e.id = :e
+        """), {"e": a.engagement_id})
+        bdr_row = bdr_lookup.first()
+        engine_bdr_id = bdr_row.bdr_id if bdr_row else None
+
         # Legacy CRM timeline visibility — keeps the existing reply UI working
         activity_type = "email_auto_response" if is_auto_response else "email_replied"
         prefix = "[Auto-response]" if is_auto_response else "[Reply]"
         db.add(Activity(
             company_id=a.company_id,
             contact_id=a.contact_id,
+            user_id=engine_bdr_id,  # per-rep attribution: who owns this engagement
             activity_type=activity_type,
             content=f"{prefix} {subject or '(no subject)'} — {body_preview or '(empty body)'}",
             metadata_json=_json.dumps({
@@ -423,6 +437,30 @@ async def _classify_engagement_reply_async(
             })
 
             await db.commit()
+
+        # POST-CUTOVER: now that the sentiment is known, force a lead-
+        # score recompute. Pre-fix, lead_scorer ran when the Activity
+        # row first landed (sentiment NULL → REPLY_SENTIMENT_WEIGHTS
+        # bucket was the default ~20). After the classifier updated
+        # the column nothing re-ran scoring, so 'interested' replies
+        # never got the +80 boost they should have. Fire-and-forget
+        # in its own session so a failure doesn't fail this function.
+        try:
+            from app.services.lead_scorer import get_or_recompute
+            from app.models import Company as _Company
+            async with async_session() as ls_db:
+                co = (await ls_db.execute(
+                    select(_Company).join(
+                        Contact, Contact.company_id == _Company.id
+                    ).where(Contact.id == contact_id)
+                )).scalar_one_or_none()
+                if co is not None:
+                    await get_or_recompute(ls_db, co, force=True)
+        except Exception as _le:
+            log.warning(
+                "[classify] post-classify lead-score recompute failed "
+                "(contact=%s): %s", contact_id, _le,
+            )
 
         log.info(
             "[classify] contact=%s channel=%s sentiment=%s",

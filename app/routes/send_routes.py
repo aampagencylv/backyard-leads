@@ -896,6 +896,50 @@ async def _emit_engagement_engine_signal(
                 f"failed for action={engagement_action_id}: {_te}"
             )
 
+        # POST-CUTOVER: refresh the active tenant identity's 24h
+        # deliverability rates so the reputation dashboard can see
+        # real-time health. Pre-fix bounce_rate_24h and complaint_rate_24h
+        # on email_identities were NEVER updated by anything → forever
+        # NULL → no health signal feeding warmup_stage advancement or
+        # auto-pause-on-bad-deliverability logic.
+        try:
+            await db.execute(_sa_text("""
+                UPDATE email_identities ei SET
+                    bounce_rate_24h = (
+                        SELECT
+                          CASE WHEN sent > 0 THEN bounced::numeric / sent ELSE 0 END
+                        FROM (
+                            SELECT
+                              COUNT(*) FILTER (WHERE activity_type='email_sent') AS sent,
+                              COUNT(*) FILTER (WHERE activity_type='email_bounced') AS bounced
+                            FROM activities
+                            WHERE tenant_id = ei.tenant_id
+                              AND created_at >= NOW() - INTERVAL '24 hours'
+                              AND activity_type IN ('email_sent','email_bounced')
+                        ) s
+                    ),
+                    complaint_rate_24h = (
+                        SELECT
+                          CASE WHEN delivered > 0 THEN complained::numeric / delivered ELSE 0 END
+                        FROM (
+                            SELECT
+                              COUNT(*) FILTER (WHERE activity_type='email_delivered') AS delivered,
+                              COUNT(*) FILTER (WHERE activity_type='email_complained') AS complained
+                            FROM activities
+                            WHERE tenant_id = ei.tenant_id
+                              AND created_at >= NOW() - INTERVAL '24 hours'
+                              AND activity_type IN ('email_delivered','email_complained')
+                        ) s
+                    ),
+                    last_validated_at = NOW()
+                WHERE ei.tenant_id = :t AND ei.is_active = TRUE
+            """), {"t": a.tenant_id})
+        except Exception as _de:
+            log.warning(
+                f"[resend webhook] deliverability rate refresh failed "
+                f"for tenant={a.tenant_id}: {_de}"
+            )
+
     # Dual-write Activity row so dashboards / morning brief / reputation
     # widget / company timeline see new-engine email events. The legacy
     # webhook path only wrote Activity rows when `em` (GeneratedEmail

@@ -328,6 +328,18 @@ class EmailChannel:
                             WHERE id = :co AND status = 'sequencing'
                         """), {"co": company_id})
 
+                # POST-CUTOVER: also set the denormalized
+                # company.email_sent flag for parity with legacy. The
+                # column is currently only consumed by external/future
+                # integrations (no current SQL read path), but setting
+                # it consistently means engine-only companies don't
+                # appear as "never emailed" if anything starts using it.
+                if company_id is not None:
+                    await activity_session.execute(text("""
+                        UPDATE companies SET email_generated = TRUE
+                        WHERE id = :co AND email_generated = FALSE
+                    """), {"co": company_id})
+
                 await activity_session.commit()
         except Exception:
             # Activity logging must NEVER block dispatch — the engine
