@@ -431,6 +431,39 @@ async def snap_pending_steps_to_window(
         )
         step.scheduled_send_at = new_time
         snapped += 1
+
+    # POST-CUTOVER: also snap new-engine actions. Without this, engine
+    # actions could fire at 3am local time after re-anchoring or after
+    # initial enrollment off-window — deliverability hit because outreach
+    # arrives in the deep-overnight inbox burst.
+    from sqlalchemy import text as _sa_text
+    engine_rows = (await db.execute(_sa_text("""
+        SELECT a.id, a.scheduled_at, ct.code AS channel_code
+        FROM actions a
+        JOIN channel_types ct ON ct.id = a.channel_id
+        WHERE a.contact_id = :c
+          AND a.status = 'scheduled'
+          AND ct.code IN ('email', 'sms')
+    """), {"c": contact_id})).fetchall()
+    for r in engine_rows:
+        channel = "email" if r.channel_code == "email" else "imessage"
+        original = r.scheduled_at
+        if original.tzinfo is None:
+            original = original.replace(tzinfo=timezone.utc)
+        if is_within_window(
+            now_utc=original, contact_tz=contact_tz, rep_tz=rep_tz,
+            cfg=cfg, channel=channel,
+        ):
+            continue
+        new_time = next_window_start(
+            after_utc=original, contact_tz=contact_tz, rep_tz=rep_tz,
+            cfg=cfg, channel=channel,
+        )
+        await db.execute(_sa_text("""
+            UPDATE actions SET scheduled_at = :s, updated_at = NOW()
+            WHERE id = :id
+        """), {"s": new_time, "id": int(r.id)})
+        snapped += 1
     return snapped
 
 

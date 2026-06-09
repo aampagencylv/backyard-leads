@@ -146,6 +146,9 @@ async def list_companies(
     # Prefetch next unsent sequence step per company — single aggregate query.
     # Returns the lowest sequence_order among unsent emails so the UI can
     # show "Step 2" meaning the company is waiting on step 2.
+    # POST-CUTOVER: must also consider engine actions. Pre-fix, engine-only
+    # companies had min_step=None → "Step N" filter pills hid them entirely
+    # and the "📬 Waiting on step N" badge never rendered.
     seq_step_map: dict[int, int | None] = {}
     if company_ids:
         step_rows = (await db.execute(
@@ -158,6 +161,36 @@ async def list_companies(
         )).all()
         for cid, min_step in step_rows:
             seq_step_map[cid] = min_step
+
+        # Engine equivalent: for each company, the lowest 1-based step index
+        # (ordered by scheduled_at within an engagement) among scheduled
+        # actions. Use ROW_NUMBER over the engagement to get per-engagement
+        # ordering, then take the min across engagements at the company.
+        from sqlalchemy import text as _sa_text
+        engine_step_rows = (await db.execute(_sa_text("""
+            SELECT c.company_id, MIN(step_order) AS min_step
+            FROM (
+                SELECT a.contact_id, a.engagement_id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY a.engagement_id
+                           ORDER BY a.scheduled_at, a.id
+                       ) AS step_order,
+                       a.status
+                FROM actions a
+            ) ranked
+            JOIN contacts c ON c.id = ranked.contact_id
+            WHERE ranked.status = 'scheduled'
+              AND c.company_id = ANY(:cids)
+            GROUP BY c.company_id
+        """), {"cids": list(company_ids)})).all()
+        for cid, min_step in engine_step_rows:
+            existing = seq_step_map.get(cid)
+            # Take MIN across legacy + engine. None means no row in that
+            # source, so the other wins.
+            if existing is None:
+                seq_step_map[cid] = int(min_step)
+            elif min_step is not None and int(min_step) < existing:
+                seq_step_map[cid] = int(min_step)
 
     # Prefetch contact counts — single aggregate query.
     contact_count_map: dict[int, int] = {}
@@ -413,26 +446,64 @@ async def unstall_sequences(
         ).order_by(GeneratedEmail.sequence_order)
     )).scalars().all()
 
-    if not stalled:
+    # POST-CUTOVER: also re-anchor engine actions on this company that
+    # are overdue. Without this, the legacy half slid forward but the
+    # engine half stayed past-due — and the dispatcher's stale-action
+    # guard may have already retired them, in which case the engagement
+    # would be silently dead. Re-anchor the same way: spread from NOW
+    # with 2-minute step offsets so they fire near-simultaneously but
+    # don't all burst at once.
+    from sqlalchemy import text as _sa_text
+    engine_stalled = (await db.execute(_sa_text("""
+        SELECT a.id
+        FROM actions a
+        JOIN engagements e ON e.id = a.engagement_id
+        JOIN contacts c ON c.id = a.contact_id
+        WHERE c.company_id = :co
+          AND a.status = 'scheduled'
+          AND a.scheduled_at < :cutoff
+        ORDER BY a.scheduled_at, a.id
+    """), {"co": company_id, "cutoff": now - grace})).fetchall()
+    engine_reanchored = 0
+    for i, r in enumerate(engine_stalled):
+        new_scheduled = now + timedelta(minutes=2 * i + 1)
+        # Extend stale_after so the dispatcher doesn't immediately re-skip.
+        new_stale_after = now + timedelta(days=7)
+        await db.execute(_sa_text("""
+            UPDATE actions
+            SET scheduled_at = :s, stale_after = :sa,
+                updated_at = NOW()
+            WHERE id = :id
+        """), {"s": new_scheduled, "sa": new_stale_after, "id": int(r.id)})
+        engine_reanchored += 1
+
+    if not stalled and not engine_reanchored:
         return {"reanchored": 0, "message": "No overdue auto-execute steps found"}
 
-    # Re-anchor: spread from now, maintaining relative offsets
-    base = min(s.send_delay_days or 0 for s in stalled)
-    for i, step in enumerate(stalled):
-        offset = max((step.send_delay_days or 0) - base, 0)
-        step.scheduled_send_at = now + timedelta(days=offset, minutes=i * 2)
+    # Re-anchor legacy: spread from now, maintaining relative offsets
+    if stalled:
+        base = min(s.send_delay_days or 0 for s in stalled)
+        for i, step in enumerate(stalled):
+            offset = max((step.send_delay_days or 0) - base, 0)
+            step.scheduled_send_at = now + timedelta(days=offset, minutes=i * 2)
 
-    # Snap to send window
-    try:
-        from app.services.send_window import snap_pending_steps_to_window
-        contact_ids = {s.contact_id for s in stalled if s.contact_id}
-        for cid in contact_ids:
-            await snap_pending_steps_to_window(db, contact_id=cid)
-    except Exception:
-        pass
+        # Snap to send window
+        try:
+            from app.services.send_window import snap_pending_steps_to_window
+            contact_ids = {s.contact_id for s in stalled if s.contact_id}
+            for cid in contact_ids:
+                await snap_pending_steps_to_window(db, contact_id=cid)
+        except Exception:
+            pass
 
     await db.commit()
-    return {"reanchored": len(stalled), "message": f"Re-anchored {len(stalled)} step(s) to send ASAP"}
+    total = len(stalled) + engine_reanchored
+    return {
+        "reanchored": total,
+        "legacy_reanchored": len(stalled),
+        "engine_reanchored": engine_reanchored,
+        "message": f"Re-anchored {total} step(s) to send ASAP",
+    }
 
 
 @router.get("/paused-forgotten")
@@ -472,6 +543,60 @@ async def get_paused_forgotten(
         )
         .order_by(GeneratedEmail.paused_at)
     )).all()
+
+    # POST-CUTOVER: also pull engine actions that are paused on active
+    # 'sequencing' companies. Without this the widget showed empty for
+    # any contact whose BDR manually paused their engine engagement.
+    from sqlalchemy import text as _sa_text
+    eng_rows = (await db.execute(_sa_text("""
+        SELECT a.id, a.scheduled_at,
+               ct.code AS channel_code,
+               a.subject,
+               a.updated_at AS paused_at,
+               c.id AS contact_id, c.first_name, c.last_name, c.email, c.phone,
+               c.email_status, c.unsubscribed_at, c.is_archived, c.do_not_text,
+               co.id AS company_id, co.name AS company_name,
+               co.city, co.state, co.status AS company_status, co.assigned_to
+        FROM actions a
+        JOIN channel_types ct ON ct.id = a.channel_id
+        JOIN engagements e ON e.id = a.engagement_id
+        JOIN contacts c ON c.id = a.contact_id
+        JOIN companies co ON co.id = c.company_id
+        WHERE a.status = 'paused'
+          AND co.status = 'sequencing'
+        ORDER BY a.updated_at
+    """))).fetchall()
+
+    class _Proxy:
+        def __init__(self, **kw):
+            for k, v in kw.items():
+                setattr(self, k, v)
+    for r in eng_rows:
+        st_map = {"email":"email","sms":"imessage","call_task":"call",
+                  "linkedin":"linkedin","manual":"manual"}
+        synth_ge = _Proxy(
+            id=int(r.id),
+            step_type=st_map.get(r.channel_code, r.channel_code),
+            paused_at=r.paused_at,
+            sequence_label="engine",
+            engine_marker="engagement_engine",
+        )
+        synth_contact = _Proxy(
+            id=int(r.contact_id),
+            first_name=r.first_name, last_name=r.last_name,
+            email=r.email, phone=r.phone,
+            email_status=r.email_status,
+            unsubscribed_at=r.unsubscribed_at,
+            is_archived=bool(r.is_archived) if r.is_archived is not None else False,
+            do_not_text=bool(r.do_not_text) if r.do_not_text is not None else False,
+        )
+        synth_company = _Proxy(
+            id=int(r.company_id), name=r.company_name,
+            city=r.city, state=r.state, status=r.company_status,
+            assigned_to=r.assigned_to,
+        )
+        rows.append((synth_ge, synth_contact, synth_company))
+
     if not rows:
         return []
 

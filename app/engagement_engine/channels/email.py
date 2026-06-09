@@ -202,15 +202,45 @@ class EmailChannel:
         new_engine_token = f"a{action.id}_{_secrets.token_hex(8)}"
         new_reply_to = reply_to_for_token(new_engine_token)
 
+        # POST-CUTOVER: wrap links for click tracking. The legacy path
+        # ran wrap_html_links on every send; EmailChannel skipped this,
+        # so every click in an engine email went directly to the dest
+        # URL → ZERO TrackingLink rows, zero email_clicked Activity,
+        # zero lead-score click bumps, auto-qualify-on-click never trips.
+        # Resolve company_id here so the TrackingLink row attributes
+        # correctly (engagement.id is meaningless to the /t/{token} handler).
+        wrapped_body = action.body
+        co_id_for_tracking = None
+        try:
+            from app.services.tracking import wrap_html_links
+            async with async_session() as track_session:
+                co_row = await track_session.execute(text("""
+                    SELECT company_id FROM engagements WHERE id = :e
+                """), {"e": action.engagement_id})
+                co = co_row.first()
+                co_id_for_tracking = int(co.company_id) if co else None
+                wrapped_body = await wrap_html_links(
+                    track_session,
+                    action.body,
+                    contact_id=action.contact_id,
+                    company_id=co_id_for_tracking,
+                    email_id=action.id,
+                    label="engine_body_link",
+                )
+        except Exception:
+            # Click-tracking is observability; never block a send if the
+            # wrap fails (regex blowup on malformed HTML, etc.).
+            wrapped_body = action.body
+
         try:
             result = await send_email(
                 to_email=action.recipient_email,
                 subject=action.subject,
-                body=action.body,
+                body=wrapped_body,
                 from_name=from_name,
                 from_firstname=from_firstname,
                 reply_to_email=new_reply_to,
-                company_id=action.engagement_id,  # legacy field; eng_id works
+                company_id=co_id_for_tracking or action.engagement_id,
                 contact_id=action.contact_id,
                 email_id=action.id,  # for legacy audit-log keying
                 step_type="email",
@@ -248,7 +278,8 @@ class EmailChannel:
             async with async_session() as activity_session:
                 ctx = await activity_session.execute(text("""
                     SELECT e.company_id,
-                           COALESCE(e.assigned_bdr_id, co.assigned_to) AS user_id
+                           COALESCE(e.assigned_bdr_id, co.assigned_to) AS user_id,
+                           co.status AS company_status
                     FROM engagements e
                     JOIN companies co ON co.id = e.company_id
                     WHERE e.id = :eng
@@ -256,6 +287,7 @@ class EmailChannel:
                 row = ctx.first()
                 company_id = row.company_id if row else None
                 user_id = row.user_id if row else None
+                company_status = row.company_status if row else None
                 activity_session.add(_Activity(
                     company_id=company_id,
                     contact_id=action.contact_id,
@@ -271,6 +303,31 @@ class EmailChannel:
                         "subject": action.subject,
                     }),
                 ))
+
+                # POST-CUTOVER status transition: when THIS send was the
+                # LAST scheduled action on the engagement (i.e., after
+                # this commit the engagement has zero remaining scheduled
+                # work), flip company.status='sequencing' → 'contacted'.
+                # 'contacted' is the mid-funnel bucket meaning "we
+                # finished cold outreach but the prospect didn't react".
+                # Pre-fix, engine engagements would silently complete
+                # and leave the company stuck in 'sequencing' forever —
+                # the 'Contacted' filter pill stayed empty for engine
+                # contacts (Finding 8).
+                if company_status == "sequencing" and company_id is not None:
+                    remaining = await activity_session.execute(text("""
+                        SELECT COUNT(*) FROM actions
+                        WHERE engagement_id = :eng
+                          AND status = 'scheduled'
+                          AND id != :this_id
+                    """), {"eng": action.engagement_id, "this_id": action.id})
+                    if int(remaining.scalar() or 0) == 0:
+                        await activity_session.execute(text("""
+                            UPDATE companies
+                            SET status = 'contacted'
+                            WHERE id = :co AND status = 'sequencing'
+                        """), {"co": company_id})
+
                 await activity_session.commit()
         except Exception:
             # Activity logging must NEVER block dispatch — the engine

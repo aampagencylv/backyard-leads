@@ -253,6 +253,10 @@ async def reputation_summary(
         trend.append({"date": day, **d})
 
     # Recent offenders — last bounces + complaints
+    # POST-CUTOVER: also pull engine bounces/complaints from Activity.
+    # Pre-fix the aggregate numbers were right (already unioned in lines
+    # ~150) but this list was legacy-only — Steve's "who recently bounced"
+    # list silently hid every engine-attributed address.
     recent_offenders_rows = (await db.execute(
         select(
             GeneratedEmail.id,
@@ -267,14 +271,47 @@ async def reputation_summary(
         .order_by(func.coalesce(GeneratedEmail.complained_at, GeneratedEmail.bounced_at).desc())
         .limit(25)
     )).all()
-    offenders = [{
+    legacy_offenders = [{
         "email_id": r.id,
         "contact_id": r.contact_id,
         "company_id": r.company_id,
         "email": r.email,
         "kind": "complained" if r.complained_at else "bounced",
         "at": (r.complained_at or r.bounced_at).isoformat() if (r.complained_at or r.bounced_at) else None,
+        "engine": "legacy",
     } for r in recent_offenders_rows]
+
+    from sqlalchemy import text as _sa_text
+    engine_offender_rows = (await db.execute(_sa_text("""
+        SELECT
+          (a.metadata_json::jsonb->>'engagement_action_id')::int AS action_id,
+          a.contact_id, a.company_id,
+          c.email,
+          MAX(CASE WHEN a.activity_type='email_complained' THEN a.created_at END) AS complained_at,
+          MAX(CASE WHEN a.activity_type='email_bounced' THEN a.created_at END) AS bounced_at
+        FROM activities a
+        LEFT JOIN contacts c ON c.id = a.contact_id
+        WHERE a.activity_type IN ('email_bounced','email_complained')
+          AND a.metadata_json::jsonb->>'engine' = 'engagement_engine'
+          AND a.created_at >= :cutoff
+        GROUP BY (a.metadata_json::jsonb->>'engagement_action_id')::int,
+                 a.contact_id, a.company_id, c.email
+        ORDER BY MAX(a.created_at) DESC
+        LIMIT 25
+    """), {"cutoff": cutoff})).fetchall()
+    engine_offenders = [{
+        "email_id": r.action_id,
+        "contact_id": r.contact_id,
+        "company_id": r.company_id,
+        "email": r.email,
+        "kind": "complained" if r.complained_at else "bounced",
+        "at": (r.complained_at or r.bounced_at).isoformat() if (r.complained_at or r.bounced_at) else None,
+        "engine": "engagement_engine",
+    } for r in engine_offender_rows]
+
+    # Merge + sort by `at` desc, cap at 25
+    offenders = sorted(legacy_offenders + engine_offenders,
+                       key=lambda x: x.get("at") or "", reverse=True)[:25]
 
     return {
         "window_days": days,
