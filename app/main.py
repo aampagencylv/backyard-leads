@@ -213,6 +213,18 @@ async def _sequence_engine_loop():
                 except Exception as e:
                     log.exception(f"engagement completion sweep failed (tenant={tid}): {e}")
 
+            # Inbound reply poll (account-wide, not per tenant — Resend's
+            # inbound store is account-scoped). Resend's email.received
+            # webhook push has never delivered; pull is the reliable path.
+            try:
+                from app.services.inbound_email_poller import poll_resend_inbound
+                async with async_session() as db:
+                    ip = await poll_resend_inbound(db)
+                if ip.get("ingested") or ip.get("errors"):
+                    log.info(f"inbound reply poll: {ip}")
+            except Exception as e:
+                log.exception(f"inbound reply poll failed: {e}")
+
         # Snoozed-deal wake check every 10 ticks (10 min) per tenant.
         if tick_count % 10 == 0:
             for tid in tenant_ids:

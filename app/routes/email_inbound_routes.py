@@ -491,6 +491,21 @@ async def email_inbound(request: Request):
     except Exception:
         return JSONResponse({"ok": False, "error": "bad json"}, status_code=400)
 
+    return await process_inbound_payload(payload)
+
+
+async def process_inbound_payload(payload: dict):
+    """Core inbound-reply processing, callable from BOTH the Resend webhook
+    route above AND the pull-based poller (app/services/inbound_email_poller).
+
+    The poller exists because Resend's email.received webhook push never
+    delivered a single event despite correct configuration (verified
+    2026-06-10: 27 inbound emails sitting in Resend's store — including 12
+    real prospect replies dating to May 12 — zero webhook attempts in nginx
+    history). Polling GET /emails/inbound is the reliable path; the webhook,
+    if it ever starts working, simply gets deduped by the poller's
+    ingestion markers.
+    """
     event_type = payload.get("type") or ""
     if event_type and event_type != "email.received":
         # Not a received email — could be a delivery / bounce event we don't care about here.
