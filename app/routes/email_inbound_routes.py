@@ -395,13 +395,17 @@ async def _classify_engagement_reply_async(
             # Patch the most-recent matching signal for this contact —
             # jsonb_set merges so we don't clobber the existing payload.
             # Window is 5 minutes back to be safe on slow webhook acks.
+            # NOTE the ::text casts — :sentiment binds twice inside
+            # jsonb_build_object and asyncpg can't infer the parameter
+            # type without them (IndeterminateDatatypeError; every
+            # classification failed until 2026-06-10).
             await db.execute(_sa_text("""
                 UPDATE signals
                 SET raw_data_json = COALESCE(raw_data_json, '{}'::jsonb)
                                     || jsonb_build_object(
-                                        'sentiment',         :sentiment,
-                                        'reply_sentiment',   :sentiment,
-                                        'summary',           :summary
+                                        'sentiment',         :sentiment ::text,
+                                        'reply_sentiment',   :sentiment ::text,
+                                        'summary',           :summary ::text
                                     )
                 WHERE id = (
                     SELECT s.id FROM signals s
@@ -435,6 +439,31 @@ async def _classify_engagement_reply_async(
                 "sentiment": sentiment,
                 "summary": summary,
             })
+
+            # ENFORCE explicit opt-outs. Classification previously only
+            # painted a badge — a prospect replying "stop emailing me" kept
+            # getting the rest of the sequence. do_not_contact blocks the
+            # engine (kill-switch gate); unsubscribed_at blocks the legacy
+            # send routes; terminate_engagement cancels scheduled steps.
+            if sentiment == "unsubscribe":
+                await db.execute(_sa_text("""
+                    UPDATE contacts
+                    SET do_not_contact = TRUE,
+                        unsubscribed_at = COALESCE(unsubscribed_at, NOW())
+                    WHERE id = :c
+                """), {"c": contact_id})
+                await db.commit()
+                try:
+                    from app.engagement_engine.lifecycle import terminate_engagement
+                    await terminate_engagement(
+                        db, contact_id, reason="reply_unsubscribe",
+                        transition_by="system",
+                    )
+                except Exception as _te:
+                    log.warning("[classify] terminate after unsubscribe failed "
+                                "(contact=%s): %s", contact_id, _te)
+                log.info("[classify] contact=%s opted out via reply — "
+                         "do_not_contact set, engagement terminated", contact_id)
 
             await db.commit()
 
