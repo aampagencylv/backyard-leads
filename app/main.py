@@ -200,6 +200,18 @@ async def _sequence_engine_loop():
                         log.info(f"recording backfill tick (tenant={tid}): {rb}")
                 except Exception as e:
                     log.exception(f"recording backfill tick failed (tenant={tid}): {e}")
+                # Close engagements whose sequences finished (every action
+                # done) so 'in cadence' views and re-enrollment guards see
+                # the truth instead of forever-active finished sequences.
+                try:
+                    from app.engagement_engine.lifecycle import sweep_completed_engagements
+                    async with async_session() as db:
+                        with tenant_scope(db, tid):
+                            closed = await sweep_completed_engagements(db)
+                    if closed:
+                        log.info(f"engagement completion sweep (tenant={tid}): {closed} closed")
+                except Exception as e:
+                    log.exception(f"engagement completion sweep failed (tenant={tid}): {e}")
 
         # Snoozed-deal wake check every 10 ticks (10 min) per tenant.
         if tick_count % 10 == 0:

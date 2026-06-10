@@ -80,21 +80,32 @@ async def build_brief(db: AsyncSession, user: User) -> BriefData:
 
     overnight = {}
 
-    # God Mode runs for campaigns this user owns
+    # Campaign activity for campaigns this user owns. Counted from
+    # campaign_logs — the audit trail the ACTIVE batch runner writes.
+    # (CampaignRun rows are only written by the God-Mode runner, which the
+    # cron doesn't use, so the brief reported 0 enrollments forever even
+    # while autopilot enrolled hundreds.)
     user_campaign_ids = (await db.execute(
         select(Campaign.id).where(Campaign.created_by == user.id)
     )).scalars().all()
     if user_campaign_ids:
-        runs = (await db.execute(
-            select(CampaignRun)
-            .where(
-                CampaignRun.campaign_id.in_(user_campaign_ids),
-                CampaignRun.started_at >= since,
+        from app.models import CampaignLog
+        ticks = (await db.execute(
+            select(func.count(CampaignLog.id)).where(
+                CampaignLog.campaign_id.in_(user_campaign_ids),
+                CampaignLog.action == "searched",
+                CampaignLog.created_at >= since,
             )
-            .order_by(CampaignRun.started_at.desc())
-        )).scalars().all()
-        overnight["campaign_ticks"] = len(runs)
-        overnight["contacts_enrolled_overnight"] = sum(r.contacts_enrolled or 0 for r in runs)
+        )).scalar() or 0
+        enrolled = (await db.execute(
+            select(func.count(CampaignLog.id)).where(
+                CampaignLog.campaign_id.in_(user_campaign_ids),
+                CampaignLog.action == "sequence_created",
+                CampaignLog.created_at >= since,
+            )
+        )).scalar() or 0
+        overnight["campaign_ticks"] = int(ticks)
+        overnight["contacts_enrolled_overnight"] = int(enrolled)
     else:
         overnight["campaign_ticks"] = 0
         overnight["contacts_enrolled_overnight"] = 0

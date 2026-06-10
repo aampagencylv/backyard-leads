@@ -990,6 +990,62 @@ async def terminate_engagement(
     return n
 
 
+async def sweep_completed_engagements(db: AsyncSession) -> int:
+    """Close out engagements whose every action has finished.
+
+    Engagements previously stayed status='active' forever after the last
+    step dispatched — 'in cadence' badges, engagement lists, and AI budget
+    allocation all kept treating finished sequences as live work. The
+    engagements.status CHECK constraint allows only active/paused/
+    hibernating/terminal, so completed-naturally is modeled as
+    status='terminal' with terminal_reason='sequence_completed' (the
+    terminal-pairing constraint requires terminal_at + terminal_reason
+    together). Re-enrollment still works — the start_engagement duplicate
+    guard only blocks on status='active'.
+
+    Also flips the company sequencing → contacted when the completed
+    engagement was the company's last one with pending work — parity with
+    the EmailChannel post-send transition, covering call/manual-final
+    sequences that complete via task completion instead of an email send.
+
+    Returns the number of engagements closed. Commits.
+    """
+    completed = (await db.execute(text("""
+        UPDATE engagements e
+        SET status = 'terminal',
+            terminal_reason = 'sequence_completed',
+            terminal_at = NOW(),
+            updated_at = NOW()
+        WHERE e.status = 'active'
+          AND EXISTS (SELECT 1 FROM actions a WHERE a.engagement_id = e.id)
+          AND NOT EXISTS (
+              SELECT 1 FROM actions a
+              WHERE a.engagement_id = e.id
+                AND a.status IN ('scheduled', 'paused', 'awaiting_approval'))
+        RETURNING e.id, e.company_id
+    """))).fetchall()
+    if not completed:
+        return 0
+
+    company_ids = sorted({int(r.company_id) for r in completed if r.company_id})
+    if company_ids:
+        await db.execute(text("""
+            UPDATE companies co
+            SET status = 'contacted'
+            WHERE co.id = ANY(:cos)
+              AND co.status = 'sequencing'
+              AND NOT EXISTS (
+                  SELECT 1 FROM engagements e2
+                  JOIN actions a2 ON a2.engagement_id = e2.id
+                  WHERE e2.company_id = co.id AND e2.status = 'active'
+                    AND a2.status IN ('scheduled', 'paused', 'awaiting_approval'))
+        """), {"cos": company_ids})
+
+    await db.commit()
+    log.info("sweep_completed_engagements: closed %d engagements", len(completed))
+    return len(completed)
+
+
 async def purge_contact_engine_data(db: AsyncSession, contact_id: int) -> int:
     """Hard-delete every engagement-engine row belonging to a contact.
 
