@@ -1047,14 +1047,17 @@ async def sweep_completed_engagements(db: AsyncSession) -> int:
 
 
 async def purge_contact_engine_data(db: AsyncSession, contact_id: int) -> int:
-    """Hard-delete every engagement-engine row belonging to a contact.
+    """Clear every row that blocks deleting a contact — engine AND legacy.
 
-    Called BEFORE deleting the contact itself. The engine tables (actions,
-    engagements, signals, observations) all FK contacts.id with NO cascade,
-    so without this purge a DELETE on an engine-enrolled contact raises a
-    foreign-key violation (the CRM delete button 500s) — or, where the FK
-    is unenforced, leaves orphaned scheduled actions that keep dispatching
-    to a contact that no longer exists.
+    Called BEFORE deleting the contact itself. ALL FKs into contacts are
+    NO ACTION (engine tables: actions/engagements/signals/observations;
+    legacy: tracking_links/seq_enrollments/activities/tasks/bookings/
+    page_views), so without this purge the DELETE raises a foreign-key
+    violation (the CRM delete button 500s) — or, where rows linger,
+    leaves orphaned scheduled actions that keep dispatching to a contact
+    that no longer exists. Engine rows and per-contact analytics are
+    deleted; shared history (activities/tasks/bookings) is detached so
+    the company timeline survives.
 
     Deletion order respects the FK graph:
       signals.triggered_action_id → actions; actions.triggered_by_signal_id
@@ -1104,8 +1107,33 @@ async def purge_contact_engine_data(db: AsyncSession, contact_id: int) -> int:
         DELETE FROM engagements WHERE contact_id = :c
     """), {"c": contact_id})
 
-    log.info("purge_contact_engine_data: contact=%s engagements=%d actions=%d",
-             contact_id, len(eng_ids), deleted_actions)
+    # LEGACY dependents. Every FK into contacts is NO ACTION (verified via
+    # information_schema 2026-06-10), so these block the contact DELETE too.
+    # Sentry incident same day: batch delete 500'd because the ORM cascade
+    # on generated_emails hit tracking_links.email_id (NO ACTION).
+    #
+    # Semantics per table:
+    #   tracking_links — per-contact/per-email click analytics: DELETE
+    #     (must go before the ORM cascades generated_emails away).
+    #   seq_enrollments — dead schema, rows would block: DELETE.
+    #   activities/tasks/bookings/page_views — shared history that should
+    #     SURVIVE on the company timeline / task list: detach (contact_id
+    #     NULL, columns are nullable) rather than erase.
+    await db.execute(text("""
+        DELETE FROM tracking_links
+        WHERE contact_id = :c
+           OR email_id IN (SELECT id FROM generated_emails WHERE contact_id = :c)
+    """), {"c": contact_id})
+    await db.execute(text("""
+        DELETE FROM seq_enrollments WHERE contact_id = :c
+    """), {"c": contact_id})
+    for tbl in ("activities", "tasks", "bookings", "page_views"):
+        await db.execute(text(
+            f"UPDATE {tbl} SET contact_id = NULL WHERE contact_id = :c"
+        ), {"c": contact_id})
+
+    log.info("purge_contact_engine_data: contact=%s engagements=%d actions=%d "
+             "(+legacy dependents cleared)", contact_id, len(eng_ids), deleted_actions)
     return deleted_actions
 
 
