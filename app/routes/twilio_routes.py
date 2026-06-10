@@ -425,52 +425,56 @@ async def voice_recording(request: Request):
     if not recording_url.lower().endswith((".mp3", ".wav")):
         recording_url = recording_url + ".mp3"
 
+    from app.services.call_reconciliation import attach_recording_for_call_sid
     async with async_session() as db:
-        # A race between call_reconciliation (creates a stub) and the
-        # normal call-end webhook can leave two Activity rows with the
-        # same twilio_call_sid. Pick the most-recently-updated row that
-        # has a non-stub content (real log_call output), falling back
-        # to the most recent row of any kind. Delete the others to
-        # collapse the duplicate immediately so the next webhook sees
-        # exactly one match.
-        rows = (await db.execute(
-            select(Activity)
-            .where(Activity.twilio_call_sid == call_sid)
-            .order_by(Activity.id.desc())
-        )).scalars().all()
+        activity_id = await attach_recording_for_call_sid(db, call_sid, recording_url)
 
-        activity_id: Optional[int] = None
-        if rows:
-            # Prefer the row that does NOT look like a reconciliation stub
-            # (those have content starting with "Called the prospect at" +
-            # "[reconciled from Twilio"). Anything else is the real one.
-            def _is_stub(a) -> bool:
-                c = (a.content or "")
-                return "[reconciled from Twilio" in c or c.startswith("Called the prospect at")
-            non_stubs = [a for a in rows if not _is_stub(a)]
-            primary = non_stubs[0] if non_stubs else rows[0]
-
-            primary.recording_url = recording_url
-            activity_id = primary.id
-
-            # Collapse duplicates — delete every other row pointing at
-            # this same CallSid. Safe because we've moved the recording
-            # URL onto `primary` already.
-            for dup in rows:
-                if dup.id != primary.id:
-                    _log.info(
-                        f"[recording-webhook] collapsing duplicate activity "
-                        f"id={dup.id} into primary id={primary.id} for "
-                        f"CallSid={call_sid}"
-                    )
-                    await db.delete(dup)
-            await db.commit()
-
-    # Fire-and-forget transcription pipeline. Don't block the webhook ack.
     if activity_id is not None:
+        # Fire-and-forget transcription pipeline. Don't block the webhook ack.
         asyncio.create_task(transcribe_and_summarize_in_background(activity_id))
+    else:
+        # THE RACE THAT LOST ~65% OF RECORDINGS: this webhook fires within
+        # seconds of hangup, while the rep is still typing notes into the
+        # dialer modal — so the Activity row doesn't exist yet. The old
+        # code returned 200 here and the URL was gone forever (the audio
+        # stayed in Twilio, invisible to the CRM). Retry the attach in the
+        # background until log_call or the reconciliation cron creates the
+        # row. The 5-minute backfill sweep is the durable backstop if the
+        # process restarts mid-retry.
+        _log.warning(
+            f"[recording-webhook] no Activity yet for CallSid={call_sid} — "
+            f"starting background re-attach"
+        )
+        asyncio.create_task(_attach_recording_with_retry(call_sid, recording_url))
 
     return Response(content="", media_type="application/xml")
+
+
+async def _attach_recording_with_retry(call_sid: str, recording_url: str) -> None:
+    """Re-try attaching a recording URL every 20s for up to 10 minutes,
+    waiting for log_call (rep submits modal) or the reconciliation cron to
+    create the Activity row. Kicks off transcription once attached."""
+    import logging as _logging
+    _log = _logging.getLogger("bmp.twilio")
+    from app.services.call_reconciliation import attach_recording_for_call_sid
+    for _ in range(30):
+        await asyncio.sleep(20)
+        try:
+            async with async_session() as db:
+                activity_id = await attach_recording_for_call_sid(db, call_sid, recording_url)
+            if activity_id is not None:
+                _log.info(
+                    f"[recording-webhook] re-attach succeeded for CallSid={call_sid} "
+                    f"→ activity {activity_id}"
+                )
+                asyncio.create_task(transcribe_and_summarize_in_background(activity_id))
+                return
+        except Exception as e:
+            _log.warning(f"[recording-webhook] re-attach attempt failed for {call_sid}: {e}")
+    _log.warning(
+        f"[recording-webhook] gave up re-attaching CallSid={call_sid} after 10 min — "
+        f"the backfill sweep will recover it"
+    )
 
 
 # ============================================================

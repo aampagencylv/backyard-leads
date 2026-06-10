@@ -177,7 +177,9 @@ async def _sequence_engine_loop():
         # Call reconciliation every 5 ticks (5 min). Per tenant.
         # 24h lookback is idempotent on twilio_call_sid (cheap to re-scan).
         if tick_count % 5 == 0:
-            from app.services.call_reconciliation import reconcile_calls
+            from app.services.call_reconciliation import (
+                reconcile_calls, backfill_missing_recordings,
+            )
             for tid in tenant_ids:
                 try:
                     async with async_session() as db:
@@ -187,6 +189,17 @@ async def _sequence_engine_loop():
                         log.info(f"call_recon tick (tenant={tid}): {rc}")
                 except Exception as e:
                     log.exception(f"call_recon tick failed (tenant={tid}): {e}")
+                # Recording sweep: attach recordings the webhook race lost
+                # (URL arrives before the Activity row exists). Pulls from
+                # the Twilio API for any recent call still missing one.
+                try:
+                    async with async_session() as db:
+                        with tenant_scope(db, tid):
+                            rb = await backfill_missing_recordings(db, hours=48)
+                    if rb.get("attached") or rb.get("errors"):
+                        log.info(f"recording backfill tick (tenant={tid}): {rb}")
+                except Exception as e:
+                    log.exception(f"recording backfill tick failed (tenant={tid}): {e}")
 
         # Snoozed-deal wake check every 10 ticks (10 min) per tenant.
         if tick_count % 10 == 0:
