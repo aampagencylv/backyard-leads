@@ -20,6 +20,7 @@ Usage:
 import argparse
 import asyncio
 import sys
+from datetime import datetime, timezone
 
 from sqlalchemy import text
 
@@ -38,6 +39,8 @@ async def main() -> int:
     ap.add_argument("--limit", type=int, default=1000)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
+    since = datetime.fromisoformat(args.since).replace(tzinfo=timezone.utc)
+    until = datetime.fromisoformat(args.until).replace(tzinfo=timezone.utc)
 
     async with async_session() as db:
         nr_key = await get_netrows_api_key(db)
@@ -52,7 +55,7 @@ async def main() -> int:
                               AND ct.email IS NOT NULL AND ct.email != '')
             ORDER BY co.id
             LIMIT :lim
-        """), {"since": args.since, "until": args.until, "lim": args.limit})).fetchall()
+        """), {"since": since, "until": until, "lim": args.limit})).fetchall()
 
     print(f"{len(rows)} companies to re-discover "
           f"(netrows_key={'set' if nr_key else 'MISSING'}, "
