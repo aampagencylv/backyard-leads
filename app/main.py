@@ -222,6 +222,23 @@ async def _sequence_engine_loop():
                 except Exception as e:
                     log.exception(f"morning_brief tick failed (tenant={tid}): {e}")
 
+        # Platform health watchdog every 60 ticks (hourly) per tenant.
+        # Probes for the silent-failure patterns from the 2026-06-10 audit
+        # (phantom sends, dead dispatcher, contact-discovery outage,
+        # campaign error bursts, unattached recordings) and posts a
+        # system_announcement to admins when something trips.
+        if tick_count % 60 == 0:
+            from app.services.platform_health import run_platform_health_check
+            for tid in tenant_ids:
+                try:
+                    async with async_session() as db:
+                        with tenant_scope(db, tid):
+                            hc = await run_platform_health_check(db)
+                    if hc.get("issues"):
+                        log.warning(f"platform health (tenant={tid}): {hc}")
+                except Exception as e:
+                    log.exception(f"platform health check failed (tenant={tid}): {e}")
+
         await asyncio.sleep(60)
 
 

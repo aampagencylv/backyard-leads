@@ -70,6 +70,12 @@ TRANSIENT_RETRY_DELAY_SECONDS = 300
 # duplicate sends if the original worker also resumes.
 ABANDONED_HEARTBEAT_SECONDS = 60
 
+# Gap between consecutive sends within one tick. Resend allows ~2 req/s
+# per account; each send also makes auxiliary calls (link wrapping,
+# Activity write), so 0.7s keeps a full 20-action batch (~14s more per
+# tick) comfortably under the limit. The 60s cron interval absorbs it.
+INTER_SEND_PACING_SECONDS = 0.7
+
 
 @dataclass
 class TickReport:
@@ -121,7 +127,7 @@ async def run_dispatcher_tick(
         report.finished_at = datetime.now(timezone.utc)
         return report
 
-    for action_id in action_ids:
+    for i, action_id in enumerate(action_ids):
         try:
             await _process_one_action(
                 action_id=action_id,
@@ -134,6 +140,13 @@ async def run_dispatcher_tick(
                 f"action {action_id} unhandled: {type(e).__name__}: {e}",
             )
             log.exception(f"dispatcher unhandled exception on action {action_id}")
+        # Pace the batch under Resend's ~2 req/s account limit. Without
+        # this, back-to-back sends in a full batch tripped 429s on most
+        # ticks (32 in today's log alone) — each one detouring a real
+        # email through a 5-minute transient retry.
+        if i < len(action_ids) - 1 and not dry_run:
+            import asyncio as _asyncio
+            await _asyncio.sleep(INTER_SEND_PACING_SECONDS)
 
     report.finished_at = datetime.now(timezone.utc)
     return report
