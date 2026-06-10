@@ -691,12 +691,26 @@ async def voicemail_recording(request: Request):
         recording_url = recording_url + ".mp3"
 
     async with async_session() as db:
-        # Try to match the From number to a known Contact for attribution
+        # Try to match the From number to a known Contact for attribution.
+        # Match by last-10 digits: Twilio gives E.164 (+14805551234) while
+        # CRM phones are stored pretty ("(480) 555-1234") — the old exact
+        # compare never matched, so every callback voicemail was dropped
+        # as an "orphan vm" even when the caller was a known contact.
         contact = None
         if from_number:
-            contact = (await db.execute(
-                select(Contact).where(Contact.phone == from_number)
-            )).scalar_one_or_none()
+            digits = "".join(ch for ch in from_number if ch.isdigit())[-10:]
+            if len(digits) == 10:
+                from sqlalchemy import text as _sa_text
+                ct_row = (await db.execute(_sa_text("""
+                    SELECT id FROM contacts
+                    WHERE phone IS NOT NULL AND phone != ''
+                      AND RIGHT(regexp_replace(phone, '[^0-9]', '', 'g'), 10) = :d
+                    ORDER BY is_primary DESC, id LIMIT 1
+                """), {"d": digits})).first()
+                if ct_row:
+                    contact = (await db.execute(
+                        select(Contact).where(Contact.id == int(ct_row.id))
+                    )).scalar_one_or_none()
 
         company_id = contact.company_id if contact else None
         if not company_id:
@@ -739,9 +753,8 @@ async def inbound_lookup(
     """When the browser receives an inbound call via the SDK, it calls this
     to resolve the From number to a Contact + Company so the modal pre-pops
     with CRM context."""
-    contact = (await db.execute(
-        select(Contact).where(Contact.phone == phone)
-    )).scalar_one_or_none()
+    from app.services.phone_match import find_contact_by_phone
+    contact = await find_contact_by_phone(db, phone)
     if not contact:
         return {"contact": None, "company": None}
     company = (await db.execute(select(Company).where(Company.id == contact.company_id))).scalar_one_or_none()
@@ -1232,9 +1245,11 @@ async def sms_inbound(request: Request):
         return Response(content="<Response/>", media_type="application/xml")
 
     async with async_session() as db:
-        contact = (await db.execute(
-            select(Contact).where(Contact.phone == from_number)
-        )).scalar_one_or_none()
+        # Digit-match: E.164 From vs pretty-stored phones. The old exact
+        # compare meant inbound SMS — including STOP opt-outs — never
+        # attributed to a contact, so do_not_text was never set.
+        from app.services.phone_match import find_contact_by_phone
+        contact = await find_contact_by_phone(db, from_number)
 
         # Find which rep owns the called number (so the activity attributes correctly)
         rep = None

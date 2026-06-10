@@ -1432,8 +1432,10 @@ async def _find_existing_company(db, name, website, phone):
             return existing
 
     if phone:
-        result = await db.execute(select(Company).where(Company.phone == phone))
-        existing = result.scalars().first()
+        # Digit-match so dedup works regardless of whether the scraper or
+        # the stored row carries E.164 vs "(954) 327-3686" formatting.
+        from app.services.phone_match import find_company_by_phone
+        existing = await find_company_by_phone(db, phone)
         if existing:
             return existing
 

@@ -482,9 +482,10 @@ async def _handle_inbound_message(data: dict) -> None:
         return
 
     async with async_session() as db:
-        contact = (await db.execute(
-            select(Contact).where(Contact.phone == from_number)
-        )).scalar_one_or_none()
+        # Digit-match (E.164 vs pretty-stored phones) — exact compare never
+        # matched, so inbound texts incl. STOP opt-outs were dropped here.
+        from app.services.phone_match import find_contact_by_phone
+        contact = await find_contact_by_phone(db, from_number)
         if not contact:
             # Unknown sender — log nothing for now (could create placeholder later).
             return
