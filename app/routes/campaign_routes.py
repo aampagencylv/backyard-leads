@@ -798,15 +798,22 @@ async def _execute_batch(campaign_id: int, db: AsyncSession, user: User):
                 except Exception:
                     pass
 
-                # Contact lookup — Netrows then Hunter
+                # Contact lookup — Netrows then Hunter. FAILURES MUST BE
+                # VISIBLE: a silent `except: pass` here hid a 6-day Netrows
+                # outage (May 30 – Jun 4 2026) during which 1,000+ enriched
+                # companies were skipped "No contact email" and the Houston/
+                # Naples campaigns completed nearly empty. Log to campaign_logs
+                # so a dead provider shows up in the campaign detail view.
                 nr_key = await get_netrows_api_key(db)
                 if nr_key:
                     try:
                         nr = await netrows_find_decision_makers(company.website, nr_key)
                         for dm in nr.decision_makers:
                             await _ensure_contact(db, company.id, dm.full_name, dm.email, dm.job_title, company.phone, dm.linkedin_url)
-                    except Exception:
-                        pass
+                    except Exception as _nre:
+                        _log(db, campaign.id, "error",
+                             f"Netrows contact lookup failed for {company.name}: {str(_nre)[:80]}",
+                             company_id=company.id)
 
                 if settings.hunter_api_key:
                     try:
@@ -815,8 +822,10 @@ async def _execute_batch(campaign_id: int, db: AsyncSession, user: User):
                             if hc.email:
                                 full = f"{hc.first_name or ''} {hc.last_name or ''}".strip()
                                 await _ensure_contact(db, company.id, full, hc.email, hc.position, company.phone, None)
-                    except Exception:
-                        pass
+                    except Exception as _hue:
+                        _log(db, campaign.id, "error",
+                             f"Hunter contact lookup failed for {company.name}: {str(_hue)[:80]}",
+                             company_id=company.id)
 
                 # Meter the enrichment
                 try:
@@ -1056,13 +1065,18 @@ async def _process_business_through_pipeline(
             except Exception:
                 pass
 
+            # Contact lookup failures must be VISIBLE — see the same block in
+            # _execute_batch: a silent pass here hid the May 30 – Jun 4 2026
+            # Netrows outage that emptied the Houston/Naples campaigns.
             if nr_key:
                 try:
                     nr = await netrows_find_decision_makers(company.website, nr_key)
                     for dm in nr.decision_makers:
                         await _ensure_contact(db, company.id, dm.full_name, dm.email, dm.job_title, company.phone, dm.linkedin_url)
-                except Exception:
-                    pass
+                except Exception as _nre:
+                    _log(db, campaign.id, "error",
+                         f"Netrows contact lookup failed for {company.name}: {str(_nre)[:80]}",
+                         company_id=company.id)
 
             if settings.hunter_api_key:
                 try:
@@ -1071,8 +1085,10 @@ async def _process_business_through_pipeline(
                         if hc.email:
                             full = f"{hc.first_name or ''} {hc.last_name or ''}".strip()
                             await _ensure_contact(db, company.id, full, hc.email, hc.position, company.phone, None)
-                except Exception:
-                    pass
+                except Exception as _hue:
+                    _log(db, campaign.id, "error",
+                         f"Hunter contact lookup failed for {company.name}: {str(_hue)[:80]}",
+                         company_id=company.id)
 
             # Meter the enrichment
             try:
