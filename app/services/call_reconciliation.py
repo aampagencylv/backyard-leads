@@ -154,25 +154,40 @@ async def reconcile_calls(db: AsyncSession, *, hours: int = 6) -> dict:
             started_at = datetime.now(timezone.utc)
 
         # Look up contact + company by dialed number, if we have one.
+        # MATCH BY LAST-10 DIGITS, not exact string: the CRM stores phones
+        # in Google's pretty format ("(954) 327-3686" — 0 of 3,268 company
+        # phones were E.164 when checked 2026-06-10) while Twilio gives us
+        # "+19543273686". The old exact compare matched NOTHING — every
+        # stub ever created (330/330) landed with company_id NULL and was
+        # invisible on company timelines, which the team experienced as
+        # "the CRM isn't logging my calls".
         contact_id: Optional[int] = None
         company_id: Optional[int] = None
         normalized_to: Optional[str] = normalize_phone_e164(to_number) if to_number else None
         if normalized_to:
-            # Contact match first (preferred — links the call to a person)
-            ct = (await db.execute(
-                select(Contact).where(Contact.phone == normalized_to)
-                .order_by(Contact.is_primary.desc(), Contact.id).limit(1)
-            )).scalar_one_or_none()
-            if ct:
-                contact_id = ct.id
-                company_id = ct.company_id
-            else:
-                # Company main-line fallback
-                co = (await db.execute(
-                    select(Company).where(Company.phone == normalized_to).limit(1)
-                )).scalar_one_or_none()
-                if co:
-                    company_id = co.id
+            from sqlalchemy import text as _sa_text
+            digits = "".join(ch for ch in normalized_to if ch.isdigit())[-10:]
+            if len(digits) == 10:
+                # Contact match first (preferred — links the call to a person)
+                ct_row = (await db.execute(_sa_text("""
+                    SELECT id, company_id FROM contacts
+                    WHERE phone IS NOT NULL AND phone != ''
+                      AND RIGHT(regexp_replace(phone, '[^0-9]', '', 'g'), 10) = :d
+                    ORDER BY is_primary DESC, id LIMIT 1
+                """), {"d": digits})).first()
+                if ct_row:
+                    contact_id = int(ct_row.id)
+                    company_id = int(ct_row.company_id) if ct_row.company_id else None
+                else:
+                    # Company main-line fallback
+                    co_row = (await db.execute(_sa_text("""
+                        SELECT id FROM companies
+                        WHERE phone IS NOT NULL AND phone != ''
+                          AND RIGHT(regexp_replace(phone, '[^0-9]', '', 'g'), 10) = :d
+                        ORDER BY id LIMIT 1
+                    """), {"d": digits})).first()
+                    if co_row:
+                        company_id = int(co_row.id)
 
         if not company_id:
             # Orphan call — number isn't in the CRM. We still record it
