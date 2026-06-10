@@ -91,7 +91,24 @@ async def track_click(token: str, request: Request):
             return Response(status_code=404, content="link not found")
 
         now = datetime.now(timezone.utc)
-        is_first_click = link.first_clicked_at is None
+
+        # Machine-click gate: tracking links are created at send time, so a
+        # click within the bot window of link.created_at is a security
+        # gateway (Outlook SafeLinks, Barracuda, Mimecast) crawling every
+        # URL while scanning the message — not a person. Count it for
+        # analytics but don't let it claim first_clicked_at (which drives
+        # the timeline Activity and lead-score click bumps); a later HUMAN
+        # click still registers because first_clicked_at stays NULL.
+        from app.routes.send_routes import BOT_OPEN_WINDOW_SECONDS
+        _created = link.created_at
+        if _created is not None and _created.tzinfo is None:
+            _created = _created.replace(tzinfo=timezone.utc)
+        _is_bot_click = (
+            _created is not None
+            and (now - _created).total_seconds() < BOT_OPEN_WINDOW_SECONDS
+        )
+
+        is_first_click = link.first_clicked_at is None and not _is_bot_click
         link.click_count = (link.click_count or 0) + 1
         link.last_clicked_at = now
         if is_first_click:

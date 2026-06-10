@@ -846,6 +846,17 @@ SUPPRESSION_REASON = {
     "email.complained": "complaint",
 }
 
+# An "open" arriving this soon after the send is a machine, not a human:
+# security gateways (Barracuda, Mimecast, Microsoft Defender SafeLinks)
+# fetch every image — including the tracking pixel — while scanning the
+# message in transit. Prod forensics 2026-06-10: 74% of engine opens
+# landed within 60s of send, many within 2-3 SECONDS, and 31 companies
+# were auto-qualified off "3+ opens" that were mostly these scanners.
+# Machine opens are still recorded for analytics (open_count, bot-tagged
+# signal/activity rows) but do NOT set opened_at / action.outcome, do NOT
+# feed the 3-distinct-opens auto-qualify, and do NOT bump lead score.
+BOT_OPEN_WINDOW_SECONDS = 60
+
 
 async def _emit_engagement_engine_signal(
     db, engagement_action_id: int, event_type: str, data: dict, log,
@@ -868,7 +879,8 @@ async def _emit_engagement_engine_signal(
 
     # Resolve action → engagement/contact/tenant
     action_row = await db.execute(_sa_text("""
-        SELECT id, tenant_id, engagement_id, contact_id, recipient_email
+        SELECT id, tenant_id, engagement_id, contact_id, recipient_email,
+               executed_at
         FROM actions WHERE id = :id
     """), {"id": engagement_action_id})
     a = action_row.first()
@@ -904,13 +916,32 @@ async def _emit_engagement_engine_signal(
     else:
         idem = f"webhook-{event_type.replace('.', '-')}-{engagement_action_id}"
 
+    # Machine-open classification: an open within BOT_OPEN_WINDOW_SECONDS
+    # of the send is a security-gateway prefetch, not a person.
+    is_bot_open = False
+    if event_type == "email.opened" and a.executed_at is not None:
+        _sent_at = a.executed_at
+        if _sent_at.tzinfo is None:
+            _sent_at = _sent_at.replace(tzinfo=timezone.utc)
+        _age = (datetime.now(timezone.utc) - _sent_at).total_seconds()
+        if _age < BOT_OPEN_WINDOW_SECONDS:
+            is_bot_open = True
+            log.info(
+                f"[open-classifier] bot open for action {engagement_action_id}: "
+                f"{_age:.1f}s after send — recorded but excluded from scoring"
+            )
+
     raw_data = {
         "event_type": event_type,
         "resend_data": {
             k: v for k, v in data.items()
-            if k in ("email_id", "from", "to", "subject", "click", "bounce")
+            # 'open'/'click' sub-objects carry IP + user agent when Resend
+            # provides them — keep for future bot classification.
+            if k in ("email_id", "from", "to", "subject", "click", "open", "bounce")
         },
     }
+    if is_bot_open:
+        raw_data["suspected_bot"] = True
 
     # Insert signal (ON CONFLICT DO NOTHING for idempotency)
     await db.execute(_sa_text("""
@@ -930,8 +961,10 @@ async def _emit_engagement_engine_signal(
         "idem": idem,
     })
 
-    # For replies / clicks, update the action's outcome
-    if event_type in ("email.opened", "email.clicked"):
+    # For opens / clicks, update the action's outcome. Bot opens are
+    # deliberately excluded — outcome stays NULL so a later HUMAN open can
+    # still claim it, and engagement scoring only sees real engagement.
+    if event_type in ("email.opened", "email.clicked") and not is_bot_open:
         outcome = "opened" if event_type == "email.opened" else "clicked"
         await db.execute(_sa_text("""
             UPDATE actions
@@ -1044,6 +1077,11 @@ async def _emit_engagement_engine_signal(
         "email.unsubscribed": "email_unsubscribed",
     }
     activity_type = _activity_type_map.get(event_type)
+    if activity_type == "email_opened" and is_bot_open:
+        # Distinct type: kept for analytics/audit, invisible to every
+        # consumer that counts engagement (auto-qualify counts exactly
+        # 'email_opened'; dashboards and lead scoring likewise).
+        activity_type = "email_opened_bot"
     if activity_type:
         # Get company_id via engagement → company for correct timeline
         # placement (Activity.company_id drives the company-page feed).
@@ -1161,7 +1199,12 @@ async def resend_webhook(request: Request, db: AsyncSession = Depends(get_tenant
     log.info(f"event={event_type} company={company_id} contact={contact_id} email={email_id}")
 
     em: Optional[GeneratedEmail] = None
-    if email_id:
+    # Engine events carry email_id = action.id, which lives in a DIFFERENT
+    # id space that overlaps generated_emails.id (~2000 collisions at
+    # cutover). Looking it up here would stamp opened_at/delivered_at onto
+    # an unrelated legacy email. Engine events are fully handled by
+    # _emit_engagement_engine_signal above — skip the legacy row lookup.
+    if email_id and engagement_action_id is None:
         em = (await db.execute(select(GeneratedEmail).where(GeneratedEmail.id == int(email_id)))).scalar_one_or_none()
 
     if event_type == "email.delivered":
@@ -1181,7 +1224,23 @@ async def resend_webhook(request: Request, db: AsyncSession = Depends(get_tenant
         # preview) don't inflate engagement scores.
         is_first_open_for_email = False
         if em:
-            is_first_open_for_email = em.opened_at is None
+            # Machine-open gate (see BOT_OPEN_WINDOW_SECONDS): a gateway
+            # scanner opening the pixel seconds after the send counts
+            # toward open_count (analytics) but must NOT set opened_at —
+            # opened_at means "a human plausibly read this" and feeds the
+            # 3-distinct-opens auto-qualify. A later real open still sets
+            # opened_at because it remains NULL here.
+            _legacy_sent = em.sent_at
+            if _legacy_sent is not None and _legacy_sent.tzinfo is None:
+                _legacy_sent = _legacy_sent.replace(tzinfo=timezone.utc)
+            _is_bot_open = (
+                _legacy_sent is not None
+                and (now - _legacy_sent).total_seconds() < BOT_OPEN_WINDOW_SECONDS
+            )
+            if _is_bot_open:
+                log.info(f"[open-classifier] bot open for legacy email {em.id}: "
+                         f"{(now - _legacy_sent).total_seconds():.1f}s after send")
+            is_first_open_for_email = em.opened_at is None and not _is_bot_open
             if is_first_open_for_email:
                 em.opened_at = now
             em.open_count = (em.open_count or 0) + 1
