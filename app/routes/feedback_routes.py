@@ -204,14 +204,23 @@ async def approve_deletion(
     if not pd or pd.status != "pending":
         raise HTTPException(status_code=404)
 
-    # Actually delete the entity
+    # Actually delete the entity. Engagement-engine rows (actions,
+    # engagements, signals, observations) FK contacts with no cascade —
+    # purge them first or the contact/company delete hits an FK violation.
+    from app.engagement_engine.lifecycle import purge_contact_engine_data
     if pd.entity_type == "company":
         obj = (await db.execute(select(Company).where(Company.id == pd.entity_id))).scalar_one_or_none()
         if obj:
+            company_contact_ids = (await db.execute(
+                select(Contact.id).where(Contact.company_id == obj.id)
+            )).scalars().all()
+            for cid in company_contact_ids:
+                await purge_contact_engine_data(db, cid)
             await db.delete(obj)
     elif pd.entity_type == "contact":
         obj = (await db.execute(select(Contact).where(Contact.id == pd.entity_id))).scalar_one_or_none()
         if obj:
+            await purge_contact_engine_data(db, obj.id)
             await db.delete(obj)
     elif pd.entity_type == "deal":
         obj = (await db.execute(select(Deal).where(Deal.id == pd.entity_id))).scalar_one_or_none()

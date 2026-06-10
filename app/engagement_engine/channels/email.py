@@ -258,6 +258,21 @@ class EmailChannel:
                 raise TransientChannelError(str(e)) from e
             raise PermanentChannelError(str(e)) from e
 
+        # send_email reports API-level failures as a result dict, NOT an
+        # exception. Without this check, a Resend rejection (429 rate
+        # limit, 4xx validation, 5xx outage) fell through to the success
+        # path below — the action was marked status='sent' with a NULL
+        # external_id and the prospect never received anything. Observed
+        # live on prod (2026-06-10 16:06 tick: HTTP 429 → "sent: 1").
+        # Transient failures raise TransientChannelError so the dispatcher
+        # reschedules; permanent ones raise PermanentChannelError → failed.
+        if not result.get("success"):
+            err = (f"resend rejected: HTTP {result.get('status_code', '?')} "
+                   f"{str(result.get('error', ''))[:300]}")
+            if result.get("retryable"):
+                raise TransientChannelError(err)
+            raise PermanentChannelError(err)
+
         # send_email returns a dict with 'resend_id' (NOT 'resend_message_id'
         # as I wrote earlier — caught during prod cutover when external_id
         # came back NULL for all 15 actual Resend sends).

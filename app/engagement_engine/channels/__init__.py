@@ -27,7 +27,12 @@ CHANNEL_REGISTRY: dict[str, ActionDispatcher] = {
     "sms":       SMSChannel(),
     "call_task": CallTaskChannel(),
     "manual":    ManualChannel(),
-    # 'linkedin' deferred to Phase 8
+    # LinkedIn routes through ManualChannel (a CRM task for the BDR to send
+    # the DM by hand) until Phase 8 ships a real LinkedInChannel. Without
+    # this registration every linkedin action failed at dispatch with
+    # no_adapter:linkedin — the step died silently and the BDR never saw
+    # a task for it.
+    "linkedin":  ManualChannel(),
     # 'wait' is a no-op step — dispatcher skips it without lookup
 }
 

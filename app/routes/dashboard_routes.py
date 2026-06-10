@@ -963,13 +963,17 @@ async def team_dashboard(
         elif a.activity_type == "imessage_sent":
             if created >= today_start: row["imessages_today"] += 1
 
-    # Emails → emails_today / emails_this_week (attribute to the
-    # company's assigned rep via prefetched cache)
+    # Emails → emails_today / emails_this_week. Attribute to the Activity's
+    # OWN user_id first — both legacy sends (sent_by user) and engine sends
+    # (engagement's assigned BDR) stamp it. Only fall back to the company's
+    # current owner when user_id is NULL (system-driven sends with no rep).
+    # Pre-fix this always used the company owner, so leaderboard credit
+    # moved whenever a company was reassigned mid-sequence.
     for e in emails_30d:
         sent = _aware(e.sent_at) if e.sent_at else None
         if not sent:
             continue
-        sender_uid = company_owner_cache.get(e.company_id) if e.company_id else None
+        sender_uid = e.user_id or (company_owner_cache.get(e.company_id) if e.company_id else None)
         if not sender_uid or sender_uid not in per_bdr:
             continue
         if sent >= today_start: per_bdr[sender_uid]["emails_today"] += 1

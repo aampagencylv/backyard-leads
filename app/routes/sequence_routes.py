@@ -127,7 +127,7 @@ async def get_for_contact(
     # New-engine actions for the contact. Channel code resolved via a join.
     action_rows = (await db.execute(_sa_text("""
         SELECT a.id, a.channel_id, ct.code AS channel_code,
-               a.subject, a.body, a.scheduled_at, a.executed_at,
+               a.subject, a.body, a.scheduled_at, a.executed_at, a.updated_at,
                a.status, a.skip_reason, a.engagement_id,
                ROW_NUMBER() OVER (PARTITION BY a.engagement_id
                                   ORDER BY a.scheduled_at) AS step_order
@@ -168,10 +168,11 @@ async def get_for_contact(
             "send_delay_days": None,
             "scheduled_send_at": r.scheduled_at.isoformat() if r.scheduled_at else None,
             "sent_at": r.executed_at.isoformat() if r.executed_at else None,
-            "skipped_at": None,
+            "skipped_at": (r.executed_at or r.updated_at).isoformat()
+                          if r.status == "skipped" and (r.executed_at or r.updated_at) else None,
             "skip_reason": r.skip_reason,
             "skip_if": [],
-            "paused_at": None,
+            "paused_at": r.updated_at.isoformat() if r.status == "paused" and r.updated_at else None,
             "auto_execute": r.channel_code in ("email", "sms"),
             "task_id": None,
             "status": _action_status(r),
@@ -190,11 +191,41 @@ async def pause(
     db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
+    """Pause BOTH engines for this contact. A contact can hold legacy
+    generated_emails rows AND engagement-engine actions (pre/post-cutover
+    mix); pausing only one side leaves the other still sending — the exact
+    bug where a BDR hit Pause and the prospect kept getting emails."""
+    contact = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    now = datetime.now(timezone.utc)
+    legacy_pending = (await db.execute(
+        select(GeneratedEmail).where(
+            GeneratedEmail.contact_id == contact_id,
+            GeneratedEmail.is_sent == False,
+            GeneratedEmail.paused_at.is_(None),
+            GeneratedEmail.skipped_at.is_(None),
+        )
+    )).scalars().all()
+    for e in legacy_pending:
+        e.paused_at = now
+
+    # pause_engagement commits (including the legacy paused_at changes
+    # above) and writes its own sequence_paused Activity when an active
+    # engagement exists. Only add our own when the contact is legacy-only,
+    # so the timeline gets exactly one entry either way.
     from app.engagement_engine.lifecycle import pause_engagement
-    n = await pause_engagement(
+    engine_n = await pause_engagement(
         db, contact_id, reason=f"manual ({user.email}): {reason}",
     )
-    return {"paused": n}
+    if engine_n == 0 and legacy_pending:
+        db.add(Activity(company_id=contact.company_id, contact_id=contact.id, user_id=user.id,
+                        activity_type="sequence_paused",
+                        content=f"Sequence paused: {reason} ({len(legacy_pending)} steps frozen)"))
+        await db.commit()
+    return {"paused": engine_n + len(legacy_pending),
+            "engine_paused": engine_n, "legacy_paused": len(legacy_pending)}
 
 
 class RescheduleRequest(BaseModel):
@@ -218,9 +249,116 @@ async def resume(
             resume_at_dt = parsed
         except (ValueError, TypeError):
             pass
+
+    contact = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    now = datetime.now(timezone.utc)
+    anchor = resume_at_dt or now
+
+    # Legacy rows: un-pause, and re-anchor overdue unsent steps so the
+    # earliest lands at `anchor` with relative spacing preserved. Without
+    # the re-anchor, "Restart from today" on a stalled (overdue but never
+    # paused) sequence was a literal no-op on both engines.
+    legacy_rows = (await db.execute(
+        select(GeneratedEmail).where(
+            GeneratedEmail.contact_id == contact_id,
+            GeneratedEmail.is_sent == False,
+            GeneratedEmail.skipped_at.is_(None),
+        )
+    )).scalars().all()
+    legacy_n = 0
+    for e in legacy_rows:
+        if e.paused_at is not None:
+            e.paused_at = None
+            legacy_n += 1
+    overdue = [e for e in legacy_rows if e.scheduled_send_at and
+               (e.scheduled_send_at.replace(tzinfo=timezone.utc) if e.scheduled_send_at.tzinfo is None
+                else e.scheduled_send_at) < now]
+    if overdue:
+        earliest = min(
+            (e.scheduled_send_at.replace(tzinfo=timezone.utc) if e.scheduled_send_at.tzinfo is None
+             else e.scheduled_send_at) for e in overdue)
+        shift = anchor - earliest
+        for e in legacy_rows:
+            if e.scheduled_send_at:
+                e.scheduled_send_at = e.scheduled_send_at + shift
+        legacy_n = max(legacy_n, len(overdue))
+
+    # Engine: un-pause paused actions (resume_engagement shifts them to
+    # resume_at), then re-anchor any still-overdue scheduled actions.
     from app.engagement_engine.lifecycle import resume_engagement
-    n = await resume_engagement(db, contact_id, resume_at=resume_at_dt)
-    return {"resumed": n, "resume_at": resume_at_dt.isoformat() if resume_at_dt else "now"}
+    engine_n = await resume_engagement(db, contact_id, resume_at=resume_at_dt)
+
+    from sqlalchemy import text as _sa_text
+    overdue_engine = (await db.execute(_sa_text("""
+        SELECT MIN(a.scheduled_at) FROM actions a
+        JOIN engagements e ON e.id = a.engagement_id
+        WHERE a.contact_id = :c AND a.status = 'scheduled'
+          AND e.status = 'active' AND a.scheduled_at < :now
+    """), {"c": contact_id, "now": now})).scalar()
+    if overdue_engine is not None:
+        shift_seconds = int((anchor - overdue_engine).total_seconds())
+        if shift_seconds > 0:
+            shifted = await db.execute(_sa_text("""
+                UPDATE actions a
+                SET scheduled_at = a.scheduled_at + (:shift * INTERVAL '1 second'),
+                    stale_after  = a.stale_after  + (:shift * INTERVAL '1 second'),
+                    updated_at   = NOW()
+                FROM engagements e
+                WHERE e.id = a.engagement_id
+                  AND a.contact_id = :c AND a.status = 'scheduled'
+                  AND e.status = 'active'
+                RETURNING a.id
+            """), {"c": contact_id, "shift": shift_seconds})
+            engine_n = max(engine_n, len(shifted.fetchall()))
+
+    await db.commit()
+    return {"resumed": engine_n + legacy_n,
+            "engine_resumed": engine_n, "legacy_resumed": legacy_n,
+            "resume_at": resume_at_dt.isoformat() if resume_at_dt else "now"}
+
+
+@router.delete("/{contact_id}")
+async def delete_sequence(
+    contact_id: int,
+    db: AsyncSession = Depends(get_tenant_db),
+    user: User = Depends(get_current_user),
+):
+    """Delete this contact's entire pending sequence across BOTH engines in
+    one atomic call: unsent legacy generated_emails rows are removed, and
+    the active engagement (if any) is terminated so its scheduled actions
+    stop dispatching. Sent steps stay on the timeline as history.
+
+    Replaces the old frontend behavior of looping DELETE /api/send/email/{id}
+    over every step — which 404'd silently on engine action ids, so the user
+    saw 'Sequence deleted' while the engine kept sending.
+    """
+    contact = (await db.execute(select(Contact).where(Contact.id == contact_id))).scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    legacy_rows = (await db.execute(
+        select(GeneratedEmail).where(
+            GeneratedEmail.contact_id == contact_id,
+            GeneratedEmail.is_sent == False,
+        )
+    )).scalars().all()
+    for e in legacy_rows:
+        await db.delete(e)
+
+    from app.engagement_engine.lifecycle import terminate_engagement
+    engine_n = await terminate_engagement(
+        db, contact_id, reason="sequence_deleted_by_bdr",
+    )
+
+    db.add(Activity(company_id=contact.company_id, contact_id=contact.id, user_id=user.id,
+                    activity_type="sequence_deleted",
+                    content=f"Sequence deleted ({len(legacy_rows)} legacy steps removed, "
+                            f"{engine_n} engine steps canceled)"))
+    await db.commit()
+    return {"deleted_legacy": len(legacy_rows), "canceled_engine": engine_n}
 
 
 class ReworkRequest(BaseModel):
@@ -293,6 +431,25 @@ async def rework_sequence(
         remaining_step_count=min(deleted, 7) or 5,
         messaging_direction=direction,
     )
+
+    # Cancel the engagement's still-pending PRE-CALL actions before
+    # appending the reworked ones. Without this, the old cold-outreach
+    # steps and the new post-call steps both stay scheduled and the
+    # prospect gets two interleaved sequences (the double-send bug).
+    from sqlalchemy import text as _sa_text
+    superseded = await db.execute(_sa_text("""
+        UPDATE actions a
+        SET status = 'skipped',
+            skip_reason = 'superseded_by_rework',
+            updated_at = NOW()
+        FROM engagements e
+        WHERE e.id = a.engagement_id
+          AND a.contact_id = :c
+          AND e.status = 'active'
+          AND a.status IN ('scheduled', 'paused', 'awaiting_approval')
+        RETURNING a.id
+    """), {"c": contact_id})
+    deleted += len(superseded.fetchall())
 
     # Append the AI-reworked steps to the contact's active engagement.
     # The legacy GeneratedEmail rows we deleted above were already

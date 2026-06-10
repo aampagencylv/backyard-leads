@@ -20,8 +20,8 @@ from app.engagement_engine.channels.sms import SMSChannel
 
 # ── Registry ────────────────────────────────────────────────────────────────
 
-def test_registry_has_four_channels():
-    assert set(supported_channels()) == {"email", "sms", "call_task", "manual"}
+def test_registry_has_five_channels():
+    assert set(supported_channels()) == {"email", "sms", "call_task", "manual", "linkedin"}
 
 
 def test_get_channel_returns_correct_adapter():
@@ -29,6 +29,11 @@ def test_get_channel_returns_correct_adapter():
     assert isinstance(get_channel("sms"), SMSChannel)
     assert isinstance(get_channel("call_task"), CallTaskChannel)
     assert isinstance(get_channel("manual"), ManualChannel)
+    # LinkedIn dispatches through ManualChannel (BDR sends the DM by hand
+    # via a CRM task) until Phase 8 ships a native LinkedInChannel.
+    # Pre-fix it had NO adapter and every linkedin action failed silently
+    # with no_adapter:linkedin.
+    assert isinstance(get_channel("linkedin"), ManualChannel)
 
 
 def test_unknown_channel_returns_none():
@@ -37,7 +42,12 @@ def test_unknown_channel_returns_none():
 
 
 def test_each_adapter_advertises_correct_code():
+    # linkedin is a documented alias onto ManualChannel (channel_code
+    # 'manual') — exempt until the native adapter exists.
     for code, adapter in CHANNEL_REGISTRY.items():
+        if code == "linkedin":
+            assert adapter.channel_code == "manual"
+            continue
         assert adapter.channel_code == code
 
 

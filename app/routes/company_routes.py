@@ -355,6 +355,31 @@ async def get_stalled_sequences(
 
     rows = list(rows) + engine_grouped
 
+    # Dedup to ONE stall per contact. A contact mid-cutover can hold a
+    # stalled legacy step AND a stalled engine action; without dedup the
+    # widget showed the same human twice and ops chased phantom alerts.
+    # Keep the most severe entry (critical > needs_action > paused),
+    # breaking ties by earliest scheduled time.
+    def _stall_rank(ge) -> tuple:
+        if getattr(ge, "paused_at", None):
+            sev = 2
+        elif getattr(ge, "auto_execute", False):
+            sev = 0  # critical
+        else:
+            sev = 1  # needs_action
+        sched = getattr(ge, "scheduled_send_at", None) or now
+        if sched.tzinfo is None:  # legacy rows can be tz-naive; engine rows are aware
+            sched = sched.replace(tzinfo=timezone.utc)
+        return (sev, sched)
+
+    best_by_contact: dict[int, tuple] = {}
+    for entry in rows:
+        ge, contact, company = entry
+        prev = best_by_contact.get(contact.id)
+        if prev is None or _stall_rank(ge) < _stall_rank(prev[0]):
+            best_by_contact[contact.id] = entry
+    rows = list(best_by_contact.values())
+
     # Group by company
     by_company: dict[int, dict] = {}
     for ge, contact, company in rows:
@@ -735,6 +760,26 @@ async def disqualify_company(
     for step in active_steps:
         step.paused_at = now
 
+    # Engagement-engine parity: terminate every contact's active engagement
+    # so scheduled `actions` rows stop dispatching. Without this, only the
+    # legacy rows above were frozen and engine contacts at a disqualified
+    # company kept receiving cold outreach.
+    engine_terminated = 0
+    contact_ids = (await db.execute(
+        select(Contact.id).where(Contact.company_id == company_id)
+    )).scalars().all()
+    if contact_ids:
+        import logging
+        from app.engagement_engine.lifecycle import terminate_engagement
+        for cid in contact_ids:
+            try:
+                engine_terminated += await terminate_engagement(
+                    db, cid, reason=f"company_disqualified: {req.reason}"[:80],
+                )
+            except Exception:
+                logging.getLogger("bmp.company_routes").exception(
+                    "disqualify: terminate_engagement failed for contact %s", cid)
+
     # Log activity — 'disqualified' type so admin dashboard can filter it
     snooze_note = " (snooze cleared)" if had_snooze else ""
     db.add(Activity(
@@ -749,7 +794,7 @@ async def disqualify_company(
         "company_id": company_id,
         "status": "not_interested",
         "lost_reason": full_reason,
-        "steps_paused": len(active_steps),
+        "steps_paused": len(active_steps) + engine_terminated,
     }
 
 
@@ -1483,7 +1528,7 @@ async def get_company_full(
         action_rows = (await db.execute(_sa_text("""
             SELECT a.id, a.engagement_id, a.contact_id,
                    ct.code AS channel_code,
-                   a.status, a.scheduled_at, a.executed_at,
+                   a.status, a.scheduled_at, a.executed_at, a.updated_at,
                    a.subject, a.body, a.skip_reason,
                    ROW_NUMBER() OVER (
                        PARTITION BY a.engagement_id
@@ -1519,7 +1564,11 @@ async def get_company_full(
                 "sequence_order": 10000 + int(r.step_order),
                 "send_delay_days": None,
                 "is_sent": r.status == "sent",
-                "paused_at": None,
+                # Engine pause lives on action.status, not a paused_at
+                # column. Map it so the UI's isPaused banner / Resume
+                # button (which key off paused_at) work for engine steps.
+                "paused_at": (r.updated_at.isoformat()
+                              if r.status == "paused" and r.updated_at else None),
                 "scheduled_send_at": r.scheduled_at.isoformat() if r.scheduled_at else None,
                 "sent_at": r.executed_at.isoformat() if r.executed_at else None,
                 "created_at": None,
@@ -3021,7 +3070,15 @@ class MergeCompaniesRequest(BaseModel):
 # (Static list — adding a new table requires updating this. Documented in the
 # model file: Activity, Contact, Deal, GeneratedEmail, PageView, Task,
 # TrackingLink. Plus the company_tags association.)
-_MERGE_REPOINT_TABLES = ["activities", "contacts", "deals", "generated_emails", "page_views", "tasks", "tracking_links"]
+_MERGE_REPOINT_TABLES = [
+    "activities", "contacts", "deals", "generated_emails", "page_views",
+    "tasks", "tracking_links",
+    # Engagement-engine tables that FK companies.id. Contacts move to the
+    # kept company above, so their engagements/observations must follow —
+    # otherwise the merged-from company DELETE below violates the FK (or
+    # strands live engagements on a dead company).
+    "engagements", "observations",
+]
 
 
 @router.post("/merge")

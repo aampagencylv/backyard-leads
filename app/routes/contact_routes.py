@@ -413,6 +413,11 @@ async def delete_contact(
         return {"pending": True, "message": "Deletion requested — pending admin approval"}
 
     company_id = contact.company_id
+    # Engine rows FK this contact with no cascade — purge them first or the
+    # DELETE violates the FK (and any surviving scheduled actions would
+    # keep dispatching to a contact that no longer exists).
+    from app.engagement_engine.lifecycle import purge_contact_engine_data
+    await purge_contact_engine_data(db, contact_id)
     await db.delete(contact)
     db.add(Activity(company_id=company_id, user_id=user.id, activity_type="contact_removed",
                     content=f"Contact removed: {contact.full_name or contact.email or '(no name)'}"))
@@ -433,11 +438,13 @@ async def batch_contact_action(
 ):
     """Batch actions on contacts: delete."""
     from app.scoping import check_contact_access
+    from app.engagement_engine.lifecycle import purge_contact_engine_data
     count = 0
     if req.action == "delete":
         for cid in req.contact_ids:
             contact = (await db.execute(select(Contact).where(Contact.id == cid))).scalar_one_or_none()
             if contact and await check_contact_access(contact, user, db):
+                await purge_contact_engine_data(db, contact.id)
                 await db.delete(contact)
                 count += 1
         await db.commit()
@@ -904,6 +911,48 @@ async def merge_contacts(
             base_params,
         )
         repoint_counts[tbl] = result.rowcount or 0
+
+    # Engagement-engine tables. These FK contacts.id with no cascade, so
+    # skipping them either FK-blocks the merge-from DELETE below or leaves
+    # live engagements attributed to a deleted contact. Column shapes
+    # differ from the legacy tables (actions/signals have no company_id),
+    # hence the dedicated statements instead of the loop above.
+    #
+    # If the kept contact AND a merge-from contact both have an active
+    # engagement, terminate the merge-from one first — repointing it would
+    # leave the prospect enrolled in two parallel sequences (double
+    # outreach). Pending actions are canceled, history is preserved.
+    keep_has_active = (await db.execute(sql_text(
+        "SELECT 1 FROM engagements WHERE contact_id = :keep AND status = 'active' LIMIT 1"
+    ), {"keep": req.keep_id})).first() is not None
+    if keep_has_active:
+        await db.execute(sql_text(f"""
+            UPDATE actions SET status = 'skipped',
+                               skip_reason = 'merged_into_existing_engagement',
+                               updated_at = NOW()
+            WHERE status IN ('scheduled', 'paused', 'awaiting_approval')
+              AND engagement_id IN (
+                  SELECT id FROM engagements
+                  WHERE contact_id IN ({placeholders}) AND status = 'active')
+        """), base_params)
+        await db.execute(sql_text(f"""
+            UPDATE engagements SET status = 'terminal',
+                                   terminal_reason = 'contact_merged',
+                                   terminal_at = NOW(), updated_at = NOW()
+            WHERE contact_id IN ({placeholders}) AND status = 'active'
+        """), base_params)
+    for stmt, key in (
+        (f"UPDATE engagements SET contact_id = :keep, company_id = :keep_co WHERE contact_id IN ({placeholders})", "engagements"),
+        (f"UPDATE observations SET contact_id = :keep, company_id = :keep_co WHERE contact_id IN ({placeholders})", "observations"),
+        # NOTE: actions keep their recipient_email locked to the address it
+        # was generated for. If the kept contact's email differs, the
+        # dispatcher's recipient-drift gate blocks the send — correct and
+        # safe (never email an address the BDR just merged away).
+        (f"UPDATE actions SET contact_id = :keep WHERE contact_id IN ({placeholders})", "actions"),
+        (f"UPDATE signals SET contact_id = :keep WHERE contact_id IN ({placeholders})", "signals"),
+    ):
+        result = await db.execute(sql_text(stmt), base_params)
+        repoint_counts[key] = result.rowcount or 0
 
     # Now safe to delete the merge-from contact rows. Cascades nothing
     # because we already moved every child row.

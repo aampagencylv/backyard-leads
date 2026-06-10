@@ -139,6 +139,74 @@ async def run_dispatcher_tick(
     return report
 
 
+async def dispatch_action_now(action_id: int, *, tenant_id: int | None = None) -> TickReport:
+    """Manually dispatch ONE scheduled action immediately.
+
+    This is the path a BDR clicking "Start Sequence" / "Send Next" in the
+    CRM takes for an engagement-engine contact (the legacy GeneratedEmail
+    send route can't see `actions` rows). It runs the exact same per-action
+    pipeline as the background tick — kill-switch gates, send-window check,
+    channel guards, idempotent send, Activity dual-write — so a manual send
+    and an automatic send are indistinguishable downstream.
+
+    Differences from a tick:
+      * It targets one caller-specified action instead of claiming a due
+        batch, and it does NOT require scheduled_at <= NOW(): a manual click
+        is an explicit override of the step's scheduled date (parity with the
+        legacy "Send Next", which never gated on the scheduled date).
+      * It still claims via the heartbeat guard so it can't double-send a row
+        the background dispatcher is already processing. If the row isn't
+        claimable (already sent / in-flight / not 'scheduled'), the returned
+        report has fetched=0 and the caller can surface a friendly message.
+
+    `tenant_id`: pass the caller's tenant when invoking from a tenant-scoped
+    route. This function runs on a global (non-RLS) session, so the tenant
+    filter on the claim is the defense-in-depth check that a route can't be
+    coaxed into dispatching another tenant's action id.
+    """
+    report = TickReport(started_at=datetime.now(timezone.utc))
+    worker_id = _worker_id()
+
+    tenant_clause = "AND tenant_id = :tid" if tenant_id is not None else ""
+    params = {"wid": worker_id, "id": action_id}
+    if tenant_id is not None:
+        params["tid"] = tenant_id
+    async with async_session() as session:
+        claimed = await session.execute(text(f"""
+            UPDATE actions
+            SET dispatch_heartbeat_at = NOW(),
+                dispatch_worker_id    = :wid
+            WHERE id = :id
+              {tenant_clause}
+              AND status = 'scheduled'
+              AND (dispatch_heartbeat_at IS NULL
+                   OR dispatch_heartbeat_at < NOW() - INTERVAL ':abandoned seconds')
+            RETURNING id
+        """.replace(":abandoned", str(ABANDONED_HEARTBEAT_SECONDS))), params)
+        got = claimed.first()
+        await session.commit()
+
+    if got is None:
+        # Not claimable: already sent, mid-flight in another worker, or not
+        # in 'scheduled' state. fetched stays 0 so the caller can tell.
+        report.finished_at = datetime.now(timezone.utc)
+        return report
+
+    report.fetched = 1
+    try:
+        await _process_one_action(
+            action_id=action_id, worker_id=worker_id, report=report, dry_run=False,
+        )
+    except Exception as e:
+        report.errors.append(
+            f"action {action_id} unhandled: {type(e).__name__}: {e}",
+        )
+        log.exception(f"manual dispatch unhandled exception on action {action_id}")
+
+    report.finished_at = datetime.now(timezone.utc)
+    return report
+
+
 async def _claim_due_actions(
     session: AsyncSession, *, batch_size: int, worker_id: str,
 ) -> list[int]:
@@ -185,6 +253,28 @@ async def _process_one_action(
             conn, action_id=action_id,
         )
         if not eligibility.eligible:
+            # company_snoozed is TEMPORAL — the BDR said "not until date X",
+            # not "never". Reschedule to the snooze-end instead of blocking,
+            # so the sequence picks back up when the snooze lapses.
+            if eligibility.block_reason == "company_snoozed":
+                await session.execute(text("""
+                    UPDATE actions a
+                    SET scheduled_at = GREATEST(
+                            co.sequence_resume_at,
+                            NOW() + INTERVAL '1 hour'),
+                        stale_after = GREATEST(
+                            co.sequence_resume_at,
+                            NOW() + INTERVAL '1 hour') + (a.stale_after - a.scheduled_at),
+                        dispatch_heartbeat_at = NULL,
+                        dispatch_worker_id = NULL,
+                        updated_at = NOW()
+                    FROM engagements e
+                    JOIN companies co ON co.id = e.company_id
+                    WHERE e.id = a.engagement_id AND a.id = :id
+                """), {"id": action_id})
+                await session.commit()
+                report.out_of_send_window_rescheduled += 1
+                return
             await _mark_action(
                 session, action_id,
                 status="skipped" if "stale" in eligibility.block_reason
@@ -344,7 +434,30 @@ async def _process_one_action(
             SET last_outreach_at = NOW(), updated_at = NOW()
             WHERE id = :eng
         """), {"eng": record.engagement_id})
+        bdr_row = (await session.execute(text("""
+            SELECT COALESCE(e.assigned_bdr_id, co.assigned_to) AS user_id
+            FROM engagements e
+            JOIN companies co ON co.id = e.company_id
+            WHERE e.id = :eng
+        """), {"eng": record.engagement_id})).first()
         await session.commit()
+
+    # Billing parity with the legacy send path (which meters every manual
+    # send). Engine sends were previously unmetered — free emails/SMS once
+    # billing enforcement turns on. Idempotency key is the action id, so
+    # crash-recovery re-processing can't double-charge. call_task/manual
+    # channels create CRM tasks, not vendor spend — no meter row for those.
+    meter_type = {"email": "email_send", "sms": "sms_send"}.get(channel_code)
+    if meter_type:
+        from app.services.credit_meter import meter_standalone, make_idem_key
+        await meter_standalone(
+            action_type=meter_type,
+            idempotency_key=make_idem_key(meter_type, f"engine_action:{action_id}"),
+            user_id=bdr_row.user_id if bdr_row else None,
+            action_ref=f"engagement_action:{action_id}",
+            raw_cost_override_usd=result.cost_usd,
+            tenant_id=record.tenant_id,
+        )
     report.sent += 1
 
 

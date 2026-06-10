@@ -56,8 +56,10 @@ class _ActionContext:
     contact_linkedin_url: str | None
     contact_do_not_contact: bool
     contact_outreach_owner: str
+    contact_email_status: str | None
     company_id: int
     company_do_not_contact: bool
+    company_sequence_resume_at: datetime | None
     channel_id: int
     channel_code: str
     channel_is_paused: bool
@@ -92,8 +94,10 @@ async def check_dispatch_eligibility(
             c.linkedin_url    AS contact_linkedin_url,
             c.do_not_contact  AS contact_do_not_contact,
             c.outreach_owner  AS contact_outreach_owner,
+            c.email_status    AS contact_email_status,
             co.id             AS company_id,
             co.do_not_contact AS company_do_not_contact,
+            co.sequence_resume_at AS company_sequence_resume_at,
             ct.id             AS channel_id,
             ct.code           AS channel_code,
             ct.is_paused      AS channel_is_paused,
@@ -125,8 +129,10 @@ async def check_dispatch_eligibility(
         contact_linkedin_url=r.contact_linkedin_url,
         contact_do_not_contact=r.contact_do_not_contact,
         contact_outreach_owner=r.contact_outreach_owner,
+        contact_email_status=r.contact_email_status,
         company_id=r.company_id,
         company_do_not_contact=r.company_do_not_contact,
+        company_sequence_resume_at=r.company_sequence_resume_at,
         channel_id=r.channel_id,
         channel_code=r.channel_code,
         channel_is_paused=r.channel_is_paused,
@@ -161,6 +167,19 @@ def _check_all_gates(ctx: _ActionContext) -> DispatchEligibility:
         return DispatchEligibility(
             False, f"channel_paused:{ctx.channel_code}",
         )
+    # Company snooze ("pause until date X" set by a BDR). The legacy engine
+    # respected sequence_resume_at; the engine dispatched right through it.
+    # TEMPORAL gate — the dispatcher reschedules to the resume date instead
+    # of permanently blocking, so the sequence survives the snooze.
+    if (ctx.company_sequence_resume_at is not None
+            and ctx.company_sequence_resume_at > datetime.now(timezone.utc)):
+        return DispatchEligibility(False, "company_snoozed")
+    # Hard-bounced mailbox: block the EMAIL channel only. The suppression
+    # list catches this when the bounce webhook carried engagement_action_id;
+    # this gate is the backstop for bounces recorded via the legacy path.
+    if (ctx.channel_code == "email"
+            and (ctx.contact_email_status or "").lower() == "bounced"):
+        return DispatchEligibility(False, "email_bounced")
 
     # ── Stale-action checks (defensive architecture §7) ─────────────────────
     if (ctx.last_reply_at is not None

@@ -28,8 +28,10 @@ def _ctx(**overrides) -> _ActionContext:
         contact_linkedin_url=None,
         contact_do_not_contact=False,
         contact_outreach_owner="engagement_engine",
+        contact_email_status="valid",
         company_id=200,
         company_do_not_contact=False,
+        company_sequence_resume_at=None,
         channel_id=1,
         channel_code="email",
         channel_is_paused=False,
@@ -73,6 +75,32 @@ def test_company_do_not_contact_blocks():
     result = check_gates_for_context(_ctx(company_do_not_contact=True))
     assert result.eligible is False
     assert result.block_reason == "company_do_not_contact"
+
+
+def test_company_snoozed_blocks():
+    result = check_gates_for_context(_ctx(
+        company_sequence_resume_at=datetime.now(timezone.utc) + timedelta(days=14)))
+    assert result.eligible is False
+    assert result.block_reason == "company_snoozed"
+
+
+def test_company_snooze_expired_passes():
+    result = check_gates_for_context(_ctx(
+        company_sequence_resume_at=datetime.now(timezone.utc) - timedelta(hours=1)))
+    assert result.eligible is True
+
+
+def test_bounced_email_blocks_email_channel():
+    result = check_gates_for_context(_ctx(contact_email_status="bounced"))
+    assert result.eligible is False
+    assert result.block_reason == "email_bounced"
+
+
+def test_bounced_email_does_not_block_other_channels():
+    result = check_gates_for_context(_ctx(
+        contact_email_status="bounced", channel_code="sms",
+        action_recipient_email=None))
+    assert result.eligible is True
 
 
 def test_outreach_owner_legacy_blocks():

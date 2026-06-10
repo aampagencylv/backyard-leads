@@ -468,6 +468,40 @@ async def reject_action(
     return await _row_to_action_item(db, row)
 
 
+@router.delete("/actions/{action_id}", response_model=ActionItem)
+async def cancel_action(
+    action_id: int,
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user: User = Depends(get_current_user),
+) -> ActionItem:
+    """BDR removes a single pending step from an engine sequence. Moves
+    status → skipped (NOT blocked: 'the user deleted this step' is normal
+    sequence editing, not a compliance block). executed_at is stamped so
+    the UI serializers — which derive skipped_at from executed_at — render
+    the step as skipped instead of leaving it looking pending/overdue."""
+    result = await db.execute(text("""
+        UPDATE actions
+        SET status = 'skipped',
+            skip_reason = :reason,
+            executed_at = NOW(),
+            approved_by_user_id = :uid,
+            approved_at = NOW(),
+            updated_at = NOW()
+        WHERE id = :id AND status IN ('awaiting_approval', 'scheduled', 'paused')
+        RETURNING id, engagement_id, channel_id, status, scheduled_at,
+                  executed_at, subject, body, recipient_email,
+                  requires_human_review, approved_by_user_id, approved_at,
+                  error_message, skip_reason, outcome
+    """), {"id": action_id,
+           "reason": f"canceled_by_bdr:{current_user.email[:60]}"[:80],
+           "uid": current_user.id})
+    row = result.first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="action not found or already dispatched")
+    await db.commit()
+    return await _row_to_action_item(db, row)
+
+
 class ActionOverride(BaseModel):
     model_config = ConfigDict(extra="forbid")
     subject: Optional[str] = None

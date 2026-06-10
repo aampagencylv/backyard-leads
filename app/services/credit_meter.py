@@ -75,6 +75,7 @@ async def meter(
     metadata: Optional[dict[str, Any]] = None,
     raw_cost_override_usd: Optional[float] = None,
     units: float = 1.0,
+    tenant_id: Optional[int] = None,
 ) -> Optional[CreditLedger]:
     """Record a billable action.
 
@@ -119,6 +120,11 @@ async def meter(
             idempotency_key=idempotency_key,
             metadata_json=meta_json,
         )
+        # Callers outside a tenant-scoped session (the engagement-engine
+        # dispatcher) pass tenant_id explicitly so the spend books to the
+        # right tenant instead of the TenantMixin default (tenant #1).
+        if tenant_id is not None:
+            row.tenant_id = tenant_id
         db.add(row)
         await db.flush()
         return row
@@ -145,6 +151,7 @@ async def meter_standalone(
     metadata: Optional[dict[str, Any]] = None,
     raw_cost_override_usd: Optional[float] = None,
     units: float = 1.0,
+    tenant_id: Optional[int] = None,
 ) -> None:
     """Same as meter() but opens its own DB session.
 
@@ -171,6 +178,7 @@ async def meter_standalone(
                 metadata=metadata,
                 raw_cost_override_usd=raw_cost_override_usd,
                 units=units,
+                tenant_id=tenant_id,
             )
             await db.commit()
     except Exception as e:

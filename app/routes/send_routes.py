@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 import json
 from pydantic import BaseModel
 
@@ -148,6 +148,87 @@ async def send_single_email(
     raise HTTPException(status_code=500, detail=f"Failed to send: {result.get('error', 'Unknown error')}")
 
 
+async def _send_next_engine_action(db: AsyncSession, contact: Contact, user: User) -> dict:
+    """Dispatch the next scheduled EMAIL action for an engagement-engine contact.
+
+    Mirrors the legacy "send next" semantics (earliest unsent email step,
+    sent on demand regardless of its scheduled date) but routes through the
+    engine's dispatcher so the action's status, Activity dual-write, company
+    status transition, idempotency and send-window guards all match an
+    automatic send. channel code is filtered to 'email' for the same reason
+    the legacy query filters step_type='email': never blast a call/LinkedIn
+    talk-track draft to the prospect's inbox.
+    """
+    if not user.sending_enabled:
+        raise HTTPException(status_code=403, detail="Sending is disabled for your account.")
+
+    next_action = (await db.execute(text("""
+        SELECT a.id
+        FROM actions a
+        JOIN channel_types ct ON ct.id = a.channel_id
+        WHERE a.contact_id = :cid
+          AND a.status = 'scheduled'
+          AND ct.code = 'email'
+        ORDER BY a.scheduled_at, a.id
+        LIMIT 1
+    """), {"cid": contact.id})).first()
+
+    if next_action is None:
+        # Genuinely nothing scheduled (legacy AND engine both empty).
+        return {"message": "All emails in sequence have been sent (or sequence is paused)", "complete": True}
+
+    from app.engagement_engine.dispatcher import dispatch_action_now
+    report = await dispatch_action_now(
+        int(next_action.id), tenant_id=getattr(contact, "tenant_id", None))
+
+    if report.sent:
+        remaining = (await db.execute(text("""
+            SELECT COUNT(*)
+            FROM actions a
+            JOIN channel_types ct ON ct.id = a.channel_id
+            WHERE a.contact_id = :cid AND a.status = 'scheduled' AND ct.code = 'email'
+        """), {"cid": contact.id})).scalar() or 0
+        return {
+            "success": True,
+            "engine": "engagement_engine",
+            "action_id": int(next_action.id),
+            "sent_to": contact.email,
+            "remaining_in_sequence": int(remaining),
+            "complete": int(remaining) == 0,
+        }
+
+    # Non-send outcomes: translate the engine's report into an actionable
+    # HTTP response instead of a misleading "all sent".
+    if report.out_of_send_window_rescheduled:
+        raise HTTPException(
+            status_code=409,
+            detail="Outside this contact's allowed send window — the step was rescheduled to the next permitted time.",
+        )
+    if report.transient_rescheduled:
+        raise HTTPException(
+            status_code=503,
+            detail="Email provider had a transient error — the send was rescheduled and will retry shortly.",
+            headers={"Retry-After": "60"},
+        )
+    if report.blocked or report.skipped_no_adapter:
+        raise HTTPException(
+            status_code=409,
+            detail="This step is blocked (suppression list, kill-switch, or channel guard) and was not sent.",
+        )
+    if report.failed:
+        msg = report.errors[0] if report.errors else "send failed"
+        raise HTTPException(status_code=500, detail=f"Failed to send: {msg}")
+    if report.skipped_stale:
+        return {"message": "This step was stale and has been skipped.", "complete": False}
+
+    # fetched=0 → the action wasn't claimable (already sent or being sent by
+    # the background dispatcher right now). Treat as a benign race.
+    raise HTTPException(
+        status_code=409,
+        detail="That step is already being sent (or was just sent). Refresh to see the latest status.",
+    )
+
+
 # ============================================================
 # Send: next-in-sequence for a contact
 # ============================================================
@@ -186,7 +267,14 @@ async def send_next_in_sequence(
     )).scalars().first()
 
     if not email:
-        return {"message": "All emails in sequence have been sent (or sequence is paused)", "complete": True}
+        # No legacy GeneratedEmail to send. This contact may be enrolled on
+        # the new engagement engine, whose steps live in `actions` (rendered
+        # in the UI with the ENGINE badge), NOT generated_emails. Before the
+        # fix, this route returned complete=True here — so every brand-new
+        # engine contact showed "All emails in this sequence have been sent"
+        # and the BDR could never send the first email. Fall through to the
+        # engine's single-action dispatch path instead.
+        return await _send_next_engine_action(db, contact, user)
 
     company = (await db.execute(select(Company).where(Company.id == email.company_id))).scalar_one_or_none()
     if not company:
@@ -1219,6 +1307,26 @@ async def resend_webhook(request: Request, db: AsyncSession = Depends(get_tenant
                 db.add(Activity(company_id=company_id, contact_id=int(contact_id),
                                 activity_type="email_replied",
                                 content=f"Reply received; sequence auto-paused ({len(pending)} emails)"))
+
+                # Engagement-engine parity. Replies arriving via the
+                # engine's reply-token route already stamp last_reply_at,
+                # but replies surfacing through THIS synthetic path
+                # (Gmail forwarding, legacy reply tokens, address-match)
+                # previously paused only the legacy rows — engine actions
+                # kept dispatching after the prospect replied. Stamp
+                # last_reply_at (arms the stale_post_reply kill switch as
+                # a backstop) AND pause the scheduled actions directly.
+                await db.execute(text("""
+                    UPDATE engagements
+                    SET last_reply_at = NOW(), updated_at = NOW()
+                    WHERE contact_id = :c AND status = 'active'
+                """), {"c": c.id})
+                try:
+                    from app.engagement_engine.lifecycle import pause_engagement
+                    await pause_engagement(db, c.id, reason="email_reply")
+                except Exception:
+                    log.exception(
+                        "resend webhook: engine pause after reply failed for contact %s", c.id)
         await db.commit()
 
     # ============================================================

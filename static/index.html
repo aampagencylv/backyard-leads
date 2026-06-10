@@ -8139,26 +8139,21 @@ function verify(secret, rawBody, header) {
                 : '';
             const handle = isDraggable ? '<span style="cursor:grab;user-select:none;color:#aab;margin-right:6px" title="Drag to reorder">⋮⋮</span>' : '';
 
-            // CRITICAL: engine action IDs and legacy GeneratedEmail IDs
-            // share the same int space. Edit/Delete buttons that pass
-            // the engine action ID to /api/send/email/{id}/edit will
-            // silently corrupt an unrelated legacy email row whose id
-            // happens to match. Disable destructive controls on engine
-            // steps until per-channel engine-aware endpoints exist.
-            // (`engine` field set by company_routes.py emails-array fix.)
+            // Engine action IDs and legacy GeneratedEmail IDs share the
+            // same int space, so editEmail/deleteEmail route on the card's
+            // data-engine attribute: engine steps go to the engagement
+            // engine's override/cancel endpoints, legacy steps to the
+            // /api/send/email/{id} endpoints. Same buttons, both engines.
             const isEngineStep = e.engine === 'engagement_engine';
-            const disabledNote = "Engine sequence steps can't be edited from this UI yet — talk to admin if you need to change content";
 
             return `
                 <div class="${klass}" data-email-id="${e.id}" data-engine="${isEngineStep ? 'engagement_engine' : 'legacy'}" data-sequence-label="${escapeHtml(e.sequence_label || 'main')}" ${dragAttrs}>
                     <div class="meta ${meta}">
                         <span>${handle}<span class="step-number">${e.sequence_order || '·'}</span>${icon} ${escapeHtml(channelLabel)} <span style="color:#aab">·</span> ${escapeHtml((e.email_type||'').replace(/_/g,' '))} ${stateLabel} ${auto}${skipBadges}${isEngineStep ? ' <span style="background:#e8f4f8;color:#1e4634;padding:1px 6px;border-radius:8px;font-size:10px;font-weight:600;margin-left:6px" title="Managed by the engagement engine">engine</span>' : ''}</span>
                         <span style="display:flex;gap:4px">
-                            ${!e.is_sent && !isSkipped && !isEngineStep ? `<button class="btn btn-secondary btn-xs" onclick="editEmail(${e.id})">Edit</button>` : ''}
+                            ${!e.is_sent && !isSkipped ? `<button class="btn btn-secondary btn-xs" onclick="editEmail(${e.id})">Edit</button>` : ''}
                             ${!e.is_sent && !isSkipped && !isEngineStep && stype === 'linkedin' ? `<button class="btn btn-success btn-xs" onclick="completeStep(${e.id})">Mark Done</button>` : ''}
-                            ${!e.is_sent && !isSkipped && !isEngineStep ? `<button class="btn btn-danger btn-xs" onclick="deleteEmail(${e.id})">Delete</button>` : ''}
-                            ${!e.is_sent && !isSkipped && isEngineStep ? `<span class="btn btn-secondary btn-xs" style="opacity:0.4;cursor:not-allowed" title="${disabledNote}">Edit</span>` : ''}
-                            ${!e.is_sent && !isSkipped && isEngineStep ? `<span class="btn btn-danger btn-xs" style="opacity:0.4;cursor:not-allowed" title="${disabledNote}">Delete</span>` : ''}
+                            ${!e.is_sent && !isSkipped ? `<button class="btn btn-danger btn-xs" onclick="deleteEmail(${e.id})">Delete</button>` : ''}
                         </span>
                     </div>
                     <div class="subject">${stype === 'email' ? 'Subject: ' : ''}${escapeHtml(e.subject)}</div>
@@ -9477,22 +9472,15 @@ function verify(secret, rawBody, header) {
 
         async function deleteSequence(contactId) {
             if (!confirm('Delete the entire sequence for this contact? This cannot be undone.')) return;
-            // Delete all unsent emails for this contact
+            // One atomic backend call that covers BOTH engines (legacy
+            // generated_emails + engagement-engine actions). The old loop of
+            // per-step DELETEs silently 404'd on engine steps and left them
+            // sending after the user was told the sequence was deleted.
+            const data = await api(`/api/sequences/${contactId}`, { method: 'DELETE' });
+            if (!data) return; // api() already toasted the error
+            toast(`Sequence deleted (${(data.deleted_legacy || 0) + (data.canceled_engine || 0)} steps removed)`);
             const contact = await api(`/api/contacts/${contactId}`);
-            if (!contact) return;
-            // Use the company full endpoint to get emails
-            const company = await api(`/api/companies/${contact.company_id}/full`);
-            if (!company) return;
-            const contactData = company.contacts.find(c => c.id === contactId);
-            if (contactData) {
-                for (const e of contactData.emails) {
-                    if (!e.is_sent) {
-                        await api(`/api/send/email/${e.id}`, { method: 'DELETE' });
-                    }
-                }
-            }
-            toast('Sequence deleted');
-            openCompanyDetail(contact.company_id);
+            if (contact) openCompanyDetail(contact.company_id);
         }
 
         async function regenerateSequence(contactId) {
@@ -10476,16 +10464,12 @@ hmac.compare_digest(expected, header)</pre>
                 toast(data.detail);
             }
         }
-        async function pauseSequence(contactId) {
-            await api(`/api/send/contact/${contactId}/pause`, { method: 'POST' });
-            toast('Sequence paused.');
-            const c = await api(`/api/contacts/${contactId}`); if (c) openCompanyDetail(c.company_id);
-        }
-        async function resumeSequence(contactId) {
-            await api(`/api/send/contact/${contactId}/resume`, { method: 'POST' });
-            toast('Sequence resumed.');
-            const c = await api(`/api/contacts/${contactId}`); if (c) openCompanyDetail(c.company_id);
-        }
+        // NOTE: pauseSequence/resumeSequence are defined ONCE near the other
+        // sequence controls (~line 9366) and call /api/sequences/pause|resume,
+        // which handle BOTH the legacy and engagement-engine backends. A
+        // duplicate legacy-only pair used to live here and, being later in
+        // the file, silently shadowed the correct ones — Pause did nothing
+        // for engine contacts. Do not re-add overrides here.
 
         async function editEmail(emailId) {
             // Fetch the email card via the DOM (we already rendered it)
@@ -10495,18 +10479,30 @@ hmac.compare_digest(expected, header)</pre>
             const body = card.querySelector('.body').textContent;
             const newSubject = prompt('Subject:', subject); if (newSubject === null) return;
             const newBody = prompt('Body:', body); if (newBody === null) return;
-            await api(`/api/send/email/${emailId}/edit`, {
-                method: 'PATCH',
-                body: JSON.stringify({ subject: newSubject, body: newBody }),
-            });
-            toast('Email updated.');
-            // Re-fetch the company detail
-            const url = window.location.hash; // hack: we don't have the company id easily — refetch from contact
+            // Engine steps live in the `actions` table (same numeric id space
+            // as legacy generated_emails!) — route to the engine's override
+            // endpoint, NEVER to /api/send/email/{id}/edit, or we'd edit an
+            // unrelated legacy row that happens to share the id.
+            const isEngine = card.dataset.engine === 'engagement_engine';
+            const data = isEngine
+                ? await api(`/api/engagement/actions/${emailId}/override`, {
+                      method: 'POST',
+                      body: JSON.stringify({ subject: newSubject, body: newBody }),
+                  })
+                : await api(`/api/send/email/${emailId}/edit`, {
+                      method: 'PATCH',
+                      body: JSON.stringify({ subject: newSubject, body: newBody }),
+                  });
+            if (data) { toast('Email updated.'); _refreshCurrentCompany(); }
         }
         async function deleteEmail(emailId) {
             if (!confirm('Delete this queued email?')) return;
-            await api(`/api/send/email/${emailId}`, { method: 'DELETE' });
-            toast('Email deleted.');
+            const card = document.querySelector(`[data-email-id="${emailId}"]`);
+            const isEngine = card && card.dataset.engine === 'engagement_engine';
+            const data = isEngine
+                ? await api(`/api/engagement/actions/${emailId}`, { method: 'DELETE' })
+                : await api(`/api/send/email/${emailId}`, { method: 'DELETE' });
+            if (data) { toast('Step removed.'); _refreshCurrentCompany(); }
         }
 
         const STAGE_OPTIONS = [

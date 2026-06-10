@@ -990,6 +990,69 @@ async def terminate_engagement(
     return n
 
 
+async def purge_contact_engine_data(db: AsyncSession, contact_id: int) -> int:
+    """Hard-delete every engagement-engine row belonging to a contact.
+
+    Called BEFORE deleting the contact itself. The engine tables (actions,
+    engagements, signals, observations) all FK contacts.id with NO cascade,
+    so without this purge a DELETE on an engine-enrolled contact raises a
+    foreign-key violation (the CRM delete button 500s) — or, where the FK
+    is unenforced, leaves orphaned scheduled actions that keep dispatching
+    to a contact that no longer exists.
+
+    Deletion order respects the FK graph:
+      signals.triggered_action_id → actions; actions.triggered_by_signal_id
+      → signals (circular — break it by nulling), then signals → actions →
+      observations → engagements, after detaching the two nullable
+      referencers (inbound_unattributed, action_dedupe_counters).
+
+    Returns the number of actions deleted (for the caller's audit log).
+    Does NOT commit — runs inside the caller's transaction so the purge
+    and the contact delete succeed or fail atomically.
+    """
+    eng_ids = [r[0] for r in (await db.execute(text("""
+        SELECT id FROM engagements WHERE contact_id = :c
+    """), {"c": contact_id})).fetchall()]
+
+    # Break the signals<->actions FK cycle before deleting either side.
+    await db.execute(text("""
+        UPDATE actions SET triggered_by_signal_id = NULL,
+                           supersedes_action_id = NULL,
+                           superseded_by_action_id = NULL
+        WHERE contact_id = :c
+    """), {"c": contact_id})
+    await db.execute(text("""
+        UPDATE signals SET triggered_action_id = NULL
+        WHERE contact_id = :c
+    """), {"c": contact_id})
+
+    if eng_ids:
+        await db.execute(text("""
+            UPDATE inbound_unattributed SET attributed_engagement_id = NULL
+            WHERE attributed_engagement_id = ANY(:e)
+        """), {"e": eng_ids})
+        await db.execute(text("""
+            DELETE FROM action_dedupe_counters WHERE engagement_id = ANY(:e)
+        """), {"e": eng_ids})
+
+    await db.execute(text("""
+        DELETE FROM signals WHERE contact_id = :c
+    """), {"c": contact_id})
+    deleted_actions = len((await db.execute(text("""
+        DELETE FROM actions WHERE contact_id = :c RETURNING id
+    """), {"c": contact_id})).fetchall())
+    await db.execute(text("""
+        DELETE FROM observations WHERE contact_id = :c
+    """), {"c": contact_id})
+    await db.execute(text("""
+        DELETE FROM engagements WHERE contact_id = :c
+    """), {"c": contact_id})
+
+    log.info("purge_contact_engine_data: contact=%s engagements=%d actions=%d",
+             contact_id, len(eng_ids), deleted_actions)
+    return deleted_actions
+
+
 # ────────────────────────────────────────────────────────────────────────────
 # wake_engagement_for_company — restore enrollment when a BDR un-disqualifies
 # a contact or clicks "wake up" in the CRM.

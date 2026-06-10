@@ -433,8 +433,11 @@ async def send_email(
         await _log_outbound_audit(**_audit_base, status="sent", resend_id=resend_id)
         return {"success": True, "resend_id": resend_id, "message": "Email sent successfully",
                 "anomaly_score": anomaly_score, "anomaly_flags": anomaly_flags}
-    # 5xx from Resend = their problem, retry on next tick
-    retryable = 500 <= response.status_code < 600
+    # 5xx from Resend = their problem, retry on next tick. 429 is rate
+    # limiting (Resend caps ~2 req/s) — also transient by definition; the
+    # dispatcher's batch loop trips it routinely, so treating it as a
+    # permanent failure threw away real sends.
+    retryable = response.status_code == 429 or 500 <= response.status_code < 600
     await _log_outbound_audit(
         **_audit_base, status=("transient" if retryable else "failed"),
         error_message=f"HTTP {response.status_code}: {(response.text or '')[:500]}",
