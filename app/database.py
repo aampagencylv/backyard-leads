@@ -23,8 +23,18 @@ elif "postgresql" in settings.database_url:
     # (measured ~240ms overhead on 2026-05-12). pool_recycle keeps
     # connections fresh enough that stale-conn errors are rare; when one
     # slips through, SQLAlchemy reconnects on next request.
-    _engine_kwargs["pool_size"] = 10
-    _engine_kwargs["max_overflow"] = 5
+    # Sized for webhook-retry bursts: on 2026-06-08 and again on
+    # 2026-06-11, Resend retry floods (~250 webhook POSTs in minutes,
+    # each holding a pooled conn for its sequential UPDATE chain) plus
+    # the SPA's dashboard polling exhausted 10+5 and produced 30s
+    # checkout timeouts → 500s → which re-queued the same webhooks for
+    # another retry cycle (self-sustaining spiral).
+    # Ceiling math: postgres max_connections=60 on this box. App ceiling
+    # 15+20=35, three cron workers use a handful each (pools are lazy),
+    # backups/psql ~5 — keeps worst-case under 60 so we degrade by
+    # queueing at the pool instead of hard "too many clients" errors.
+    _engine_kwargs["pool_size"] = 15
+    _engine_kwargs["max_overflow"] = 20
     _engine_kwargs["pool_recycle"] = 1800  # recycle conns every 30 min
 
 engine = create_async_engine(
