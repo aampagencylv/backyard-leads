@@ -29,6 +29,15 @@ from app.config import settings
 # regex handles them reliably without pulling in a parser dep.
 _HREF_RE = re.compile(r'''(href\s*=\s*)(["'])([^"']+)(["'])''', re.IGNORECASE)
 
+# Match bare URLs in plain-text content (NOT already inside an href
+# attribute or anchor tag). AI-generated email bodies are plain text —
+# "posted the results here: https://audit.../report/xyz" — so without
+# bare-URL wrapping, body links (including the audit-report link, the
+# single most important CTA in the whole pitch) were NEVER click-tracked.
+# Trailing-punctuation chars are excluded so "...report/xyz." doesn't
+# swallow the period.
+_BARE_URL_RE = re.compile(r'https?://[^\s<>"\')\]]+[^\s<>"\')\].,;:!?]')
+
 UNTRACKABLE_PREFIXES = ("#", "mailto:", "tel:", "sms:", "javascript:")
 SKIP_PATH_PATTERNS = ("/unsubscribe", "/u/")  # CAN-SPAM compliance — don't wrap unsubscribe links
 
@@ -65,30 +74,35 @@ async def wrap_html_links(
     company_id: Optional[int],
     email_id: Optional[int],
     label: str = "body_link",
+    linkify_bare_urls: bool = True,
 ) -> str:
-    """Replace every trackable href in `html` with a /t/{token} URL.
-    Mints one TrackingLink row per URL. Commits in batches at the end —
-    caller can wrap in their own transaction if needed; this commits to
-    keep tokens persistent in case the email send itself fails afterwards
-    (better to have orphan tokens than to drop tracking on a partial send).
+    """Replace every trackable href in `html` with a /t/{token} URL,
+    AND (when linkify_bare_urls=True) convert bare plain-text URLs into
+    tracked <a> anchors. Mints one TrackingLink row per URL. Commits in
+    batches at the end — caller can wrap in their own transaction if
+    needed; this commits to keep tokens persistent in case the email
+    send itself fails afterwards (better to have orphan tokens than to
+    drop tracking on a partial send).
+
+    The bare-URL pass exists because AI-generated bodies are plain text:
+    every body link (including the audit-report CTA) shipped as a bare
+    URL that email clients auto-link client-side, invisible to us. The
+    rewritten anchor keeps the original URL as the display text so the
+    prospect sees what they expect; the href routes through /t/{token}.
 
     Returns the rewritten HTML. If no trackable links are found, returns
     the input unchanged (no DB writes)."""
     if not html:
         return html
 
-    # First pass: scan for all hrefs we'll track. Build them up in order so we
-    # can mint tokens and substitute back in one pass.
-    matches = list(_HREF_RE.finditer(html))
-    if not matches:
-        return html
-
     public_base = settings.public_url.rstrip("/")
     minted: list[tuple[int, int, str]] = []  # (start, end, replacement)
     rows_to_add: list[TrackingLink] = []
 
-    for m in matches:
-        full_match = m.group(0)
+    # Pass 1: existing href attributes (signature links, any HTML bodies).
+    href_spans: list[tuple[int, int]] = []
+    for m in _HREF_RE.finditer(html):
+        href_spans.append((m.start(), m.end()))
         attr_prefix = m.group(1)  # 'href='
         quote = m.group(2)
         url = m.group(3).strip()
@@ -106,8 +120,46 @@ async def wrap_html_links(
             label=label,
         ))
 
+    # Pass 2: bare plain-text URLs → tracked anchors. Skip any URL that
+    # sits inside an href attribute span (already handled above) or
+    # inside an existing anchor's display text (rewriting the display
+    # text of an <a> would double-link).
+    if linkify_bare_urls:
+        anchor_spans = [
+            (m.start(), m.end())
+            for m in re.finditer(r"<a\b[^>]*>.*?</a>", html,
+                                 flags=re.IGNORECASE | re.DOTALL)
+        ]
+        protected = href_spans + anchor_spans
+
+        def _inside_protected(start: int, end: int) -> bool:
+            return any(ps <= start and end <= pe for ps, pe in protected)
+
+        for m in _BARE_URL_RE.finditer(html):
+            if _inside_protected(m.start(), m.end()):
+                continue
+            url = m.group(0)
+            if not _should_track(url):
+                continue
+            token = _new_token()
+            # Display text stays the original URL so the prospect sees
+            # exactly what the copy promised; only the href is tracked.
+            wrapped = f'<a href="{public_base}/t/{token}">{url}</a>'
+            minted.append((m.start(), m.end(), wrapped))
+            rows_to_add.append(TrackingLink(
+                token=token,
+                contact_id=contact_id,
+                company_id=company_id,
+                email_id=email_id,
+                destination_url=url,
+                label=label,
+            ))
+
     if not minted:
         return html
+
+    # Substitutions must apply in reverse positional order; sort by start.
+    minted.sort(key=lambda t: t[0])
 
     # Persist tokens BEFORE rewriting — if anything blows up, we'd rather
     # have orphan tokens (harmless: just sit in the table) than rewrite

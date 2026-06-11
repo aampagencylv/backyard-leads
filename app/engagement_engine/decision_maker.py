@@ -213,6 +213,22 @@ async def _score_one_signal(
     if not reservation.granted:
         report.cost_budget_exceeded += 1
         await _pause_engagement(signal.engagement_id, reason=reservation.reason)
+        # Mark the signal scored (relevance 0) so it doesn't retry every
+        # tick forever. Pre-fix, a bounce signal on an already-terminal
+        # engagement (terminated by the bounce webhook itself) stayed
+        # relevance_score=NULL and re-entered the queue every minute,
+        # inflating cost_budget_exceeded and wasting a fetch slot.
+        async with async_session() as mark_session:
+            await mark_session.execute(text("""
+                UPDATE signals
+                SET relevance_score = 0,
+                    ai_summary = :why
+                WHERE id = :sid AND relevance_score IS NULL
+            """), {
+                "sid": signal_id,
+                "why": f"skipped: {reservation.reason}",
+            })
+            await mark_session.commit()
         return
 
     # Build prompt
