@@ -69,7 +69,7 @@ async def unsubscribe(
                         tenant_id, recipient_email, reason, source,
                         is_currently_active
                     )
-                    VALUES (:t, :r, 'unsubscribed', 'unsubscribe_link', TRUE)
+                    VALUES (:t, :r, 'unsubscribe', 'unsubscribe_link', TRUE)
                     ON CONFLICT (tenant_id, recipient_email)
                       WHERE is_currently_active = TRUE
                       DO NOTHING
