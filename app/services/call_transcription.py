@@ -88,7 +88,17 @@ async def _run_pipeline(activity_id: int) -> None:
                 signed_recording_url, deepgram_key
             )
         except Exception as e:
-            log.exception("Deepgram transcription failed for activity %s", activity_id)
+            # A 404/REMOTE_CONTENT_ERROR means Twilio no longer serves the
+            # recording (purged, or the URL isn't live yet when we fire
+            # right after the recording webhook). Expected occasionally —
+            # log as warning so Sentry doesn't page; everything else stays
+            # ERROR via log.exception.
+            msg = str(e)
+            if "REMOTE_CONTENT_ERROR" in msg or "404" in msg:
+                log.warning("Deepgram could not fetch recording for activity %s: %s",
+                            activity_id, msg[:200])
+            else:
+                log.exception("Deepgram transcription failed for activity %s", activity_id)
             return
 
         # Persist the transcript + structured diarization first — even

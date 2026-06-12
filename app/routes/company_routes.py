@@ -284,6 +284,10 @@ async def get_stalled_sequences(
     # could have been dead behind the scenes.
     from sqlalchemy import text as _sa_text
     auto_channels = ("email", "sms")  # engine channels that fire automatically
+    # NB: `= ANY(:auto)` with a Python list, NOT `IN :auto` — text() +
+    # asyncpg binds the tuple as a single $1 parameter which is a
+    # Postgres syntax error (Sentry AI-PROSPECTOR-K, 2026-06-12: the
+    # Stalled Sequences tab 500'd the first time a BDR opened it).
     engine_rows = (await db.execute(_sa_text("""
         SELECT
           a.id, a.scheduled_at, a.status,
@@ -291,7 +295,7 @@ async def get_stalled_sequences(
           a.subject,
           c.id AS contact_id, c.first_name, c.last_name, c.email, c.phone,
           co.id AS company_id, co.name AS company_name, co.status AS company_status,
-          (SELECT MAX(updated_at) FROM actions WHERE id = a.id) AS paused_at_proxy
+          a.updated_at AS paused_at_proxy
         FROM actions a
         JOIN channel_types ct ON ct.id = a.channel_id
         JOIN contacts c ON c.id = a.contact_id
@@ -300,15 +304,13 @@ async def get_stalled_sequences(
         WHERE co.status NOT IN ('not_interested','qualified','converted')
           AND e.status = 'active'
           AND (
-            (a.status = 'scheduled' AND ct.code IN :auto AND a.scheduled_at < :critical_cutoff)
-            OR (a.status = 'scheduled' AND ct.code NOT IN :auto AND a.scheduled_at < :now)
+            (a.status = 'scheduled' AND ct.code = ANY(:auto) AND a.scheduled_at < :critical_cutoff)
+            OR (a.status = 'scheduled' AND NOT (ct.code = ANY(:auto)) AND a.scheduled_at < :now)
             OR (a.status = 'paused')
           )
         ORDER BY co.name, a.scheduled_at
-    """).bindparams(
-        # asyncpg requires tuples for IN with bound params
-    ), {
-        "auto": tuple(auto_channels),
+    """), {
+        "auto": list(auto_channels),
         "critical_cutoff": now - grace,
         "now": now,
     })).fetchall()
