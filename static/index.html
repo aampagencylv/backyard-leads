@@ -10422,10 +10422,11 @@ hmac.compare_digest(expected, header)</pre>
         async function saveCompanyLinkedIn(companyId) {
             const url = document.getElementById(`manual-linkedin-${companyId}`).value.trim();
             if (!url) return;
-            await api(`/api/companies/${companyId}`, {
+            const res = await api(`/api/companies/${companyId}`, {
                 method: 'PATCH',
                 body: JSON.stringify({ linkedin_url: url }),
             });
+            if (!res) return;  // api() already surfaced the error
             toast('LinkedIn URL saved');
             openCompanyDetail(companyId);
         }

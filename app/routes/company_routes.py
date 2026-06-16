@@ -1878,6 +1878,58 @@ async def update_company_status(
     return {"company_id": company.id, "status": company.status}
 
 
+class UpdateCompanyRequest(BaseModel):
+    # Editable scalar fields. `status` is intentionally NOT here — it has
+    # its own /status route that logs a status_change activity. The
+    # frontend (saveCompanyLinkedIn, and any future field edit) PATCHes
+    # this route; before it existed those calls 405'd and silently no-op'd
+    # while the UI claimed success.
+    name: Optional[str] = None
+    website: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    industry: Optional[str] = None
+    business_type: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    facebook_url: Optional[str] = None
+    instagram_url: Optional[str] = None
+    youtube_url: Optional[str] = None
+    tiktok_url: Optional[str] = None
+
+
+@router.patch("/{company_id}")
+async def update_company(
+    company_id: int,
+    req: UpdateCompanyRequest,
+    db: AsyncSession = Depends(get_tenant_db),
+    user: User = Depends(get_current_user),
+):
+    """General field update for a company. Whitelisted scalar fields only.
+    Status changes go through /status (kept separate so they always log a
+    status_change activity)."""
+    from app.scoping import check_company_access
+    company = (await db.execute(select(Company).where(Company.id == company_id))).scalar_one_or_none()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    if not check_company_access(company, user):
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    changed = []
+    for field in ("name", "website", "phone", "address", "city", "state",
+                  "industry", "business_type", "linkedin_url", "facebook_url",
+                  "instagram_url", "youtube_url", "tiktok_url"):
+        val = getattr(req, field)
+        if val is not None:
+            setattr(company, field, val[:500] if isinstance(val, str) else val)
+            changed.append(field)
+    if not changed:
+        raise HTTPException(status_code=400, detail="No editable fields provided")
+    await db.commit()
+    return {"company_id": company.id, "updated": changed}
+
+
 # ============================================================
 # Enrichment
 # ============================================================
