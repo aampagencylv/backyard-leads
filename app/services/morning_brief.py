@@ -322,6 +322,7 @@ Pick the angle that matters most. If nothing notable, return an empty string."""
 async def _generate_ai_insight(brief: BriefData) -> str:
     if not settings.anthropic_api_key:
         return ""
+    from app.services.ai_client import MODEL_BALANCED as _MB_MODEL
     payload = {
         "user_first_name": brief.user.get("first_name") or "",
         "overnight": brief.overnight,
@@ -341,7 +342,9 @@ async def _generate_ai_insight(brief: BriefData) -> str:
                     "content-type": "application/json",
                 },
                 json={
-                    "model": "claude-sonnet-4-20250514",
+                    # Shared constant — the old dated snapshot was retired
+                    # and 404'd, silently killing the brief's AI insight.
+                    "model": _MB_MODEL,
                     "max_tokens": 120,
                     "system": INSIGHT_SYSTEM,
                     "messages": [{"role": "user", "content": json.dumps(payload, default=str)}],

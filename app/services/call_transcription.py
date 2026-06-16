@@ -349,8 +349,13 @@ async def _summarize_with_claude(
 """
 
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    # Use the shared model constant, not a hardcoded dated snapshot.
+    # claude-sonnet-4-20250514 was retired and started 404ing, so every
+    # call summary silently failed (transcript still saved, summary did
+    # not). MODEL_BALANCED tracks the current Sonnet.
+    from app.services.ai_client import MODEL_BALANCED
     response = await client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=MODEL_BALANCED,
         max_tokens=1200,
         system=CALL_SUMMARY_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
