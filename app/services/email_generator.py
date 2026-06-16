@@ -107,6 +107,33 @@ def _strip_signature(body: str) -> str:
     return body
 
 
+# Friendly anchor text for the AI-findability audit CTA. Stored in the
+# body as a markdown link `[CTA](url)` so the prospect sees a clickable
+# phrase (never a raw URL); wrap_html_links / send_email render + track it.
+AUDIT_CTA_TEXT = "View Your AI Visibility Report"
+
+
+def inject_audit_cta(body: str, audit_url: Optional[str]) -> str:
+    """Ensure the audit link appears as a friendly markdown CTA, never a
+    raw URL. Three layers, in priority order:
+      1. Replace the {{AUDIT_LINK}} placeholder the prompt asks for.
+      2. Failing that, replace any raw occurrence of the audit URL.
+      3. Failing that (model dropped it entirely), append the CTA.
+    No-op when audit_url is falsy. Idempotent — if the markdown link is
+    already present it won't double-inject."""
+    if not audit_url:
+        # Still strip a stray placeholder so it never ships literally.
+        return (body or "").replace("{{AUDIT_LINK}}", "").rstrip()
+    md = f"[{AUDIT_CTA_TEXT}]({audit_url})"
+    if md in (body or ""):
+        return body
+    if "{{AUDIT_LINK}}" in body:
+        return body.replace("{{AUDIT_LINK}}", md)
+    if audit_url in body:
+        return body.replace(audit_url, md)
+    return body.rstrip() + f"\n\n{md}"
+
+
 SYSTEM_PROMPT = """You are writing cold outreach emails for a BDR at a B2B marketing agency.
 The agency's specific focus, industry, and value proposition are described in
 the STRATEGIC DIRECTION section above (every prospect message you write should
@@ -253,13 +280,13 @@ async def generate_follow_up(
     if audit_url and follow_up_number in (1, 2):
         audit_clause = (
             f"\n\nIMPORTANT: We've already run an AI Findability audit on their site. "
-            f"For follow-up #1, your job is to share this exact link naturally in the "
-            f"body so the prospect can click and see what we found: {audit_url}\n"
-            f"Phrasing should feel value-add, not pitchy. Something like 'I actually "
-            f"went ahead and ran a quick AI findability scan on your site — "
-            f"posted the results here: {audit_url}'. Adapt phrasing to feel natural.\n"
-            f"For follow-up #2, you can briefly reference the audit (e.g. 'the "
-            f"analysis I shared') without dropping the link again."
+            f"For follow-up #1, write a short value-add lead-in, then on its OWN LINE "
+            f"put the literal token {{{{AUDIT_LINK}}}} — it becomes a clickable button "
+            f"that opens their report. Do NOT paste a raw URL; use the token. Example:\n"
+            f"  'I actually went ahead and ran a quick AI findability scan on your site:\\n\\n"
+            f"{{{{AUDIT_LINK}}}}\\n\\nTakes two minutes to look through.'\n"
+            f"For follow-up #2, briefly reference the audit (e.g. 'the analysis I "
+            f"shared') WITHOUT the token — don't drop the link again."
         )
 
     user_prompt = f"""Write follow-up #{follow_up_number} for this prospect who didn't respond to my first email.
@@ -296,9 +323,15 @@ Return as JSON: {{"subject": "...", "body": "..."}}
                     metadata={"max_tokens": 400, "kind": "follow_up"})
 
     result = _parse_email_response(text)
+    body = _strip_signature(result["body"])
+    # Normalize the audit link into a friendly markdown CTA on follow-up
+    # #1 (the step that carries the link). For every other step pass None
+    # so a stray {{AUDIT_LINK}} placeholder is stripped rather than
+    # turned into an appended CTA.
+    body = inject_audit_cta(body, audit_url if follow_up_number == 1 else None)
     return {
         "subject": result["subject"],
-        "body": _strip_signature(result["body"]),
+        "body": body,
     }
 
 

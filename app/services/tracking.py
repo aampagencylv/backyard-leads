@@ -29,6 +29,29 @@ from app.config import settings
 # regex handles them reliably without pulling in a parser dep.
 _HREF_RE = re.compile(r'''(href\s*=\s*)(["'])([^"']+)(["'])''', re.IGNORECASE)
 
+# Match markdown-style links [display text](https://url). AI-generated
+# bodies now emit the audit CTA as `[View Your AI Visibility Report](url)`
+# so the prospect sees a friendly clickable phrase, never a raw URL.
+# Converting to an <a> here (before the href pass) means the resulting
+# anchor's href gets click-tracked while the display text is preserved.
+_MD_LINK_RE = re.compile(r'\[([^\]\n]{1,120})\]\((https?://[^)\s]+)\)')
+
+
+def linkify_markdown(text: str) -> str:
+    """Convert markdown links [text](url) → <a href="url">text</a>.
+
+    Pure string transform, no DB. Safe to run repeatedly (idempotent:
+    once converted to an anchor there's no markdown left to match) and
+    safe on plain prose (the `](http` shape doesn't occur naturally).
+    Used both here (so the href becomes click-tracked) and as a
+    last-resort render inside email_sender.send_email (so the CTA still
+    renders as a real link even if click-wrapping is skipped)."""
+    if not text or "](" not in text:
+        return text
+    return _MD_LINK_RE.sub(
+        lambda m: f'<a href="{m.group(2)}">{m.group(1)}</a>', text
+    )
+
 # Match bare URLs in plain-text content (NOT already inside an href
 # attribute or anchor tag). AI-generated email bodies are plain text —
 # "posted the results here: https://audit.../report/xyz" — so without
@@ -94,6 +117,11 @@ async def wrap_html_links(
     the input unchanged (no DB writes)."""
     if not html:
         return html
+
+    # Pass 0: markdown links [text](url) → <a href="url">text</a>. Run
+    # first so the resulting anchor's href is click-tracked by the href
+    # pass below, while the friendly display text is preserved.
+    html = linkify_markdown(html)
 
     public_base = settings.public_url.rstrip("/")
     minted: list[tuple[int, int, str]] = []  # (start, end, replacement)

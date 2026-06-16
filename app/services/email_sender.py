@@ -297,6 +297,17 @@ async def send_email(
 
     from_address = f"{from_name} <{from_firstname}@{settings.send_domain}>"
 
+    # Render any markdown links [text](url) → <a> anchors. Normally the
+    # caller's wrap_html_links already did this (and tracked the href),
+    # so this is a no-op; but if click-wrapping was skipped or failed,
+    # this guarantees the audit CTA still renders as a real hyperlink
+    # in the inbox instead of literal "[View ...](https://...)" text.
+    try:
+        from app.services.tracking import linkify_markdown
+        body = linkify_markdown(body)
+    except Exception:
+        pass
+
     body_html = body.replace("\n", "<br>")
     sig_block = f'<div style="margin-top:24px">{signature_html}</div>' if signature_html else ""
     footer = _compliance_footer()

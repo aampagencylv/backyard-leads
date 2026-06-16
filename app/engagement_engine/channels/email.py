@@ -224,12 +224,26 @@ class EmailChannel:
                     action.body,
                     contact_id=action.contact_id,
                     company_id=co_id_for_tracking,
-                    email_id=action.id,
+                    # email_id MUST be None for engine sends. The column
+                    # has a FK to generated_emails.id, and action.id lives
+                    # in a different table (and the id-spaces collide), so
+                    # passing action.id raised a FK violation that the old
+                    # bare `except` swallowed — silently shipping the
+                    # UNWRAPPED plain-text body for every engine email
+                    # since this code shipped (zero tracked body links,
+                    # raw URL instead of a hyperlink in the inbox).
+                    email_id=None,
                     label="engine_body_link",
                 )
-        except Exception:
+        except Exception as e:
             # Click-tracking is observability; never block a send if the
-            # wrap fails (regex blowup on malformed HTML, etc.).
+            # wrap fails. But DO log — a silent swallow is exactly how the
+            # FK bug above hid for days.
+            import logging
+            logging.getLogger("engagement_engine.channels.email").warning(
+                "link-wrap failed for action %s (sending unwrapped): %s",
+                action.id, e,
+            )
             wrapped_body = action.body
 
         try:
