@@ -1572,9 +1572,18 @@ async def get_company_full(
                 "paused_at": (r.updated_at.isoformat()
                               if r.status == "paused" and r.updated_at else None),
                 "scheduled_send_at": r.scheduled_at.isoformat() if r.scheduled_at else None,
-                "sent_at": r.executed_at.isoformat() if r.executed_at else None,
+                # Only treat an action as 'sent' (filled body, sent_at) when
+                # it actually executed. A skipped/canceled action has
+                # executed_at NULL — guard so a terminated step never
+                # renders a phantom send timestamp.
+                "sent_at": r.executed_at.isoformat() if (r.status == "sent" and r.executed_at) else None,
                 "created_at": None,
-                "skipped_at": r.executed_at.isoformat() if r.status == "skipped" and r.executed_at else None,
+                # status='skipped' steps (e.g. cancelled when a bounce
+                # terminated the engagement) have executed_at NULL. Fall
+                # back to updated_at so the UI can render them as "Skipped"
+                # (grey) instead of showing no flag at all — which made a
+                # torn-down sequence look like every step had "sent".
+                "skipped_at": (r.executed_at or r.updated_at).isoformat() if r.status == "skipped" else None,
                 "skip_reason": r.skip_reason,
                 "auto_execute": r.channel_code in ("email", "sms"),
                 "task_id": None,

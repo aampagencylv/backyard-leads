@@ -1316,8 +1316,17 @@ async def resend_webhook(request: Request, db: AsyncSession = Depends(get_tenant
     elif event_type == "email.bounced":
         if em and not em.bounced_at:
             em.bounced_at = now
-        company.status = "not_interested"
-        company.enrichment_summary = (company.enrichment_summary or "") + " [Email bounced]"
+        # A hard bounce means THIS email address is bad — NOT that the
+        # company is unqualified. Previously this flipped the whole
+        # company to not_interested, which destroyed active pursuits:
+        # Sebastian had a connected 1:48 call with one contact, but a
+        # generic catch-all (office@) on the same company bounced and
+        # nuked the entire account. Now we only act at the contact level
+        # — mark the address bounced, pause that contact's steps, log it.
+        # The bounced contact's engine engagement is separately terminated
+        # by _emit_engagement_engine_signal; the address is suppressed
+        # there too. Company-level disposition stays a human decision.
+        company.enrichment_summary = (company.enrichment_summary or "") + " [An email address bounced]"
         if contact_id:
             c = (await db.execute(select(Contact).where(Contact.id == int(contact_id)))).scalar_one_or_none()
             if c:
@@ -1333,17 +1342,33 @@ async def resend_webhook(request: Request, db: AsyncSession = Depends(get_tenant
                 for e in pending:
                     e.paused_at = now
             db.add(Activity(company_id=company_id, contact_id=int(contact_id),
-                            activity_type="email_bounced", content="Email bounced; sequence paused"))
+                            activity_type="email_bounced", content="Email bounced — this contact's sequence paused (company left as-is)"))
         await db.commit()
 
     elif event_type == "email.complained":
         if em and not em.complained_at:
             em.complained_at = now
-        company.status = "not_interested"
-        company.enrichment_summary = (company.enrichment_summary or "") + " [Marked as spam]"
+        # Same principle as bounce: a spam complaint is a per-recipient
+        # signal. Suppress + stop contacting THAT address (handled in the
+        # engine signal path), but don't auto-disqualify the whole
+        # company — other contacts may be fine and the rep owns the
+        # company-level call.
+        company.enrichment_summary = (company.enrichment_summary or "") + " [A recipient marked an email as spam]"
         if contact_id:
+            c = (await db.execute(select(Contact).where(Contact.id == int(contact_id)))).scalar_one_or_none()
+            if c:
+                c.email_status = "bounced"
+                pending = (await db.execute(
+                    select(GeneratedEmail).where(
+                        GeneratedEmail.contact_id == c.id,
+                        GeneratedEmail.is_sent == False,
+                        GeneratedEmail.paused_at.is_(None),
+                    )
+                )).scalars().all()
+                for e in pending:
+                    e.paused_at = now
             db.add(Activity(company_id=company_id, contact_id=int(contact_id),
-                            activity_type="email_complained", content="Marked as spam"))
+                            activity_type="email_complained", content="Marked as spam — this contact's sequence paused (company left as-is)"))
         await db.commit()
 
     elif event_type == "email.replied":

@@ -9188,10 +9188,17 @@ function verify(secret, rawBody, header) {
         }
         // also called from the Companies list cards
         async function quickQualify(companyId, status) {
-            await api(`/api/companies/${companyId}`, {
+            // NOTE: status lives on its own endpoint (/status). The bare
+            // PATCH /api/companies/{id} route does not exist — calling it
+            // 405'd, api() returned null, and we showed a success toast
+            // anyway, so the status never changed but the rep was told it
+            // did (Sebastian's "says it'll do it but doesn't"). Hit the
+            // real endpoint and only claim success when it actually saved.
+            const res = await api(`/api/companies/${companyId}/status`, {
                 method: 'PATCH',
                 body: JSON.stringify({ status }),
             });
+            if (!res || res.status !== status) return;  // api() already toasted the error
             toast(status === 'qualified' ? 'Company qualified — added to pipeline' : 'Company marked as unqualified');
             loadCompanies(_lastCompaniesFilter);
         }
