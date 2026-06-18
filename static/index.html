@@ -8450,6 +8450,30 @@ function verify(secret, rawBody, header) {
         // its audio decoding memory.
         const _wavesurfers = {};
 
+        // Playback-speed control for call recordings. Reps skim long calls
+        // (Sebastian's ask: a 10-min call at 2x/4x to jump to the parts
+        // that matter). One pill cycles 1× → 1.5× → 2× → 3× → 4×; the
+        // chosen rate is remembered across calls so they don't re-set it
+        // every recording. Pitch is preserved so voices stay intelligible.
+        const _PLAYBACK_SPEEDS = [1, 1.5, 2, 3, 4];
+        let _callPlaybackRate = 1;
+        const _fmtRate = (r) => (Number.isInteger(r) ? r : r) + '×';
+        // applyRate(rate) sets the rate on whatever player backs this button
+        // (native <audio>.playbackRate or wavesurfer.setPlaybackRate).
+        function _wireSpeedBtn(btn, applyRate) {
+            if (!btn) return;
+            applyRate(_callPlaybackRate);
+            btn.textContent = _fmtRate(_callPlaybackRate);
+            btn.onclick = (e) => {
+                e.stopPropagation();
+                const i = _PLAYBACK_SPEEDS.indexOf(_callPlaybackRate);
+                _callPlaybackRate = _PLAYBACK_SPEEDS[(i + 1) % _PLAYBACK_SPEEDS.length];
+                applyRate(_callPlaybackRate);
+                btn.textContent = _fmtRate(_callPlaybackRate);
+            };
+        }
+        const _SPEED_BTN_STYLE = "flex-shrink:0;min-width:38px;height:28px;border:1px solid #ddd;border-radius:14px;background:#f7f7f7;color:#444;cursor:pointer;font-size:11px;font-weight:600;font-variant-numeric:tabular-nums;padding:0 8px";
+
         async function toggleCallExpand(activityId, view) {
             const panel = document.getElementById('call-expand-' + activityId);
             if (!panel) return;
@@ -8507,6 +8531,7 @@ function verify(secret, rawBody, header) {
                 <div style="display:flex;align-items:center;gap:12px;background:#fff;border:1px solid #e8e8e8;border-radius:24px;padding:6px 14px 6px 6px;margin-top:4px">
                     <button id="${playBtnId}" type="button" aria-label="Play recording" style="flex-shrink:0;width:36px;height:36px;border:none;border-radius:50%;background:#ff5252;color:white;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;line-height:1;padding-left:2px">▶</button>
                     <div id="${waveId}" style="flex:1;min-width:0;height:36px"></div>
+                    <button id="speed-${activityId}" type="button" aria-label="Playback speed" title="Playback speed" style="${_SPEED_BTN_STYLE}">1×</button>
                     <div id="${timeId}" style="flex-shrink:0;font-size:11px;color:#666;font-variant-numeric:tabular-nums;min-width:42px;text-align:right">--:--</div>
                 </div>
                 <audio id="${audioFallbackId}" preload="none" src="${recordingUrl}" style="display:none"></audio>
@@ -8548,6 +8573,9 @@ function verify(secret, rawBody, header) {
             const timeEl = document.getElementById(timeId);
             ws.on('ready', () => {
                 if (timeEl) timeEl.textContent = fmtTime(ws.getDuration());
+                // Re-apply the remembered speed once the media is ready
+                // (setPlaybackRate before 'ready' can no-op).
+                try { ws.setPlaybackRate(_callPlaybackRate, true); } catch (e) {}
             });
             ws.on('timeupdate', (t) => {
                 if (timeEl) timeEl.textContent = `${fmtTime(t)} / ${fmtTime(ws.getDuration())}`;
@@ -8560,6 +8588,10 @@ function verify(secret, rawBody, header) {
                 panel.innerHTML = `<audio controls preload="none" style="width:100%;margin-top:4px" src="${recordingUrl}"></audio>`;
             });
             playBtn.onclick = () => ws.playPause();
+            // Speed pill — wavesurfer v7 setPlaybackRate(rate, preservePitch).
+            _wireSpeedBtn(document.getElementById('speed-' + activityId), (r) => {
+                try { ws.setPlaybackRate(r, true); } catch (e) {}
+            });
         }
 
         // Inline waveform that renders by default (no click required).
@@ -8659,6 +8691,7 @@ function verify(secret, rawBody, header) {
                         </div>
                         <div style="display:flex;align-items:center;gap:10px">
                             <button id="${playBtnId}" type="button" aria-label="Play" style="width:36px;height:36px;border:none;border-radius:50%;background:${agentColor};color:white;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;padding-left:2px">▶</button>
+                            <button id="speed-${audioId}" type="button" aria-label="Playback speed" title="Playback speed" style="${_SPEED_BTN_STYLE}">1×</button>
                             <span id="${timeId}" style="font-size:11px;color:#666;font-variant-numeric:tabular-nums;min-width:80px;text-align:right">--:-- / --:--</span>
                         </div>
                     </div>
@@ -8726,6 +8759,12 @@ function verify(secret, rawBody, header) {
                 if (audio.paused) audio.play().catch(err => console.warn('audio play failed', err));
                 else audio.pause();
             };
+            // Speed pill — preservesPitch keeps voices natural at 2x/4x.
+            try { audio.preservesPitch = true; } catch (e) {}
+            _wireSpeedBtn(document.getElementById('speed-' + audioId), (r) => {
+                try { audio.preservesPitch = true; } catch (e) {}
+                audio.playbackRate = r;
+            });
             canvas.addEventListener('click', (e) => {
                 if (!duration || !audio) return;
                 const rect = canvas.getBoundingClientRect();
