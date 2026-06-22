@@ -57,23 +57,41 @@ def is_configured() -> bool:
     return _api_key() is not None
 
 
-async def create_domain(subdomain: str) -> Optional[ResendProvisionResult]:
-    """Create a sending subdomain in Resend. Returns the domain id +
-    DKIM/SPF/DMARC records that need to be added to leadprospector.ai's
-    DNS.
+PLATFORM_BASE_DOMAIN = "leadprospector.ai"
 
-    `subdomain` is the LEAF only — e.g. "go.acme" produces
-    "go.acme.leadprospector.ai" in Resend's domain registry.
 
-    Returns None (and logs) when the API key isn't configured or the
-    request fails. Never raises — tenant creation is the primary action.
+def is_platform_domain(domain_name: str) -> bool:
+    """True when the sending domain is under leadprospector.ai (DNS we
+    control and can auto-add via Cloudflare). False for a customer's own
+    domain like go.aamp.agency, where the customer must add the records
+    to their own DNS."""
+    d = (domain_name or "").strip().lower().rstrip(".")
+    return d == PLATFORM_BASE_DOMAIN or d.endswith("." + PLATFORM_BASE_DOMAIN)
+
+
+async def register_domain(domain_name: str) -> Optional[ResendProvisionResult]:
+    """Register ANY sending domain in Resend and return its id + the
+    DKIM/SPF/DMARC records that must land in DNS.
+
+    `domain_name` is the FULL domain — e.g. "go.aamp.agency" (a customer's
+    own domain) or "go.acme.leadprospector.ai" (a platform-hosted one).
+
+    For a customer domain, the records are what the customer adds to THEIR
+    DNS. For a platform domain, the caller can auto-add them via Cloudflare.
+
+    Idempotent-ish: if the domain already exists in Resend, the API returns
+    a 4xx; the caller can fall back to looking it up. Never raises.
     """
     api_key = _api_key()
     if not api_key:
         log.info("resend domain skipped — neither PLATFORM_RESEND_API_KEY nor RESEND_API_KEY set")
         return None
 
-    name = f"{subdomain}.leadprospector.ai"
+    name = (domain_name or "").strip().lower().rstrip(".")
+    if not name or "." not in name:
+        log.warning(f"resend register_domain: invalid domain {domain_name!r}")
+        return None
+
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -88,21 +106,53 @@ async def create_domain(subdomain: str) -> Optional[ResendProvisionResult]:
             return None
         data = r.json()
         domain_id = data.get("id") or data.get("data", {}).get("id")
-        domain_name = data.get("name") or data.get("data", {}).get("name") or name
+        resolved_name = data.get("name") or data.get("data", {}).get("name") or name
         records = data.get("records") or data.get("data", {}).get("records") or []
         status = data.get("status") or "not_started"
         if not domain_id:
             log.warning(f"resend response missing id: {data}")
             return None
-        log.info(f"resend domain provisioned: {domain_id} ({domain_name})")
+        log.info(f"resend domain provisioned: {domain_id} ({resolved_name})")
         return {
             "domain_id": domain_id,
-            "domain_name": domain_name,
+            "domain_name": resolved_name,
             "records": records,
             "status": status,
         }
     except Exception:
         log.exception("resend domain provisioning raised; ignoring")
+        return None
+
+
+async def create_domain(subdomain: str) -> Optional[ResendProvisionResult]:
+    """Platform-subdomain convenience wrapper used by tenant auto-create.
+
+    `subdomain` is the LEAF only — e.g. "go.acme" produces
+    "go.acme.leadprospector.ai". For arbitrary/custom domains call
+    register_domain(full_domain) instead.
+    """
+    return await register_domain(f"{subdomain}.{PLATFORM_BASE_DOMAIN}")
+
+
+async def trigger_verify(domain_id: str) -> Optional[dict]:
+    """Ask Resend to re-check DNS and (re)verify the domain. Call this
+    AFTER the DNS records have been added — Resend won't poll on its own.
+    Returns the raw response (or None). Never raises."""
+    api_key = _api_key()
+    if not api_key:
+        return None
+    headers = {"Authorization": f"Bearer {api_key}"}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.post(
+                f"https://api.resend.com/domains/{domain_id}/verify", headers=headers
+            )
+        if r.status_code >= 400:
+            log.warning(f"resend domain verify failed: {r.status_code} {r.text[:200]}")
+            return None
+        return r.json() if r.content else {"ok": True}
+    except Exception:
+        log.exception("resend trigger_verify raised; ignoring")
         return None
 
 

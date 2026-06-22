@@ -2916,6 +2916,28 @@ function verify(secret, rawBody, header) {
                             <div id="resend-webhook-current" style="font-size:11px;color:#888;margin-top:4px"></div>
                         </div>
                     </div>
+
+                    <!-- Tenant email sending-domain setup (Resend). Provisions a
+                         customer's sending domain + surfaces the DNS records they
+                         add to their own DNS. Super-admin only. -->
+                    <div style="margin-top:24px;padding-top:16px;border-top:1px solid #eee">
+                        <h4 style="font-size:14px;margin-bottom:6px">Tenant Email Domain Setup</h4>
+                        <p style="font-size:12px;color:#888;margin-bottom:8px">Register a new company's sending domain in Resend and get the exact DNS records they add to their own DNS. Use a subdomain like <code>go.theircompany.com</code> for cold outreach (protects their root domain reputation). Leave the domain blank to use a platform-hosted <code>go.&lt;slug&gt;.leadprospector.ai</code> (auto-configured, no customer DNS needed).</p>
+                        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:flex-end">
+                            <div style="flex:1;min-width:120px">
+                                <label style="font-size:11px;color:#666;display:block;margin-bottom:2px">Tenant ID</label>
+                                <input type="number" id="emaildomain-tenant-id" placeholder="2" style="width:100%">
+                            </div>
+                            <div style="flex:2;min-width:200px">
+                                <label style="font-size:11px;color:#666;display:block;margin-bottom:2px">Sending domain (blank = platform subdomain)</label>
+                                <input type="text" id="emaildomain-name" placeholder="go.aamp.agency" autocomplete="off" style="width:100%">
+                            </div>
+                            <button class="btn btn-primary btn-sm" onclick="provisionEmailDomain()">Provision</button>
+                            <button class="btn btn-secondary btn-sm" onclick="loadEmailDomain()" title="Load existing config for this tenant">Load</button>
+                            <button class="btn btn-secondary btn-sm" onclick="verifyEmailDomain()" title="Re-check DNS after records are added">Verify</button>
+                        </div>
+                        <div id="emaildomain-result" style="margin-top:12px"></div>
+                    </div>
                 </div>
 
                 <!-- Messaging Tone & Direction (org-wide AI prompt) — tenant-tier
@@ -13450,6 +13472,83 @@ hmac.compare_digest(expected, header)</pre>
                 body: JSON.stringify({ resend_webhook_secret: v }),
             });
             if (data) { toast('Resend webhook secret saved — reply catching now HMAC-verified from DB'); loadRuntimeConfig(); }
+        }
+
+        // ============ Tenant Email Domain Setup (Resend, super-admin) ============
+        function _emailDomainStatusBadge(status) {
+            const s = (status || '').toLowerCase();
+            let css = 'background:#fdecea;color:#a92e22', label = status || 'unknown';
+            if (s === 'verified') { css = 'background:#e8f5e9;color:#1B5E20'; label = 'Verified ✓'; }
+            else if (s === 'dns_auto_added') { css = 'background:#e3f2fd;color:#0d47a1'; label = 'DNS auto-added — verifying'; }
+            else if (s === 'pending' || s === 'not_started') { css = 'background:#fff8e1;color:#a36400'; label = 'Pending DNS'; }
+            else if (s === 'failed') { css = 'background:#fdecea;color:#a92e22'; label = 'Failed'; }
+            return `<span style="padding:3px 9px;border-radius:11px;font-size:11px;font-weight:600;${css}">${escapeHtml(label)}</span>`;
+        }
+
+        function _renderEmailDomain(data) {
+            const box = document.getElementById('emaildomain-result');
+            if (!box) return;
+            if (!data || data.configured === false) {
+                box.innerHTML = '<p style="font-size:12px;color:#888">No sending domain provisioned for this tenant yet.</p>';
+                return;
+            }
+            const recs = data.records || [];
+            const rows = recs.map(r => `
+                <tr>
+                    <td style="padding:6px 8px;border-bottom:1px solid #eee;font-weight:600">${escapeHtml(r.type)}</td>
+                    <td style="padding:6px 8px;border-bottom:1px solid #eee;font-family:monospace;font-size:11px;word-break:break-all">${escapeHtml(r.name)}<button class="btn btn-secondary btn-xs" style="margin-left:6px" onclick="navigator.clipboard.writeText(${JSON.stringify(r.name)}).then(()=>toast('Name copied'))">copy</button></td>
+                    <td style="padding:6px 8px;border-bottom:1px solid #eee;font-family:monospace;font-size:11px;word-break:break-all">${escapeHtml(r.value)}<button class="btn btn-secondary btn-xs" style="margin-left:6px" onclick="navigator.clipboard.writeText(${JSON.stringify(r.value)}).then(()=>toast('Value copied'))">copy</button></td>
+                    <td style="padding:6px 8px;border-bottom:1px solid #eee">${r.priority != null ? escapeHtml(String(r.priority)) : '—'}</td>
+                    <td style="padding:6px 8px;border-bottom:1px solid #eee">${r.status ? _emailDomainStatusBadge(r.status) : '—'}</td>
+                </tr>`).join('');
+            const platformNote = data.is_platform_domain
+                ? '<span style="color:#0d47a1">Platform-hosted — DNS is auto-managed, nothing for the customer to do.</span>'
+                : '<span style="color:#a36400">Customer domain — send these records to the customer to add to their DNS, then click Verify.</span>';
+            box.innerHTML = `
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap">
+                    <strong style="font-family:monospace">${escapeHtml(data.domain_name || '')}</strong>
+                    ${_emailDomainStatusBadge(data.status)}
+                </div>
+                <p style="font-size:11px;margin:0 0 8px">${platformNote}</p>
+                ${recs.length ? `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+                    <thead><tr style="text-align:left;color:#666;font-size:11px">
+                        <th style="padding:6px 8px">Type</th><th style="padding:6px 8px">Name / Host</th>
+                        <th style="padding:6px 8px">Value</th><th style="padding:6px 8px">Priority</th><th style="padding:6px 8px">Status</th>
+                    </tr></thead><tbody>${rows}</tbody></table></div>` : '<p style="font-size:12px;color:#888">No DNS records returned.</p>'}`;
+        }
+
+        function _emailDomainTenantId() {
+            const v = parseInt(document.getElementById('emaildomain-tenant-id').value, 10);
+            if (!v || v < 1) { toast('Enter a tenant ID'); return null; }
+            return v;
+        }
+
+        async function provisionEmailDomain() {
+            const tid = _emailDomainTenantId(); if (!tid) return;
+            const domain = (document.getElementById('emaildomain-name').value || '').trim().toLowerCase();
+            const box = document.getElementById('emaildomain-result');
+            if (box) box.innerHTML = '<p style="font-size:12px;color:#888">Registering with Resend…</p>';
+            const data = await api(`/api/admin/tenants/${tid}/email-domain`, {
+                method: 'POST',
+                body: JSON.stringify(domain ? { domain_name: domain } : {}),
+            });
+            if (!data) { if (box) box.innerHTML = ''; return; }  // api() toasted the error
+            toast(`Provisioned ${data.domain_name}${data.auto_dns_added ? ' — DNS auto-added' : ''}`);
+            _renderEmailDomain({ configured: true, ...data });
+        }
+
+        async function loadEmailDomain() {
+            const tid = _emailDomainTenantId(); if (!tid) return;
+            const data = await api(`/api/admin/tenants/${tid}/email-domain`);
+            _renderEmailDomain(data);
+        }
+
+        async function verifyEmailDomain() {
+            const tid = _emailDomainTenantId(); if (!tid) return;
+            const data = await api(`/api/admin/tenants/${tid}/email-domain/verify`, { method: 'POST' });
+            if (!data) return;
+            toast(`Status: ${data.status}`);
+            _renderEmailDomain({ configured: true, ...data });
         }
 
         async function testBlooioConnection() {

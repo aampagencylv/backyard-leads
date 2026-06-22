@@ -986,6 +986,160 @@ async def refresh_email_status(
 
 
 # ----------------------------------------------------------------------
+# Email sending-domain provisioning (Resend)
+# ----------------------------------------------------------------------
+
+class EmailDomainProvisionIn(BaseModel):
+    # Full sending domain. Omit to default to go.{slug}.leadprospector.ai
+    # (platform-hosted, auto-DNS). For a customer's own brand, pass e.g.
+    # "go.aamp.agency" — the customer then adds the returned records to
+    # their own DNS.
+    domain_name: Optional[str] = None
+
+
+def _format_dns_records(records: list) -> list[dict]:
+    """Normalize Resend's record objects into a copy-paste-friendly shape
+    for the admin UI: type / name / value / priority / status."""
+    out = []
+    for rec in records or []:
+        out.append({
+            "type": (rec.get("type") or rec.get("record") or "").upper(),
+            "name": rec.get("name") or "",
+            "value": rec.get("value") or rec.get("content") or "",
+            "priority": rec.get("priority"),
+            "ttl": rec.get("ttl") or "Auto",
+            "status": rec.get("status") or "",
+        })
+    return out
+
+
+@router.post("/tenants/{tenant_id}/email-domain")
+async def provision_email_domain(
+    tenant_id: int,
+    req: EmailDomainProvisionIn,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(require_super_admin),
+):
+    """Register a sending domain in Resend for this tenant and capture the
+    DNS records they need to add. Works for a customer's own domain
+    (go.aamp.agency) or a platform-hosted subdomain. For platform domains
+    we also auto-add the records to Cloudflare; for customer domains we
+    return the records for the customer to add to their own DNS."""
+    import json as _json
+    from app.services.resend_provisioning import (
+        register_domain, is_platform_domain, is_configured,
+    )
+    tenant = (await db.execute(select(Tenant).where(Tenant.id == tenant_id))).scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    if not is_configured():
+        raise HTTPException(status_code=400, detail="Resend API key not configured on the platform")
+
+    domain_name = (req.domain_name or f"go.{tenant.slug}.leadprospector.ai").strip().lower().rstrip(".")
+    result = await register_domain(domain_name)
+    if not result:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Resend could not register '{domain_name}'. It may already exist, or the domain is invalid.",
+        )
+
+    rc = (await db.execute(
+        select(RuntimeConfig).where(RuntimeConfig.tenant_id == tenant_id)
+    )).scalar_one_or_none()
+    if not rc:
+        rc = RuntimeConfig(tenant_id=tenant_id)
+        db.add(rc)
+    rc.resend_domain_id = result["domain_id"]
+    rc.resend_domain_name = result["domain_name"]
+    rc.resend_domain_records_json = _json.dumps(result["records"])
+    rc.resend_domain_status = result["status"]
+
+    # Platform-hosted domains: we control the DNS, so auto-add to Cloudflare.
+    auto_dns = False
+    if is_platform_domain(result["domain_name"]):
+        try:
+            from app.services.cloudflare_dns import add_resend_records, is_configured as cf_ok
+            if cf_ok():
+                if await add_resend_records(result["records"]):
+                    rc.resend_domain_status = "dns_auto_added"
+                    auto_dns = True
+        except Exception:
+            pass
+
+    await db.commit()
+    await record_audit(db, actor=actor, action="email_domain_provisioned",
+                       target_type="tenant", target_id=tenant_id,
+                       metadata={"domain": result["domain_name"], "auto_dns": auto_dns})
+    return {
+        "domain_name": result["domain_name"],
+        "domain_id": result["domain_id"],
+        "status": rc.resend_domain_status,
+        "is_platform_domain": is_platform_domain(result["domain_name"]),
+        "auto_dns_added": auto_dns,
+        "records": _format_dns_records(result["records"]),
+    }
+
+
+@router.get("/tenants/{tenant_id}/email-domain")
+async def get_email_domain(
+    tenant_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_super_admin),
+):
+    """Current sending-domain config + DNS records for the admin UI."""
+    import json as _json
+    from app.services.resend_provisioning import is_platform_domain
+    rc = (await db.execute(
+        select(RuntimeConfig).where(RuntimeConfig.tenant_id == tenant_id)
+    )).scalar_one_or_none()
+    if not rc or not rc.resend_domain_id:
+        return {"configured": False}
+    records = _json.loads(rc.resend_domain_records_json) if rc.resend_domain_records_json else []
+    return {
+        "configured": True,
+        "domain_name": rc.resend_domain_name,
+        "domain_id": rc.resend_domain_id,
+        "status": rc.resend_domain_status,
+        "is_platform_domain": is_platform_domain(rc.resend_domain_name or ""),
+        "records": _format_dns_records(records),
+    }
+
+
+@router.post("/tenants/{tenant_id}/email-domain/verify")
+async def verify_email_domain(
+    tenant_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_super_admin),
+):
+    """Ask Resend to re-check DNS (call after records are added), then
+    refresh the stored status + per-record verification state."""
+    import json as _json
+    from app.services.resend_provisioning import trigger_verify, get_domain_status
+    rc = (await db.execute(
+        select(RuntimeConfig).where(RuntimeConfig.tenant_id == tenant_id)
+    )).scalar_one_or_none()
+    if not rc or not rc.resend_domain_id:
+        raise HTTPException(status_code=404, detail="tenant has no Resend domain provisioned")
+
+    await trigger_verify(rc.resend_domain_id)
+    # Re-fetch the authoritative status + records after the verify poke.
+    status_data = await get_domain_status(rc.resend_domain_id)
+    if not status_data:
+        raise HTTPException(status_code=502, detail="Could not fetch status from Resend")
+    new_status = status_data.get("status") or rc.resend_domain_status
+    new_records = status_data.get("records") or []
+    rc.resend_domain_status = new_status
+    if new_records:
+        rc.resend_domain_records_json = _json.dumps(new_records)
+    await db.commit()
+    return {
+        "domain_name": rc.resend_domain_name,
+        "status": new_status,
+        "records": _format_dns_records(new_records or (_json.loads(rc.resend_domain_records_json) if rc.resend_domain_records_json else [])),
+    }
+
+
+# ----------------------------------------------------------------------
 # Impersonation
 # ----------------------------------------------------------------------
 
