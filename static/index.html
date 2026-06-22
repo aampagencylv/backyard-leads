@@ -4117,7 +4117,19 @@ function verify(secret, rawBody, header) {
                         }
                     } catch (e) {}
                 }
-            } catch(e) { logout(); }
+            } catch(e) {
+                // We already authenticated: api('/api/auth/me') above handles a
+                // real expired/invalid token by logging out + returning null,
+                // and the whole init block is inside `if (user)`. So anything
+                // that throws HERE is a post-auth INIT/render failure (Twilio
+                // setup, a nav toggle, a deep-link handler) — NOT an auth
+                // problem. Do NOT nuke a valid session over it; that was the
+                // cause of the "team randomly logged out" reports (no server
+                // 401 ever fired). Stay logged in, surface the app, log it.
+                console.error('post-auth init error (staying logged in):', e);
+                try { document.getElementById('auth-screen').classList.add('hidden'); } catch(_) {}
+                try { document.getElementById('app-screen').classList.remove('hidden'); } catch(_) {}
+            }
         }
 
         // ============ Realtime-ish notifications ============
