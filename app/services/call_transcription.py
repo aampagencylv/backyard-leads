@@ -59,6 +59,16 @@ async def transcribe_and_summarize_in_background(activity_id: int) -> None:
 
 
 async def _run_pipeline(activity_id: int) -> None:
+    # CRITICAL: never hold a pooled DB connection across the slow external
+    # calls (Deepgram up to 120s, Claude with 529-overload retry backoff).
+    # On 2026-06-23 an Anthropic overload event stalled every in-flight
+    # transcription mid-pipeline; each squatted on a pooled connection for
+    # the full retry duration, draining the 15+20 pool and producing 30s
+    # QueuePool checkout timeouts on the dashboard / log_call / voice_twiml.
+    # The pipeline now opens a session ONLY around DB work and releases it
+    # before each network call.
+
+    # --- Phase 1: load what we need, then release the connection ---
     async with async_session() as db:
         act = (await db.execute(
             select(Activity).where(Activity.id == activity_id)
@@ -79,32 +89,41 @@ async def _run_pipeline(activity_id: int) -> None:
             return
 
         twilio_creds = await get_twilio_credentials(db)
+        recording_url = act.recording_url
         # The Twilio recording URL needs basic auth; embed creds so Deepgram can fetch it
-        signed_recording_url = _embed_basic_auth(act.recording_url, twilio_creds.account_sid, twilio_creds.auth_token)
+        signed_recording_url = _embed_basic_auth(recording_url, twilio_creds.account_sid, twilio_creds.auth_token)
 
-        # 1. Deepgram transcription
-        try:
-            transcript_text, diarized_segments, talk_ratio = await _transcribe_with_deepgram(
-                signed_recording_url, deepgram_key
-            )
-        except Exception as e:
-            # A 404/REMOTE_CONTENT_ERROR means Twilio no longer serves the
-            # recording (purged, or the URL isn't live yet when we fire
-            # right after the recording webhook). Expected occasionally —
-            # log as warning so Sentry doesn't page; everything else stays
-            # ERROR via log.exception.
-            msg = str(e)
-            if "REMOTE_CONTENT_ERROR" in msg or "404" in msg:
-                log.warning("Deepgram could not fetch recording for activity %s: %s",
-                            activity_id, msg[:200])
-            else:
-                log.exception("Deepgram transcription failed for activity %s", activity_id)
+    # --- Deepgram transcription (no DB connection held) ---
+    try:
+        transcript_text, diarized_segments, talk_ratio = await _transcribe_with_deepgram(
+            signed_recording_url, deepgram_key
+        )
+    except Exception as e:
+        # A 404/REMOTE_CONTENT_ERROR means Twilio no longer serves the
+        # recording (purged, or the URL isn't live yet when we fire
+        # right after the recording webhook). Expected occasionally —
+        # log as warning so Sentry doesn't page; everything else stays
+        # ERROR via log.exception.
+        msg = str(e)
+        if "REMOTE_CONTENT_ERROR" in msg or "404" in msg:
+            log.warning("Deepgram could not fetch recording for activity %s: %s",
+                        activity_id, msg[:200])
+        else:
+            log.exception("Deepgram transcription failed for activity %s", activity_id)
+        return
+
+    # --- Phase 2: persist transcript + load prompt context, then release ---
+    # Persist the transcript + structured diarization first — even if Claude
+    # summarization fails later. The dashboard waveform + talk-ratio panel
+    # both read these JSON blobs directly.
+    import json as _json
+    async with async_session() as db:
+        act = (await db.execute(
+            select(Activity).where(Activity.id == activity_id)
+        )).scalar_one_or_none()
+        if not act:
+            log.warning("activity %s vanished before transcript persist", activity_id)
             return
-
-        # Persist the transcript + structured diarization first — even
-        # if Claude summarization fails later. The dashboard waveform +
-        # talk-ratio panel both read these JSON blobs directly.
-        import json as _json
         act.transcript = transcript_text
         # Normalize the talk_ratio dict to include prospect_pct too (the
         # legacy helper only set rep_pct). UI reads both.
@@ -121,7 +140,9 @@ async def _run_pipeline(activity_id: int) -> None:
             act.diarized_segments_json = None
         await db.commit()
 
-        # 2. Pull contact + company context for the prompt
+        # Pull contact + company context for the prompt. expire_on_commit is
+        # False, so the column attrs _summarize_with_claude reads stay
+        # populated after the session closes.
         contact = None
         company = None
         if act.contact_id:
@@ -129,22 +150,39 @@ async def _run_pipeline(activity_id: int) -> None:
         if act.company_id:
             company = (await db.execute(select(Company).where(Company.id == act.company_id))).scalar_one_or_none()
 
-        # 3. Claude summary
-        if not settings.anthropic_api_key:
-            log.info("no Anthropic key; skipping summary for activity %s", activity_id)
-            return
-        try:
-            summary = await _summarize_with_claude(
-                transcript_text, diarized_segments, talk_ratio,
-                contact=contact, company=company,
-            )
-        except Exception:
+    # --- Claude summary (no DB connection held) ---
+    if not settings.anthropic_api_key:
+        log.info("no Anthropic key; skipping summary for activity %s", activity_id)
+        return
+    try:
+        summary = await _summarize_with_claude(
+            transcript_text, diarized_segments, talk_ratio,
+            contact=contact, company=company,
+        )
+    except Exception as e:
+        # Anthropic 529 (overloaded) / 429 (rate limit) are transient
+        # upstream blips, not our bug — log as warning so Sentry doesn't
+        # page. The transcript is already persisted (Phase 2); only the
+        # summary is missing and the reconciliation sweep can re-run it.
+        msg = str(e)
+        if "529" in msg or "overloaded" in msg.lower() or "429" in msg or "rate_limit" in msg.lower():
+            log.warning("Claude summary skipped (transient upstream) for activity %s: %s",
+                        activity_id, msg[:200])
+        else:
             log.exception("Claude summary failed for activity %s", activity_id)
-            return
+        return
 
+    # --- Phase 3: persist summary ---
+    async with async_session() as db:
+        act = (await db.execute(
+            select(Activity).where(Activity.id == activity_id)
+        )).scalar_one_or_none()
+        if not act:
+            log.warning("activity %s vanished before summary persist", activity_id)
+            return
         act.call_summary = summary
         await db.commit()
-        log.info("transcription pipeline complete for activity %s", activity_id)
+    log.info("transcription pipeline complete for activity %s", activity_id)
 
 
 # ============================================================
