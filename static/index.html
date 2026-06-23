@@ -750,15 +750,31 @@
           const name = (brand.company_name || "").trim();
           if (name) document.title = name + " · Prospector + CRM";
 
-          // Logos — only swap when the brand actually has its own logo url.
-          // Empty string falls back to the inline BMP image already in the DOM.
-          if (brand.logo_url) {
-            for (const id of ["auth-logo-img", "sidebar-logo-img"]) {
-              const img = document.getElementById(id);
-              if (img) {
-                img.src = brand.logo_url;
-                img.alt = name || "Logo";
-              }
+          // Logos — fully data-driven per tenant (white-label correctness).
+          // The <img> starts hidden so no tenant ever flashes another
+          // tenant's logo. If this tenant has its own logo url, show it.
+          // Otherwise render the company NAME as a text wordmark — never a
+          // hardcoded competitor logo (this is what made AAMP show the BMP
+          // logo). BMP keeps its logo because its brand_logo_url is now set
+          // in the DB like any other tenant.
+          const logoUrl = (brand.logo_url || "").trim();
+          for (const id of ["auth-logo-img", "sidebar-logo-img"]) {
+            const img = document.getElementById(id);
+            if (!img) continue;
+            const wrap = img.parentElement;
+            if (logoUrl) {
+              img.src = logoUrl;
+              img.alt = name || "Logo";
+              img.style.display = "";
+            } else if (wrap && name && !wrap.querySelector(".brand-wordmark")) {
+              const span = document.createElement("span");
+              span.className = "brand-wordmark";
+              span.textContent = name;
+              const isSidebar = id === "sidebar-logo-img";
+              span.style.cssText = isSidebar
+                ? "font-size:17px;font-weight:800;color:#fff;letter-spacing:-0.3px"
+                : "font-size:22px;font-weight:800;color:var(--bmp-green,#1B5E20);letter-spacing:-0.3px";
+              wrap.appendChild(span);
             }
           }
 
@@ -781,8 +797,10 @@
     <div id="auth-screen" class="auth-container">
         <div class="auth-card">
             <div class="auth-logo" id="auth-logo-wrap">
-                <!-- Logo populated at boot from /api/brand based on Host. -->
-                <img id="auth-logo-img" src="https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz.png" alt="">
+                <!-- Logo/wordmark populated at boot from /api/brand based on
+                     Host (white-label). Starts hidden so no tenant flashes
+                     another tenant's logo before the brand resolves. -->
+                <img id="auth-logo-img" src="" alt="" style="display:none">
             </div>
             <h1>Prospector + CRM</h1>
             <p>Sign in to your team account</p>
@@ -939,7 +957,7 @@
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-brand">
                 <!-- Logo populated at boot from /api/brand based on Host. -->
-                <img id="sidebar-logo-img" src="https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz_white-text.png" alt="">
+                <img id="sidebar-logo-img" src="" alt="" style="display:none">
                 <small>Prospector + CRM</small>
             </div>
             <nav class="sidebar-nav">
