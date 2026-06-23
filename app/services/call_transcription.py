@@ -162,8 +162,13 @@ async def _run_pipeline(activity_id: int) -> None:
     except Exception as e:
         # Anthropic 529 (overloaded) / 429 (rate limit) are transient
         # upstream blips, not our bug — log as warning so Sentry doesn't
-        # page. The transcript is already persisted (Phase 2); only the
-        # summary is missing and the reconciliation sweep can re-run it.
+        # page. The transcript is already persisted (Phase 2); the summary
+        # is simply absent. NOTE: it does NOT auto-backfill — re-running the
+        # pipeline short-circuits at the `if act.transcript: return` guard
+        # (Phase 1), so call_summary stays NULL. Accepted tradeoff: a missing
+        # summary is non-critical (the transcript is the durable artifact),
+        # and not paging on transient upstream errors is worth more than a
+        # guaranteed summary. Revisit with a summary-only backfill if needed.
         msg = str(e)
         if "529" in msg or "overloaded" in msg.lower() or "429" in msg or "rate_limit" in msg.lower():
             log.warning("Claude summary skipped (transient upstream) for activity %s: %s",

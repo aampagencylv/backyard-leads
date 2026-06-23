@@ -254,8 +254,18 @@ async def get_dashboard(
     # (do_orm_execute) does NOT rewrite it and Postgres RLS is dormant, so
     # tenant isolation must be an EXPLICIT predicate here. The earlier
     # "ORM auto-filter handles it" comment was wrong (2026-06-23).
+    # User-scope must be a WHERE predicate, NOT a post-fetch Python filter:
+    # applying it after `LIMIT 10` lets other reps' rows consume the cap, so
+    # a BDR could see fewer than 10 — or zero — of their own due actions even
+    # with many pending (the sibling get_stalled_sequences query scopes in
+    # SQL for exactly this reason).
     from sqlalchemy import text as _sa_text
-    engine_queued_rows = (await db.execute(_sa_text("""
+    _q_params = {"tenant_id": db.info.get("tenant_id")}
+    _rep_clause = ""
+    if user.role not in ("admin", "super_admin"):
+        _rep_clause = "AND co.assigned_to = :assigned_to"
+        _q_params["assigned_to"] = user.id
+    engine_queued_rows = (await db.execute(_sa_text(f"""
         SELECT a.id, a.subject, a.scheduled_at,
                c.id AS contact_id, c.first_name, c.last_name, c.email,
                co.id AS company_id, co.name AS company_name,
@@ -267,14 +277,12 @@ async def get_dashboard(
         WHERE a.status = 'scheduled'
           AND ct.code = 'email'
           AND co.tenant_id = :tenant_id
+          {_rep_clause}
           AND a.scheduled_at <= NOW()
           AND c.unsubscribed_at IS NULL
         ORDER BY a.scheduled_at
         LIMIT 10
-    """), {"tenant_id": db.info.get("tenant_id")})).fetchall()
-    # User-scope: non-admins only see actions on companies assigned to them
-    if user.role not in ("admin", "super_admin"):
-        engine_queued_rows = [r for r in engine_queued_rows if r.assigned_to == user.id]
+    """), _q_params)).fetchall()
     for r in engine_queued_rows:
         contact_name = (
             f"{r.first_name or ''} {r.last_name or ''}".strip() or r.email
