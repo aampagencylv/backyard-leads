@@ -250,8 +250,10 @@ async def get_dashboard(
 
     # New-engine actions due to dispatch right now (email channel only;
     # SMS/call_task/manual/linkedin land on the BDR task list, not this
-    # widget). Tenant-safety via the same contacts/companies join +
-    # ORM auto-filter on session.info.tenant_id.
+    # widget). NOTE: this is raw text() SQL — the ORM tenant auto-filter
+    # (do_orm_execute) does NOT rewrite it and Postgres RLS is dormant, so
+    # tenant isolation must be an EXPLICIT predicate here. The earlier
+    # "ORM auto-filter handles it" comment was wrong (2026-06-23).
     from sqlalchemy import text as _sa_text
     engine_queued_rows = (await db.execute(_sa_text("""
         SELECT a.id, a.subject, a.scheduled_at,
@@ -264,11 +266,12 @@ async def get_dashboard(
         JOIN companies co ON co.id = c.company_id
         WHERE a.status = 'scheduled'
           AND ct.code = 'email'
+          AND co.tenant_id = :tenant_id
           AND a.scheduled_at <= NOW()
           AND c.unsubscribed_at IS NULL
         ORDER BY a.scheduled_at
         LIMIT 10
-    """))).fetchall()
+    """), {"tenant_id": db.info.get("tenant_id")})).fetchall()
     # User-scope: non-admins only see actions on companies assigned to them
     if user.role not in ("admin", "super_admin"):
         engine_queued_rows = [r for r in engine_queued_rows if r.assigned_to == user.id]

@@ -284,11 +284,31 @@ async def get_stalled_sequences(
     # could have been dead behind the scenes.
     from sqlalchemy import text as _sa_text
     auto_channels = ("email", "sms")  # engine channels that fire automatically
+    # SCOPING: this is raw text() SQL, so the ORM-layer tenant auto-filter
+    # (do_orm_execute) does NOT rewrite it, and Postgres RLS is dormant
+    # (postgres role bypasses it). Without explicit filters this query
+    # leaked stalled actions across ALL tenants AND across reps — the
+    # widget surfaced companies the viewer couldn't open, so clicking them
+    # 404'd "Company not found" under the tenant + assigned_to scoped detail
+    # route (2026-06-23). Mirror the same scoping the ORM/scope_companies
+    # path applies above: tenant_id always, assigned_to for non-admins.
+    tenant_id = db.info.get("tenant_id")
+    rep_scoped = user.role not in ("admin", "super_admin")
     # NB: `= ANY(:auto)` with a Python list, NOT `IN :auto` — text() +
     # asyncpg binds the tuple as a single $1 parameter which is a
     # Postgres syntax error (Sentry AI-PROSPECTOR-K, 2026-06-12: the
     # Stalled Sequences tab 500'd the first time a BDR opened it).
-    engine_rows = (await db.execute(_sa_text("""
+    engine_params = {
+        "auto": list(auto_channels),
+        "critical_cutoff": now - grace,
+        "now": now,
+        "tenant_id": tenant_id,
+    }
+    rep_clause = ""
+    if rep_scoped:
+        rep_clause = "AND co.assigned_to = :assigned_to"
+        engine_params["assigned_to"] = user.id
+    engine_rows = (await db.execute(_sa_text(f"""
         SELECT
           a.id, a.scheduled_at, a.status,
           ct.code AS channel_code,
@@ -302,6 +322,8 @@ async def get_stalled_sequences(
         JOIN companies co ON co.id = c.company_id
         JOIN engagements e ON e.id = a.engagement_id
         WHERE co.status NOT IN ('not_interested','qualified','converted')
+          AND co.tenant_id = :tenant_id
+          {rep_clause}
           AND e.status = 'active'
           AND (
             (a.status = 'scheduled' AND ct.code = ANY(:auto) AND a.scheduled_at < :critical_cutoff)
@@ -309,11 +331,7 @@ async def get_stalled_sequences(
             OR (a.status = 'paused')
           )
         ORDER BY co.name, a.scheduled_at
-    """), {
-        "auto": list(auto_channels),
-        "critical_cutoff": now - grace,
-        "now": now,
-    })).fetchall()
+    """), engine_params)).fetchall()
 
     # Append engine rows to the grouping using the same dict shape so
     # the rendering loop below treats them uniformly.
