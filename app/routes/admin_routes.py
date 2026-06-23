@@ -1140,6 +1140,42 @@ async def verify_email_domain(
 
 
 # ----------------------------------------------------------------------
+# Per-tenant AI messaging direction (used by the New Company wizard)
+# ----------------------------------------------------------------------
+
+class MessagingDirectionIn(BaseModel):
+    text: str = ""
+
+
+@router.post("/tenants/{tenant_id}/messaging-direction")
+async def set_tenant_messaging_direction(
+    tenant_id: int,
+    req: MessagingDirectionIn,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(require_super_admin),
+):
+    """Set a specific tenant's AI messaging direction — the strategic angle
+    prepended to every AI generation (cold email, follow-ups, iMessage).
+    BMP's is 'AI findability / local SEO'; AAMP's might be 'web dev +
+    Google Ads for tour operators'. This is what 'vertical' really maps to."""
+    tenant = (await db.execute(select(Tenant).where(Tenant.id == tenant_id))).scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    rc = (await db.execute(
+        select(RuntimeConfig).where(RuntimeConfig.tenant_id == tenant_id)
+    )).scalar_one_or_none()
+    if not rc:
+        rc = RuntimeConfig(tenant_id=tenant_id)
+        db.add(rc)
+    rc.messaging_direction = (req.text or "").strip() or None
+    await db.commit()
+    await record_audit(db, actor=actor, action="messaging_direction_set",
+                       target_type="tenant", target_id=tenant_id,
+                       metadata={"chars": len(req.text or "")})
+    return {"tenant_id": tenant_id, "messaging_direction": rc.messaging_direction or ""}
+
+
+# ----------------------------------------------------------------------
 # Impersonation
 # ----------------------------------------------------------------------
 
