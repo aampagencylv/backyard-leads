@@ -665,6 +665,12 @@ class RuntimeConfig(TenantMixin, Base):
     # never ships links to another company's site before they set their own.
     brand_website_url = Column(Text, nullable=False, default="")
 
+    # Per-tenant prospecting vertical — JSON list of business categories the
+    # Find Leads search + Auto Pilot campaign picker target (e.g. BMP: home
+    # services; AAMP: tour operators / things-to-do). NULL → frontend uses a
+    # generic starter set. Set during onboarding (AI-suggested from the angle).
+    target_business_types = Column(Text, nullable=True)
+
     # Editable middle pipeline stages — JSON array of
     # {key, name, probability, color}. NULL means "use defaults". System
     # stages (in_sequence/closed_won/closed_lost/snoozed) are NEVER stored

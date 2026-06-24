@@ -668,3 +668,115 @@ async def verify_tenant_app_domain(
         "resolved_ips": ips,
         "target_ip": APP_DOMAIN_TARGET_IP,
     }
+
+
+# ======================================================================
+# Per-tenant prospecting vertical — target business types
+# ----------------------------------------------------------------------
+# The categories the Find Leads search + Auto Pilot campaign picker target.
+# Replaces the old hardcoded BMP_BUSINESS_TYPES. AI-suggested from the
+# tenant's messaging direction so it's "figured out during build-out".
+# ======================================================================
+
+class BusinessTypesIn(BaseModel):
+    business_types: list[str] = []
+
+
+@router.get("/runtime-config/business-types")
+async def get_business_types(
+    db: AsyncSession = Depends(get_tenant_db),
+    user: User = Depends(get_current_user),
+):
+    import json as _json
+    from sqlalchemy import select
+    from app.models import RuntimeConfig
+    tid = _tenant_id(db)
+    rc = (await db.execute(select(RuntimeConfig).where(RuntimeConfig.tenant_id == tid))).scalar_one_or_none()
+    types = []
+    if rc and rc.target_business_types:
+        try:
+            types = _json.loads(rc.target_business_types)
+        except Exception:
+            types = []
+    return {"business_types": types}
+
+
+@router.post("/runtime-config/business-types")
+async def set_business_types(
+    req: BusinessTypesIn,
+    request: Request,
+    db: AsyncSession = Depends(get_tenant_db),
+    user: User = Depends(get_current_user),
+):
+    _require_admin(user)
+    import json as _json
+    from sqlalchemy import select
+    from app.models import RuntimeConfig
+    tid = _tenant_id(db)
+    rc = (await db.execute(select(RuntimeConfig).where(RuntimeConfig.tenant_id == tid))).scalar_one_or_none()
+    if not rc:
+        rc = RuntimeConfig(tenant_id=tid)
+        db.add(rc)
+    # dedupe, trim, cap at 60
+    seen, clean = set(), []
+    for t in (req.business_types or []):
+        v = (t or "").strip().lower()
+        if v and v not in seen:
+            seen.add(v); clean.append(v)
+        if len(clean) >= 60:
+            break
+    rc.target_business_types = _json.dumps(clean)
+    await db.commit()
+    await record_audit(db, actor=user, action="business_types_set",
+                       target_type="tenant", target_id=tid,
+                       metadata={"count": len(clean)}, request=request)
+    return {"business_types": clean}
+
+
+@router.post("/runtime-config/business-types/suggest")
+async def suggest_business_types(
+    db: AsyncSession = Depends(get_tenant_db),
+    user: User = Depends(get_current_user),
+):
+    """AI-generate a starter list of prospecting categories from the tenant's
+    messaging direction / vertical. Does NOT save — the UI shows them for the
+    admin to edit + Save."""
+    _require_admin(user)
+    from fastapi import HTTPException
+    from sqlalchemy import select
+    from app.models import RuntimeConfig, Tenant
+    from app.config import settings
+    tid = _tenant_id(db)
+    if not settings.anthropic_api_key:
+        raise HTTPException(status_code=400, detail="AI is not configured on the platform")
+    rc = (await db.execute(select(RuntimeConfig).where(RuntimeConfig.tenant_id == tid))).scalar_one_or_none()
+    tenant = (await db.execute(select(Tenant).where(Tenant.id == tid))).scalar_one_or_none()
+    direction = ((rc.messaging_direction if rc else "") or "").strip()
+    name = (tenant.name if tenant else "this agency")
+
+    prompt = (
+        f"You are setting up an outbound prospecting tool for an agency called \"{name}\".\n"
+        f"Here is who they target and how they describe their work:\n\n{direction or '(not specified)'}\n\n"
+        "List the specific TYPES OF LOCAL BUSINESSES this agency would prospect as clients "
+        "— the searchable Google Maps category terms (e.g. 'boat tour operator', 'escape room', "
+        "'kayak rental'). Be comprehensive and specific to their vertical; include adjacent "
+        "categories they'd also want. 15-25 items. Return ONLY a JSON array of lowercase strings, "
+        "nothing else."
+    )
+    try:
+        import anthropic, json as _json
+        from app.services.ai_client import MODEL_BALANCED
+        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        resp = await client.messages.create(
+            model=MODEL_BALANCED, max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        txt = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
+        # tolerate ```json fences
+        if txt.startswith("```"):
+            txt = txt.split("```", 2)[1].lstrip("json").strip() if "```" in txt[3:] else txt.strip("`")
+        types = _json.loads(txt)
+        types = [str(t).strip().lower() for t in types if str(t).strip()][:25]
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not generate suggestions: {type(e).__name__}")
+    return {"business_types": types}
