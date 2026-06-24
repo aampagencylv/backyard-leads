@@ -678,29 +678,38 @@ async def update_profile(
     db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
+    # `user` comes from get_current_user's OWN session (Depends(get_db)), not
+    # this route's `db` (get_tenant_db). Mutating user + committing db persists
+    # NOTHING — they're different sessions. So collect the changes and apply
+    # them with an explicit UPDATE-by-PK on `db` (also dodges the tenant SELECT
+    # filter under impersonation). We still mutate `user` in-memory so the
+    # response payload reflects the new values (expire_on_commit=False).
+    changes: dict = {}
     for field in ("first_name", "last_name", "nickname", "phone_number",
                   "scheduling_url", "personal_phone_number"):
         val = getattr(req, field)
         if val is not None:
-            setattr(user, field, val.strip() or None if field == "personal_phone_number" else val.strip())
+            v = (val.strip() or None) if field == "personal_phone_number" else val.strip()
+            setattr(user, field, v)
+            changes[field] = v
     if req.sending_enabled is not None:
         user.sending_enabled = req.sending_enabled
+        changes["sending_enabled"] = req.sending_enabled
     if req.dial_mode is not None and req.dial_mode in ("browser", "bridge"):
         user.dial_mode = req.dial_mode
+        changes["dial_mode"] = req.dial_mode
     if req.timezone is not None:
         from zoneinfo import ZoneInfo
         try:
             ZoneInfo(req.timezone)
             user.timezone = req.timezone
+            changes["timezone"] = req.timezone
         except (KeyError, Exception):
             pass
-    await db.commit()
-    # No db.refresh(user) here: the session uses expire_on_commit=False, so
-    # the just-set attributes remain valid after commit, and _profile_payload
-    # reads them straight off the object. A refresh would re-SELECT the row
-    # under the session's tenant filter, which fails when a super_admin is
-    # impersonating another tenant (their own user row lives in their home
-    # tenant, not the impersonated one) → "Instance is not persistent".
+    if changes:
+        from sqlalchemy import update as _update
+        await db.execute(_update(User).where(User.id == user.id).values(**changes))
+        await db.commit()
     return await _profile_payload(db, user)
 
 
