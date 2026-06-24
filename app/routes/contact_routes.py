@@ -359,6 +359,11 @@ async def update_contact(
     if not await check_contact_access(contact, user, db):
         raise HTTPException(status_code=404, detail="Contact not found")
 
+    # Capture identifiers BEFORE the edit so we can re-sync in-flight actions
+    # if they change (see below).
+    _old_email = contact.email
+    _old_phone = contact.phone
+
     for f in ("first_name", "last_name", "title", "email", "phone", "linkedin_url"):
         v = getattr(req, f)
         if v is not None:
@@ -378,6 +383,41 @@ async def update_contact(
 
     await db.commit()
     await db.refresh(contact)
+
+    # Re-sync in-flight engine actions to the contact's new email/phone.
+    # The recipient-lock DB trigger validates each action's recipient against
+    # the contact's CURRENT identifiers; editing a contact mid-sequence
+    # otherwise orphans its pending actions and the dispatcher 500s on every
+    # tick (Sentry: "action.recipient_email does not match engagement contact").
+    # Contact is committed first, so these UPDATEs see the new value and pass.
+    from sqlalchemy import text as _txt
+    _PENDING = ['scheduled', 'queued', 'awaiting_approval', 'paused', 'sending']
+    if req.email is not None and (contact.email or '') != (_old_email or ''):
+        if (contact.email or '').strip():
+            await db.execute(_txt(
+                "UPDATE actions SET recipient_email = :e WHERE contact_id = :c "
+                "AND recipient_email IS NOT NULL AND status = ANY(:st)"
+            ), {"e": contact.email, "c": contact_id, "st": _PENDING})
+        else:
+            # No usable email now → can't send those steps; skip them cleanly.
+            await db.execute(_txt(
+                "UPDATE actions SET recipient_email = NULL, status = 'skipped' "
+                "WHERE contact_id = :c AND recipient_email IS NOT NULL AND status = ANY(:st)"
+            ), {"c": contact_id, "st": _PENDING})
+        await db.commit()
+    if req.phone is not None and (contact.phone or '') != (_old_phone or ''):
+        if (contact.phone or '').strip():
+            await db.execute(_txt(
+                "UPDATE actions SET recipient_phone = :p WHERE contact_id = :c "
+                "AND recipient_phone IS NOT NULL AND status = ANY(:st)"
+            ), {"p": contact.phone, "c": contact_id, "st": _PENDING})
+        else:
+            await db.execute(_txt(
+                "UPDATE actions SET recipient_phone = NULL, status = 'skipped' "
+                "WHERE contact_id = :c AND recipient_phone IS NOT NULL AND status = ANY(:st)"
+            ), {"c": contact_id, "st": _PENDING})
+        await db.commit()
+
     return _contact_summary(contact)
 
 
