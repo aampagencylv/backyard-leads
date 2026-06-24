@@ -329,7 +329,10 @@ async def update_runtime_config(
     if req.messaging_direction is not None:
         await set_messaging_direction(db, req.messaging_direction)
     if req.imessage_enabled is not None:
-        from app.runtime_config import _get_or_create
+        # NB: do NOT `import _get_or_create` here — it's already imported at
+        # module scope. A local import makes the name function-local for the
+        # WHOLE function, so when this branch is skipped (e.g. a brand-only
+        # save) the later `_get_or_create(db)` call hits UnboundLocalError.
         rc = await _get_or_create(db)
         rc.imessage_enabled = bool(req.imessage_enabled)
         await db.flush()

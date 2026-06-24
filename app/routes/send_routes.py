@@ -695,7 +695,12 @@ async def update_profile(
         except (KeyError, Exception):
             pass
     await db.commit()
-    await db.refresh(user)
+    # No db.refresh(user) here: the session uses expire_on_commit=False, so
+    # the just-set attributes remain valid after commit, and _profile_payload
+    # reads them straight off the object. A refresh would re-SELECT the row
+    # under the session's tenant filter, which fails when a super_admin is
+    # impersonating another tenant (their own user row lives in their home
+    # tenant, not the impersonated one) → "Instance is not persistent".
     return await _profile_payload(db, user)
 
 
