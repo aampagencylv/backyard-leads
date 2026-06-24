@@ -158,6 +158,7 @@ async def init_db():
         "scripts.migrate_action_status_paused",
         "scripts.migrate_user_email_per_tenant",
         "scripts.migrate_target_business_types",
+        "scripts.migrate_target_regions",
     )
 
     # Decide which actually need to run.

@@ -670,6 +670,9 @@ class RuntimeConfig(TenantMixin, Base):
     # services; AAMP: tour operators / things-to-do). NULL → frontend uses a
     # generic starter set. Set during onboarding (AI-suggested from the angle).
     target_business_types = Column(Text, nullable=True)
+    # Per-tenant target geographic markets (JSON list). Captured at onboarding;
+    # pre-fills the Auto Pilot location field. e.g. ["Costa Rica","Cancun"].
+    target_regions = Column(Text, nullable=True)
 
     # Editable middle pipeline stages — JSON array of
     # {key, name, probability, color}. NULL means "use defaults". System

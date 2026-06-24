@@ -692,13 +692,18 @@ async def get_business_types(
     from app.models import RuntimeConfig
     tid = _tenant_id(db)
     rc = (await db.execute(select(RuntimeConfig).where(RuntimeConfig.tenant_id == tid))).scalar_one_or_none()
-    types = []
+    types, regions = [], []
     if rc and rc.target_business_types:
         try:
             types = _json.loads(rc.target_business_types)
         except Exception:
             types = []
-    return {"business_types": types}
+    if rc and getattr(rc, "target_regions", None):
+        try:
+            regions = _json.loads(rc.target_regions)
+        except Exception:
+            regions = []
+    return {"business_types": types, "regions": regions}
 
 
 @router.post("/runtime-config/business-types")
@@ -731,6 +736,39 @@ async def set_business_types(
                        target_type="tenant", target_id=tid,
                        metadata={"count": len(clean)}, request=request)
     return {"business_types": clean}
+
+
+class TargetRegionsIn(BaseModel):
+    regions: list[str] = []
+
+
+@router.post("/runtime-config/target-regions")
+async def set_target_regions(
+    req: TargetRegionsIn,
+    request: Request,
+    db: AsyncSession = Depends(get_tenant_db),
+    user: User = Depends(get_current_user),
+):
+    """Set the tenant's target geographic markets (pre-fills Auto Pilot)."""
+    _require_admin(user)
+    import json as _json
+    from sqlalchemy import select
+    from app.models import RuntimeConfig
+    tid = _tenant_id(db)
+    rc = (await db.execute(select(RuntimeConfig).where(RuntimeConfig.tenant_id == tid))).scalar_one_or_none()
+    if not rc:
+        rc = RuntimeConfig(tenant_id=tid)
+        db.add(rc)
+    seen, clean = set(), []
+    for t in (req.regions or []):
+        v = (t or "").strip()
+        if v and v.lower() not in seen:
+            seen.add(v.lower()); clean.append(v)
+        if len(clean) >= 40:
+            break
+    rc.target_regions = _json.dumps(clean)
+    await db.commit()
+    return {"regions": clean}
 
 
 @router.post("/runtime-config/business-types/suggest")

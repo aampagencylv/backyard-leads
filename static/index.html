@@ -885,6 +885,7 @@
                 <div class="ob-dot" data-step="2"></div>
                 <div class="ob-dot" data-step="3"></div>
                 <div class="ob-dot" data-step="4"></div>
+                <div class="ob-dot" data-step="5"></div>
             </div>
 
             <!-- STEP 1: agency basics -->
@@ -974,13 +975,38 @@
                 </div>
             </div>
 
-            <!-- STEP 4: review + finish -->
+            <!-- STEP 4: who you prospect (business types + regions) -->
             <div id="ob-step-4" class="ob-step hidden">
+                <h2 style="font-size:24px;margin-bottom:6px;color:var(--bmp-green)">Who you prospect</h2>
+                <p style="color:#666;margin-bottom:18px;font-size:14px">We generated the kinds of businesses you'd target from your angle. Add or remove any — these power Find Leads + Auto Pilot.</p>
+                <div class="form-group">
+                    <label style="display:flex;justify-content:space-between;align-items:center">Target business types
+                        <button class="btn btn-secondary btn-xs" onclick="obRegenerateTypes()" id="ob-regen-btn">↻ Regenerate</button>
+                    </label>
+                    <div id="ob-types-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;min-height:28px"><span style="color:#999;font-size:12px">Generating…</span></div>
+                    <div style="display:flex;gap:6px">
+                        <input id="ob-type-add" placeholder="Add a type, e.g. escape room" onkeydown="if(event.key==='Enter'){event.preventDefault();obAddType();}" style="flex:1">
+                        <button class="btn btn-secondary btn-sm" onclick="obAddType()">Add</button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Target regions / markets</label>
+                    <textarea id="ob-regions" rows="3" placeholder="One per line — a city, region, or country. e.g.&#10;Costa Rica&#10;Cancun&#10;Las Vegas, NV"></textarea>
+                    <div style="font-size:11px;color:#888;margin-top:4px">Auto Pilot expands these into surrounding areas (US suburbs, or international tourist hubs).</div>
+                </div>
+                <div class="ob-actions">
+                    <button class="btn btn-secondary" onclick="obBack(4)">← Back</button>
+                    <button class="btn btn-primary" onclick="obNext(4)">Continue →</button>
+                </div>
+            </div>
+
+            <!-- STEP 5: review + finish -->
+            <div id="ob-step-5" class="ob-step hidden">
                 <h2 style="font-size:24px;margin-bottom:6px;color:var(--bmp-green)">Review and finish</h2>
                 <p style="color:#666;margin-bottom:24px;font-size:14px">Looks right? You can change everything later in Settings.</p>
                 <div id="ob-review" style="background:#f8f9fa;border-radius:8px;padding:18px;font-size:13px;line-height:1.8;margin-bottom:16px"></div>
                 <div class="ob-actions">
-                    <button class="btn btn-secondary" onclick="obBack(4)">← Back</button>
+                    <button class="btn btn-secondary" onclick="obBack(5)">← Back</button>
                     <button class="btn btn-primary" onclick="obFinish()" id="ob-finish-btn">Start prospecting →</button>
                 </div>
             </div>
@@ -3930,9 +3956,10 @@ function verify(secret, rawBody, header) {
         }
 
         function obShowStep(n) {
-            for (let i = 1; i <= 4; i++) {
+            for (let i = 1; i <= 5; i++) {
                 document.getElementById('ob-step-' + i).classList.toggle('hidden', i !== n);
             }
+            if (n === 4) obLoadProspectStep();
             document.querySelectorAll('#ob-progress .ob-dot').forEach(d => {
                 const dn = parseInt(d.dataset.step);
                 d.classList.toggle('active', dn === n);
@@ -3989,11 +4016,59 @@ function verify(secret, rawBody, header) {
                 currentStep === 1 ? await obSaveStep1() :
                 currentStep === 2 ? await obSaveStep2() :
                 currentStep === 3 ? await obSaveStep3() :
+                currentStep === 4 ? await obSaveStep4() :
                 false
             );
             if (!ok) return;
-            if (currentStep === 3) obRenderReview();
+            if (currentStep === 4) obRenderReview();
             obShowStep(currentStep + 1);
+        }
+
+        // ---- Step 4: who you prospect (business types + regions) ----
+        let _obTypes = [];
+        let _obTypesLoaded = false;
+        function obRenderTypeChips() {
+            const wrap = document.getElementById('ob-types-chips');
+            if (!_obTypes.length) { wrap.innerHTML = '<span style="color:#999;font-size:12px">None yet — add some below or Regenerate.</span>'; return; }
+            wrap.innerHTML = _obTypes.map((t, i) =>
+                `<span style="display:inline-flex;align-items:center;gap:5px;background:#fff;border:1px solid #ddd;border-radius:14px;padding:3px 10px;font-size:12px">${escapeHtml(t)}<span onclick="obRemoveType(${i})" style="cursor:pointer;color:#c0392b;font-weight:700">×</span></span>`
+            ).join('');
+        }
+        function obAddType() {
+            const inp = document.getElementById('ob-type-add');
+            const v = (inp.value || '').trim().toLowerCase();
+            if (v && !_obTypes.includes(v)) { _obTypes.push(v); obRenderTypeChips(); }
+            inp.value = '';
+        }
+        function obRemoveType(i) { _obTypes.splice(i, 1); obRenderTypeChips(); }
+        async function obRegenerateTypes() {
+            const btn = document.getElementById('ob-regen-btn');
+            btn.disabled = true; btn.textContent = '↻ Generating…';
+            const r = await api('/api/runtime-config/business-types/suggest', { method: 'POST', body: '{}' });
+            if (r && Array.isArray(r.business_types)) { _obTypes = r.business_types; obRenderTypeChips(); }
+            btn.disabled = false; btn.textContent = '↻ Regenerate';
+        }
+        async function obLoadProspectStep() {
+            if (_obTypesLoaded) return;
+            _obTypesLoaded = true;
+            // existing saved types first; if none, auto-generate from the angle
+            const cur = await api('/api/runtime-config/business-types');
+            if (cur && cur.business_types && cur.business_types.length) {
+                _obTypes = cur.business_types;
+                if (cur.regions && cur.regions.length) document.getElementById('ob-regions').value = cur.regions.join('\n');
+                obRenderTypeChips();
+            } else {
+                await obRegenerateTypes();
+            }
+        }
+        async function obSaveStep4() {
+            await api('/api/runtime-config/business-types', { method: 'POST', body: JSON.stringify({ business_types: _obTypes }) });
+            const regions = (document.getElementById('ob-regions').value || '')
+                .split('\n').map(s => s.trim()).filter(Boolean);
+            _ob.regions = regions;
+            _ob.types = _obTypes.slice();
+            await api('/api/runtime-config/target-regions', { method: 'POST', body: JSON.stringify({ regions }) });
+            return true;
         }
 
         function obBack(currentStep) { if (currentStep > 1) obShowStep(currentStep - 1); }
@@ -4019,6 +4094,8 @@ function verify(secret, rawBody, header) {
                 <div><strong>Focus:</strong> ${escapeHtml(focusLabels[_ob.focus] || "—")}</div>
                 ${_ob.icp ? `<div><strong>Customers:</strong> ${escapeHtml(_ob.icp)}</div>` : ""}
                 <div style="margin-top:6px"><strong>Angle:</strong> <em style="color:#444">${escapeHtml(_ob.angle).slice(0, 220)}${_ob.angle.length > 220 ? "…" : ""}</em></div>
+                ${(_ob.types && _ob.types.length) ? `<div style="margin-top:6px"><strong>Prospecting:</strong> ${_ob.types.length} business types — <span style="color:#666">${escapeHtml(_ob.types.slice(0,6).join(", "))}${_ob.types.length > 6 ? "…" : ""}</span></div>` : ""}
+                ${(_ob.regions && _ob.regions.length) ? `<div><strong>Markets:</strong> ${escapeHtml(_ob.regions.join(", "))}</div>` : ""}
             `;
             document.getElementById('ob-review').innerHTML = html;
         }
@@ -11107,7 +11184,7 @@ hmac.compare_digest(expected, header)</pre>
                             <textarea id="camp-locations" rows="3" placeholder="Phoenix, AZ\nLas Vegas, NV\nDallas, TX" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px"></textarea>
                             <label style="display:flex;align-items:center;gap:6px;margin-top:6px;cursor:pointer;font-size:13px">
                                 <input type="checkbox" id="camp-expand-metros" checked>
-                                Include surrounding suburbs (auto-expands major cities into metro area — e.g. Phoenix → Phoenix + Scottsdale + Mesa + 15 more)
+                                Include surrounding areas (auto-expands a city, region, or country into its surrounding communities — e.g. Phoenix → +Scottsdale/Mesa/15 more; Costa Rica → Tamarindo/Jacó/Manuel Antonio/…)
                             </label>
                         </div>
                         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
@@ -11297,7 +11374,7 @@ hmac.compare_digest(expected, header)</pre>
                             <textarea id="edit-camp-locations" rows="3" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px">${escapeHtml(locText)}</textarea>
                             <label style="display:flex;align-items:center;gap:6px;margin-top:6px;cursor:pointer;font-size:13px">
                                 <input type="checkbox" id="edit-camp-expand-metros">
-                                Include surrounding suburbs (auto-expands major cities like Phoenix → Phoenix + Scottsdale + Mesa + 15 more). Check this if you typed a metro name and want suburbs added.
+                                Include surrounding areas (auto-expands a city, region, or country into surrounding communities — works for US metros and international regions like Costa Rica or Riviera Maya). Check this if you typed a metro/region/country.
                             </label>
                             <div style="font-size:11px;color:#888;margin-top:4px">Currently targeting ${(c.locations || []).length} ${(c.locations || []).length === 1 ? 'city' : 'cities'}.</div>
                         </div>
