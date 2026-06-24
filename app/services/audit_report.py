@@ -24,6 +24,36 @@ from app.services.dataforseo import (
 )
 
 
+_US_STATES = {
+    "al": "Alabama", "ak": "Alaska", "az": "Arizona", "ar": "Arkansas",
+    "ca": "California", "co": "Colorado", "ct": "Connecticut", "de": "Delaware",
+    "fl": "Florida", "ga": "Georgia", "hi": "Hawaii", "id": "Idaho",
+    "il": "Illinois", "in": "Indiana", "ia": "Iowa", "ks": "Kansas",
+    "ky": "Kentucky", "la": "Louisiana", "me": "Maine", "md": "Maryland",
+    "ma": "Massachusetts", "mi": "Michigan", "mn": "Minnesota", "ms": "Mississippi",
+    "mo": "Missouri", "mt": "Montana", "ne": "Nebraska", "nv": "Nevada",
+    "nh": "New Hampshire", "nj": "New Jersey", "nm": "New Mexico", "ny": "New York",
+    "nc": "North Carolina", "nd": "North Dakota", "oh": "Ohio", "ok": "Oklahoma",
+    "or": "Oregon", "pa": "Pennsylvania", "ri": "Rhode Island", "sc": "South Carolina",
+    "sd": "South Dakota", "tn": "Tennessee", "tx": "Texas", "ut": "Utah",
+    "vt": "Vermont", "va": "Virginia", "wa": "Washington", "wv": "West Virginia",
+    "wi": "Wisconsin", "wy": "Wyoming", "dc": "District of Columbia",
+}
+
+
+def _ads_location(city: str, state: str) -> str:
+    """DataForSEO's Google Ads (keyword volume) endpoint needs the FULL state
+    name — "Miami,Florida,United States" — and rejects the abbreviation
+    ("FL") that the SERP endpoint accepts."""
+    st = (state or "").strip()
+    full = _US_STATES.get(st.lower(), st)
+    if city and full:
+        return f"{city},{full},United States"
+    if city:
+        return f"{city},United States"
+    return "United States"
+
+
 async def _ai_local_keywords(company_name: str, business_type: str, city: str,
                              state: str, website: str) -> tuple[str, list[str]]:
     """Use AI to (1) refine the business type from the company itself — the
@@ -314,7 +344,8 @@ async def generate_audit(
                 report.business_type = refined_bt  # accurate label, not the search bucket
             if local_kws and city:
                 location_name = f"{city},{state},United States" if state else f"{city},United States"
-                vols = await keyword_volumes(local_kws, location_name, dfs_login, dfs_pass)
+                # Google Ads volume needs the full state name; SERP takes the abbrev.
+                vols = await keyword_volumes(local_kws, _ads_location(city, state), dfs_login, dfs_pass)
                 ranks = await _asyncio.gather(
                     *[serp_rank_for_domain(k, location_name, website, dfs_login, dfs_pass) for k in local_kws],
                     return_exceptions=True,
