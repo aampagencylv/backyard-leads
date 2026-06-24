@@ -115,7 +115,20 @@ def _clamp_hours(start: int, end: int, defaults: tuple[int, int]) -> tuple[int, 
 
 
 async def get_autopilot_config(db: AsyncSession) -> AutopilotConfig:
-    rc = (await db.execute(select(RuntimeConfig).limit(1))).scalar_one_or_none()
+    # RuntimeConfig is per-tenant. For a tenant-stamped session the ORM
+    # auto-filter already constrains this SELECT, but bind the tenant
+    # explicitly too so intent is clear and a stray multi-row result can't
+    # hand one tenant another's send window. Untenanted system sessions
+    # (tid is None) fall back to the historical single-row behavior.
+    _q = select(RuntimeConfig)
+    _tid = None
+    try:
+        _tid = db.info.get("tenant_id")
+    except Exception:
+        _tid = None
+    if _tid is not None:
+        _q = _q.where(RuntimeConfig.tenant_id == _tid)
+    rc = (await db.execute(_q.limit(1))).scalar_one_or_none()
     if rc is None:
         return AutopilotConfig(
             basis="contact",

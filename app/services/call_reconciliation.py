@@ -168,13 +168,19 @@ async def reconcile_calls(db: AsyncSession, *, hours: int = 6) -> dict:
             from sqlalchemy import text as _sa_text
             digits = "".join(ch for ch in normalized_to if ch.isdigit())[-10:]
             if len(digits) == 10:
+                # Scope the match to the REP's tenant. This worker runs on a
+                # plain (untenanted) session across all reps, and the raw SQL
+                # bypasses the ORM tenant filter — without this a rep could be
+                # linked to a contact/company that belongs to another tenant
+                # whose phone happens to share the last 10 digits.
                 # Contact match first (preferred — links the call to a person)
                 ct_row = (await db.execute(_sa_text("""
                     SELECT id, company_id FROM contacts
                     WHERE phone IS NOT NULL AND phone != ''
+                      AND tenant_id = :t
                       AND RIGHT(regexp_replace(phone, '[^0-9]', '', 'g'), 10) = :d
                     ORDER BY is_primary DESC, id LIMIT 1
-                """), {"d": digits})).first()
+                """), {"d": digits, "t": rep.tenant_id})).first()
                 if ct_row:
                     contact_id = int(ct_row.id)
                     company_id = int(ct_row.company_id) if ct_row.company_id else None
@@ -183,9 +189,10 @@ async def reconcile_calls(db: AsyncSession, *, hours: int = 6) -> dict:
                     co_row = (await db.execute(_sa_text("""
                         SELECT id FROM companies
                         WHERE phone IS NOT NULL AND phone != ''
+                          AND tenant_id = :t
                           AND RIGHT(regexp_replace(phone, '[^0-9]', '', 'g'), 10) = :d
                         ORDER BY id LIMIT 1
-                    """), {"d": digits})).first()
+                    """), {"d": digits, "t": rep.tenant_id})).first()
                     if co_row:
                         company_id = int(co_row.id)
 

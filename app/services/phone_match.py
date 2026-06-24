@@ -26,17 +26,44 @@ def last10(raw: Optional[str]) -> Optional[str]:
     return digits[-10:] if len(digits) >= 10 else None
 
 
-async def find_contact_by_phone(db: AsyncSession, raw: Optional[str]) -> Optional[Contact]:
-    """Contact whose phone matches by last-10 digits (primary first)."""
+def _scope_tid(db: AsyncSession, tenant_id: Optional[int]) -> Optional[int]:
+    """Tenant to constrain the raw last-10 lookup to. Explicit arg wins;
+    otherwise fall back to the session's tenant stamp (set by get_tenant_db).
+    Returns None only for genuinely untenanted sessions — those stay
+    cross-tenant by design (a few inbound webhooks resolve the owning tenant
+    by the receiving number, not by a session stamp)."""
+    if tenant_id is not None:
+        return tenant_id
+    try:
+        return db.info.get("tenant_id")
+    except Exception:
+        return None
+
+
+async def find_contact_by_phone(
+    db: AsyncSession, raw: Optional[str], tenant_id: Optional[int] = None
+) -> Optional[Contact]:
+    """Contact whose phone matches by last-10 digits (primary first).
+
+    The raw SQL bypasses the ORM tenant auto-filter, so it is scoped here:
+    constrained to `tenant_id` (explicit, or the session's stamp). Without a
+    tenant the match spans all tenants — only correct for system callers.
+    """
     d = last10(raw)
     if d is None:
         return None
-    row = (await db.execute(text("""
+    tid = _scope_tid(db, tenant_id)
+    sql = """
         SELECT id FROM contacts
         WHERE phone IS NOT NULL AND phone != ''
           AND RIGHT(regexp_replace(phone, '[^0-9]', '', 'g'), 10) = :d
-        ORDER BY is_primary DESC, id LIMIT 1
-    """), {"d": d})).first()
+    """
+    params = {"d": d}
+    if tid is not None:
+        sql += " AND tenant_id = :t"
+        params["t"] = tid
+    sql += " ORDER BY is_primary DESC, id LIMIT 1"
+    row = (await db.execute(text(sql), params)).first()
     if row is None:
         return None
     return (await db.execute(
@@ -44,17 +71,26 @@ async def find_contact_by_phone(db: AsyncSession, raw: Optional[str]) -> Optiona
     )).scalar_one_or_none()
 
 
-async def find_company_by_phone(db: AsyncSession, raw: Optional[str]) -> Optional[Company]:
-    """Company whose main line matches by last-10 digits."""
+async def find_company_by_phone(
+    db: AsyncSession, raw: Optional[str], tenant_id: Optional[int] = None
+) -> Optional[Company]:
+    """Company whose main line matches by last-10 digits. Tenant-scoped like
+    find_contact_by_phone — see that docstring."""
     d = last10(raw)
     if d is None:
         return None
-    row = (await db.execute(text("""
+    tid = _scope_tid(db, tenant_id)
+    sql = """
         SELECT id FROM companies
         WHERE phone IS NOT NULL AND phone != ''
           AND RIGHT(regexp_replace(phone, '[^0-9]', '', 'g'), 10) = :d
-        ORDER BY id LIMIT 1
-    """), {"d": d})).first()
+    """
+    params = {"d": d}
+    if tid is not None:
+        sql += " AND tenant_id = :t"
+        params["t"] = tid
+    sql += " ORDER BY id LIMIT 1"
+    row = (await db.execute(text(sql), params)).first()
     if row is None:
         return None
     return (await db.execute(
