@@ -290,8 +290,9 @@ async def apply_to_existing(
         FROM engagements e
         JOIN contacts c ON c.id = e.contact_id
         WHERE e.status = 'active'
+          AND c.tenant_id = :tid
     """
-    params = {}
+    params = {"tid": db.info.get("tenant_id")}
     if payload.company_ids:
         eng_sql += " AND c.company_id = ANY(:cids)"
         params["cids"] = list(payload.company_ids)

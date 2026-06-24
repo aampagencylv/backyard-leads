@@ -218,7 +218,12 @@ async def reconcile_calls(db: AsyncSession, *, hours: int = 6) -> dict:
             head += dur_str
         summary = f"{head}\n[reconciled from Twilio — dialer modal didn't log]"
 
+        # Stamp the rep's own tenant. This is a cross-tenant worker (it
+        # iterates every rep), and the session is plain (no tenant stamp),
+        # so without this the Activity falls back to TenantMixin's default
+        # of 1 (BMP) — wrong for a non-BMP rep's call.
         db.add(Activity(
+            tenant_id=rep.tenant_id,
             company_id=company_id,
             contact_id=contact_id,
             user_id=rep.id,

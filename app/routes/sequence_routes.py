@@ -134,8 +134,9 @@ async def get_for_contact(
         FROM actions a
         JOIN channel_types ct ON ct.id = a.channel_id
         WHERE a.contact_id = :c
+          AND a.tenant_id = :tid
         ORDER BY a.scheduled_at
-    """), {"c": contact_id})).fetchall()
+    """), {"c": contact_id, "tid": db.info.get("tenant_id")})).fetchall()
 
     def _action_status(r) -> str:
         if r.status == "sent" or r.executed_at is not None:
@@ -296,8 +297,9 @@ async def resume(
         SELECT MIN(a.scheduled_at) FROM actions a
         JOIN engagements e ON e.id = a.engagement_id
         WHERE a.contact_id = :c AND a.status = 'scheduled'
+          AND a.tenant_id = :tid
           AND e.status = 'active' AND a.scheduled_at < :now
-    """), {"c": contact_id, "now": now})).scalar()
+    """), {"c": contact_id, "now": now, "tid": db.info.get("tenant_id")})).scalar()
     if overdue_engine is not None:
         shift_seconds = int((anchor - overdue_engine).total_seconds())
         if shift_seconds > 0:
@@ -309,9 +311,10 @@ async def resume(
                 FROM engagements e
                 WHERE e.id = a.engagement_id
                   AND a.contact_id = :c AND a.status = 'scheduled'
+                  AND a.tenant_id = :tid
                   AND e.status = 'active'
                 RETURNING a.id
-            """), {"c": contact_id, "shift": shift_seconds})
+            """), {"c": contact_id, "shift": shift_seconds, "tid": db.info.get("tenant_id")})
             engine_n = max(engine_n, len(shifted.fetchall()))
 
     await db.commit()
@@ -445,10 +448,11 @@ async def rework_sequence(
         FROM engagements e
         WHERE e.id = a.engagement_id
           AND a.contact_id = :c
+          AND a.tenant_id = :tid
           AND e.status = 'active'
           AND a.status IN ('scheduled', 'paused', 'awaiting_approval')
         RETURNING a.id
-    """), {"c": contact_id})
+    """), {"c": contact_id, "tid": db.info.get("tenant_id")})
     deleted += len(superseded.fetchall())
 
     # Append the AI-reworked steps to the contact's active engagement.
@@ -681,10 +685,10 @@ async def reorder(
         SELECT a.id, a.scheduled_at FROM actions a
         JOIN contacts c ON c.id = a.contact_id
         WHERE a.contact_id = :c
-          AND a.tenant_id = c.tenant_id
+          AND c.tenant_id = :tid
           AND a.status IN ('scheduled', 'paused', 'awaiting_approval')
         ORDER BY a.scheduled_at ASC, a.id ASC
-    """), {"c": req.contact_id})).fetchall()
+    """), {"c": req.contact_id, "tid": db.info.get("tenant_id")})).fetchall()
     action_by_id = {int(r.id): r.scheduled_at for r in action_rows}
     action_times_sorted = sorted(action_by_id.values())
 
@@ -721,7 +725,8 @@ async def reorder(
                 SET scheduled_at = :sched,
                     updated_at = NOW()
                 WHERE id = :aid
-            """), {"aid": step_id, "sched": new_time})
+                  AND tenant_id = :tid
+            """), {"aid": step_id, "sched": new_time, "tid": db.info.get("tenant_id")})
             action_order_idx += 1
             actions_reflowed += 1
 

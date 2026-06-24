@@ -177,12 +177,14 @@ async def list_companies(
                        ) AS step_order,
                        a.status
                 FROM actions a
+                WHERE a.tenant_id = :tid
             ) ranked
             JOIN contacts c ON c.id = ranked.contact_id
             WHERE ranked.status = 'scheduled'
+              AND c.tenant_id = :tid
               AND c.company_id = ANY(:cids)
             GROUP BY c.company_id
-        """), {"cids": list(company_ids)})).all()
+        """), {"cids": list(company_ids), "tid": db.info.get("tenant_id")})).all()
         for cid, min_step in engine_step_rows:
             existing = seq_step_map.get(cid)
             # Take MIN across legacy + engine. None means no row in that
@@ -593,7 +595,16 @@ async def get_paused_forgotten(
     # 'sequencing' companies. Without this the widget showed empty for
     # any contact whose BDR manually paused their engine engagement.
     from sqlalchemy import text as _sa_text
-    eng_rows = (await db.execute(_sa_text("""
+    # SCOPING: raw text() bypasses the ORM tenant auto-filter, so bind the
+    # tenant explicitly + mirror scope_companies' assigned_to rep scoping.
+    # Without this the widget leaked paused actions across tenants and reps
+    # (confirmed live leak, 2026-06-23).
+    eng_params: dict = {"tid": db.info.get("tenant_id")}
+    eng_rep_clause = ""
+    if user.role not in ("admin", "super_admin"):
+        eng_rep_clause = "AND co.assigned_to = :assigned_to"
+        eng_params["assigned_to"] = user.id
+    eng_rows = (await db.execute(_sa_text(f"""
         SELECT a.id, a.scheduled_at,
                ct.code AS channel_code,
                a.subject,
@@ -609,8 +620,10 @@ async def get_paused_forgotten(
         JOIN companies co ON co.id = c.company_id
         WHERE a.status = 'paused'
           AND co.status = 'sequencing'
+          AND co.tenant_id = :tid
+          {eng_rep_clause}
         ORDER BY a.updated_at
-    """))).fetchall()
+    """), eng_params)).fetchall()
 
     class _Proxy:
         def __init__(self, **kw):
@@ -1557,8 +1570,9 @@ async def get_company_full(
             FROM actions a
             JOIN channel_types ct ON ct.id = a.channel_id
             WHERE a.contact_id = ANY(:cids)
+              AND a.tenant_id = :tid
             ORDER BY a.contact_id, a.scheduled_at
-        """), {"cids": contact_ids})).fetchall()
+        """), {"cids": contact_ids, "tid": db.info.get("tenant_id")})).fetchall()
 
         def _step_type_from_channel(code: str) -> str:
             return {
@@ -3361,13 +3375,18 @@ async def bulk_company_action(
 
     placeholders = ",".join(f":id{i}" for i in range(len(req.company_ids)))
     id_params = {f"id{i}": v for i, v in enumerate(req.company_ids)}
+    # SCOPING: company_ids come straight from the request body. These raw
+    # text() UPDATE/DELETE/INSERT statements bypass the ORM tenant filter, so
+    # bind the tenant explicitly to prevent cross-tenant id injection.
+    _tid = db.info.get("tenant_id")
+    id_params["tid"] = _tid
     affected = 0
     errors: list[str] = []
 
     if req.action == "assign":
         # user_id may be None to unassign
         result = await db.execute(
-            sql_text(f"UPDATE companies SET assigned_to = :uid WHERE id IN ({placeholders})"),
+            sql_text(f"UPDATE companies SET assigned_to = :uid WHERE id IN ({placeholders}) AND tenant_id = :tid"),
             {"uid": req.user_id, **id_params},
         )
         affected = result.rowcount or 0
@@ -3386,10 +3405,10 @@ async def bulk_company_action(
         await db.execute(
             sql_text(f"""
                 INSERT INTO company_tags (company_id, tag_id)
-                SELECT id, :tid FROM companies WHERE id IN ({placeholders})
+                SELECT id, :tag_id FROM companies WHERE id IN ({placeholders}) AND tenant_id = :tid
                 ON CONFLICT (company_id, tag_id) DO NOTHING
             """),
-            {"tid": req.tag_id, **id_params},
+            {"tag_id": req.tag_id, **id_params},
         )
         affected = len(req.company_ids)
 
@@ -3397,8 +3416,8 @@ async def bulk_company_action(
         if not req.tag_id:
             raise HTTPException(status_code=400, detail="tag_id required")
         result = await db.execute(
-            sql_text(f"DELETE FROM company_tags WHERE tag_id = :tid AND company_id IN ({placeholders})"),
-            {"tid": req.tag_id, **id_params},
+            sql_text(f"DELETE FROM company_tags WHERE tag_id = :tag_id AND company_id IN (SELECT id FROM companies WHERE id IN ({placeholders}) AND tenant_id = :tid)"),
+            {"tag_id": req.tag_id, **id_params},
         )
         affected = result.rowcount or 0
 
@@ -3407,7 +3426,7 @@ async def bulk_company_action(
         if req.status not in valid:
             raise HTTPException(status_code=400, detail=f"status must be one of {sorted(valid)}")
         result = await db.execute(
-            sql_text(f"UPDATE companies SET status = :s WHERE id IN ({placeholders})"),
+            sql_text(f"UPDATE companies SET status = :s WHERE id IN ({placeholders}) AND tenant_id = :tid"),
             {"s": req.status, **id_params},
         )
         affected = result.rowcount or 0

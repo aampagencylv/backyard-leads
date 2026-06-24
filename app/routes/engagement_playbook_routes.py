@@ -183,12 +183,13 @@ async def _channel_code_for_id(db: AsyncSession, channel_id: int) -> str:
 
 async def _load_playbook(db: AsyncSession, playbook_id: int) -> PlaybookOut:
     """Load a playbook + its active actions."""
+    _tid = db.info.get("tenant_id")
     pb_row = await db.execute(text("""
         SELECT id, name, description, phase, mode, duration_max_days,
                ai_strategy_json, is_active, version, parent_playbook_id,
                legacy_seq_template_id, created_at
-        FROM playbooks WHERE id = :id
-    """), {"id": playbook_id})
+        FROM playbooks WHERE id = :id AND tenant_id = :tid
+    """), {"id": playbook_id, "tid": _tid})
     pb = pb_row.first()
     if pb is None:
         raise HTTPException(status_code=404, detail="playbook not found")
@@ -200,9 +201,9 @@ async def _load_playbook(db: AsyncSession, playbook_id: int) -> PlaybookOut:
                pa.day_offset, pa.skip_conditions_json, pa.is_active
         FROM playbook_actions pa
         JOIN channel_types ct ON ct.id = pa.channel_id
-        WHERE pa.playbook_id = :id AND pa.is_active = TRUE
+        WHERE pa.playbook_id = :id AND pa.tenant_id = :tid AND pa.is_active = TRUE
         ORDER BY pa.action_order
-    """), {"id": playbook_id})
+    """), {"id": playbook_id, "tid": _tid})
     actions = [
         PlaybookActionOut(
             id=r.id, action_order=r.action_order,
@@ -249,9 +250,10 @@ async def _has_active_enrollments(db: AsyncSession, playbook_id: int) -> bool:
     row = await db.execute(text("""
         SELECT 1 FROM engagements
         WHERE current_playbook_id = :id
+          AND tenant_id = :tid
           AND status NOT IN ('terminal',)
         LIMIT 1
-    """), {"id": playbook_id})
+    """), {"id": playbook_id, "tid": db.info.get("tenant_id")})
     return row.first() is not None
 
 
@@ -284,10 +286,11 @@ async def _create_new_version(
             CAST(COALESCE(:strategy, CAST(ai_strategy_json AS text)) AS jsonb),
             legacy_seq_template_id,
             TRUE, version + 1, id, :user_id
-        FROM playbooks WHERE id = :old_id
+        FROM playbooks WHERE id = :old_id AND tenant_id = :tid
         RETURNING id, version
     """), {
         "old_id": old_playbook_id,
+        "tid": db.info.get("tenant_id"),
         "name": metadata_updates.get("name"),
         "description": metadata_updates.get("description"),
         "dur": metadata_updates.get("duration_max_days"),
@@ -314,14 +317,14 @@ async def _create_new_version(
             subject_template, body_template, task_template, day_offset,
             skip_conditions_json, legacy_seq_step_id, is_active
         FROM playbook_actions
-        WHERE playbook_id = :old_id AND is_active = TRUE
-    """), {"new_id": new_id, "old_id": old_playbook_id})
+        WHERE playbook_id = :old_id AND tenant_id = :tid AND is_active = TRUE
+    """), {"new_id": new_id, "old_id": old_playbook_id, "tid": db.info.get("tenant_id")})
 
     # 3) Mark the old playbook inactive
     await db.execute(text("""
         UPDATE playbooks SET is_active = FALSE, updated_at = NOW()
-        WHERE id = :old_id
-    """), {"old_id": old_playbook_id})
+        WHERE id = :old_id AND tenant_id = :tid
+    """), {"old_id": old_playbook_id, "tid": db.info.get("tenant_id")})
 
     return new_id
 
@@ -366,8 +369,8 @@ async def list_playbooks(
 ) -> list[PlaybookOut]:
     """List the tenant's playbooks. By default only returns the currently
     active version of each playbook chain."""
-    where = ["1=1"]
-    params: dict = {}
+    where = ["tenant_id = :tid"]
+    params: dict = {"tid": db.info.get("tenant_id")}
     if not include_inactive:
         where.append("is_active = TRUE")
     if phase:
@@ -472,8 +475,9 @@ async def update_playbook(
             set_parts.append(f"{k} = :{k}")
             params[k] = v
     set_parts.append("updated_at = NOW()")
+    params["tid"] = db.info.get("tenant_id")
     await db.execute(text(f"""
-        UPDATE playbooks SET {', '.join(set_parts)} WHERE id = :id
+        UPDATE playbooks SET {', '.join(set_parts)} WHERE id = :id AND tenant_id = :tid
     """), params)
     await db.commit()
     return await _load_playbook(db, playbook_id)
@@ -490,9 +494,9 @@ async def deactivate_playbook(
     current_playbook_version). New enrollments cannot use this playbook."""
     result = await db.execute(text("""
         UPDATE playbooks SET is_active = FALSE, updated_at = NOW()
-        WHERE id = :id
+        WHERE id = :id AND tenant_id = :tid
         RETURNING id
-    """), {"id": playbook_id})
+    """), {"id": playbook_id, "tid": db.info.get("tenant_id")})
     if result.first() is None:
         raise HTTPException(status_code=404, detail="playbook not found")
     await db.commit()
@@ -527,8 +531,8 @@ async def add_playbook_action(
     # Determine next action_order
     next_order_row = await db.execute(text("""
         SELECT COALESCE(MAX(action_order), 0) + 1 AS next FROM playbook_actions
-        WHERE playbook_id = :id AND is_active = TRUE
-    """), {"id": target_pb_id})
+        WHERE playbook_id = :id AND tenant_id = :tid AND is_active = TRUE
+    """), {"id": target_pb_id, "tid": db.info.get("tenant_id")})
     next_order = next_order_row.first().next
 
     try:
@@ -586,8 +590,8 @@ async def add_playbook_action(
                pa.day_offset, pa.skip_conditions_json, pa.is_active
         FROM playbook_actions pa
         JOIN channel_types ct ON ct.id = pa.channel_id
-        WHERE pa.id = :id
-    """), {"id": new_action_id})
+        WHERE pa.id = :id AND pa.tenant_id = :tid
+    """), {"id": new_action_id, "tid": db.info.get("tenant_id")})
     r = row.first()
     return PlaybookActionOut(
         id=r.id, action_order=r.action_order, channel_code=r.channel_code,
@@ -615,8 +619,8 @@ async def edit_playbook_action(
 
     # Find the parent playbook
     parent_row = await db.execute(text(
-        "SELECT playbook_id FROM playbook_actions WHERE id = :id"
-    ), {"id": action_id})
+        "SELECT playbook_id FROM playbook_actions WHERE id = :id AND tenant_id = :tid"
+    ), {"id": action_id, "tid": db.info.get("tenant_id")})
     parent = parent_row.first()
     if parent is None:
         raise HTTPException(status_code=404, detail="action not found")
@@ -627,8 +631,8 @@ async def edit_playbook_action(
     if await _has_active_enrollments(db, parent_id):
         # Find this action's order in the source playbook
         order_row = await db.execute(text(
-            "SELECT action_order FROM playbook_actions WHERE id = :id"
-        ), {"id": action_id})
+            "SELECT action_order FROM playbook_actions WHERE id = :id AND tenant_id = :tid"
+        ), {"id": action_id, "tid": db.info.get("tenant_id")})
         action_order = order_row.first().action_order
 
         new_pb_id = await _create_new_version(
@@ -638,8 +642,9 @@ async def edit_playbook_action(
         # Find the corresponding cloned action_id in the new playbook
         cloned_row = await db.execute(text("""
             SELECT id FROM playbook_actions
-            WHERE playbook_id = :pb AND action_order = :ord AND is_active = TRUE
-        """), {"pb": new_pb_id, "ord": action_order})
+            WHERE playbook_id = :pb AND tenant_id = :tid
+              AND action_order = :ord AND is_active = TRUE
+        """), {"pb": new_pb_id, "ord": action_order, "tid": db.info.get("tenant_id")})
         target_action_id = cloned_row.first().id
 
     # Apply the edit
@@ -673,9 +678,10 @@ async def edit_playbook_action(
         pass
     else:
         sets.append("updated_at = NOW()")
+        params["tid"] = db.info.get("tenant_id")
         try:
             await db.execute(text(
-                f"UPDATE playbook_actions SET {', '.join(sets)} WHERE id = :id"
+                f"UPDATE playbook_actions SET {', '.join(sets)} WHERE id = :id AND tenant_id = :tid"
             ), params)
         except Exception as e:
             msg = str(e)
@@ -700,8 +706,8 @@ async def edit_playbook_action(
                pa.day_offset, pa.skip_conditions_json, pa.is_active
         FROM playbook_actions pa
         JOIN channel_types ct ON ct.id = pa.channel_id
-        WHERE pa.id = :id
-    """), {"id": target_action_id})
+        WHERE pa.id = :id AND pa.tenant_id = :tid
+    """), {"id": target_action_id, "tid": db.info.get("tenant_id")})
     r = row.first()
     return PlaybookActionOut(
         id=r.id, action_order=r.action_order, channel_code=r.channel_code,
@@ -726,8 +732,8 @@ async def delete_playbook_action(
     """Soft-delete: mark step inactive."""
     result = await db.execute(text("""
         UPDATE playbook_actions SET is_active = FALSE, updated_at = NOW()
-        WHERE id = :id RETURNING id
-    """), {"id": action_id})
+        WHERE id = :id AND tenant_id = :tid RETURNING id
+    """), {"id": action_id, "tid": db.info.get("tenant_id")})
     if result.first() is None:
         raise HTTPException(status_code=404, detail="action not found")
     await db.commit()
@@ -744,8 +750,8 @@ async def reorder_playbook_action(
     """Move a step to a new position. Other steps shift to fill the gap."""
     # Find current position
     cur_row = await db.execute(text(
-        "SELECT playbook_id, action_order FROM playbook_actions WHERE id = :id"
-    ), {"id": action_id})
+        "SELECT playbook_id, action_order FROM playbook_actions WHERE id = :id AND tenant_id = :tid"
+    ), {"id": action_id, "tid": db.info.get("tenant_id")})
     cur = cur_row.first()
     if cur is None:
         raise HTTPException(status_code=404, detail="action not found")
@@ -759,8 +765,8 @@ async def reorder_playbook_action(
                    pa.day_offset, pa.skip_conditions_json, pa.is_active
             FROM playbook_actions pa
             JOIN channel_types ct ON ct.id = pa.channel_id
-            WHERE pa.id = :id
-        """), {"id": action_id})
+            WHERE pa.id = :id AND pa.tenant_id = :tid
+        """), {"id": action_id, "tid": db.info.get("tenant_id")})
         r = row.first()
         return PlaybookActionOut(
             id=r.id, action_order=r.action_order, channel_code=r.channel_code,
@@ -787,8 +793,9 @@ async def reorder_playbook_action(
         # Find cloned action by order
         cloned_row = await db.execute(text("""
             SELECT id FROM playbook_actions
-            WHERE playbook_id = :pb AND action_order = :ord AND is_active = TRUE
-        """), {"pb": new_pb_id, "ord": cur.action_order})
+            WHERE playbook_id = :pb AND tenant_id = :tid
+              AND action_order = :ord AND is_active = TRUE
+        """), {"pb": new_pb_id, "ord": cur.action_order, "tid": db.info.get("tenant_id")})
         target_action_id = cloned_row.first().id
 
     old_order = cur.action_order
@@ -800,8 +807,8 @@ async def reorder_playbook_action(
     temp_order = 9999
     await db.execute(text("""
         UPDATE playbook_actions SET action_order = :temp
-        WHERE id = :id
-    """), {"temp": temp_order, "id": target_action_id})
+        WHERE id = :id AND tenant_id = :tid
+    """), {"temp": temp_order, "id": target_action_id, "tid": db.info.get("tenant_id")})
 
     if new_order > old_order:
         # Moving down — shift items in (old_order, new_order] up by one
@@ -809,23 +816,25 @@ async def reorder_playbook_action(
             UPDATE playbook_actions
             SET action_order = action_order - 1
             WHERE playbook_id = :pb
+              AND tenant_id = :tid
               AND is_active = TRUE
               AND action_order > :old AND action_order <= :new
-        """), {"pb": target_pb_id, "old": old_order, "new": new_order})
+        """), {"pb": target_pb_id, "old": old_order, "new": new_order, "tid": db.info.get("tenant_id")})
     else:
         # Moving up — shift items in [new_order, old_order) down by one
         await db.execute(text("""
             UPDATE playbook_actions
             SET action_order = action_order + 1
             WHERE playbook_id = :pb
+              AND tenant_id = :tid
               AND is_active = TRUE
               AND action_order >= :new AND action_order < :old
-        """), {"pb": target_pb_id, "old": old_order, "new": new_order})
+        """), {"pb": target_pb_id, "old": old_order, "new": new_order, "tid": db.info.get("tenant_id")})
 
     # Phase 2: place target at new_order
     await db.execute(text("""
-        UPDATE playbook_actions SET action_order = :new WHERE id = :id
-    """), {"new": new_order, "id": target_action_id})
+        UPDATE playbook_actions SET action_order = :new WHERE id = :id AND tenant_id = :tid
+    """), {"new": new_order, "id": target_action_id, "tid": db.info.get("tenant_id")})
     await db.commit()
 
     # Return updated action
@@ -836,8 +845,8 @@ async def reorder_playbook_action(
                pa.day_offset, pa.skip_conditions_json, pa.is_active
         FROM playbook_actions pa
         JOIN channel_types ct ON ct.id = pa.channel_id
-        WHERE pa.id = :id
-    """), {"id": target_action_id})
+        WHERE pa.id = :id AND pa.tenant_id = :tid
+    """), {"id": target_action_id, "tid": db.info.get("tenant_id")})
     r = row.first()
     return PlaybookActionOut(
         id=r.id, action_order=r.action_order, channel_code=r.channel_code,
@@ -872,8 +881,8 @@ async def test_send_playbook_action(
                pa.subject_template, pa.body_template, pa.task_template
         FROM playbook_actions pa
         JOIN channel_types ct ON ct.id = pa.channel_id
-        WHERE pa.id = :id
-    """), {"id": action_id})
+        WHERE pa.id = :id AND pa.tenant_id = :tid
+    """), {"id": action_id, "tid": db.info.get("tenant_id")})
     step = row.first()
     if step is None:
         raise HTTPException(status_code=404, detail="action not found")
@@ -886,8 +895,8 @@ async def test_send_playbook_action(
                    co.name AS company_name
             FROM contacts c
             JOIN companies co ON co.id = c.company_id
-            WHERE c.id = :id
-        """), {"id": body.contact_id})
+            WHERE c.id = :id AND c.tenant_id = :tid AND co.tenant_id = :tid
+        """), {"id": body.contact_id, "tid": db.info.get("tenant_id")})
         c = c_row.first()
         if c is None:
             raise HTTPException(status_code=404, detail="contact not found")

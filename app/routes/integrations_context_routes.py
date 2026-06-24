@@ -213,14 +213,15 @@ async def get_context(
                    ROW_NUMBER() OVER (ORDER BY a.scheduled_at, a.id) AS step_order
             FROM actions a JOIN channel_types ct ON ct.id = a.channel_id
             WHERE a.contact_id = :c AND a.status = 'scheduled'
+              AND a.tenant_id = :tid
             ORDER BY a.scheduled_at ASC LIMIT 1
-        """), {"c": contact.id})).first()
+        """), {"c": contact.id, "tid": db.info.get("tenant_id")})).first()
         engine_total = (await db.execute(_sa_text(
-            "SELECT COUNT(*) FROM actions WHERE contact_id = :c"
-        ), {"c": contact.id})).scalar() or 0
+            "SELECT COUNT(*) FROM actions WHERE contact_id = :c AND tenant_id = :tid"
+        ), {"c": contact.id, "tid": db.info.get("tenant_id")})).scalar() or 0
         engine_sent = (await db.execute(_sa_text(
-            "SELECT COUNT(*) FROM actions WHERE contact_id = :c AND status = 'sent'"
-        ), {"c": contact.id})).scalar() or 0
+            "SELECT COUNT(*) FROM actions WHERE contact_id = :c AND status = 'sent' AND tenant_id = :tid"
+        ), {"c": contact.id, "tid": db.info.get("tenant_id")})).scalar() or 0
 
         legacy_total = (await db.execute(
             select(func.count(GeneratedEmail.id)).where(
@@ -321,8 +322,9 @@ async def get_context(
             FROM actions a
             JOIN channel_types ct ON ct.id = a.channel_id
             WHERE a.contact_id = :c AND ct.code = 'email'
+              AND a.tenant_id = :tid
             ORDER BY a.executed_at DESC NULLS LAST, a.scheduled_at DESC LIMIT 5
-        """), {"c": contact.id})).fetchall()
+        """), {"c": contact.id, "tid": db.info.get("tenant_id")})).fetchall()
         engine_recent = [{
             "id": int(r.id),
             "subject": r.subject,
@@ -920,10 +922,10 @@ async def sidebar_send_next_step(
         JOIN contacts c ON c.id = a.contact_id
         WHERE a.contact_id = :c
           AND a.status = 'scheduled'
-          AND a.tenant_id = c.tenant_id
+          AND c.tenant_id = :tid
         ORDER BY a.scheduled_at ASC, a.id ASC
         LIMIT 1
-    """), {"c": req.contact_id})).first()
+    """), {"c": req.contact_id, "tid": db.info.get("tenant_id")})).first()
     if row is None:
         return {"fired": False, "reason": "no pending action"}
     action_id = int(row[0])
@@ -934,7 +936,8 @@ async def sidebar_send_next_step(
         SET scheduled_at = NOW(),
             sent_by_user_id = COALESCE(sent_by_user_id, :uid)
         WHERE id = :aid
-    """), {"aid": action_id, "uid": user.id})
+          AND tenant_id = :tid
+    """), {"aid": action_id, "uid": user.id, "tid": db.info.get("tenant_id")})
     await db.commit()
 
     return {

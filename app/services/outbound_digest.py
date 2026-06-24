@@ -307,13 +307,18 @@ async def send_digest(*, hours: int = 24, recipient: str = DIGEST_RECIPIENT, for
                 from sqlalchemy import text
                 from app.database import async_session
                 async with async_session() as s:
+                    # Stamp tenant_id explicitly. outbound_email_audit.tenant_id
+                    # is nullable with NO server-default, so omitting it writes
+                    # NULL — which leaves the row un-scoped (invisible to every
+                    # tenant-filtered read). This digest is a platform-ops record,
+                    # so it belongs to the platform tenant (1).
                     await s.execute(text("""
                         INSERT INTO outbound_email_audit (
-                            sender_user_id, company_id, contact_id, email_id,
+                            tenant_id, sender_user_id, company_id, contact_id, email_id,
                             step_type, subject, body_preview, recipient_email,
                             status, anomaly_score, resend_id, caller_module
                         ) VALUES (
-                            NULL, NULL, NULL, NULL,
+                            1, NULL, NULL, NULL, NULL,
                             'internal', :subject, :preview, :recipient,
                             'sent', 0, :resend_id, 'outbound_digest'
                         )

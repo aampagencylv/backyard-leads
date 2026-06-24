@@ -184,6 +184,8 @@ async def get_engagement_detail(
     """Return one engagement with a merged timeline of signals, actions,
     and AI decisions ordered most-recent-first."""
 
+    _tid = db.info.get("tenant_id")
+
     # Header data
     header_row = await db.execute(text("""
         SELECT
@@ -197,8 +199,8 @@ async def get_engagement_detail(
         FROM engagements e
         JOIN contacts c ON c.id = e.contact_id
         JOIN companies co ON co.id = e.company_id
-        WHERE e.id = :id
-    """), {"id": engagement_id})
+        WHERE e.id = :id AND e.tenant_id = :tid
+    """), {"id": engagement_id, "tid": _tid})
     header = header_row.first()
     if header is None:
         raise HTTPException(status_code=404, detail="engagement not found")
@@ -213,10 +215,10 @@ async def get_engagement_detail(
                s.detected_at, s.triggered_action_id
         FROM signals s
         JOIN signal_types st ON st.id = s.signal_type_id
-        WHERE s.engagement_id = :id
+        WHERE s.engagement_id = :id AND s.tenant_id = :tid
         ORDER BY s.detected_at DESC
         LIMIT :n
-    """), {"id": engagement_id, "n": timeline_limit})
+    """), {"id": engagement_id, "n": timeline_limit, "tid": _tid})
     signal_items = [
         EngagementTimelineItem(
             kind="signal",
@@ -233,10 +235,10 @@ async def get_engagement_detail(
                a.outcome, a.send_cost_usd
         FROM actions a
         JOIN channel_types ct ON ct.id = a.channel_id
-        WHERE a.engagement_id = :id
+        WHERE a.engagement_id = :id AND a.tenant_id = :tid
         ORDER BY COALESCE(a.executed_at, a.scheduled_at) DESC
         LIMIT :n
-    """), {"id": engagement_id, "n": timeline_limit})
+    """), {"id": engagement_id, "n": timeline_limit, "tid": _tid})
     action_items = [
         EngagementTimelineItem(
             kind="action",
@@ -311,11 +313,12 @@ async def signal_feed(
     tenant owns. The CRM signal-feed view powers this."""
 
     where_clauses = [
+        "s.tenant_id = :tid",
         "s.relevance_score >= :min_rel",
         "s.detected_at > NOW() - (:hours_back * INTERVAL '1 hour')",
     ]
     params: dict = {"min_rel": min_relevance, "hours_back": hours_back,
-                    "limit": limit}
+                    "limit": limit, "tid": db.info.get("tenant_id")}
     if only_unacted:
         where_clauses.append("s.triggered_action_id IS NULL")
     where_sql = " AND ".join(where_clauses)
@@ -368,6 +371,13 @@ async def get_decision_audit(
 ) -> list[DecisionAuditItem]:
     """Full AI decision audit trail for one engagement. Used by the
     'Why did the AI do X?' BDR view."""
+    # ai_decisions has no tenant_id column; gate ownership via engagements.
+    _tid = db.info.get("tenant_id")
+    gate = await db.execute(text("""
+        SELECT 1 FROM engagements WHERE id = :id AND tenant_id = :tid
+    """), {"id": engagement_id, "tid": _tid})
+    if gate.first() is None:
+        raise HTTPException(status_code=404, detail="engagement not found")
     rows = await db.execute(text("""
         SELECT id, signal_id, decision_type, provider, model_used,
                cost_usd, latency_ms, reasoning, output_choice_json,
@@ -424,12 +434,12 @@ async def approve_action(
             approved_by_user_id = :uid,
             approved_at = NOW(),
             updated_at = NOW()
-        WHERE id = :id AND status = 'awaiting_approval'
+        WHERE id = :id AND tenant_id = :tid AND status = 'awaiting_approval'
         RETURNING id, engagement_id, channel_id, status, scheduled_at,
                   executed_at, subject, body, recipient_email,
                   requires_human_review, approved_by_user_id, approved_at,
                   error_message, skip_reason, outcome
-    """), {"id": action_id, "uid": current_user.id})
+    """), {"id": action_id, "uid": current_user.id, "tid": db.info.get("tenant_id")})
     row = result.first()
     if row is None:
         raise HTTPException(
@@ -455,12 +465,12 @@ async def reject_action(
             approved_by_user_id = :uid,
             approved_at = NOW(),
             updated_at = NOW()
-        WHERE id = :id AND status IN ('awaiting_approval', 'scheduled')
+        WHERE id = :id AND tenant_id = :tid AND status IN ('awaiting_approval', 'scheduled')
         RETURNING id, engagement_id, channel_id, status, scheduled_at,
                   executed_at, subject, body, recipient_email,
                   requires_human_review, approved_by_user_id, approved_at,
                   error_message, skip_reason, outcome
-    """), {"id": action_id, "reason": f"bdr_rejected:{reason}"[:80], "uid": current_user.id})
+    """), {"id": action_id, "reason": f"bdr_rejected:{reason}"[:80], "uid": current_user.id, "tid": db.info.get("tenant_id")})
     row = result.first()
     if row is None:
         raise HTTPException(status_code=404, detail="action not found or already dispatched")
@@ -487,14 +497,15 @@ async def cancel_action(
             approved_by_user_id = :uid,
             approved_at = NOW(),
             updated_at = NOW()
-        WHERE id = :id AND status IN ('awaiting_approval', 'scheduled', 'paused')
+        WHERE id = :id AND tenant_id = :tid AND status IN ('awaiting_approval', 'scheduled', 'paused')
         RETURNING id, engagement_id, channel_id, status, scheduled_at,
                   executed_at, subject, body, recipient_email,
                   requires_human_review, approved_by_user_id, approved_at,
                   error_message, skip_reason, outcome
     """), {"id": action_id,
            "reason": f"canceled_by_bdr:{current_user.email[:60]}"[:80],
-           "uid": current_user.id})
+           "uid": current_user.id,
+           "tid": db.info.get("tenant_id")})
     row = result.first()
     if row is None:
         raise HTTPException(status_code=404, detail="action not found or already dispatched")
@@ -521,7 +532,7 @@ async def override_action(
     while status='awaiting_approval' or 'scheduled' (NOT after sent)."""
     # Build dynamic UPDATE for only the fields the BDR changed
     sets = []
-    params = {"id": action_id, "uid": current_user.id}
+    params = {"id": action_id, "uid": current_user.id, "tid": db.info.get("tenant_id")}
     if override.subject is not None:
         sets.append("subject = :subj"); params["subj"] = override.subject
     if override.body is not None:
@@ -542,6 +553,7 @@ async def override_action(
         UPDATE actions
         SET {', '.join(sets)}
         WHERE id = :id
+          AND tenant_id = :tid
           AND status IN ('awaiting_approval', 'scheduled')
         RETURNING id, engagement_id, channel_id, status, scheduled_at,
                   executed_at, subject, body, recipient_email,
@@ -594,9 +606,9 @@ async def list_inbound_unattributed(
 ) -> list[InboundUnattributedItem]:
     """Replies that couldn't be parsed back to an engagement. BDR reviews
     + manually attributes or marks resolution."""
-    where = "WHERE 1=1"
+    where = "WHERE tenant_id = :tid"
     if only_pending:
-        where = "WHERE reviewed_at IS NULL"
+        where = "WHERE tenant_id = :tid AND reviewed_at IS NULL"
     rows = await db.execute(text(f"""
         SELECT id, envelope_from, envelope_to, subject,
                LEFT(cleaned_body, 500) AS cleaned_body_preview,
@@ -605,7 +617,7 @@ async def list_inbound_unattributed(
         {where}
         ORDER BY received_at DESC
         LIMIT :n
-    """), {"n": limit})
+    """), {"n": limit, "tid": db.info.get("tenant_id")})
     return [
         InboundUnattributedItem(
             id=r.id,
@@ -653,7 +665,7 @@ async def attribute_inbound_reply(
             resolution = :res,
             reviewed_at = NOW(),
             reviewed_by_user_id = :uid
-        WHERE id = :id
+        WHERE id = :id AND tenant_id = :tid
         RETURNING id, envelope_from, envelope_to, subject,
                   LEFT(cleaned_body, 500) AS cleaned_body_preview,
                   received_at, reviewed_at, resolution
@@ -662,6 +674,7 @@ async def attribute_inbound_reply(
         "eng": body.engagement_id,
         "res": body.resolution or "attributed_manually",
         "uid": current_user.id,
+        "tid": db.info.get("tenant_id"),
     })
     row = result.first()
     if row is None:
