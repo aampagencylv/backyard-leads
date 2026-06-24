@@ -320,3 +320,70 @@ async def backlinks_summary(domain: str, login: str, password: str) -> Optional[
             return None
 
     return result
+
+
+# ============================================================
+# Local keyword opportunities — volume + the prospect's rank
+# ============================================================
+
+def _norm_domain(d: str) -> str:
+    return (d or "").replace("https://", "").replace("http://", "").split("/")[0].replace("www.", "").lower().strip()
+
+
+async def keyword_volumes(keywords: list, location: str, login: str, password: str) -> Dict[str, int]:
+    """Bulk local search volume for a list of keywords (one call). Returns
+    {keyword_lower: monthly_search_volume}. Empty dict on failure."""
+    out: Dict[str, int] = {}
+    kws = [k for k in (keywords or []) if (k or "").strip()][:50]
+    if not kws:
+        return out
+    async with httpx.AsyncClient(timeout=40) as client:
+        try:
+            r = await client.post(
+                f"{BASE_URL}/keywords_data/google_ads/search_volume/live",
+                headers=_auth_header(login, password),
+                json=[{"keywords": kws, "location_name": location, "language_code": "en"}],
+            )
+            if r.status_code != 200:
+                return out
+            tasks = r.json().get("tasks", [])
+            if not tasks or not tasks[0].get("result"):
+                return out
+            for item in tasks[0]["result"]:
+                kw = (item.get("keyword") or "").lower().strip()
+                if kw:
+                    out[kw] = item.get("search_volume") or 0
+        except Exception:
+            return out
+    return out
+
+
+async def serp_rank_for_domain(keyword: str, location: str, domain: str,
+                               login: str, password: str, depth: int = 100) -> Optional[int]:
+    """The prospect's organic rank (rank_absolute) for `keyword` in `location`,
+    scanning the top `depth` results. Returns the position, or None if not
+    found in the top `depth` (i.e. "not in top 100")."""
+    target = _norm_domain(domain)
+    if not target:
+        return None
+    async with httpx.AsyncClient(timeout=30) as client:
+        try:
+            r = await client.post(
+                f"{BASE_URL}/serp/google/organic/live/regular",
+                headers=_auth_header(login, password),
+                json=[{"keyword": keyword, "location_name": location,
+                       "language_code": "en", "depth": depth}],
+            )
+            if r.status_code != 200:
+                return None
+            tasks = r.json().get("tasks", [])
+            if not tasks or not tasks[0].get("result"):
+                return None
+            for item in tasks[0]["result"][0].get("items", []):
+                if item.get("type") != "organic":
+                    continue
+                if _norm_domain(item.get("domain", "")) == target:
+                    return item.get("rank_absolute") or item.get("rank_group")
+        except Exception:
+            return None
+    return None

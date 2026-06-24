@@ -19,8 +19,96 @@ from app.services.website_intel import analyze_website, WebsiteAnalysis
 from app.services.local_seo_intel import analyze_local_seo, LocalSEOAnalysis
 from app.services.dataforseo import (
     onpage_instant, serp_check, domain_ranked_keywords, backlinks_summary,
+    keyword_volumes, serp_rank_for_domain,
     OnPageResult, SERPResult, DomainKeywordsResult, BacklinksResult,
 )
+
+
+async def _ai_local_keywords(company_name: str, business_type: str, city: str,
+                             state: str, website: str) -> tuple[str, list[str]]:
+    """Use AI to (1) refine the business type from the company itself — the
+    stored business_type is just the prospecting search keyword and often
+    mislabels multi-service companies — and (2) generate the high-intent
+    LOCAL search keywords a customer would type to HIRE them (the
+    "[service] [city]" terms people actually search, not generic head terms
+    like "patio"). Returns (refined_business_type, [keywords]).
+    Falls back to ("", []) if AI is unavailable."""
+    from app.config import settings
+    if not (settings.anthropic_api_key or "").strip():
+        return "", []
+    loc = f"{city}, {state}".strip().strip(",") or "their city"
+    prompt = (
+        f"A local business: \"{company_name}\" ({website or 'no site'}) in {loc}. "
+        f"It was tagged as \"{business_type or 'unknown'}\" but that's just a search bucket.\n\n"
+        "1. What is this business, in 1-3 words (the category a customer would use)?\n"
+        "2. List the 8 highest-intent LOCAL Google searches someone would type when "
+        "ready to HIRE a business like this. Use the real \"[service] [city]\" pattern "
+        f"(localize to {loc}); these must be commercial-intent local searches, NOT "
+        "generic one-word head terms.\n\n"
+        'Return ONLY JSON: {"business_type": "...", "keywords": ["...", ...]}'
+    )
+    try:
+        import anthropic, json as _json
+        from app.services.ai_client import MODEL_BALANCED
+        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        resp = await client.messages.create(
+            model=MODEL_BALANCED, max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        txt = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
+        if txt.startswith("```"):
+            txt = txt.split("```", 2)[1].lstrip("json").strip() if "```" in txt[3:] else txt.strip("`")
+        data = _json.loads(txt)
+        bt = (data.get("business_type") or "").strip()
+        kws = [str(k).strip() for k in (data.get("keywords") or []) if str(k).strip()][:8]
+        return bt, kws
+    except Exception:
+        return "", []
+
+
+def _kw_section(report) -> str:
+    """Render the keyword block. Prefers the local-intent opportunities
+    (keyword + the prospect's rank + local volume); falls back to the legacy
+    'top keywords by national volume' table only when AI/SERP produced none."""
+    if report.local_keywords:
+        rows = []
+        for k in report.local_keywords:
+            rank = k.get("rank")
+            if isinstance(rank, int):
+                rank_txt = f"#{rank}"
+                color = "#1B5E20" if rank <= 3 else ("#b26a00" if rank <= 10 else "#c0392b")
+            else:
+                rank_txt, color = "Not in top 100", "#c0392b"
+            rows.append(
+                f'<tr style="border-bottom:1px solid #eee"><td style="padding:6px">{_esc(k.get("keyword",""))}</td>'
+                f'<td style="padding:6px;text-align:center;font-weight:700;color:{color}">{rank_txt}</td>'
+                f'<td style="padding:6px;text-align:right">{k.get("volume",0):,}</td></tr>'
+            )
+        loc = _esc(f"{report.city}".strip() or "your area")
+        what = _esc(report.business_type or "business")
+        return (
+            '<h3 style="font-size:14px;margin-bottom:4px">Local keyword opportunities</h3>'
+            f'<p style="font-size:12px;color:#888;margin:0 0 8px">The searches people in {loc} actually run to hire a {what} — and where you rank today.</p>'
+            '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="border-bottom:1px solid #ddd">'
+            '<th style="padding:6px;text-align:left">Local search</th>'
+            '<th style="padding:6px;text-align:center">Your rank</th>'
+            '<th style="padding:6px;text-align:right">Monthly searches</th></tr></thead><tbody>'
+            + "".join(rows) + '</tbody></table>'
+        )
+    if report.top_keywords:
+        return (
+            '<h3 style="font-size:14px;margin-bottom:8px">Your Top Keywords</h3>'
+            '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="border-bottom:1px solid #ddd">'
+            '<th style="padding:6px;text-align:left">Keyword</th><th style="padding:6px;text-align:center">Position</th>'
+            '<th style="padding:6px;text-align:right">Monthly Searches</th></tr></thead><tbody>'
+            + "".join(
+                f'<tr style="border-bottom:1px solid #eee"><td style="padding:6px">{_esc(k.get("keyword",""))}</td>'
+                f'<td style="padding:6px;text-align:center">{k.get("position","-")}</td>'
+                f'<td style="padding:6px;text-align:right">{k.get("volume",0):,}</td></tr>'
+                for k in report.top_keywords[:7]
+            ) + '</tbody></table>'
+        )
+    return '<p style="font-size:13px;color:#888">No keyword rankings detected — your website is not appearing in Google search results.</p>'
 
 
 @dataclass
@@ -84,6 +172,10 @@ class AuditReport:
     total_ranked_keywords: int = 0
     organic_traffic_estimate: int = 0
     top_keywords: List[Dict] = field(default_factory=list)  # [{keyword, position, volume}]
+    # Local keyword opportunities — AI-generated geo-intent keywords (e.g.
+    # "patio contractor Miami") with their LOCAL volume + the prospect's rank.
+    # [{keyword, volume, rank}] where rank is an int or None ("not in top 100").
+    local_keywords: List[Dict] = field(default_factory=list)
     serp_competitors: List[Dict] = field(default_factory=list)  # Top 5 from SERP
     has_ai_overview: bool = False  # Google shows AI overview for their keyword
     has_local_pack: bool = False
@@ -209,6 +301,31 @@ async def generate_audit(
                     ]
             except Exception:
                 pass
+
+        # Local keyword opportunities — AI-generate the high-intent
+        # "[service] [city]" searches a customer actually types, then attach
+        # the LOCAL search volume + this prospect's rank (or "not in top 100").
+        # Replaces the old vanity "top keywords by national volume" framing.
+        try:
+            import asyncio as _asyncio
+            refined_bt, local_kws = await _ai_local_keywords(
+                company_name, business_type, city, state, website)
+            if refined_bt:
+                report.business_type = refined_bt  # accurate label, not the search bucket
+            if local_kws and city:
+                location_name = f"{city},{state},United States" if state else f"{city},United States"
+                vols = await keyword_volumes(local_kws, location_name, dfs_login, dfs_pass)
+                ranks = await _asyncio.gather(
+                    *[serp_rank_for_domain(k, location_name, website, dfs_login, dfs_pass) for k in local_kws],
+                    return_exceptions=True,
+                )
+                for k, rank in zip(local_kws, ranks):
+                    if isinstance(rank, Exception):
+                        rank = None
+                    report.local_keywords.append(
+                        {"keyword": k, "volume": vols.get(k.lower(), 0), "rank": rank})
+        except Exception:
+            pass
 
         # On-page technical audit
         try:
@@ -651,16 +768,14 @@ def render_report_html(
         f'<div style="background:#f8f9fa;padding:16px;border-radius:8px;text-align:center"><div style="font-size:28px;font-weight:700;color:#E65100">{report.organic_traffic_estimate}</div><div style="font-size:12px;color:#666">Est. monthly organic visits</div></div>' +
         f'<div style="background:#f8f9fa;padding:16px;border-radius:8px;text-align:center"><div style="font-size:28px;font-weight:700">{report.referring_domains}</div><div style="font-size:12px;color:#666">Referring domains</div></div>' +
         '</div>' +
-        (('<h3 style="font-size:14px;margin-bottom:8px">Your Top Keywords</h3><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="border-bottom:1px solid #ddd"><th style="padding:6px;text-align:left">Keyword</th><th style="padding:6px;text-align:center">Position</th><th style="padding:6px;text-align:right">Monthly Searches</th></tr></thead><tbody>' +
-        ''.join(f'<tr style="border-bottom:1px solid #eee"><td style="padding:6px">{_esc(k.get("keyword",""))}</td><td style="padding:6px;text-align:center">{k.get("position","-")}</td><td style="padding:6px;text-align:right">{k.get("volume",0):,}</td></tr>' for k in report.top_keywords[:7]) +
-        '</tbody></table>') if report.top_keywords else '<p style="font-size:13px;color:#888">No keyword rankings detected — your website is not appearing in Google search results.</p>') +
+        _kw_section(report) +
         (f'<div style="margin-top:12px;padding:12px;background:#FFF8F0;border-radius:8px;font-size:13px"><strong>Google SERP Features for your market:</strong> ' +
         (' AI Overview appears' if report.has_ai_overview else '') +
         (' | Local Pack appears' if report.has_local_pack else '') +
         (' | Featured Snippet appears' if report.has_featured_snippet else '') +
         ('' if (report.has_ai_overview or report.has_local_pack or report.has_featured_snippet) else 'Standard organic results') +
         '</div>' if report.serp_competitors else '') +
-        '</div>' if (report.total_ranked_keywords or report.top_keywords or report.serp_competitors) else ''}
+        '</div>' if (report.total_ranked_keywords or report.top_keywords or report.local_keywords or report.serp_competitors) else ''}
 
         {('<!-- Who Ranks Above You -->' + chr(10) + '<div class="section"><h2>Who Ranks Above You</h2>' +
         f'<p style="font-size:13px;color:#666;margin-bottom:12px">Top results for <strong>"{_esc(report.business_type)} {_esc(report.city)}"</strong> on Google:</p>' +
