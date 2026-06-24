@@ -301,6 +301,41 @@ METRO_AREAS: dict[str, list[str]] = {
         "Honolulu, HI", "Kailua, HI", "Kaneohe, HI",
         "Pearl City, HI", "Kapolei, HI",
     ],
+
+    # ============ INTERNATIONAL (curated anchors) ============
+    # Outside the US, "surrounding communities" aren't tidy suburbs — tourist
+    # economies spread across a whole region. These curated lists cover the
+    # markets we target most; anything else falls through to AI expansion
+    # (expand_location_ai), which knows the wider geography of any country.
+    "costa rica": [
+        "San José, Costa Rica", "Tamarindo, Costa Rica", "Jacó, Costa Rica",
+        "Manuel Antonio, Costa Rica", "Quepos, Costa Rica", "La Fortuna, Costa Rica",
+        "Monteverde, Costa Rica", "Liberia, Costa Rica", "Nosara, Costa Rica",
+        "Santa Teresa, Costa Rica", "Sámara, Costa Rica", "Puerto Viejo, Costa Rica",
+        "Tortuguero, Costa Rica", "Uvita, Costa Rica", "Dominical, Costa Rica",
+        "Playas del Coco, Costa Rica", "Flamingo, Costa Rica", "Puntarenas, Costa Rica",
+        "Drake Bay, Costa Rica", "Montezuma, Costa Rica",
+    ],
+    "guanacaste": [
+        "Tamarindo, Costa Rica", "Playas del Coco, Costa Rica", "Flamingo, Costa Rica",
+        "Nosara, Costa Rica", "Sámara, Costa Rica", "Liberia, Costa Rica",
+        "Playa Grande, Costa Rica", "Playa Hermosa, Costa Rica", "Potrero, Costa Rica",
+    ],
+    "cancun": [
+        "Cancún, Mexico", "Playa del Carmen, Mexico", "Tulum, Mexico",
+        "Cozumel, Mexico", "Isla Mujeres, Mexico", "Puerto Morelos, Mexico",
+        "Akumal, Mexico", "Puerto Aventuras, Mexico", "Bacalar, Mexico",
+        "Holbox, Mexico",
+    ],
+    "riviera maya": [
+        "Playa del Carmen, Mexico", "Tulum, Mexico", "Puerto Morelos, Mexico",
+        "Akumal, Mexico", "Puerto Aventuras, Mexico", "Cozumel, Mexico",
+        "Cancún, Mexico",
+    ],
+    "los cabos": [
+        "Cabo San Lucas, Mexico", "San José del Cabo, Mexico",
+        "Todos Santos, Mexico", "La Paz, Mexico",
+    ],
 }
 
 
@@ -354,3 +389,66 @@ def get_available_metros() -> list[dict]:
         {"key": k, "name": k.title(), "cities": len(v), "sample": ", ".join(v[:4]) + f" +{len(v)-4} more" if len(v) > 4 else ", ".join(v)}
         for k, v in METRO_AREAS.items()
     ]
+
+
+async def expand_location_ai(location: str, *, max_places: int = 30) -> list[str]:
+    """Expand ANY location into searchable nearby places via AI — the path
+    for international markets the curated METRO_AREAS don't cover.
+
+    For US metros this rarely runs (the dict handles them). For a region or
+    country (Costa Rica, Riviera Maya, Latin America), it uses a WIDER net:
+    the notable towns and tourist hubs across that area, since businesses are
+    spread out rather than clustered in suburbs. Returns [location] on any
+    failure so prospecting still works with the bare name."""
+    from app.config import settings
+    if not (settings.anthropic_api_key or "").strip():
+        return [location]
+    prompt = (
+        "I'm building location targeting for a local-business prospecting tool. "
+        f"Expand this location into specific places to search on Google Maps: \"{location}\".\n\n"
+        "Rules:\n"
+        "- If it's a US metro, return the city + its suburbs.\n"
+        "- If it's a region, state/province, or country (e.g. Costa Rica, Riviera Maya, "
+        "Guanacaste, Latin America), use a WIDER approach: list the notable towns, beach "
+        "areas, and tourist hubs across it where local businesses operate — they're spread "
+        "out, not clustered like US suburbs.\n"
+        "- Always include the country (or US state) in each entry for geocoding clarity, "
+        "e.g. \"Tamarindo, Costa Rica\".\n"
+        f"Return ONLY a JSON array of {max_places} or fewer place strings, nothing else."
+    )
+    try:
+        import anthropic, json as _json
+        from app.services.ai_client import MODEL_BALANCED
+        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        resp = await client.messages.create(
+            model=MODEL_BALANCED, max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        txt = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
+        if txt.startswith("```"):
+            txt = txt.split("```", 2)[1].lstrip("json").strip() if "```" in txt[3:] else txt.strip("`")
+        places = _json.loads(txt)
+        out = [str(p).strip() for p in places if str(p).strip()][:max_places]
+        return out or [location]
+    except Exception:
+        return [location]
+
+
+async def expand_location_list(locations: list[str], *, use_ai: bool = True) -> list[str]:
+    """Expand a list of locations into a deduped search list. Curated
+    METRO_AREAS first (instant, US + key international); for anything that
+    doesn't match, fall back to AI (use_ai) for a wider international net.
+    The single entry point used by /expand-locations and campaign create/update."""
+    expanded: list[str] = []
+    for loc in locations:
+        metro = expand_metro(loc)
+        # expand_metro returns [loc] unchanged when there's no curated match.
+        if use_ai and len(metro) == 1 and metro[0] == loc:
+            metro = await expand_location_ai(loc)
+        expanded.extend(metro)
+    seen, unique = set(), []
+    for city in expanded:
+        k = city.lower().strip()
+        if k and k not in seen:
+            seen.add(k); unique.append(city)
+    return unique

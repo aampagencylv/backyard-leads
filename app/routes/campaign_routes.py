@@ -170,19 +170,12 @@ async def expand_locations(
     locations: list[str],
     user: User = Depends(get_current_user),
 ):
-    """Expand location names into suburb lists using metro area mappings.
-    Used by the campaign creation UI to show what cities will be searched."""
-    from app.services.metro_areas import expand_metro
-    expanded = []
-    for loc in locations:
-        expanded.extend(expand_metro(loc))
-    # Dedupe while preserving order
-    seen = set()
-    unique = []
-    for city in expanded:
-        if city.lower() not in seen:
-            seen.add(city.lower())
-            unique.append(city)
+    """Expand location names into search lists. Curated metro/region maps
+    first (US suburbs + key international hubs); anything unmatched falls
+    back to AI for a wider international net (Costa Rica, Riviera Maya, …).
+    Used by the campaign creation UI to preview what will be searched."""
+    from app.services.metro_areas import expand_location_list
+    unique = await expand_location_list(locations)
     return {"locations": unique, "count": len(unique)}
 
 
@@ -192,15 +185,11 @@ async def create_campaign(
     db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
-    # Expand metro areas if requested
+    # Expand metro areas / international regions if requested
     locations = req.locations
     if req.expand_metros:
-        from app.services.metro_areas import expand_metro
-        expanded = []
-        for loc in locations:
-            expanded.extend(expand_metro(loc))
-        seen = set()
-        locations = [c for c in expanded if c.lower() not in seen and not seen.add(c.lower())]
+        from app.services.metro_areas import expand_location_list
+        locations = await expand_location_list(locations)
 
     campaign = Campaign(
         name=req.name,
@@ -385,12 +374,8 @@ async def update_campaign(
         # expansion even when the UI checkbox is checked — what bit
         # campaigns #9/#10/#11 (Dallas, Naples, Palm Beach).
         if req.expand_metros:
-            from app.services.metro_areas import expand_metro
-            expanded = []
-            for loc in new_locs:
-                expanded.extend(expand_metro(loc))
-            seen = set()
-            new_locs = [c for c in expanded if c.lower() not in seen and not seen.add(c.lower())]
+            from app.services.metro_areas import expand_location_list
+            new_locs = await expand_location_list(new_locs)
         campaign.locations = json.dumps(new_locs)
 
     # If a completed campaign is edited, reset it to running so the engine
