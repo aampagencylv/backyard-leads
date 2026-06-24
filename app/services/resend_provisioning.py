@@ -156,6 +156,32 @@ async def trigger_verify(domain_id: str) -> Optional[dict]:
         return None
 
 
+async def set_open_tracking(domain_id: str, *, open_tracking: bool = True,
+                            click_tracking: bool = False) -> Optional[dict]:
+    """Toggle Resend's per-domain open/click tracking. We enable OPEN tracking
+    (Resend injects the pixel → email.opened webhook) but leave CLICK tracking
+    OFF, because we do our own /t/{token} click-wrapping (enabling both would
+    double-wrap links). Call right after a domain is registered. Never raises."""
+    api_key = _api_key()
+    if not api_key:
+        return None
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.patch(
+                f"https://api.resend.com/domains/{domain_id}",
+                json={"open_tracking": open_tracking, "click_tracking": click_tracking},
+                headers=headers,
+            )
+        if r.status_code >= 400:
+            log.warning(f"resend set_open_tracking failed: {r.status_code} {r.text[:200]}")
+            return None
+        return r.json() if r.content else {"ok": True}
+    except Exception:
+        log.exception("resend set_open_tracking raised; ignoring")
+        return None
+
+
 async def get_domain_status(domain_id: str) -> Optional[dict]:
     """Fetch the current verification status + records for a domain.
     Used by the admin UI to display whether DNS has propagated yet."""

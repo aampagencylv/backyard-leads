@@ -521,7 +521,7 @@ async def set_tenant_sending_domain(
     from sqlalchemy import select
     from app.models import RuntimeConfig
     from app.routes.admin_routes import _format_dns_records
-    from app.services.resend_provisioning import register_domain, get_domain_status, is_configured
+    from app.services.resend_provisioning import register_domain, set_open_tracking, is_configured
     from fastapi import HTTPException
     tid = _tenant_id(db)
 
@@ -532,6 +532,10 @@ async def set_tenant_sending_domain(
         raise HTTPException(status_code=400, detail="Enter a valid domain, e.g. go.yourcompany.com")
 
     result = await register_domain(name)
+    if result:
+        # Enable Resend OPEN tracking (pixel → email.opened webhook). Click
+        # tracking stays OFF — we wrap links ourselves via /t/{token}.
+        await set_open_tracking(result["domain_id"], open_tracking=True, click_tracking=False)
     if not result:
         # Already in Resend (register returns 4xx) — look it up by listing.
         raise HTTPException(status_code=502, detail=f"Could not register '{name}'. If it already exists in Resend, it's likely on a different account — contact support.")

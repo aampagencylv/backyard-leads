@@ -123,7 +123,25 @@ async def wrap_html_links(
     # pass below, while the friendly display text is preserved.
     html = linkify_markdown(html)
 
+    # Per-tenant click-tracking host: route /t/{token} through the owning
+    # tenant's OWN app domain (e.g. https://prospector.aamp.agency) instead
+    # of the BMP-global settings.public_url. The /t/ redirect serves on every
+    # host, and links on the same domain as the sender are both on-brand and
+    # better for deliverability. Falls back to settings.public_url.
     public_base = settings.public_url.rstrip("/")
+    if company_id:
+        try:
+            from app.tenancy import tenant_primary_base_url
+            from sqlalchemy import text as _text
+            tid = (await db.execute(_text(
+                "SELECT tenant_id FROM companies WHERE id = :c"
+            ), {"c": company_id})).scalar()
+            if tid:
+                base = await tenant_primary_base_url(db, int(tid))
+                if base:
+                    public_base = base.rstrip("/")
+        except Exception:
+            pass
     minted: list[tuple[int, int, str]] = []  # (start, end, replacement)
     rows_to_add: list[TrackingLink] = []
 
