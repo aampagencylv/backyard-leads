@@ -74,9 +74,11 @@ async def _ai_local_keywords(company_name: str, business_type: str, city: str,
         f"A local business: \"{company_name}\" ({website or 'no site'}) in {loc}. "
         f"It was tagged as \"{business_type or 'unknown'}\" but that's just a search bucket.\n\n"
         "1. business_type: what this business is, in 1-3 words (the category a customer uses).\n"
-        "2. keywords: 8 SERVICE phrases a customer Googles when ready to HIRE a business "
-        "like this (commercial intent, e.g. \"patio cover installation\", \"pergola builder\"). "
-        "Do NOT include any city/state in these — just the service.\n"
+        "2. keywords: the 6 PRIMARY services this business sells — the main, "
+        "highest-demand commercial terms a customer Googles (e.g. \"patio cover\", "
+        "\"outdoor kitchen\", \"pergola\"), NOT hyper-specific long-tail variations "
+        "and NOT generic one-word head terms. Do NOT include any city/state — just "
+        "the service.\n"
         f"3. metro_city + metro_state: the major metro market \"{loc}\" belongs to (e.g. a "
         "Dallas suburb → Dallas / TX). If it's already a major city, repeat it.\n\n"
         'Return ONLY JSON: {"business_type":"...","keywords":["...",...],"metro_city":"...","metro_state":"..."}'
@@ -324,7 +326,9 @@ async def generate_audit(
         if business_type and city:
             try:
                 search_term = f"{business_type} {city} {state}".strip()
-                location_name = f"{city},{state},United States" if state else f"{city},United States"
+                # Full state name — DataForSEO rejects the abbreviation, which
+                # had been silently zeroing out the competitor/SERP-feature data.
+                location_name = _ads_location(city, state)
                 serp = await serp_check(search_term, location_name, dfs_login, dfs_pass)
                 if serp:
                     report.has_ai_overview = serp.has_ai_overview
@@ -353,7 +357,10 @@ async def generate_audit(
                 # a tiny suburb reads ~0). Rank + display: the "[service] [city]"
                 # search the customer actually types, ranked at the local level.
                 vols = await keyword_volumes(services, _ads_location(metro_city, metro_state), dfs_login, dfs_pass)
-                serp_loc = f"{city},{state},United States" if state else f"{city},United States"
+                # DataForSEO needs the full state name for SERP too (the abbrev
+                # is rejected as "Invalid Field" → no results → false "not in
+                # top 100"). Rank at the prospect's own city.
+                serp_loc = _ads_location(city, state)
                 geo_terms = [f"{s} {city}".strip() for s in services]
                 ranks = await _asyncio.gather(
                     *[serp_rank_for_domain(gt, serp_loc, website, dfs_login, dfs_pass) for gt in geo_terms],
@@ -364,6 +371,8 @@ async def generate_audit(
                         rank = None
                     report.local_keywords.append(
                         {"keyword": gt, "volume": vols.get(svc.lower(), 0), "rank": rank})
+                # Lead with the highest-demand searches.
+                report.local_keywords.sort(key=lambda x: x.get("volume", 0), reverse=True)
         except Exception:
             pass
 
