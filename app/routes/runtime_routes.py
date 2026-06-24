@@ -429,3 +429,238 @@ async def update_runtime_config(
     rc = await _get_or_create(db)
     await db.commit()
     return _payload(rc, settings, include_platform=is_super)
+
+
+# ======================================================================
+# Tenant self-service: Email & Domains (Settings → Email & Domains)
+# ----------------------------------------------------------------------
+# Tenant ADMINS manage their own sending domain (Resend) + custom app
+# domain here — no super-admin / /admin console needed. Everything is
+# scoped to the caller's resolved tenant (db.info["tenant_id"]), never a
+# path param, so one tenant can't touch another's domains.
+# ======================================================================
+
+# The server's public IP — a custom app domain must A-record here before
+# Caddy will issue its TLS cert (see /api/admin/caddy/ask).
+APP_DOMAIN_TARGET_IP = "72.62.168.160"
+
+
+def _require_admin(user: User) -> None:
+    from fastapi import HTTPException
+    if user.role not in ("admin", "super_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+
+def _tenant_id(db: AsyncSession) -> int:
+    from fastapi import HTTPException
+    tid = db.info.get("tenant_id")
+    if not tid:
+        raise HTTPException(status_code=400, detail="No tenant in context")
+    return int(tid)
+
+
+class SendingDomainIn(BaseModel):
+    domain_name: str = ""
+
+
+@router.get("/runtime-config/domains")
+async def get_tenant_domains(
+    db: AsyncSession = Depends(get_tenant_db),
+    user: User = Depends(get_current_user),
+):
+    """Sending domain (Resend) + app domains for the caller's tenant."""
+    _require_admin(user)
+    import json as _json
+    from sqlalchemy import select
+    from app.models import RuntimeConfig, TenantDomain
+    from app.routes.admin_routes import _format_dns_records
+    tid = _tenant_id(db)
+
+    rc = (await db.execute(select(RuntimeConfig).where(RuntimeConfig.tenant_id == tid))).scalar_one_or_none()
+    sending = {"configured": False}
+    if rc and rc.resend_domain_id:
+        recs = _json.loads(rc.resend_domain_records_json) if rc.resend_domain_records_json else []
+        sending = {
+            "configured": True,
+            "domain_name": rc.resend_domain_name,
+            "status": rc.resend_domain_status,
+            "records": _format_dns_records(recs),
+        }
+
+    rows = (await db.execute(
+        select(TenantDomain).where(TenantDomain.tenant_id == tid).order_by(TenantDomain.is_primary.desc(), TenantDomain.id)
+    )).scalars().all()
+    app_domains = [{
+        "domain": d.domain,
+        "is_primary": bool(d.is_primary),
+        "is_verified": bool(d.is_verified),
+        # leadprospector.ai subdomains are platform-managed; custom domains
+        # are the ones a tenant adds and must point DNS at us.
+        "is_platform": d.domain.endswith(".leadprospector.ai"),
+    } for d in rows]
+
+    return {
+        "sending": sending,
+        "app_domains": app_domains,
+        "app_domain_target_ip": APP_DOMAIN_TARGET_IP,
+    }
+
+
+@router.post("/runtime-config/sending-domain")
+async def set_tenant_sending_domain(
+    req: SendingDomainIn,
+    request: Request,
+    db: AsyncSession = Depends(get_tenant_db),
+    user: User = Depends(get_current_user),
+):
+    """Register the tenant's sending domain in Resend + store the DNS records
+    they need to add. Idempotent-ish: re-registering an existing domain
+    returns its current records/status."""
+    _require_admin(user)
+    import json as _json
+    from sqlalchemy import select
+    from app.models import RuntimeConfig
+    from app.routes.admin_routes import _format_dns_records
+    from app.services.resend_provisioning import register_domain, get_domain_status, is_configured
+    from fastapi import HTTPException
+    tid = _tenant_id(db)
+
+    if not is_configured():
+        raise HTTPException(status_code=400, detail="Email sending is not configured on the platform yet")
+    name = (req.domain_name or "").strip().lower().rstrip(".")
+    if not name or "." not in name:
+        raise HTTPException(status_code=400, detail="Enter a valid domain, e.g. go.yourcompany.com")
+
+    result = await register_domain(name)
+    if not result:
+        # Already in Resend (register returns 4xx) — look it up by listing.
+        raise HTTPException(status_code=502, detail=f"Could not register '{name}'. If it already exists in Resend, it's likely on a different account — contact support.")
+
+    rc = (await db.execute(select(RuntimeConfig).where(RuntimeConfig.tenant_id == tid))).scalar_one_or_none()
+    if not rc:
+        rc = RuntimeConfig(tenant_id=tid)
+        db.add(rc)
+    rc.resend_domain_id = result["domain_id"]
+    rc.resend_domain_name = result["domain_name"]
+    rc.resend_domain_records_json = _json.dumps(result["records"])
+    rc.resend_domain_status = result["status"]
+    await db.commit()
+    await record_audit(db, actor=user, action="sending_domain_set",
+                       target_type="tenant", target_id=tid,
+                       metadata={"domain": result["domain_name"]}, request=request)
+    return {
+        "domain_name": result["domain_name"],
+        "status": rc.resend_domain_status,
+        "records": _format_dns_records(result["records"]),
+    }
+
+
+@router.post("/runtime-config/sending-domain/verify")
+async def verify_tenant_sending_domain(
+    request: Request,
+    db: AsyncSession = Depends(get_tenant_db),
+    user: User = Depends(get_current_user),
+):
+    """Ask Resend to re-check DNS, then refresh stored status + records."""
+    _require_admin(user)
+    import json as _json
+    from sqlalchemy import select
+    from app.models import RuntimeConfig
+    from app.routes.admin_routes import _format_dns_records
+    from app.services.resend_provisioning import trigger_verify, get_domain_status
+    from fastapi import HTTPException
+    tid = _tenant_id(db)
+
+    rc = (await db.execute(select(RuntimeConfig).where(RuntimeConfig.tenant_id == tid))).scalar_one_or_none()
+    if not rc or not rc.resend_domain_id:
+        raise HTTPException(status_code=404, detail="No sending domain set yet")
+    await trigger_verify(rc.resend_domain_id)
+    status_data = await get_domain_status(rc.resend_domain_id)
+    if not status_data:
+        raise HTTPException(status_code=502, detail="Could not reach Resend to check status")
+    rc.resend_domain_status = status_data.get("status") or rc.resend_domain_status
+    recs = status_data.get("records") or []
+    if recs:
+        rc.resend_domain_records_json = _json.dumps(recs)
+    await db.commit()
+    return {
+        "domain_name": rc.resend_domain_name,
+        "status": rc.resend_domain_status,
+        "records": _format_dns_records(recs or (_json.loads(rc.resend_domain_records_json) if rc.resend_domain_records_json else [])),
+    }
+
+
+class AppDomainIn(BaseModel):
+    domain: str = ""
+
+
+@router.post("/runtime-config/app-domain")
+async def add_tenant_app_domain(
+    req: AppDomainIn,
+    request: Request,
+    db: AsyncSession = Depends(get_tenant_db),
+    user: User = Depends(get_current_user),
+):
+    """Register a custom app domain (e.g. prospector.yourcompany.com) for
+    the caller's tenant. Stored unverified until DNS points at us; the
+    response tells them the A record to add."""
+    _require_admin(user)
+    import re as _re
+    from sqlalchemy import select
+    from app.models import TenantDomain
+    from fastapi import HTTPException
+    tid = _tenant_id(db)
+
+    d = (req.domain or "").strip().lower().rstrip(".")
+    if not _re.match(r"^[a-z0-9.-]+\.[a-z]{2,}$", d):
+        raise HTTPException(status_code=400, detail="Enter a valid hostname, e.g. prospector.yourcompany.com")
+    existing = (await db.execute(select(TenantDomain).where(TenantDomain.domain == d))).scalar_one_or_none()
+    if existing:
+        if existing.tenant_id != tid:
+            raise HTTPException(status_code=409, detail="That domain is already in use")
+        return {"domain": d, "is_verified": bool(existing.is_verified), "target_ip": APP_DOMAIN_TARGET_IP}
+    db.add(TenantDomain(tenant_id=tid, domain=d, is_primary=False, is_verified=False))
+    await db.commit()
+    await record_audit(db, actor=user, action="app_domain_added",
+                       target_type="tenant", target_id=tid, metadata={"domain": d}, request=request)
+    return {"domain": d, "is_verified": False, "target_ip": APP_DOMAIN_TARGET_IP}
+
+
+@router.post("/runtime-config/app-domain/verify")
+async def verify_tenant_app_domain(
+    req: AppDomainIn,
+    db: AsyncSession = Depends(get_tenant_db),
+    user: User = Depends(get_current_user),
+):
+    """Check the custom domain's A record points at us; if so mark it
+    verified so Caddy will issue its TLS cert on first hit."""
+    _require_admin(user)
+    import socket
+    from datetime import datetime, timezone
+    from sqlalchemy import select
+    from app.models import TenantDomain
+    from fastapi import HTTPException
+    tid = _tenant_id(db)
+
+    d = (req.domain or "").strip().lower().rstrip(".")
+    row = (await db.execute(
+        select(TenantDomain).where(TenantDomain.domain == d, TenantDomain.tenant_id == tid)
+    )).scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Domain not found for this tenant")
+    try:
+        _, _, ips = socket.gethostbyname_ex(d)
+    except Exception:
+        ips = []
+    points_here = APP_DOMAIN_TARGET_IP in ips
+    if points_here and not row.is_verified:
+        row.is_verified = True
+        row.verified_at = datetime.now(timezone.utc)
+        await db.commit()
+    return {
+        "domain": d,
+        "is_verified": bool(row.is_verified),
+        "points_here": points_here,
+        "resolved_ips": ips,
+        "target_ip": APP_DOMAIN_TARGET_IP,
+    }
