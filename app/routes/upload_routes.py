@@ -10,7 +10,7 @@ whatever record needs it (SchedulingConfig.logo_url, etc.).
 from __future__ import annotations
 import logging
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 
 from app.auth import get_current_user
 from app.models import User
@@ -26,12 +26,15 @@ router = APIRouter(prefix="/api/uploads", tags=["uploads"])
 
 @router.post("/logo")
 async def upload_logo(
+    request: Request,
     file: UploadFile = File(...),
     user: User = Depends(get_current_user),
 ):
     """Upload a logo image. Returns the absolute URL where the file
     is now reachable. The caller (Calendar Settings, audit settings,
-    etc.) saves that URL on whichever record needs it."""
+    etc.) saves that URL on whichever record needs it. The URL is built
+    on the requesting tenant's own host so a white-label tenant's logo
+    never points at another tenant's domain."""
     if file.content_type and file.content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -45,12 +48,21 @@ async def upload_logo(
             detail=f"File too large ({len(content) // 1024}KB). "
                    f"Max is {MAX_LOGO_BYTES // 1024 // 1024}MB.",
         )
+    # Build the asset URL on the tenant's own host (scheme + host from the
+    # request), falling back to settings.public_url inside save_image when
+    # the header is missing.
+    tenant_base = None
+    host = request.headers.get("host")
+    if host:
+        scheme = request.headers.get("x-forwarded-proto") or request.url.scheme or "https"
+        tenant_base = f"{scheme}://{host}"
     try:
         url = save_image(
             content,
             content_type=file.content_type or "application/octet-stream",
             category="logos",
             user_id=user.id,
+            base_url=tenant_base,
         )
     except UploadValidationError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

@@ -81,12 +81,20 @@ def _safe_ext(content_type: Optional[str]) -> str:
 
 def save_image(
     content: bytes, content_type: str, *, category: str, user_id: int,
+    base_url: str | None = None,
 ) -> str:
     """Persist `content` under var/uploads/{category}/{user_id}/{rand}.{ext}.
     Returns the absolute https URL the booking page (or any other
     consumer) can use directly. Never overwrites — random filename
     means uploads are cumulative; old logos stay on disk after a
-    replace, which is fine at our scale."""
+    replace, which is fine at our scale.
+
+    `base_url` overrides the host of the returned URL — pass the
+    requesting tenant's own host (e.g. https://aamp.leadprospector.ai)
+    so a white-label tenant's logo URL doesn't point at BMP's domain.
+    Files are served on every host (the /uploads StaticFiles mount is
+    app-wide), so any tenant host resolves the same file. Defaults to
+    settings.public_url when not given."""
     if not category or not category.replace("_", "").isalnum():
         # Defensive: don't let a future caller smuggle path separators
         # in via a category param.
@@ -105,8 +113,9 @@ def save_image(
 
     # Always return an absolute URL — the booking-page logo_url
     # validator requires https://, and absolute URLs are easier to
-    # paste into other tools later.
-    public = settings.public_url.rstrip("/")
+    # paste into other tools later. Prefer the caller-supplied tenant
+    # host so a white-label tenant's asset URL stays on its own domain.
+    public = (base_url or settings.public_url).rstrip("/")
     return f"{public}/uploads/{category}/{int(user_id)}/{filename}"
 
 
