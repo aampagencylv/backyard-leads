@@ -32,17 +32,19 @@ def effective_scheduling_url(user: User) -> str:
     return (user.scheduling_url or "").strip() or (settings.iclosed_booking_url or "").strip()
 
 
-# Hardcoded BMP defaults, used as a last-resort fallback when the brand
-# resolver fails or when render_signature is called from a sync context
-# that can't await a DB query (legacy paths only — all current callers
-# should go through `render_signature(db, user)`).
+# NEUTRAL last-resort fallback — used only when the brand resolver fails
+# entirely. It must NOT be BMP-specific: render_signature overrides these
+# with the tenant's RuntimeConfig values, but only when a value is truthy,
+# so a tenant that legitimately leaves (say) website_url blank would
+# otherwise inherit whatever sits here. Keeping it neutral means a clean
+# tenant never ships another company's name/logo/site in its signature.
 _DEFAULT_BRAND = {
-    "primary_color":   "#E65100",
-    "secondary_color": "#1B5E20",
-    "accent_bg_color": "#FFF8F0",
-    "logo_url":        "https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz.png",
-    "company_name":    "Backyard Marketing Pros",
-    "website_url":     "https://backyardmarketingpros.com",
+    "primary_color":   "#2563EB",
+    "secondary_color": "#1F2937",
+    "accent_bg_color": "#F8FAFC",
+    "logo_url":        "",
+    "company_name":    "",
+    "website_url":     "",
 }
 
 

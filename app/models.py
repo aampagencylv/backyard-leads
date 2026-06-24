@@ -651,14 +651,19 @@ class RuntimeConfig(TenantMixin, Base):
     #   email / app UI         → always use org brand
     #   audit report           → use audit_report_* if set, else brand_*
     #   booking page (per-user)→ use SchedulingConfig.* if set, else brand_*
-    brand_primary_color = Column(String(20), nullable=False, default="#E65100")
-    brand_secondary_color = Column(String(20), nullable=False, default="#1B5E20")
-    brand_accent_bg_color = Column(String(20), nullable=False, default="#FFF8F0")
+    # Defaults are deliberately NEUTRAL (not BMP) so a newly-created tenant
+    # starts on a clean, unbranded palette and fills in its own identity at
+    # onboarding. BMP's own row (tenant 1) holds explicit values in the DB,
+    # so it is unaffected by these defaults.
+    brand_primary_color = Column(String(20), nullable=False, default="#2563EB")   # neutral blue
+    brand_secondary_color = Column(String(20), nullable=False, default="#1F2937")  # neutral slate (dark chrome)
+    brand_accent_bg_color = Column(String(20), nullable=False, default="#F8FAFC")  # neutral light
     brand_logo_url = Column(Text, nullable=True)
-    brand_company_name = Column(String(120), nullable=False, default="Backyard Marketing Pros")
+    brand_company_name = Column(String(120), nullable=False, default="")          # set per-tenant at creation
     # Homepage URL used in email signatures + footers. White-label tenants
-    # point this at their own marketing site.
-    brand_website_url = Column(Text, nullable=False, default="https://backyardmarketingpros.com")
+    # point this at their own marketing site. Empty by default so a tenant
+    # never ships links to another company's site before they set their own.
+    brand_website_url = Column(Text, nullable=False, default="")
 
     # Editable middle pipeline stages — JSON array of
     # {key, name, probability, color}. NULL means "use defaults". System
