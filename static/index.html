@@ -2549,6 +2549,39 @@ function verify(secret, rawBody, header) {
                         </div>
                     </div>
                 </div>
+
+                <!-- ✉️ Email & Domains — tenant self-service (admins) -->
+                <div id="settings-email-domains" class="search-box hidden" style="max-width:680px;margin-top:16px">
+                    <h3 style="margin:0 0 4px">✉️ Email &amp; Domains</h3>
+                    <p style="font-size:13px;color:#666;margin:0 0 18px">Send email from your own domain and run the CRM on your own URL. Add the DNS records shown, then click Verify.</p>
+
+                    <!-- Sending domain -->
+                    <div style="border:1px solid #e5e7eb;border-radius:10px;padding:14px;margin-bottom:16px">
+                        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px">
+                            <strong style="font-size:14px">Sending domain</strong>
+                            <span id="ed-send-badge"></span>
+                        </div>
+                        <p style="font-size:12px;color:#888;margin:0 0 10px">Your outbound email goes out from <code id="ed-send-pattern">&lt;firstname&gt;@&lt;domain&gt;</code>.</p>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                            <input id="ed-send-input" placeholder="go.yourcompany.com" style="flex:1;min-width:220px;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px;font-family:monospace">
+                            <button class="btn btn-primary btn-sm" onclick="saveSendingDomain()">Save</button>
+                            <button class="btn btn-secondary btn-sm" onclick="verifySendingDomain()">Verify</button>
+                        </div>
+                        <div id="ed-send-records" style="margin-top:12px"></div>
+                    </div>
+
+                    <!-- App domains -->
+                    <div style="border:1px solid #e5e7eb;border-radius:10px;padding:14px">
+                        <div style="margin-bottom:8px"><strong style="font-size:14px">App domains</strong></div>
+                        <p style="font-size:12px;color:#888;margin:0 0 10px">Hosts your CRM responds on. Add a custom one with an <strong>A record → <span id="ed-app-ip">…</span></strong>, then Verify.</p>
+                        <div id="ed-app-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px"></div>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                            <input id="ed-app-input" placeholder="prospector.yourcompany.com" style="flex:1;min-width:220px;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px;font-family:monospace">
+                            <button class="btn btn-primary btn-sm" onclick="addAppDomain()">Add</button>
+                        </div>
+                        <div id="ed-app-msg" style="font-size:12px;color:#666;margin-top:8px"></div>
+                    </div>
+                </div>
                 <div class="search-box" style="max-width:600px;margin-top:16px">
                     <h3>Email Signature Preview</h3>
                     <p style="font-size:13px;color:#666;margin-bottom:16px">This is what your signature looks like. Edit your profile fields above to update it.</p>
@@ -13054,11 +13087,92 @@ hmac.compare_digest(expected, header)</pre>
             }
         }
 
+        // ===================== Email & Domains panel =====================
+        function _edBadge(status) {
+            const s = (status || '').toLowerCase();
+            if (s === 'verified') return '<span style="font-size:11px;font-weight:600;background:#e8f5e9;color:#1b5e20;padding:2px 8px;border-radius:10px">✓ Verified</span>';
+            if (s === 'pending' || s === 'not_started' || s === 'dns_auto_added') return '<span style="font-size:11px;font-weight:600;background:#fff4e5;color:#b26a00;padding:2px 8px;border-radius:10px">Pending DNS</span>';
+            if (!s) return '';
+            return `<span style="font-size:11px;font-weight:600;background:#fdecea;color:#c0392b;padding:2px 8px;border-radius:10px">${escapeHtml(s)}</span>`;
+        }
+        function _edRecordsTable(records) {
+            if (!records || !records.length) return '';
+            const rows = records.map(r => `
+                <tr>
+                    <td style="padding:5px 8px;font-weight:600;white-space:nowrap">${escapeHtml(r.type)}</td>
+                    <td style="padding:5px 8px;font-family:monospace;font-size:11px;word-break:break-all">${escapeHtml(r.name)}</td>
+                    <td style="padding:5px 8px;font-family:monospace;font-size:11px;word-break:break-all">${escapeHtml(r.value)}${r.priority ? ` <span style="color:#888">(prio ${r.priority})</span>` : ''}</td>
+                </tr>`).join('');
+            return `<div style="font-size:11px;color:#888;margin-bottom:4px">Add these to your DNS:</div>
+                <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;background:#fafafa;border:1px solid #eee;border-radius:6px">
+                <thead><tr style="text-align:left;color:#666"><th style="padding:5px 8px">Type</th><th style="padding:5px 8px">Name/Host</th><th style="padding:5px 8px">Value</th></tr></thead>
+                <tbody>${rows}</tbody></table></div>`;
+        }
+        async function loadEmailDomains() {
+            const wrap = document.getElementById('settings-email-domains');
+            if (!wrap) return;
+            if (!currentUser || !(currentUser.role === 'admin' || currentUser.role === 'super_admin')) {
+                wrap.classList.add('hidden'); return;
+            }
+            wrap.classList.remove('hidden');
+            const data = await api('/api/runtime-config/domains');
+            if (!data) return;
+            // Sending domain
+            const sd = data.sending || {};
+            document.getElementById('ed-send-badge').innerHTML = sd.configured ? _edBadge(sd.status) : '';
+            const sendInput = document.getElementById('ed-send-input');
+            if (sd.configured && sd.domain_name) {
+                sendInput.value = sd.domain_name;
+                document.getElementById('ed-send-pattern').textContent = `<firstname>@${sd.domain_name}`;
+            }
+            document.getElementById('ed-send-records').innerHTML =
+                (sd.configured && (sd.status || '').toLowerCase() !== 'verified') ? _edRecordsTable(sd.records) : '';
+            // App domains
+            document.getElementById('ed-app-ip').textContent = data.app_domain_target_ip || '';
+            const list = document.getElementById('ed-app-list');
+            list.innerHTML = (data.app_domains || []).map(d => {
+                const badge = d.is_verified ? _edBadge('verified') : _edBadge('pending');
+                const tag = d.is_primary ? '<span style="font-size:10px;color:#888"> · primary</span>' : (d.is_platform ? '<span style="font-size:10px;color:#888"> · platform</span>' : '');
+                const verifyBtn = (!d.is_verified && !d.is_platform) ? `<button class="btn btn-secondary btn-xs" onclick="verifyAppDomain('${escapeHtml(d.domain)}')">Verify</button>` : '';
+                return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;background:#fff;border:1px solid #eee;border-radius:6px">
+                    <span style="font-family:monospace;font-size:12px">${escapeHtml(d.domain)}${tag}</span>
+                    <span style="display:flex;align-items:center;gap:8px">${verifyBtn}${badge}</span></div>`;
+            }).join('');
+        }
+        async function saveSendingDomain() {
+            const name = (document.getElementById('ed-send-input').value || '').trim().toLowerCase();
+            if (!name) { toast('Enter a sending domain'); return; }
+            const r = await api('/api/runtime-config/sending-domain', { method: 'POST', body: JSON.stringify({ domain_name: name }) });
+            if (r) { toast('Sending domain saved — add the DNS records, then Verify'); loadEmailDomains(); }
+        }
+        async function verifySendingDomain() {
+            const r = await api('/api/runtime-config/sending-domain/verify', { method: 'POST', body: '{}' });
+            if (r) { toast(`Status: ${r.status}`); loadEmailDomains(); }
+        }
+        async function addAppDomain() {
+            const d = (document.getElementById('ed-app-input').value || '').trim().toLowerCase();
+            if (!d) { toast('Enter a domain'); return; }
+            const r = await api('/api/runtime-config/app-domain', { method: 'POST', body: JSON.stringify({ domain: d }) });
+            if (r) {
+                document.getElementById('ed-app-input').value = '';
+                document.getElementById('ed-app-msg').innerHTML = `Add an <strong>A record</strong>: <code>${escapeHtml(d)}</code> → <code>${escapeHtml(r.target_ip)}</code>, then click Verify.`;
+                loadEmailDomains();
+            }
+        }
+        async function verifyAppDomain(domain) {
+            const r = await api('/api/runtime-config/app-domain/verify', { method: 'POST', body: JSON.stringify({ domain }) });
+            if (!r) return;
+            if (r.is_verified) { toast(`${domain} verified — your CRM is live there (cert issues on first visit).`); }
+            else { toast(`Not pointing here yet. Resolved: ${(r.resolved_ips||[]).join(', ') || 'nothing'} — needs ${r.target_ip}.`); }
+            loadEmailDomains();
+        }
+
         async function loadRuntimeConfig() {
             const cfg = await api('/api/runtime-config');
             if (!cfg) return;
             // Surface the setup-status panel on this Settings load (no-op for non-admins).
             loadSetupStatus().catch(() => {});
+            loadEmailDomains().catch(() => {});
 
             // Org brand (tenant-tier)
             const b = cfg.brand || {};
