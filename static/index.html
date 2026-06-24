@@ -1260,23 +1260,10 @@
                     <div style="display:grid;grid-template-columns:2fr 1fr;gap:16px;align-items:end">
                         <div class="form-group">
                             <label>Business Type</label>
+                            <!-- Options populated per-tenant from TENANT_BUSINESS_TYPES
+                                 (populateBusinessTypeSelect) on Find Leads load. -->
                             <select id="search-keyword-select" onchange="onBusinessTypeChange()">
                                 <option value="">-- Select a type --</option>
-                                <option value="pool builders">Pool Builders</option>
-                                <option value="pool service and maintenance">Pool Service &amp; Maintenance</option>
-                                <option value="landscaping companies">Landscaping Companies</option>
-                                <option value="lawn care service">Lawn Care Service</option>
-                                <option value="outdoor kitchen builders">Outdoor Kitchen Builders</option>
-                                <option value="deck builders">Deck Builders</option>
-                                <option value="fence companies">Fence Companies</option>
-                                <option value="patio contractors">Patio Contractors</option>
-                                <option value="hardscape contractors">Hardscape Contractors</option>
-                                <option value="irrigation companies">Irrigation Companies</option>
-                                <option value="tree service">Tree Service</option>
-                                <option value="concrete contractors">Concrete Contractors</option>
-                                <option value="landscape lighting">Landscape Lighting</option>
-                                <option value="pergola builders">Pergola Builders</option>
-                                <option value="retaining wall contractors">Retaining Wall Contractors</option>
                                 <option value="custom">Custom (type below)</option>
                             </select>
                             <input type="text" id="search-keyword-custom" class="hidden" placeholder="Type custom business type..." style="margin-top:6px">
@@ -5004,6 +4991,7 @@ function verify(secret, rawBody, header) {
                 loadSettings();  // triggers loadRuntimeConfig etc
             }
             if (page === 'autopilot') loadCampaigns();
+            if (page === 'search') populateBusinessTypeSelect();
             if (page === 'developer') {
                 // Admin-only — refuse the visit if a sales_rep deep-links here
                 if (!currentUser || (currentUser.role !== 'admin' && currentUser.role !== 'super_admin')) {
@@ -6875,6 +6863,21 @@ function verify(secret, rawBody, header) {
         }
 
         // ============ Find Leads helpers ============
+        async function populateBusinessTypeSelect() {
+            // Fill the Find Leads Business Type dropdown with THIS tenant's
+            // categories (same per-tenant list as the Auto Pilot picker).
+            await loadTenantBusinessTypes();
+            const sel = document.getElementById('search-keyword-select');
+            if (!sel) return;
+            const prev = sel.value;
+            const _title = s => s.replace(/\b\w/g, c => c.toUpperCase());
+            const opts = ['<option value="">-- Select a type --</option>']
+                .concat((TENANT_BUSINESS_TYPES || []).map(t =>
+                    `<option value="${escapeHtml(t)}">${escapeHtml(_title(t))}</option>`))
+                .concat(['<option value="custom">Custom (type below)</option>']);
+            sel.innerHTML = opts.join('');
+            if (prev) sel.value = prev;
+        }
         function onBusinessTypeChange() {
             const sel = document.getElementById('search-keyword-select');
             const custom = document.getElementById('search-keyword-custom');
