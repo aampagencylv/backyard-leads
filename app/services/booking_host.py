@@ -45,7 +45,15 @@ async def resolve_booking_url(db: AsyncSession, user: User) -> str:
     Returns "" only when nothing is configured anywhere."""
     host = await resolve_booking_host(db, user)
     if host.booking_slug and host.google_refresh_token:
-        base = (settings.schedule_public_url or "").rstrip("/")
+        # Use the booking host's OWN tenant domain (the /book/{slug} page is
+        # served app-wide), not the BMP-global settings.schedule_public_url —
+        # otherwise a white-label tenant's signature links to
+        # schedule.backyardmarketingpros.com.
+        from app.tenancy import tenant_primary_base_url
+        base = await tenant_primary_base_url(db, host.tenant_id)
+        if not base:
+            base = (settings.schedule_public_url or "").rstrip("/")
+        base = (base or "").rstrip("/")
         if base:
             return f"{base}/book/{host.booking_slug}"
     own = (user.scheduling_url or "").strip()

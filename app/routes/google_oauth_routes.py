@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import ALGORITHM, SECRET_KEY, get_current_user
 from app.config import settings
 from app.tenancy import get_tenant_db
+from app.database import get_db
 from app.models import User
 from app.services.google_oauth import (
     GoogleAPIError,
@@ -57,24 +58,27 @@ router = APIRouter(prefix="/api/google/oauth", tags=["google-oauth"])
 STATE_TTL_MINUTES = 10
 
 
-def _mint_state(user_id: int) -> str:
-    """Sign a short-lived JWT carrying the connecting user's id + a
-    nonce. Google echoes this back on the callback; we verify before
-    persisting tokens so an attacker can't trick us into binding their
-    Google account to someone else's user record."""
-    return jwt.encode(
-        {
-            "sub": str(user_id),
-            "purpose": "google_oauth",
-            "nonce": secrets.token_urlsafe(8),
-            "exp": datetime.now(timezone.utc) + timedelta(minutes=STATE_TTL_MINUTES),
-        },
-        SECRET_KEY,
-        algorithm=ALGORITHM,
-    )
+def _mint_state(user_id: int, origin: str | None = None) -> str:
+    """Sign a short-lived JWT carrying the connecting user's id, the origin
+    host they started from, and a nonce. Google echoes this back on the
+    callback; we verify before persisting tokens so an attacker can't trick
+    us into binding their Google account to someone else's user record.
+
+    `origin` (e.g. https://aamp.leadprospector.ai) lets the callback — which
+    Google always sends to the single registered redirect_uri (BMP host) —
+    bounce the user back to the tenant they actually came from."""
+    claims = {
+        "sub": str(user_id),
+        "purpose": "google_oauth",
+        "nonce": secrets.token_urlsafe(8),
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=STATE_TTL_MINUTES),
+    }
+    if origin:
+        claims["origin"] = origin
+    return jwt.encode(claims, SECRET_KEY, algorithm=ALGORITHM)
 
 
-def _verify_state(state: str) -> int:
+def _verify_state(state: str) -> tuple[int, str | None]:
     try:
         payload = jwt.decode(state, SECRET_KEY, algorithms=[ALGORITHM])
     except JWTError as e:
@@ -83,7 +87,7 @@ def _verify_state(state: str) -> int:
     if payload.get("purpose") != "google_oauth":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail="State purpose mismatch")
-    return int(payload["sub"])
+    return int(payload["sub"]), payload.get("origin")
 
 
 def _slugify_for_booking(first: str, last: str) -> str:
@@ -110,8 +114,22 @@ async def _ensure_unique_slug(db: AsyncSession, base: str, user_id: int) -> str:
 # Endpoints
 # ============================================================
 
+def _safe_origin(request: Request) -> str | None:
+    """The tenant host the user started from, as https://<host>, but only
+    if it's one of our own domains (prevents an attacker from smuggling an
+    open-redirect target through the signed state). We trust hosts under
+    leadprospector.ai and the BMP legacy hosts; anything else → None (the
+    callback then falls back to settings.public_url)."""
+    host = (request.headers.get("host") or "").split(":", 1)[0].strip().lower()
+    if not host:
+        return None
+    ok = host == "leadprospector.ai" or host.endswith(".leadprospector.ai") \
+        or host.endswith("backyardmarketingpros.com")
+    return f"https://{host}" if ok else None
+
+
 @router.get("/start-url")
-async def start_google_oauth(user: User = Depends(get_current_user)):
+async def start_google_oauth(request: Request, user: User = Depends(get_current_user)):
     """Return the Google consent URL as JSON. The frontend then sets
     window.location.href to it. We don't return a 30x redirect because
     the browser would strip the Authorization header on the cross-
@@ -121,7 +139,7 @@ async def start_google_oauth(user: User = Depends(get_current_user)):
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Google OAuth not configured on the server (missing client id / secret)",
         )
-    state = _mint_state(user.id)
+    state = _mint_state(user.id, origin=_safe_origin(request))
     return {"auth_url": build_auth_url(state)}
 
 
@@ -130,7 +148,7 @@ async def google_oauth_callback(
     code: str | None = None,
     state: str | None = None,
     error: str | None = None,
-    db: AsyncSession = Depends(get_tenant_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """Google redirects here after consent. We:
       1. Verify the state JWT to learn which user authorized
@@ -156,10 +174,21 @@ async def google_oauth_callback(
         return RedirectResponse(f"{fail_redirect}&reason=missing_code", status_code=302)
 
     try:
-        user_id = _verify_state(state)
+        user_id, origin = _verify_state(state)
     except HTTPException:
         return RedirectResponse(f"{fail_redirect}&reason=bad_state", status_code=302)
 
+    # Land the user back on the tenant they started from (the state's origin),
+    # not the BMP-global public_url. Google always returns to the single
+    # registered redirect_uri (BMP host); origin carries the real tenant.
+    if origin:
+        base = origin.rstrip("/")
+        fail_redirect = f"{base}/?google_oauth=error"
+        success_redirect = f"{base}/?google_oauth=connected#calendar"
+
+    # Untenanted lookup (db is get_db): the user is authenticated by the
+    # signed state, and the callback runs on the BMP host — a tenant-scoped
+    # session would fail to find a non-BMP-tenant user's row.
     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if not user:
         return RedirectResponse(f"{fail_redirect}&reason=unknown_user", status_code=302)
@@ -199,8 +228,15 @@ async def google_oauth_callback(
 
 
 @router.get("/status")
-async def google_oauth_status(user: User = Depends(get_current_user)):
+async def google_oauth_status(request: Request, user: User = Depends(get_current_user)):
     """JSON snapshot for the Settings UI."""
+    # Build the booking URL on the TENANT's own host (the /book/{slug} page
+    # is served app-wide on every host), not the BMP-global
+    # settings.schedule_public_url — otherwise a white-label tenant's public
+    # booking link reads schedule.backyardmarketingpros.com.
+    host = (request.headers.get("host") or "").split(":", 1)[0].strip()
+    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme or "https"
+    base = f"{scheme}://{host}" if host else settings.schedule_public_url.rstrip("/")
     return {
         "configured": is_configured(),
         "connected": bool(user.google_refresh_token),
@@ -209,7 +245,7 @@ async def google_oauth_status(user: User = Depends(get_current_user)):
         "booking_slug": user.booking_slug,
         "connected_at": user.google_connected_at.isoformat() if user.google_connected_at else None,
         "booking_url": (
-            f"{settings.schedule_public_url.rstrip('/')}/book/{user.booking_slug}"
+            f"{base}/book/{user.booking_slug}"
             if user.booking_slug else None
         ),
     }

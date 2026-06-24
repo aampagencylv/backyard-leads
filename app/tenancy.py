@@ -107,6 +107,34 @@ async def _resolve_tenant_id(request: Request, db: AsyncSession) -> int:
     return 1
 
 
+async def tenant_primary_base_url(db: AsyncSession, tenant_id: int) -> Optional[str]:
+    """`https://<tenant primary host>` for a tenant, or None if it has no
+    domain on file. Prefers the primary domain, then any verified domain.
+
+    Used to build tenant-correct public URLs (booking pages, OAuth landing,
+    audit links) instead of the BMP-global settings.*_public_url. The
+    booking/report/book pages are served app-wide on every host, so any of
+    the tenant's own hosts resolves the same content."""
+    from app.models import TenantDomain
+    row = (await db.execute(
+        select(TenantDomain.domain).where(
+            TenantDomain.tenant_id == tenant_id,
+            TenantDomain.is_primary == True,
+        ).limit(1)
+    )).scalar_one_or_none()
+    if not row:
+        row = (await db.execute(
+            select(TenantDomain.domain).where(
+                TenantDomain.tenant_id == tenant_id,
+                TenantDomain.is_verified == True,
+            ).limit(1)
+        )).scalar_one_or_none()
+    if not row:
+        return None
+    host = str(row).strip().rstrip("/")
+    return f"https://{host}" if host else None
+
+
 async def get_current_tenant_id(
     request: Request,
     db: AsyncSession = Depends(get_db),
