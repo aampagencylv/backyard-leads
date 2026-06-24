@@ -301,9 +301,14 @@ async def update_onboarding(
     Step values: 0=not started, 1-10=in progress, 99=skipped, 100=completed."""
     if req.step < 0 or req.step > 100:
         raise HTTPException(status_code=400, detail="step must be 0-100")
-    user.onboarding_step = req.step
+    # IMPORTANT: get_current_user loads `user` on a SEPARATE session
+    # (Depends(get_db)), so mutating user + committing `db` persists nothing —
+    # the tour reappeared every visit because the skip/complete never saved.
+    # Update by primary key on the request session instead.
+    from sqlalchemy import update as _update
+    await db.execute(_update(User).where(User.id == user.id).values(onboarding_step=req.step))
     await db.commit()
-    return {"onboarding_step": user.onboarding_step}
+    return {"onboarding_step": req.step}
 
 
 @router.post("/me/onboarding/restart")
@@ -313,7 +318,8 @@ async def restart_onboarding(
 ):
     """Reset onboarding so the tour fires again next login (or immediately if
     the frontend polls). Used by the 'Restart Tour' button in Settings."""
-    user.onboarding_step = 0
+    from sqlalchemy import update as _update
+    await db.execute(_update(User).where(User.id == user.id).values(onboarding_step=0))
     await db.commit()
     return {"onboarding_step": 0}
 
