@@ -85,9 +85,18 @@ company_tags = Table(
 
 class User(TenantMixin, Base):
     __tablename__ = "users"
+    # Email is unique PER TENANT, not globally — the platform is multi-tenant
+    # and the same person (e.g. the operator) can hold an account in more than
+    # one tenant. /login is host-scoped to one tenant; /universal-login loops
+    # same-email candidates and matches by password. A global unique index
+    # (the pre-multitenant leftover ix_users_email) must NOT exist; see
+    # scripts/migrate_user_email_per_tenant.py.
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "email", name="uq_users_tenant_email"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    email = Column(String(255), unique=True, index=True, nullable=False)
+    email = Column(String(255), index=True, nullable=False)
     hashed_password = Column(String(255), nullable=False)
     is_active = Column(Boolean, default=True)
 
