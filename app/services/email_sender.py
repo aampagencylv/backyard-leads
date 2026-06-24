@@ -40,6 +40,44 @@ _SUBJECT_PLACEHOLDER_RE = _re.compile(
 _BODY_NONEMAIL_PREFIXES = ("📞", "Connect note (under 280 chars):", "Connect note:")
 
 
+async def _resolve_send_domain(company_id: Optional[int]) -> str:
+    """The sending domain for the tenant that owns `company_id`.
+
+    Multi-tenant: each tenant sends from its OWN verified Resend domain
+    (RuntimeConfig.resend_domain_name, e.g. go.aamp.agency) so a white-label
+    tenant's mail isn't From a different company's domain. Falls back to the
+    BMP-global settings.send_domain only when the tenant hasn't configured /
+    verified a domain yet. Cheap: one indexed lookup, cached per call.
+    """
+    fallback = settings.send_domain
+    if not company_id:
+        return fallback
+    try:
+        from app.database import async_session
+        from sqlalchemy import text as _text
+        async with async_session() as db:
+            row = (await db.execute(_text(
+                "SELECT rc.resend_domain_name, rc.resend_domain_status "
+                "FROM companies co JOIN runtime_config rc ON rc.tenant_id = co.tenant_id "
+                "WHERE co.id = :c LIMIT 1"
+            ), {"c": company_id})).first()
+        if row and row[0] and (row[1] or "").lower() == "verified":
+            return str(row[0]).strip()
+    except Exception:
+        pass
+    return fallback
+
+
+def _swap_domain(addr: str, new_domain: str) -> str:
+    """Replace the domain part of an email address, keeping the local part
+    (so a reply-routing local part like `r-<token>` survives). Used to keep
+    Reply-To on the same tenant domain as From."""
+    a = (addr or "").strip()
+    if "@" in a and new_domain:
+        return f"{a.split('@', 1)[0]}@{new_domain}"
+    return a
+
+
 def _score_email_anomaly(subject: str, body: str, recipient_email: str) -> tuple[int, list[str]]:
     """Score how 'weird-looking' an outbound email is. Returns (score, flags).
     Score range: 0 (clean) → 100 (clearly garbage). Flags are short
@@ -295,7 +333,14 @@ async def send_email(
         return await _refuse("anomaly_score_high",
                              f"Refused: anomaly score {anomaly_score} with flags {anomaly_flags}")
 
-    from_address = f"{from_name} <{from_firstname}@{settings.send_domain}>"
+    # Per-tenant sending domain: From is always <firstname>@<tenant domain>
+    # (e.g. steve@go.aamp.agency). Reply-To rides the SAME domain so nothing
+    # shows another tenant's domain. Falls back to BMP's only when the tenant
+    # hasn't verified a domain.
+    _send_domain = await _resolve_send_domain(company_id)
+    from_address = f"{from_name} <{from_firstname}@{_send_domain}>"
+    if _send_domain != settings.send_domain and reply_to_email:
+        reply_to_email = _swap_domain(reply_to_email, _send_domain)
 
     # Render any markdown links [text](url) → <a> anchors. Normally the
     # caller's wrap_html_links already did this (and tracked the href),
