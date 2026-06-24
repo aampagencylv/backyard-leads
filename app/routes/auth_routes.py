@@ -158,20 +158,53 @@ async def login(
     # User lookup is auto-scoped to the resolved tenant by the ORM filter,
     # so a user logging in via tenantA.leadprospector.ai only matches
     # users belonging to tenantA — even if another tenant has the same email.
-    result = await db.execute(select(User).where(User.email == form_data.username.lower()))
+    email = form_data.username.lower()
+    resolved_tid = db.info.get("tenant_id")
+    result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
 
-    if not user or not verify_password(form_data.password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+    if user and verify_password(form_data.password, user.hashed_password):
+        # Stamp tenant_id into the JWT so subsequent requests can resolve the
+        # tenant without re-doing host lookup. The resolver checks JWT claim first.
+        token = create_access_token({"sub": str(user.id), "tenant_id": user.tenant_id})
+        return TokenResponse(
+            access_token=token,
+            user_name=user.full_name,
+            user_email=user.email,
+        )
 
-    # Stamp tenant_id into the JWT so subsequent requests can resolve the
-    # tenant without re-doing host lookup. The resolver checks JWT claim first.
-    token = create_access_token({"sub": str(user.id), "tenant_id": user.tenant_id})
-    return TokenResponse(
-        access_token=token,
-        user_name=user.full_name,
-        user_email=user.email,
-    )
+    # Cross-tenant super_admin fallback: a platform super_admin has no user
+    # row in most tenants, but should still be able to sign in directly at
+    # any tenant subdomain (e.g. aamp.leadprospector.ai/login) and land
+    # operating that tenant. We do an UNSCOPED lookup (a plain session has no
+    # tenant stamp, so the ORM auto-filter doesn't apply) for an active
+    # super_admin with this email+password, then mint a token that impersonates
+    # the host-resolved tenant. Only super_admins get this; everyone else
+    # falls through to the same 401 (no email enumeration).
+    from app.database import async_session
+    async with async_session() as gdb:
+        candidates = (await gdb.execute(
+            select(User).where(
+                User.email == email,
+                User.role == "super_admin",
+                User.is_active == True,
+            )
+        )).scalars().all()
+    for sa in candidates:
+        if verify_password(form_data.password, sa.hashed_password):
+            claims = {"sub": str(sa.id), "tenant_id": sa.tenant_id}
+            # Only add acting_as when signing into a tenant that isn't the
+            # super_admin's own home tenant.
+            if resolved_tid and resolved_tid != sa.tenant_id:
+                claims["acting_as_tenant_id"] = resolved_tid
+            token = create_access_token(claims)
+            return TokenResponse(
+                access_token=token,
+                user_name=sa.full_name,
+                user_email=sa.email,
+            )
+
+    raise HTTPException(status_code=401, detail="Invalid email or password")
 
 
 @router.get("/me")
