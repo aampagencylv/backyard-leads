@@ -1183,6 +1183,7 @@ class ImpersonateOut(BaseModel):
     access_token: str
     token_type: str = "bearer"
     acting_as_tenant_id: int
+    redirect_url: str  # tenant app URL the console should navigate to
 
 
 @router.post("/tenants/{tenant_id}/impersonate", response_model=ImpersonateOut)
@@ -1205,11 +1206,35 @@ async def impersonate_tenant(
         "tenant_id": actor.tenant_id,                # the admin's home tenant
         "acting_as_tenant_id": tenant.id,            # who they're impersonating
     })
+
+    # Resolve the tenant's app URL so the console can navigate there (the
+    # CRM SPA is served on tenant hosts, NOT on app.leadprospector.ai where
+    # `/` is the admin console). Mirror universal-login: primary domain →
+    # any verified domain → app.leadprospector.ai fallback. The acting token
+    # rides across the subdomain hop as ?_lp_token=, which index.html reads
+    # into localStorage on load.
+    primary = (await db.execute(
+        select(TenantDomain).where(
+            TenantDomain.tenant_id == tenant.id,
+            TenantDomain.is_primary == True,
+        ).limit(1)
+    )).scalar_one_or_none()
+    if primary is None:
+        primary = (await db.execute(
+            select(TenantDomain).where(
+                TenantDomain.tenant_id == tenant.id,
+                TenantDomain.is_verified == True,
+            ).limit(1)
+        )).scalar_one_or_none()
+    host = primary.domain if primary else "app.leadprospector.ai"
+    redirect_url = f"https://{host}/"
+
     await record_audit(db, actor=actor, action="tenant_impersonate_start",
                        target_type="tenant", target_id=tenant.id,
                        metadata={"tenant_name": tenant.name,
                                  "ip": request.client.host if request.client else None})
-    return ImpersonateOut(access_token=token, acting_as_tenant_id=tenant.id)
+    return ImpersonateOut(access_token=token, acting_as_tenant_id=tenant.id,
+                          redirect_url=redirect_url)
 
 
 class EndImpersonateOut(BaseModel):

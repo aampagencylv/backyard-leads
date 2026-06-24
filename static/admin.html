@@ -792,7 +792,12 @@ async function impersonate() {
     token = res.access_token; localStorage.setItem(TOKEN_KEY, token);
     document.getElementById("acting-tenant-id").textContent = res.acting_as_tenant_id;
     document.getElementById("impersonating-banner").classList.remove("hidden");
-    toast("Impersonating tenant #" + res.acting_as_tenant_id);
+    toast("Opening tenant #" + res.acting_as_tenant_id + "…");
+    // The CRM SPA lives on the tenant's host, not on the admin host, so
+    // navigate there carrying the acting token across the subdomain hop
+    // (index.html reads ?_lp_token= into localStorage on load).
+    const sep = res.redirect_url.includes("?") ? "&" : "?";
+    window.location.href = res.redirect_url + sep + "_lp_token=" + encodeURIComponent(res.access_token);
   } catch (e) { toast(e.message, "error"); }
 }
 async function endImpersonation() {
