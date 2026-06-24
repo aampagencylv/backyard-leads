@@ -55,27 +55,31 @@ def _ads_location(city: str, state: str) -> str:
 
 
 async def _ai_local_keywords(company_name: str, business_type: str, city: str,
-                             state: str, website: str) -> tuple[str, list[str]]:
+                             state: str, website: str) -> tuple[str, list[str], str, str]:
     """Use AI to (1) refine the business type from the company itself — the
     stored business_type is just the prospecting search keyword and often
-    mislabels multi-service companies — and (2) generate the high-intent
-    LOCAL search keywords a customer would type to HIRE them (the
-    "[service] [city]" terms people actually search, not generic head terms
-    like "patio"). Returns (refined_business_type, [keywords]).
-    Falls back to ("", []) if AI is unavailable."""
+    mislabels multi-service companies — (2) generate the SERVICE terms a
+    customer searches when ready to HIRE them (no city baked in — we add the
+    geo ourselves), and (3) name the metro market the city belongs to, so we
+    can measure real demand (a tiny suburb like Farmers Branch has ~0 volume;
+    its Dallas metro does not).
+
+    Returns (refined_business_type, [service_terms], metro_city, metro_state).
+    Falls back to ("", [], "", "") if AI is unavailable."""
     from app.config import settings
     if not (settings.anthropic_api_key or "").strip():
-        return "", []
+        return "", [], "", ""
     loc = f"{city}, {state}".strip().strip(",") or "their city"
     prompt = (
         f"A local business: \"{company_name}\" ({website or 'no site'}) in {loc}. "
         f"It was tagged as \"{business_type or 'unknown'}\" but that's just a search bucket.\n\n"
-        "1. What is this business, in 1-3 words (the category a customer would use)?\n"
-        "2. List the 8 highest-intent LOCAL Google searches someone would type when "
-        "ready to HIRE a business like this. Use the real \"[service] [city]\" pattern "
-        f"(localize to {loc}); these must be commercial-intent local searches, NOT "
-        "generic one-word head terms.\n\n"
-        'Return ONLY JSON: {"business_type": "...", "keywords": ["...", ...]}'
+        "1. business_type: what this business is, in 1-3 words (the category a customer uses).\n"
+        "2. keywords: 8 SERVICE phrases a customer Googles when ready to HIRE a business "
+        "like this (commercial intent, e.g. \"patio cover installation\", \"pergola builder\"). "
+        "Do NOT include any city/state in these — just the service.\n"
+        f"3. metro_city + metro_state: the major metro market \"{loc}\" belongs to (e.g. a "
+        "Dallas suburb → Dallas / TX). If it's already a major city, repeat it.\n\n"
+        'Return ONLY JSON: {"business_type":"...","keywords":["...",...],"metro_city":"...","metro_state":"..."}'
     )
     try:
         import anthropic, json as _json
@@ -91,9 +95,11 @@ async def _ai_local_keywords(company_name: str, business_type: str, city: str,
         data = _json.loads(txt)
         bt = (data.get("business_type") or "").strip()
         kws = [str(k).strip() for k in (data.get("keywords") or []) if str(k).strip()][:8]
-        return bt, kws
+        m_city = (data.get("metro_city") or city or "").strip()
+        m_state = (data.get("metro_state") or state or "").strip()
+        return bt, kws, m_city, m_state
     except Exception:
-        return "", []
+        return "", [], "", ""
 
 
 def _kw_section(report) -> str:
@@ -338,23 +344,26 @@ async def generate_audit(
         # Replaces the old vanity "top keywords by national volume" framing.
         try:
             import asyncio as _asyncio
-            refined_bt, local_kws = await _ai_local_keywords(
+            refined_bt, services, metro_city, metro_state = await _ai_local_keywords(
                 company_name, business_type, city, state, website)
             if refined_bt:
                 report.business_type = refined_bt  # accurate label, not the search bucket
-            if local_kws and city:
-                location_name = f"{city},{state},United States" if state else f"{city},United States"
-                # Google Ads volume needs the full state name; SERP takes the abbrev.
-                vols = await keyword_volumes(local_kws, _ads_location(city, state), dfs_login, dfs_pass)
+            if services and city:
+                # Volume: the SERVICE term measured at the METRO (real demand;
+                # a tiny suburb reads ~0). Rank + display: the "[service] [city]"
+                # search the customer actually types, ranked at the local level.
+                vols = await keyword_volumes(services, _ads_location(metro_city, metro_state), dfs_login, dfs_pass)
+                serp_loc = f"{city},{state},United States" if state else f"{city},United States"
+                geo_terms = [f"{s} {city}".strip() for s in services]
                 ranks = await _asyncio.gather(
-                    *[serp_rank_for_domain(k, location_name, website, dfs_login, dfs_pass) for k in local_kws],
+                    *[serp_rank_for_domain(gt, serp_loc, website, dfs_login, dfs_pass) for gt in geo_terms],
                     return_exceptions=True,
                 )
-                for k, rank in zip(local_kws, ranks):
+                for svc, gt, rank in zip(services, geo_terms, ranks):
                     if isinstance(rank, Exception):
                         rank = None
                     report.local_keywords.append(
-                        {"keyword": k, "volume": vols.get(k.lower(), 0), "rank": rank})
+                        {"keyword": gt, "volume": vols.get(svc.lower(), 0), "rank": rank})
         except Exception:
             pass
 
