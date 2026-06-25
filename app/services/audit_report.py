@@ -483,10 +483,22 @@ async def ensure_audit_for_company(db, company) -> Optional[str]:
 
     if not company or not getattr(company, "id", None):
         return None
-    # `public_url` here is the AUDIT subdomain — it's the link we put in
-    # cold emails / SMS, and it's also baked into the rendered HTML
-    # (compare button → audit_public_url/report/{token}/compare).
+    # `public_url` here is the AUDIT link we put in cold emails / SMS, and
+    # baked into the rendered HTML (compare button). Per-tenant: prefer the
+    # sending tenant's OWN host (so AAMP's emails link to AAMP's domain, not
+    # audit.backyardmarketingpros.com). /report/ is served app-wide on every
+    # host, so any of the tenant's domains resolves the same content. Falls
+    # back to the BMP-global audit subdomain only when a tenant has no domain.
     public_url = _settings.audit_public_url.rstrip("/")
+    try:
+        from app.tenancy import tenant_primary_base_url
+        _tid = db.info.get("tenant_id")
+        if _tid:
+            _tbase = await tenant_primary_base_url(db, int(_tid))
+            if _tbase:
+                public_url = _tbase.rstrip("/")
+    except Exception:
+        pass
 
     existing = (await db.execute(
         _s(AuditReportModel).where(AuditReportModel.company_id == company.id)
