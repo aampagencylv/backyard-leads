@@ -664,6 +664,11 @@ class RuntimeConfig(TenantMixin, Base):
     # point this at their own marketing site. Empty by default so a tenant
     # never ships links to another company's site before they set their own.
     brand_website_url = Column(Text, nullable=False, default="")
+    # CAN-SPAM physical postal address shown in every outbound email footer.
+    # Empty by default — a tenant must enter their own real mailing address
+    # (legally required) before they can send; we never fall back to another
+    # tenant's address. Surfaced in onboarding + Settings → Business Identity.
+    compliance_address = Column(Text, nullable=True)
 
     # Per-tenant prospecting vertical — JSON list of business categories the
     # Find Leads search + Auto Pilot campaign picker target (e.g. BMP: home

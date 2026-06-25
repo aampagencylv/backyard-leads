@@ -44,6 +44,9 @@ async def _resolve_audit_assets(db, rc) -> dict:
         "left_message":    getattr(rc, "audit_left_message", "") or "",
         "right_image_url": getattr(rc, "audit_right_image_url", "") or "",
         "right_message":   getattr(rc, "audit_right_message", "") or "",
+        # Footer identity — the tenant's own company name + site (no BMP).
+        "company_name":    brand.get("company_name", ""),
+        "website_url":     brand.get("website_url", ""),
     }
 
 
@@ -353,7 +356,9 @@ async def view_competitor_report(
             select(Company).where(Company.id == report.company_id)
         )).scalar_one_or_none()
         company_name = company.name if company else "Your Business"
-        return HTMLResponse(_render_generating_page(token, company_name))
+        from app.runtime_config import get_org_brand as _gob
+        _logo = (await _gob(db)).get("logo_url", "")
+        return HTMLResponse(_render_generating_page(token, company_name, _logo))
 
     # Not booked — bounce them back to the gate
     public_url = settings.audit_public_url.rstrip("/")
@@ -367,7 +372,7 @@ async def view_competitor_report(
     )
 
 
-def _render_generating_page(token: str, company_name: str) -> str:
+def _render_generating_page(token: str, company_name: str, logo_url: str = "") -> str:
     """Branded 'still generating' page that polls /booking-status every 4s
     and reloads the moment competitor_html is ready. Auto-email also fires
     on completion, so even if the user closes this tab, they get the link
@@ -391,7 +396,7 @@ def _render_generating_page(token: str, company_name: str) -> str:
 </style>
 </head><body>
 <div class="card">
-    <img src="https://backyardmarketingpros.com/wp-content/uploads/2024/09/BMP_Logo_Color_Horiz-1024x269.png" alt="BMP">
+    {f'<img src="{_esc(logo_url)}" alt="" onerror="this.style.display=&#39;none&#39;">' if logo_url else ''}
     <div class="spinner"></div>
     <h1>Building your competitive comparison</h1>
     <p>Auditing the top businesses in <strong>{_esc(company_name)}</strong>'s market right now.</p>
@@ -491,6 +496,8 @@ async def request_competitor_comparison(
 
     company_name = company.name if company else "Your Business"
     booking_url = settings.iclosed_booking_url
+    from app.runtime_config import get_org_brand as _gob
+    _gate_logo = (await _gob(db)).get("logo_url", "")
 
     # Gated page: blurred preview + iClosed widget. The iClosed webhook
     # is the source of truth for "booked"; we poll /booking-status every
@@ -526,7 +533,7 @@ async def request_competitor_comparison(
 </head><body>
 <div class="container">
     <div class="header">
-        <img src="https://backyardmarketingpros.com/wp-content/uploads/2024/09/BMP_Logo_Color_Horiz-White-1024x269.png" alt="BMP">
+        {f'<img src="{_esc(_gate_logo)}" alt="" onerror="this.style.display=&#39;none&#39;">' if _gate_logo else ''}
         <h1 style="font-size:22px">Your Competitive Comparison</h1>
         <p style="color:rgba(255,255,255,0.8)">{_esc(company_name)} vs. Top Competitors</p>
     </div>
@@ -1006,9 +1013,11 @@ async def _generate_competitor_report_bg(report_id: int):
                 # picked in Settings → Audit Reports (iclosed, native,
                 # or custom URL). Booking is its own white-label surface,
                 # so we pass the schedule_public_url base.
-                from app.runtime_config import _get_or_create as _get_rc
+                from app.runtime_config import _get_or_create as _get_rc, get_org_brand
                 rc = await _get_rc(db)
                 cmp_booking_url = await _resolve_audit_booking_url(db, rc, settings.schedule_public_url.rstrip("/"))
+                _brand = await get_org_brand(db)
+                _assets = await _resolve_audit_assets(db, rc)
                 html = render_comparison_html(
                     prospect=prospect,
                     competitors=competitors,
@@ -1017,6 +1026,10 @@ async def _generate_competitor_report_bg(report_id: int):
                     state=company.state or "",
                     business_type=company.business_type or "",
                     booking_url=cmp_booking_url,
+                    footer_logo_url=_assets.get("footer_logo_url", ""),
+                    footer_company_name=_brand.get("company_name", ""),
+                    footer_website=_brand.get("website_url", ""),
+                    header_banner_url=_assets.get("header_url", ""),
                 )
                 report.competitor_html = html
                 report.competitor_generated_at = datetime.now(timezone.utc)

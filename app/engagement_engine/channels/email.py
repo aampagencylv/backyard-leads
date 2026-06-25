@@ -160,9 +160,17 @@ class EmailChannel:
             """), {"t": action.tenant_id})
             ident = ident_row.first()
 
+            # Tenant's own outreach company name — NEVER hardcode BMP. Used
+            # only as a last-resort From name when no sender_name is set.
+            _brand_row = await session.execute(text(
+                "SELECT brand_company_name FROM runtime_config WHERE tenant_id = :t LIMIT 1"
+            ), {"t": action.tenant_id})
+            _bc = _brand_row.scalar()
+            tenant_company = (_bc or "").strip()
+
             if ident is not None:
-                from_name = ident.sender_name or "Backyard Marketing Pros"
-                from_firstname = (ident.sender_name or "BMP").split(" ")[0]
+                from_name = ident.sender_name or tenant_company or "there"
+                from_firstname = (ident.sender_name or tenant_company or "team").split(" ")[0]
                 reply_to_email = ident.sender_email
             else:
                 # Legacy fallback: derive from the engagement's assigned BDR.

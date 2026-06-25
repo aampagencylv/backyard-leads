@@ -69,6 +69,10 @@ def render_comparison_html(
     state: str = "",
     business_type: str = "",
     booking_url: str = "",
+    footer_logo_url: str = "",
+    footer_company_name: str = "",
+    footer_website: str = "",
+    header_banner_url: str = "",
 ) -> str:
     """Render a branded side-by-side comparison report.
 
@@ -79,7 +83,11 @@ def render_comparison_html(
     the global iClosed URL.
     """
     from app.config import settings as _settings
-    cta_url = (booking_url or "").strip() or _settings.iclosed_booking_url or "https://app.iclosed.io/e/backyardmarketingpros/discovery-call"
+    cta_url = (booking_url or "").strip() or (_settings.iclosed_booking_url or "").strip()
+    _banner = (header_banner_url or "").strip() or "/static/report-banner.jpg"
+    _foot_logo = (footer_logo_url or "").strip()
+    _foot_co = (footer_company_name or "").strip()
+    _foot_site = (footer_website or "").strip().replace("https://", "").replace("http://", "").rstrip("/")
 
     def score_color(s):
         if s >= 70: return "#1B5E20"
@@ -163,7 +171,7 @@ def render_comparison_html(
 <body>
     <div class="container">
         <div style="border-radius:12px;overflow:hidden;margin-bottom:24px;box-shadow:0 4px 16px rgba(0,0,0,0.1)">
-            <img src="/static/report-banner.jpg" alt="BMP" style="width:100%;display:block">
+            <img src="{_esc(_banner)}" alt="" style="width:100%;display:block" onerror="this.style.display='none'">
             <div style="background:linear-gradient(135deg, #0D3B13, #1B5E20);color:white;padding:32px 40px;display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap">
                 <div>
                     <h1 style="font-size:26px;margin-bottom:8px">Competitive Comparison</h1>
@@ -204,8 +212,9 @@ def render_comparison_html(
         </div>
 
         <div class="footer">
-            <img src="https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz-1024x269.png" style="width:160px;margin-bottom:8px" alt="BMP">
-            <p>Backyard Marketing Pros &middot; A Division of AAMP Agency</p>
+            {f'<img src="{_esc(_foot_logo)}" style="width:160px;margin-bottom:8px" alt="" onerror="this.style.display=&#39;none&#39;">' if _foot_logo else ''}
+            {f'<p>{_esc(_foot_co)}</p>' if _foot_co else ''}
+            {f'<p style="margin-top:4px">{_esc(_foot_site)}</p>' if _foot_site else ''}
         </div>
     </div>
 </body>

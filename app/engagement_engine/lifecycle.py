@@ -198,6 +198,7 @@ def _evaluate_skip(contact: Contact, conditions: list[str]) -> Optional[str]:
 async def _build_step_payload(
     *, db: AsyncSession, contact: Contact, company: Company,
     tstep: dict, idx: int, email_drafts: dict, imessage_drafts: dict,
+    sender_company: str = "",
 ) -> tuple[str, str, Optional[str]]:
     """Return (subject, body, task_description) for the given step.
 
@@ -248,10 +249,11 @@ async def _build_step_payload(
             phone_line = f"📞 Company main line: {company_phone}\n\n"
         else:
             phone_line = ""
+        _from = f" — from {sender_company}" if sender_company else ""
         body = (
             f"{phone_line}"
             f"Call talk track:\n\n"
-            f"- Hi {contact.first_name or 'there'} — from Backyard Marketing Pros.\n"
+            f"- Hi {contact.first_name or 'there'}{_from}.\n"
             f"- I sent you a note about {company.name} earlier; wanted to catch you live.\n"
             f"- Quick reason for the call: [reference a specific problem from the audit].\n"
             f"- Got 5 min later this week to dig in?\n\n"
@@ -263,7 +265,7 @@ async def _build_step_payload(
         body = (
             f"Connect note (under 280 chars):\n\n"
             f"Hey {contact.first_name or 'there'} — saw your work at {company.name}. "
-            f"Love connecting with fellow backyard pros.\n\n"
+            f"Always glad to connect with local business owners.\n\n"
             f"(After accept) DM with one specific insight from their site/Google reviews."
         )
         return f"LinkedIn step {idx}", body, body
@@ -328,7 +330,7 @@ async def _pre_generate_drafts(
                 if tstep["label"] == "cold":
                     draft = await generate_cold_email(
                         business_name=company.name,
-                        business_type=company.business_type or company.industry or "backyard professional",
+                        business_type=company.business_type or company.industry or "local business",
                         website=company.website or "",
                         problems=problems,
                         contact_name=contact.full_name,
@@ -342,7 +344,7 @@ async def _pre_generate_drafts(
                     cold_subject = email_drafts.get("cold", {}).get("subject", "")
                     draft = await generate_follow_up(
                         business_name=company.name,
-                        business_type=company.business_type or company.industry or "backyard professional",
+                        business_type=company.business_type or company.industry or "local business",
                         problems=problems,
                         previous_email_subject=cold_subject,
                         follow_up_number=fu_num,
@@ -365,7 +367,7 @@ async def _pre_generate_drafts(
                 msg_audit_url = audit_url if tstep["label"] == "imessage_1" else None
                 draft = await generate_imessage(
                     business_name=company.name or "your business",
-                    business_type=company.business_type or company.industry or "backyard professional",
+                    business_type=company.business_type or company.industry or "local business",
                     contact_name=contact.full_name,
                     problems=problems,
                     recent_posts=recent_posts,
@@ -525,6 +527,10 @@ async def start_engagement(
     engagement_id = int(eng_row[0])
 
     # Materialize action rows from the template.
+    # Resolve the tenant's outreach company name ONCE for the call/LinkedIn
+    # boilerplate (never hardcode BMP). Empty when the tenant hasn't set it.
+    from app.runtime_config import get_org_brand
+    sender_company = (await get_org_brand(db)).get("company_name", "")
     created = 0
     earliest_pending: Optional[datetime] = None
     skip_token = secrets.token_hex(4)
@@ -543,7 +549,7 @@ async def start_engagement(
 
         subject, body, task_description = await _build_step_payload(
             db=db, contact=contact, company=company,
-            tstep=tstep, idx=idx,
+            tstep=tstep, idx=idx, sender_company=sender_company,
             email_drafts=email_drafts, imessage_drafts=imessage_drafts,
         )
 

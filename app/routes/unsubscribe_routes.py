@@ -22,12 +22,15 @@ async def unsubscribe(
     t: str = Query(..., min_length=10, description="Per-contact unsubscribe token"),
     db: AsyncSession = Depends(get_tenant_db),
 ):
+    from app.runtime_config import get_org_brand
+    brand_name = (await get_org_brand(db)).get("company_name", "")
+
     contact = (await db.execute(
         select(Contact).where(Contact.unsubscribe_token == t)
     )).scalar_one_or_none()
 
     if not contact:
-        return HTMLResponse(_page("Unsubscribe link is no longer valid", "If you continue to receive emails, reply to one and we'll remove you manually."), status_code=404)
+        return HTMLResponse(_page("Unsubscribe link is no longer valid", "If you continue to receive emails, reply to one and we'll remove you manually.", brand_name), status_code=404)
 
     if not contact.unsubscribed_at:
         contact.unsubscribed_at = datetime.now(timezone.utc)
@@ -90,18 +93,23 @@ async def unsubscribe(
         ))
         await db.commit()
 
+    _from_clause = f" from {brand_name}" if brand_name else ""
     return HTMLResponse(_page(
         "You've been unsubscribed",
-        "We've removed you from this email list. You won't receive any further messages from Backyard Marketing Pros related to this outreach. Thanks for letting us know.",
+        f"We've removed you from this email list. You won't receive any further messages{_from_clause} related to this outreach. Thanks for letting us know.",
+        brand_name,
     ))
 
 
-def _page(title: str, body: str) -> str:
+def _page(title: str, body: str, brand_name: str = "") -> str:
+    _title_suffix = f" — {brand_name}" if brand_name else ""
+    _footer = (f'<p style="margin-top:24px;font-size:12px;color:#888">— '
+               f'<span class="brand">{brand_name}</span></p>') if brand_name else ""
     return f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>{title} — Backyard Marketing Pros</title>
+<title>{title}{_title_suffix}</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; background: #f7f9f7; margin: 0; padding: 40px 20px; color: #333; }}
@@ -115,7 +123,7 @@ p {{ line-height: 1.6; font-size: 14px; }}
   <div class="card">
     <h1>{title}</h1>
     <p>{body}</p>
-    <p style="margin-top:24px;font-size:12px;color:#888">— <span class="brand">Backyard Marketing Pros</span></p>
+    {_footer}
   </div>
 </body>
 </html>"""

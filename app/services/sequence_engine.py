@@ -282,7 +282,7 @@ async def _handle_imessage(db: AsyncSession, step: GeneratedEmail, contact: Cont
         try:
             gen = await generate_imessage(
                 business_name=company.name or "your business",
-                business_type=company.business_type or company.industry or "backyard professional",
+                business_type=company.business_type or company.industry or "local business",
                 contact_name=contact.full_name,
                 problems=problems,
                 recent_posts=recent_posts,
@@ -1168,7 +1168,7 @@ async def start_sequence_from_template(
                 if tstep["label"] == "cold":
                     draft = await generate_cold_email(
                         business_name=company.name,
-                        business_type=company.business_type or company.industry or "backyard professional",
+                        business_type=company.business_type or company.industry or "local business",
                         website=company.website or "",
                         problems=problems,
                         contact_name=contact.full_name,
@@ -1182,7 +1182,7 @@ async def start_sequence_from_template(
                     cold_subject = email_drafts.get("cold", {}).get("subject", "")
                     draft = await generate_follow_up(
                         business_name=company.name,
-                        business_type=company.business_type or company.industry or "backyard professional",
+                        business_type=company.business_type or company.industry or "local business",
                         problems=problems,
                         previous_email_subject=cold_subject,
                         follow_up_number=fu_num,
@@ -1211,7 +1211,7 @@ async def start_sequence_from_template(
                 msg_audit_url = audit_url if tstep["label"] == "imessage_1" else None
                 draft = await generate_imessage(
                     business_name=company.name or "your business",
-                    business_type=company.business_type or company.industry or "backyard professional",
+                    business_type=company.business_type or company.industry or "local business",
                     contact_name=contact.full_name,
                     problems=problems,
                     recent_posts=recent_posts,

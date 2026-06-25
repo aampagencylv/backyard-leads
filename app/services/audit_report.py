@@ -546,6 +546,7 @@ def render_report_html(
     left_image_url: str = "", left_message: str = "",
     right_image_url: str = "", right_message: str = "",
     booking_url_override: str = "",
+    company_name: str = "", website_url: str = "",
 ) -> str:
     """Render the audit report as a branded HTML page.
 
@@ -560,7 +561,11 @@ def render_report_html(
     on the 'Schedule a Discovery Call' CTAs. Used to route to the
     native scheduler (/book/{slug}) or a custom URL."""
     header_img = (header_url or "").strip() or DEFAULT_HEADER_BANNER
-    footer_img = (footer_logo_url or "").strip() or DEFAULT_FOOTER_LOGO
+    # No BMP fallback logo — show the tenant's logo or nothing (the <img>
+    # onerror hides an empty src). Footer company/site come from the tenant.
+    footer_img = (footer_logo_url or "").strip()
+    _co_name = (company_name or "").strip()
+    _co_site = (website_url or "").strip().replace("https://", "").replace("http://", "").rstrip("/")
     left_img = (left_image_url or "").strip()
     left_msg = (left_message or "").strip()
     right_img = (right_image_url or "").strip()
@@ -620,8 +625,10 @@ def render_report_html(
     # behavior). The caller can override to point at the native
     # scheduler /book/{slug} or any custom URL.
     from app.config import settings as _settings
-    default_iclosed = _settings.iclosed_booking_url or "https://app.iclosed.io/e/backyardmarketingpros/discovery-call"
-    booking_url = (booking_url_override or "").strip() or default_iclosed
+    # Tenant booking link comes from booking_url_override (native scheduler /
+    # custom URL resolved per-tenant). Only fall back to the global iClosed
+    # default when explicitly configured — never to a hardcoded BMP link.
+    booking_url = (booking_url_override or "").strip() or (_settings.iclosed_booking_url or "").strip()
 
     # Side panels — rendered only when content is configured. Each side
     # can be: just an image, just a message, or both. When both sides
@@ -868,16 +875,16 @@ def render_report_html(
         <div class="section" style="text-align:center;padding:32px">
             <h2 style="border:none;text-align:center">Ready to get found by AI?</h2>
             <p style="font-size:14px;color:#666;margin:12px 0 20px">
-                We help {_esc(report.business_type or 'backyard')} professionals get discovered by
+                We help {_esc(report.business_type or 'local')} businesses get discovered by
                 ChatGPT, Google AI, and Perplexity. Pick a time below — we'll walk through what we found and the fastest fixes.
             </p>
-            <a href="{_esc(booking_url)}" style="display:inline-block;background:#E65100;color:white;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px">📅 Schedule A Discovery Call</a>
+            {f'<a href="{_esc(booking_url)}" style="display:inline-block;background:#E65100;color:white;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px">📅 Schedule A Discovery Call</a>' if booking_url else '<p style="font-size:14px;color:#888">Reply to the email that sent you this report and we&#39;ll set up a time.</p>'}
         </div>
 
         <div class="footer">
-            <img src="{_esc(footer_img)}" style="max-width:200px;max-height:60px;margin-bottom:8px" alt="Logo" onerror="this.style.display='none'">
-            <p>Backyard Marketing Pros &middot; A Division of AAMP Agency</p>
-            <p style="margin-top:4px">backyardmarketingpros.com</p>
+            {f'<img src="{_esc(footer_img)}" style="max-width:200px;max-height:60px;margin-bottom:8px" alt="Logo" onerror="this.style.display=&#39;none&#39;">' if footer_img else ''}
+            {f'<p>{_esc(_co_name)}</p>' if _co_name else ''}
+            {f'<p style="margin-top:4px">{_esc(_co_site)}</p>' if _co_site else ''}
         </div>
     </div>
     {outer_close}

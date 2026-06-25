@@ -150,8 +150,12 @@ async def get_org_brand(db: AsyncSession) -> dict:
         "secondary_color": _hex(getattr(rc, "brand_secondary_color", None), "#1B5E20"),
         "accent_bg_color": _hex(getattr(rc, "brand_accent_bg_color", None), "#FFF8F0"),
         "logo_url":        (getattr(rc, "brand_logo_url", None) or "").strip(),
-        "company_name":    (getattr(rc, "brand_company_name", None) or "Backyard Marketing Pros").strip(),
-        "website_url":     (getattr(rc, "brand_website_url", None) or "https://backyardmarketingpros.com").strip(),
+        # NEUTRAL fallbacks — never another tenant's identity. A tenant that
+        # hasn't set these gets empty strings; callers must handle empty
+        # (e.g. block the send, omit the footer) rather than ship BMP's name.
+        "company_name":    (getattr(rc, "brand_company_name", None) or "").strip(),
+        "website_url":     (getattr(rc, "brand_website_url", None) or "").strip(),
+        "compliance_address": (getattr(rc, "compliance_address", None) or "").strip(),
     }
 
 
@@ -163,6 +167,7 @@ async def set_org_brand(
     logo_url: Optional[str] = None,
     company_name: Optional[str] = None,
     website_url: Optional[str] = None,
+    compliance_address: Optional[str] = None,
 ) -> RuntimeConfig:
     rc = await _get_or_create(db)
     def _hex(v, fb):
@@ -177,12 +182,16 @@ async def set_org_brand(
     if logo_url is not None:
         rc.brand_logo_url = logo_url.strip()[:500] or None
     if company_name is not None:
-        rc.brand_company_name = company_name.strip()[:120] or "Backyard Marketing Pros"
+        # No BMP fallback — store exactly what the tenant entered (empty allowed;
+        # callers treat empty as "not configured" and refuse to ship BMP's name).
+        rc.brand_company_name = company_name.strip()[:120]
     if website_url is not None:
         v = website_url.strip()[:500]
         if v and not v.lower().startswith(("http://", "https://")):
             v = "https://" + v
-        rc.brand_website_url = v or "https://backyardmarketingpros.com"
+        rc.brand_website_url = v
+    if compliance_address is not None:
+        rc.compliance_address = compliance_address.strip()[:500] or None
     rc.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(rc)

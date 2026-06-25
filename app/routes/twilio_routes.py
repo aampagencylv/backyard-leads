@@ -51,6 +51,23 @@ from app.config import settings
 router = APIRouter(prefix="/api/twilio", tags=["twilio"])
 
 
+async def _tenant_brand_name(tenant_id: Optional[int]) -> str:
+    """The sending tenant's outreach company name (for voicemail greetings).
+    Never hardcodes BMP — returns '' when unknown/unset so the greeting
+    template falls back to a neutral phrase."""
+    if not tenant_id:
+        return ""
+    try:
+        from sqlalchemy import text as _text
+        async with async_session() as db:
+            row = (await db.execute(_text(
+                "SELECT brand_company_name FROM runtime_config WHERE tenant_id = :t LIMIT 1"
+            ), {"t": int(tenant_id)})).first()
+        return (row[0] or "").strip() if row else ""
+    except Exception:
+        return ""
+
+
 def _admin_only(user: User) -> None:
     if user.role not in ("admin", "super_admin"):
         raise HTTPException(status_code=403, detail="Admin access required")
@@ -611,7 +628,7 @@ async def voice_inbound(request: Request):
         public = settings.public_url.rstrip('/')
         recording_callback = f"{public}/api/twilio/voice/voicemail-recording"
         twiml = build_voicemail_twiml(
-            company_name="Backyard Marketing Pros",
+            company_name=(await _tenant_brand_name(getattr(rep, "tenant_id", None))) or "our office",
             recording_status_callback=recording_callback,
         )
         return Response(content=twiml, media_type="application/xml")
@@ -624,7 +641,7 @@ async def voice_inbound(request: Request):
         if rep.voicemail_greeting_url:
             custom_greeting_url = f"{public}{rep.voicemail_greeting_url}"
         twiml = build_voicemail_twiml(
-            company_name="Backyard Marketing Pros",
+            company_name=(await _tenant_brand_name(getattr(rep, "tenant_id", None))) or "our office",
             rep_first_name=rep.first_name,
             recording_status_callback=recording_callback,
             custom_greeting_url=custom_greeting_url,
@@ -654,18 +671,20 @@ async def inbound_voicemail(request: Request):
     rep_id = qp.get("rep_id")
     rep_first_name = None
     custom_greeting_url = None
+    rep_tenant_id = None
     if rep_id:
         async with async_session() as db:
             rep = (await db.execute(select(User).where(User.id == int(rep_id)))).scalar_one_or_none()
             if rep:
                 rep_first_name = rep.first_name
+                rep_tenant_id = getattr(rep, "tenant_id", None)
                 if rep.voicemail_greeting_url:
                     custom_greeting_url = f"{settings.public_url.rstrip('/')}{rep.voicemail_greeting_url}"
 
     public = settings.public_url.rstrip('/')
     recording_callback = f"{public}/api/twilio/voice/voicemail-recording?from={qp.get('from','')}&rep_id={rep_id or ''}"
     twiml = build_voicemail_twiml(
-        company_name="Backyard Marketing Pros",
+        company_name=(await _tenant_brand_name(rep_tenant_id)) or "our office",
         rep_first_name=rep_first_name,
         recording_status_callback=recording_callback,
         custom_greeting_url=custom_greeting_url,

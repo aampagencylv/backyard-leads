@@ -68,6 +68,30 @@ async def _resolve_send_domain(company_id: Optional[int]) -> str:
     return fallback
 
 
+async def _resolve_compliance_address(company_id: Optional[int]) -> str:
+    """The CAN-SPAM postal address for the tenant that owns `company_id`.
+
+    Per-tenant (RuntimeConfig.compliance_address). NEVER falls back to another
+    tenant's address — returns "" when unset, and send_email then refuses to
+    send (a missing/borrowed physical address is a CAN-SPAM violation)."""
+    if not company_id:
+        return ""
+    try:
+        from app.database import async_session
+        from sqlalchemy import text as _text
+        async with async_session() as db:
+            row = (await db.execute(_text(
+                "SELECT rc.compliance_address "
+                "FROM companies co JOIN runtime_config rc ON rc.tenant_id = co.tenant_id "
+                "WHERE co.id = :c LIMIT 1"
+            ), {"c": company_id})).first()
+        if row and row[0]:
+            return str(row[0]).strip()
+    except Exception:
+        pass
+    return ""
+
+
 def _swap_domain(addr: str, new_domain: str) -> str:
     """Replace the domain part of an email address, keeping the local part
     (so a reply-routing local part like `r-<token>` survives). Used to keep
@@ -203,18 +227,19 @@ async def _log_outbound_audit(
         )
 
 
-def _compliance_footer() -> str:
+def _compliance_footer(postal_address: str) -> str:
     """
     Minimal compliance footer. Postal address only (CAN-SPAM requirement).
-    No visible unsubscribe link — Gmail/Outlook handle that via the
-    List-Unsubscribe HTTP header (set in the Resend payload), which surfaces
-    as a native button at the top of the email instead of footer copy.
-    Visible footer "click to unsubscribe" links trigger Gmail Promotions
-    classification and hurt inbox placement.
+    The address is the SENDING TENANT's own physical address (resolved per
+    tenant in send_email) — never a shared/borrowed one. No visible
+    unsubscribe link — Gmail/Outlook handle that via the List-Unsubscribe
+    HTTP header (set in the Resend payload), which surfaces as a native
+    button at the top of the email instead of footer copy. Visible footer
+    "click to unsubscribe" links trigger Gmail Promotions classification.
     """
     return f"""
     <div style="margin-top:20px;font-size:11px;color:#999;font-family:Arial,sans-serif;">
-        {settings.bmp_postal_address}
+        {postal_address}
     </div>
     """
 
@@ -339,6 +364,17 @@ async def send_email(
     # hasn't verified a domain.
     _send_domain = await _resolve_send_domain(company_id)
     from_address = f"{from_name} <{from_firstname}@{_send_domain}>"
+
+    # CAN-SPAM: the footer must carry the SENDING tenant's own physical
+    # address. Refuse to send if it's unset rather than ship a blank or a
+    # borrowed (other-tenant) address — both are violations. Tenants set
+    # this in onboarding / Settings → Business Identity.
+    _postal_address = await _resolve_compliance_address(company_id)
+    if not _postal_address:
+        return await _refuse(
+            "no_compliance_address",
+            "Refused: tenant has no CAN-SPAM postal address configured "
+            "(Settings → Business Identity). Cannot legally send.")
     # Keep OUR reply-routing address ("r-<token>@…") on the tenant's send
     # domain. Do NOT touch an arbitrary external Reply-To (e.g. a forwarded
     # reply where Reply-To is the prospect's real email) — swapping that would
@@ -360,7 +396,7 @@ async def send_email(
 
     body_html = body.replace("\n", "<br>")
     sig_block = f'<div style="margin-top:24px">{signature_html}</div>' if signature_html else ""
-    footer = _compliance_footer()
+    footer = _compliance_footer(_postal_address)
     html_body = f"""
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; color: #333; line-height: 1.6;">
         {body_html}
