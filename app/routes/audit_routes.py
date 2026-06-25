@@ -62,7 +62,11 @@ async def _resolve_audit_booking_url(db, rc, public_url: str = "") -> str:
     """
     scheduler_type = (getattr(rc, "audit_scheduler_type", None) or "iclosed").lower()
     if scheduler_type == "iclosed":
-        return ""  # render_report_html falls back to settings.iclosed_booking_url
+        # The global iClosed URL is BMP's. Return it explicitly so it's only
+        # ever used when a tenant deliberately picks 'iclosed' — never as a
+        # silent cross-tenant fallback for a tenant whose native/custom
+        # booking just isn't set up yet.
+        return (settings.iclosed_booking_url or "").strip()
     if scheduler_type == "custom":
         return (getattr(rc, "audit_custom_url", "") or "").strip()
     if scheduler_type == "native":

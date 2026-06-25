@@ -636,11 +636,12 @@ def render_report_html(
     # touched we still default to the iClosed URL (preserves existing
     # behavior). The caller can override to point at the native
     # scheduler /book/{slug} or any custom URL.
-    from app.config import settings as _settings
-    # Tenant booking link comes from booking_url_override (native scheduler /
-    # custom URL resolved per-tenant). Only fall back to the global iClosed
-    # default when explicitly configured — never to a hardcoded BMP link.
-    booking_url = (booking_url_override or "").strip() or (_settings.iclosed_booking_url or "").strip()
+    # Booking link is fully resolved per-tenant by the caller
+    # (_resolve_audit_booking_url): iClosed only when the tenant picked it,
+    # native /book/ when configured, else "". No global fallback here — an
+    # empty value renders the neutral "reply to this email" CTA instead of
+    # silently leaking BMP's iClosed link to another tenant.
+    booking_url = (booking_url_override or "").strip()
 
     # Side panels — rendered only when content is configured. Each side
     # can be: just an image, just a message, or both. When both sides
