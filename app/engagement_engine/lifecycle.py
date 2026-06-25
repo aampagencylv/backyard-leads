@@ -274,7 +274,7 @@ async def _build_step_payload(
 
 async def _pre_generate_drafts(
     *, db: AsyncSession, contact: Contact, company: Company,
-    template: list[dict],
+    template: list[dict], objective: Optional[str] = None,
 ) -> tuple[dict, dict, Optional[str]]:
     """Mirror legacy pre-generation: call generate_cold_email,
     generate_follow_up, generate_imessage for the steps that need them.
@@ -298,6 +298,16 @@ async def _pre_generate_drafts(
         direction = await get_messaging_direction(db)
     except Exception:  # noqa: BLE001
         direction = None
+
+    # Fold the sequence's own agenda into the AI direction so every step in
+    # THIS sequence serves it (e.g. a 120-day nurture to stay top-of-mind),
+    # on top of the tenant's org-wide messaging.
+    if objective and objective.strip():
+        _base = (direction or "").strip()
+        direction = ((_base + "\n\n") if _base else "") + (
+            "THIS SEQUENCE'S AGENDA — every message in this sequence must serve "
+            f"this goal:\n{objective.strip()}"
+        )
 
     try:
         problems = json.loads(company.problems_found) if company.problems_found else []
@@ -378,6 +388,7 @@ async def start_engagement(
     *,
     template: Optional[list[dict]] = None,
     sequence_label: str = "main",
+    objective: Optional[str] = None,
     pre_generate_content: bool = True,
     assigned_bdr_id: Optional[int] = None,
     initiated_by: str = "autopilot",
@@ -460,6 +471,7 @@ async def start_engagement(
     if pre_generate_content:
         email_drafts, imessage_drafts, _ = await _pre_generate_drafts(
             db=db, contact=contact, company=company, template=template,
+            objective=objective,
         )
 
     # Resolve assigned BDR: explicit param > engagement-level assignment >

@@ -159,6 +159,7 @@ async def init_db():
         "scripts.migrate_user_email_per_tenant",
         "scripts.migrate_target_business_types",
         "scripts.migrate_target_regions",
+        "scripts.migrate_sequence_objective",
     )
 
     # Decide which actually need to run.

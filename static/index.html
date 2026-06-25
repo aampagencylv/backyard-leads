@@ -15838,6 +15838,7 @@ hmac.compare_digest(expected, header)</pre>
             _seqTemplateDraft = {
                 id: null,
                 name: 'New Template',
+                objective: '',
                 steps: [
                     { day: 0, step_type: 'email', label: 'cold', skip_if: ['no_email', 'opted_out'], auto: true },
                 ],
@@ -15854,6 +15855,7 @@ hmac.compare_digest(expected, header)</pre>
             _seqTemplateDraft = {
                 id: t.id,
                 name: t.name,
+                objective: t.objective || '',
                 steps: t.steps.map(s => ({ ...s, skip_if: [...(s.skip_if || [])] })),
                 auto_skip_days: t.auto_skip_days,
                 auto_resume_days: t.auto_resume_days,
@@ -15885,6 +15887,25 @@ hmac.compare_digest(expected, header)</pre>
                         <label style="font-size:12px;color:#666">Auto-resume paused sequence after (days, 0 = never)
                             <input id="st-resume" type="number" min="0" max="90" value="${d.auto_resume_days}" style="width:100%;padding:6px 10px;border:1px solid #ddd;border-radius:6px;margin-top:4px">
                         </label>
+                    </div>
+                    <div style="max-width:760px;margin-bottom:16px;padding:12px;border:1px solid #f0e0c0;background:#fffaf2;border-radius:8px">
+                        <label style="font-size:12px;color:#666;font-weight:600">🎯 Sequence agenda — what should this sequence accomplish?
+                            <textarea id="st-objective" rows="3" placeholder="e.g. A 120-day nurture to keep the customer aware of who we are and what we do — stay top-of-mind, share a useful tip or result each month, no hard pitch." style="width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:6px;margin-top:4px;font-family:inherit;font-size:13px;line-height:1.5;resize:vertical">${escapeHtml(d.objective || '')}</textarea>
+                        </label>
+                        <div style="font-size:11px;color:#888;margin-top:4px">The AI reads this when writing every email in the sequence, so the whole cadence stays on-message.</div>
+                    </div>
+                    <div style="max-width:760px;margin-bottom:14px;padding:12px;border:1px solid #eee;background:#f8f9fa;border-radius:8px">
+                        <div style="font-size:12px;font-weight:600;color:#666;margin-bottom:8px">⚡ Quick cadence builder — generate an evenly-spaced email schedule</div>
+                        <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+                            <label style="font-size:11px;color:#666">Over how many days
+                                <input id="st-cad-days" type="number" min="1" max="730" value="120" style="width:90px;padding:5px 8px;border:1px solid #ddd;border-radius:5px;margin-top:3px;display:block">
+                            </label>
+                            <label style="font-size:11px;color:#666">How many emails
+                                <input id="st-cad-count" type="number" min="1" max="60" value="5" style="width:90px;padding:5px 8px;border:1px solid #ddd;border-radius:5px;margin-top:3px;display:block">
+                            </label>
+                            <button class="btn btn-secondary btn-sm" onclick="buildSeqCadence()">Generate schedule</button>
+                            <span style="font-size:11px;color:#888">Replaces the steps below with N email steps spread evenly.</span>
+                        </div>
                     </div>
                     <div style="margin-bottom:8px"><strong>Steps</strong> <span style="font-size:11px;color:#888">(day = days from sequence start)</span></div>
                     <div id="st-steps"></div>
@@ -15965,9 +15986,31 @@ hmac.compare_digest(expected, header)</pre>
             if (box) box.style.display = 'none';
         }
 
+        function buildSeqCadence() {
+            const days = Math.max(1, Math.min(730, parseInt(document.getElementById('st-cad-days').value) || 120));
+            const count = Math.max(1, Math.min(60, parseInt(document.getElementById('st-cad-count').value) || 5));
+            const steps = [];
+            for (let i = 0; i < count; i++) {
+                const day = count === 1 ? 0 : Math.round((days * i) / (count - 1));
+                steps.push({
+                    day,
+                    step_type: 'email',
+                    label: i === 0 ? 'cold' : `follow_up_${i}`,
+                    skip_if: ['no_email', 'opted_out'],
+                    auto: true,
+                });
+            }
+            // keep the agenda the user already typed (re-render only the steps)
+            _seqTemplateDraft.objective = (document.getElementById('st-objective') || {}).value || _seqTemplateDraft.objective;
+            _seqTemplateDraft.steps = steps;
+            renderSequenceTemplateSteps();
+            toast(`Built ${count} email${count > 1 ? 's' : ''} over ${days} days`);
+        }
+
         async function saveSequenceTemplate() {
             const d = _seqTemplateDraft;
             d.name = document.getElementById('st-name').value.trim();
+            d.objective = (document.getElementById('st-objective') || {}).value.trim();
             d.is_active = document.getElementById('st-active').checked;
             d.auto_skip_days = parseInt(document.getElementById('st-skip').value) || 0;
             d.auto_resume_days = parseInt(document.getElementById('st-resume').value) || 0;
@@ -15980,6 +16023,7 @@ hmac.compare_digest(expected, header)</pre>
             }
             const payload = {
                 name: d.name,
+                objective: d.objective || '',
                 steps: d.steps,
                 auto_skip_days: d.auto_skip_days,
                 auto_resume_days: d.auto_resume_days,

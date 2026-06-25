@@ -1507,6 +1507,10 @@ class SequenceTemplate(TenantMixin, Base):
     is_active = Column(Boolean, default=True, nullable=False, index=True)
     is_default = Column(Boolean, default=False, nullable=False, index=True)
     steps_json = Column(Text, nullable=False)
+    # Human-written agenda/goal of the sequence — fed to the AI when generating
+    # each step so a long nurture stays on-message (e.g. "stay top-of-mind over
+    # 120 days; remind them who we are and what we do").
+    objective = Column(Text, nullable=True)
     auto_skip_days = Column(Integer, default=3, nullable=False)
     auto_resume_days = Column(Integer, default=0, nullable=False)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)

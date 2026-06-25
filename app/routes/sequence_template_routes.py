@@ -77,6 +77,7 @@ def _to_dict(t: SequenceTemplate) -> dict:
         "name": t.name,
         "is_active": t.is_active,
         "is_default": t.is_default,
+        "objective": t.objective or "",
         "steps": steps,
         "step_count": len(steps),
         "auto_skip_days": t.auto_skip_days,
@@ -122,6 +123,7 @@ async def get_template(
 class TemplatePayload(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     steps: list[dict]
+    objective: str = ""   # agenda fed to the AI when generating each step
     auto_skip_days: int = 3
     auto_resume_days: int = 0
     is_active: bool = True
@@ -150,6 +152,7 @@ async def create_template(
         is_active=payload.is_active,
         is_default=False,  # explicit set_default endpoint to flip
         steps_json=json.dumps(steps),
+        objective=(payload.objective or "").strip() or None,
         auto_skip_days=payload.auto_skip_days,
         auto_resume_days=payload.auto_resume_days,
         created_by=user.id,
@@ -187,6 +190,7 @@ async def update_template(
             raise HTTPException(400, f"A template named {payload.name!r} already exists")
     t.name = payload.name
     t.steps_json = json.dumps(steps)
+    t.objective = (payload.objective or "").strip() or None
     t.auto_skip_days = payload.auto_skip_days
     t.auto_resume_days = payload.auto_resume_days
     t.is_active = payload.is_active
@@ -353,6 +357,7 @@ async def apply_to_existing(
             db, contact,
             template=template_steps,
             sequence_label="main",
+            objective=t.objective,  # sequence agenda → folds into the AI direction
             pre_generate_content=False,  # template steps may not match cold/follow_up shape
             initiated_by=f"admin_apply:{user.email[:24]}",
         )
