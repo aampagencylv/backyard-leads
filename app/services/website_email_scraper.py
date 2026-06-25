@@ -51,7 +51,11 @@ _NOISE_DOMAIN_SUBSTR = (
     "squarespace", "shopify", "cloudflare", "googleusercontent", "gstatic",
     "schema.org", "w3.org", "example.com", "example.org", "domain.com",
     "yourdomain", "email.com", "test.com", "sentry-next",
+    "mysite.com", "wixsite.com", "godaddysites.com", "weebly.com",
 )
+
+# Placeholder localparts that ship inside site templates.
+_NOISE_LOCALPARTS = {"example", "sample", "yourname", "youremail", "email", "test"}
 
 # Exact placeholder addresses that ship inside templates.
 _NOISE_EXACT = {
@@ -94,6 +98,8 @@ def _is_noise(email: str) -> bool:
         return True
     domain = e.split("@", 1)[1] if "@" in e else ""
     if any(s in domain for s in _NOISE_DOMAIN_SUBSTR):
+        return True
+    if e.split("@", 1)[0] in _NOISE_LOCALPARTS:
         return True
     # Hex-blob localparts (Wix/Sentry event ids look like emails) — 24+ hex chars.
     local = e.split("@", 1)[0]
