@@ -395,8 +395,16 @@ async def start_engagement(
     pre_generate_content: bool = True,
     assigned_bdr_id: Optional[int] = None,
     initiated_by: str = "autopilot",
+    hold_for_approval: bool = False,
 ) -> int:
     """Create an engagement + action rows for the contact.
+
+    hold_for_approval=True (used by 'moderate' campaigns) materializes every
+    sendable step as `awaiting_approval` instead of `scheduled`, so NOTHING
+    goes out until a BDR approves. One approval on any held step releases the
+    whole sequence (see approve_action's cascade). This is the only behavioral
+    difference between moderate and full_auto — discovery/enrollment is
+    identical for both.
 
     Returns the number of action rows created. Returns 0 if:
       - contact has no company (orphan)
@@ -553,8 +561,11 @@ async def start_engagement(
             body = f"Skipped at creation: {skip_reason}"
             task_description = None
         else:
-            status = "scheduled"
-            if earliest_pending is None or scheduled_at < earliest_pending:
+            status = "awaiting_approval" if hold_for_approval else "scheduled"
+            # Only 'scheduled' actions are due-able; held actions don't set
+            # next_action_due_at (the dispatcher claims status='scheduled' only,
+            # so they wait until approval flips them to scheduled).
+            if status == "scheduled" and (earliest_pending is None or scheduled_at < earliest_pending):
                 earliest_pending = scheduled_at
 
         idem_key = f"enroll-{engagement_id}-{idx}-{skip_token}"

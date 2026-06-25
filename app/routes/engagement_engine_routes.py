@@ -426,26 +426,75 @@ async def approve_action(
     db: AsyncSession = Depends(get_tenant_db),
     current_user: User = Depends(get_current_user),
 ) -> ActionItem:
-    """BDR approves an action that was flagged requires_human_review.
-    Moves status: awaiting_approval → scheduled."""
-    result = await db.execute(text("""
-        UPDATE actions
-        SET status = 'scheduled',
-            approved_by_user_id = :uid,
-            approved_at = NOW(),
-            updated_at = NOW()
+    """BDR approves an action that was held for review.
+
+    Moves status: awaiting_approval → scheduled.
+
+    For a 'moderate' campaign enrollment (ai_strategy_used='enrollment'), one
+    approval releases the WHOLE sequence: every held step in the same
+    engagement is released together and the schedule is REBASED to start now
+    (preserving the original inter-step gaps), so approving days after
+    enrollment doesn't fire a burst of back-dated emails. For any other held
+    action (e.g. an ad-hoc signal reaction), only that single action is
+    released."""
+    tid = db.info.get("tenant_id")
+    target = (await db.execute(text("""
+        SELECT engagement_id, ai_strategy_used
+        FROM actions
         WHERE id = :id AND tenant_id = :tid AND status = 'awaiting_approval'
-        RETURNING id, engagement_id, channel_id, status, scheduled_at,
-                  executed_at, subject, body, recipient_email,
-                  requires_human_review, approved_by_user_id, approved_at,
-                  error_message, skip_reason, outcome
-    """), {"id": action_id, "uid": current_user.id, "tid": db.info.get("tenant_id")})
-    row = result.first()
-    if row is None:
+    """), {"id": action_id, "tid": tid})).first()
+    if target is None:
         raise HTTPException(
             status_code=404,
             detail="action not found or not awaiting_approval",
         )
+
+    eng_id = target.engagement_id
+    if target.ai_strategy_used == "enrollment" and eng_id is not None:
+        # Whole-sequence release, rebased so the earliest held step sends now.
+        await db.execute(text("""
+            WITH base AS (
+                SELECT MIN(scheduled_at) AS b
+                FROM actions
+                WHERE engagement_id = :eid AND tenant_id = :tid
+                  AND status = 'awaiting_approval' AND ai_strategy_used = 'enrollment'
+            )
+            UPDATE actions a
+            SET status = 'scheduled',
+                scheduled_at = NOW() + (a.scheduled_at - (SELECT b FROM base)),
+                stale_after  = NOW() + (a.scheduled_at - (SELECT b FROM base)) + INTERVAL '2 days',
+                approved_by_user_id = :uid,
+                approved_at = NOW(),
+                updated_at = NOW()
+            WHERE a.engagement_id = :eid AND a.tenant_id = :tid
+              AND a.status = 'awaiting_approval' AND a.ai_strategy_used = 'enrollment'
+        """), {"eid": eng_id, "tid": tid, "uid": current_user.id})
+        # Point the engagement at the now-due first step for the dispatcher.
+        await db.execute(text("""
+            UPDATE engagements
+            SET next_action_due_at = (
+                SELECT MIN(scheduled_at) FROM actions
+                WHERE engagement_id = :eid AND tenant_id = :tid AND status = 'scheduled'
+            )
+            WHERE id = :eid AND tenant_id = :tid
+        """), {"eid": eng_id, "tid": tid})
+    else:
+        await db.execute(text("""
+            UPDATE actions
+            SET status = 'scheduled',
+                approved_by_user_id = :uid,
+                approved_at = NOW(),
+                updated_at = NOW()
+            WHERE id = :id AND tenant_id = :tid AND status = 'awaiting_approval'
+        """), {"id": action_id, "uid": current_user.id, "tid": tid})
+
+    row = (await db.execute(text("""
+        SELECT id, engagement_id, channel_id, status, scheduled_at,
+               executed_at, subject, body, recipient_email,
+               requires_human_review, approved_by_user_id, approved_at,
+               error_message, skip_reason, outcome
+        FROM actions WHERE id = :id AND tenant_id = :tid
+    """), {"id": action_id, "tid": tid})).first()
     await db.commit()
     return await _row_to_action_item(db, row)
 

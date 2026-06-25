@@ -107,7 +107,7 @@ async def _sequence_engine_loop():
     # HOWEVER, this loop ALSO owns several non-legacy responsibilities:
     #   - _activate_scheduled_campaigns: flips status='scheduled' →
     #     'running' when scheduled_start_at passes
-    #   - _advance_full_auto_campaigns: per-tick advance for full_auto
+    #   - _advance_running_campaigns: per-tick discovery batch for any running campaign
     #     campaigns (runs the single-pair _execute_batch path which
     #     itself now routes to lifecycle.start_engagement)
     #   - reconcile_calls every 5 min
@@ -170,7 +170,7 @@ async def _sequence_engine_loop():
         # throughput rather than artificially throttled spacing.
         for tid in tenant_ids:
             try:
-                await _advance_full_auto_campaigns(tid)
+                await _advance_running_campaigns(tid)
             except Exception as e:
                 log.exception(f"campaign auto-advance failed (tenant={tid}): {e}")
 
@@ -292,8 +292,14 @@ async def _activate_scheduled_campaigns(tenant_id: int):
                 await db.commit()
 
 
-async def _advance_full_auto_campaigns(tenant_id: int):
-    """Run one batch per active full_auto campaign for this tenant."""
+async def _advance_running_campaigns(tenant_id: int):
+    """Run one discovery batch per running campaign for this tenant —
+    BOTH full_auto AND moderate. Discovery/enrollment is identical for the
+    two modes; the only difference is enforced downstream at enrollment:
+    moderate campaigns materialize their sequences as 'awaiting_approval'
+    (held until a BDR approves), full_auto materialize as 'scheduled' (send
+    automatically). Gating discovery on mode here was the bug that left
+    moderate campaigns 'running' but doing nothing (no batch ever ran)."""
     from sqlalchemy import select as _select
     from app.models import Campaign as _Campaign
     from app.routes.campaign_routes import _execute_batch
@@ -304,7 +310,6 @@ async def _advance_full_auto_campaigns(tenant_id: int):
             rows = (await db.execute(
                 _select(_Campaign).where(
                     _Campaign.status == "running",
-                    _Campaign.mode == "full_auto",
                 )
             )).scalars().all()
 

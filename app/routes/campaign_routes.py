@@ -912,6 +912,8 @@ async def _execute_batch(campaign_id: int, db: AsyncSession, user: User):
                         pre_generate_content=True,
                         assigned_bdr_id=assigned_user.id,
                         initiated_by="autopilot",
+                        # moderate = hold the whole sequence for one BDR approval
+                        hold_for_approval=(campaign.mode == "moderate"),
                     )
                     campaign.total_sequences_created += 1
                     batch_results["sequences_created"] += 1
@@ -1156,6 +1158,8 @@ async def _process_business_through_pipeline(
             pre_generate_content=True,
             assigned_bdr_id=assigned_user.id,
             initiated_by="autopilot",
+            # moderate = hold the whole sequence for one BDR approval
+            hold_for_approval=(campaign.mode == "moderate"),
         )
         campaign.total_sequences_created += 1
         _log(db, campaign.id, "sequence_created",
