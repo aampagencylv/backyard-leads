@@ -3651,12 +3651,58 @@ function verify(secret, rawBody, header) {
                 const title = `Step ${s.sequence_order} · ${(s.step_type||'email').toUpperCase()} · ${label}`;
                 return `<span title="${escapeHtml(title)}" style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border:1px solid ${border};background:${bg};color:${fg};border-radius:3px;font-size:9px;line-height:1;font-weight:700">${iconFor(s.step_type||'email')}</span>`;
             }).join('');
+            const _cname = (contact.full_name || contact.name || 'this contact').replace(/'/g, "");
             return `
                 <div style="display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap">
                     <div style="display:flex;gap:2px;flex-wrap:wrap">${boxes}</div>
                     <span style="font-size:10px;color:#666;font-weight:600">${sentCount}/${steps.length}</span>
+                    <span onclick="moveContactToSequence(${contact.id}, '${escapeHtml(_cname)}')" title="Move this contact into a different sequence" style="font-size:10px;color:var(--bmp-orange);cursor:pointer;font-weight:600">↪ Move</span>
                 </div>
             `;
+        }
+
+        // Move a single contact out of their current sequence and into a
+        // chosen template. Pre-generates content (topic + agenda) at move time.
+        async function moveContactToSequence(contactId, contactName) {
+            const tpls = await api('/api/sequence-templates');
+            if (!Array.isArray(tpls)) { toast('Could not load sequences'); return; }
+            const active = tpls.filter(t => t.is_active);
+            if (!active.length) { toast('No active sequence templates'); return; }
+            const back = document.createElement('div');
+            back.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9999;display:flex;align-items:center;justify-content:center';
+            back.innerHTML = `
+                <div style="background:#fff;border-radius:12px;padding:22px;max-width:460px;width:92%;box-shadow:0 12px 40px rgba(0,0,0,0.25)">
+                    <h3 style="margin:0 0 4px">Move ${escapeHtml(contactName)} to a sequence</h3>
+                    <p style="font-size:12px;color:#888;margin:0 0 14px">Ends their current sequence and enrolls them in the one you pick. The new emails are written now from each step's topic + the sequence agenda.</p>
+                    <select id="move-seq-select" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:6px;font-size:14px;margin-bottom:8px">
+                        ${active.map(t => `<option value="${t.id}">${escapeHtml(t.name)} — ${t.step_count} step${t.step_count===1?'':'s'}${t.objective ? ' · has agenda' : ''}</option>`).join('')}
+                    </select>
+                    <div id="move-seq-obj" style="font-size:11px;color:#666;background:#fafafa;border:1px solid #eee;border-radius:6px;padding:8px;margin-bottom:14px;min-height:18px"></div>
+                    <div style="display:flex;gap:8px;justify-content:flex-end">
+                        <button class="btn btn-secondary btn-sm" id="move-seq-cancel">Cancel</button>
+                        <button class="btn btn-primary btn-sm" id="move-seq-go">Move →</button>
+                    </div>
+                </div>`;
+            document.body.appendChild(back);
+            const sel = back.querySelector('#move-seq-select');
+            const objBox = back.querySelector('#move-seq-obj');
+            const showObj = () => {
+                const t = active.find(x => String(x.id) === sel.value);
+                objBox.textContent = (t && t.objective) ? ('Agenda: ' + t.objective) : 'No agenda set on this sequence.';
+            };
+            sel.onchange = showObj; showObj();
+            const close = () => back.remove();
+            back.querySelector('#move-seq-cancel').onclick = close;
+            back.onclick = (e) => { if (e.target === back) close(); };
+            back.querySelector('#move-seq-go').onclick = async () => {
+                const tid = parseInt(sel.value);
+                back.querySelector('#move-seq-go').disabled = true;
+                back.querySelector('#move-seq-go').textContent = 'Moving…';
+                const r = await api('/api/sequence-templates/move', { method: 'POST', body: JSON.stringify({ contact_ids: [contactId], template_id: tid }) });
+                close();
+                if (r && r.moved > 0) { toast('✓ Moved to the new sequence'); if (typeof loadContacts === 'function') loadContacts(_lastContactMode); }
+                else { toast('Could not move — ' + ((r && r.errors && r.errors[0]) || 'try again')); }
+            };
         }
 
         // Legend for the progress strip — keyed by the same logic as

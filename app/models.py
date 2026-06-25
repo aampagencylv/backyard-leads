@@ -1778,6 +1778,9 @@ class Engagement(TenantMixin, Base):
     current_phase = Column(String(40), nullable=False, default="cold_outreach")
     last_transition_by = Column(String(20), nullable=False, default="system")
     status = Column(String(20), nullable=False, default="active")
+    # Sequence agenda (from the SequenceTemplate.objective) — fed to the AI
+    # whenever this engagement's steps are (re)generated, incl. send-time.
+    objective = Column(Text, nullable=True)
     terminal_reason = Column(String(60), nullable=True)
     terminal_at = Column(DateTime(timezone=True), nullable=True)
 
@@ -1969,6 +1972,9 @@ class Action(TenantMixin, Base):
 
     subject = Column(String(500), nullable=True)
     body = Column(Text, nullable=True)
+    # Per-step topic (from the template step) — what THIS message is about;
+    # used if the body must be (re)generated at send time.
+    topic = Column(Text, nullable=True)
     task_description = Column(Text, nullable=True)
     recipient_email = Column(String(320), nullable=True)
     recipient_phone = Column(String(40), nullable=True)

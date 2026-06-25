@@ -490,7 +490,7 @@ async def start_engagement(
             status, current_action_index,
             engagement_score, tier, summary_version,
             monthly_ai_cost_usd, monthly_ai_cost_reset_at,
-            started_at, assigned_bdr_id,
+            started_at, assigned_bdr_id, objective,
             created_at, updated_at
         )
         VALUES (
@@ -499,7 +499,7 @@ async def start_engagement(
             'active', 0,
             0, 'cold', 0,
             0, :now,
-            :now, :bdr,
+            :now, :bdr, :objective,
             :now, :now
         )
         RETURNING id
@@ -508,6 +508,7 @@ async def start_engagement(
         "c": contact.id,
         "co": company.id,
         "seq": sequence_number,
+        "objective": (objective or None),
         # last_transition_by is VARCHAR(20) on prod — truncate aggressively.
         "by": (initiated_by or "system")[:20],
         "now": now,
@@ -563,7 +564,7 @@ async def start_engagement(
                 tenant_id, engagement_id, contact_id,
                 channel_id, status, requires_human_review,
                 scheduled_at, stale_after,
-                subject, body, task_description,
+                subject, body, task_description, topic,
                 recipient_email, recipient_phone, recipient_linkedin_url,
                 idempotency_key, ai_strategy_used,
                 skip_reason,
@@ -573,7 +574,7 @@ async def start_engagement(
                 :t, :e, :c,
                 :ch, :st, FALSE,
                 :sched, :stale,
-                :subj, :body, :task,
+                :subj, :body, :task, :topic,
                 :re, :rp, :rl,
                 :idem, 'enrollment',
                 :skip,
@@ -585,6 +586,7 @@ async def start_engagement(
             "ch": ch_id, "st": status,
             "sched": scheduled_at, "stale": stale_after,
             "subj": subject[:255], "body": body, "task": task_description,
+            "topic": (tstep.get("topic") or None),
             "re": recipient_email, "rp": recipient_phone, "rl": recipient_linkedin,
             "idem": idem_key, "skip": skip_reason,
             "now": now,

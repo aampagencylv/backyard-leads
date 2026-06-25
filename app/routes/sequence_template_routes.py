@@ -378,3 +378,87 @@ async def apply_to_existing(
 
     await db.commit()
     return report
+
+
+# ======================================================================
+# Move contacts into a sequence (team-facing re-enrollment)
+# ----------------------------------------------------------------------
+# Take a contact out of whatever sequence they're in and enroll them in
+# the chosen template. Content is PRE-GENERATED here so each step's topic +
+# the sequence agenda bake into the emails at move time. Not admin-gated —
+# any rep can move contacts they can access; capped per call to bound the
+# LLM cost/latency of pre-generation.
+# ======================================================================
+
+class MoveToSequenceRequest(BaseModel):
+    contact_ids: list[int]
+    template_id: int
+
+
+@router.post("/move")
+async def move_to_sequence(
+    req: MoveToSequenceRequest,
+    db: AsyncSession = Depends(get_tenant_db),
+    user: User = Depends(get_current_user),
+):
+    t = (await db.execute(
+        select(SequenceTemplate).where(SequenceTemplate.id == req.template_id)
+    )).scalar_one_or_none()
+    if not t:
+        raise HTTPException(404, "Template not found")
+    try:
+        template_steps = json.loads(t.steps_json)
+    except (TypeError, ValueError):
+        raise HTTPException(500, "Template has malformed steps_json")
+
+    from app.engagement_engine.lifecycle import start_engagement, terminate_engagement
+    from app.scoping import check_contact_access
+    now = datetime.now(timezone.utc)
+    ids = list(dict.fromkeys(req.contact_ids or []))[:25]  # dedupe + cap
+    report = {"requested": len(req.contact_ids or []), "moved": 0, "skipped": 0,
+              "capped": len(req.contact_ids or []) > 25, "errors": []}
+
+    for cid in ids:
+        contact = (await db.execute(select(Contact).where(Contact.id == cid))).scalar_one_or_none()
+        if not contact:
+            report["skipped"] += 1
+            continue
+        if not await check_contact_access(contact, user, db):
+            report["skipped"] += 1
+            continue
+        # Retire any legacy pending rows so they don't ghost-fire.
+        legacy_pending = (await db.execute(
+            select(GeneratedEmail).where(
+                GeneratedEmail.contact_id == cid,
+                GeneratedEmail.is_sent == False,
+                GeneratedEmail.skipped_at.is_(None),
+                GeneratedEmail.paused_at.is_(None),
+            )
+        )).scalars().all()
+        for ge in legacy_pending:
+            ge.skipped_at = now
+            ge.skip_reason = f"moved_to_sequence:{t.name}"
+        # End the current engagement, then start the chosen one.
+        try:
+            await terminate_engagement(db, cid, reason=f"move_to_sequence:{t.name}")
+        except Exception:
+            pass
+        try:
+            created = await start_engagement(
+                db, contact,
+                template=template_steps,
+                sequence_label="main",
+                objective=t.objective,
+                pre_generate_content=True,  # bake topic + agenda content now
+                initiated_by=f"move:{(user.email or '')[:18]}",
+            )
+            if created > 0:
+                report["moved"] += 1
+            else:
+                report["skipped"] += 1
+        except Exception as e:
+            report["errors"].append(f"contact {cid}: {type(e).__name__}")
+            report["skipped"] += 1
+
+    await db.commit()
+    return report
