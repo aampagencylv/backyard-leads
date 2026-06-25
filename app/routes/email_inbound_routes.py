@@ -273,6 +273,20 @@ async def _route_reply_to_engagement_engine(
             """), {"e": a.engagement_id})
             r = ctx.first()
             bdr_id = r.bdr_id if r else None
+            # Fallback so a prospect reply is NEVER lost: if the contact has no
+            # assigned rep (autopilot-enrolled, freshly imported, etc.), forward
+            # to the tenant's senior active admin so someone's business inbox
+            # still gets it.
+            if bdr_id is None:
+                fb = await db.execute(_sa_text("""
+                    SELECT id FROM users
+                    WHERE tenant_id = :t AND is_active = TRUE
+                      AND email IS NOT NULL AND email <> ''
+                    ORDER BY CASE role WHEN 'super_admin' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, id
+                    LIMIT 1
+                """), {"t": a.tenant_id})
+                fbr = fb.first()
+                bdr_id = fbr.id if fbr else None
             from app.models import Company as _Company, Contact as _Contact, User as _User
             co_obj = (await db.execute(
                 select(_Company).where(_Company.id == a.company_id)
@@ -979,9 +993,16 @@ async def _forward_to_bdr(
     The forwarded email looks like a normal direct email from the prospect's
     email client perspective — no 'Fwd:' prefix, no chrome — so it threads
     cleanly in the BDR's inbox alongside the original outbound."""
-    from app.services.email_sender import get_sender_info
-    sender = get_sender_info(sender_user.first_name, sender_user.full_name)
     bdr_inbox = sender_user.email  # their @bymp.com address → Missive/Gmail/whatever
+    # Forward must NOT look like the rep emailing themselves. Sending From the
+    # rep's own name on the sending subdomain TO the rep's primary domain
+    # (rodrigo@go.bymp.com → rodrigo@bymp.com) is a display-name self-spoof
+    # that Gmail/Workspace reliably files to spam — which is exactly why reps
+    # weren't seeing replies in their inbox (Rodrigo's feedback). Instead send
+    # From the PROSPECT's display name on a neutral "replies@" mailbox, with
+    # Reply-To = the prospect, so it threads as a reply from them and the rep's
+    # Reply goes straight to the prospect.
+    prospect_display = (prospect_name or prospect_email or "Prospect").strip()
 
     # Body — prefer the original HTML if present (preserves formatting).
     # Add a small contextual header so the BDR sees CRM context inline.
@@ -1002,8 +1023,8 @@ async def _forward_to_bdr(
         to_email=bdr_inbox,
         subject=subject or "(no subject)",
         body=forwarded_html,
-        from_name=sender["from_name"],
-        from_firstname=sender["from_firstname"],
+        from_name=prospect_display,
+        from_firstname="replies",  # → replies@<tenant send domain>; not the rep's own address
         reply_to_email=prospect_email,  # BDR replies → goes direct to prospect, not back through us
         company_id=(company.id if company else 0),
         contact_id=(contact.id if contact else 0),

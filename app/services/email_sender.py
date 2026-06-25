@@ -339,7 +339,12 @@ async def send_email(
     # hasn't verified a domain.
     _send_domain = await _resolve_send_domain(company_id)
     from_address = f"{from_name} <{from_firstname}@{_send_domain}>"
-    if _send_domain != settings.send_domain and reply_to_email:
+    # Keep OUR reply-routing address ("r-<token>@…") on the tenant's send
+    # domain. Do NOT touch an arbitrary external Reply-To (e.g. a forwarded
+    # reply where Reply-To is the prospect's real email) — swapping that would
+    # corrupt the address.
+    if (_send_domain != settings.send_domain and reply_to_email
+            and reply_to_email.strip().lower().startswith("r-")):
         reply_to_email = _swap_domain(reply_to_email, _send_domain)
 
     # Render any markdown links [text](url) → <a> anchors. Normally the
