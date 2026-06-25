@@ -57,10 +57,16 @@ def _validate_steps(steps: list[dict]) -> list[dict]:
         if not isinstance(skip_if, list) or any(s not in ALLOWED_SKIP_CONDITIONS for s in skip_if):
             raise HTTPException(400, f"step {i}: skip_if entries must be in {sorted(ALLOWED_SKIP_CONDITIONS)}")
         auto = bool(raw.get("auto", st in {"email", "imessage"}))
+        # Per-step topic — what THIS message should be about; fed to the AI
+        # when it writes the step (e.g. "check in on their summer season").
+        topic = raw.get("topic") or ""
+        if not isinstance(topic, str) or len(topic) > 200:
+            raise HTTPException(400, f"step {i}: topic must be a string ≤200 chars")
         cleaned.append({
             "day": day,
             "step_type": st,
             "label": label,
+            "topic": topic.strip(),
             "skip_if": skip_if,
             "auto": auto,
         })

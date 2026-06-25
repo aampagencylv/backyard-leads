@@ -15924,8 +15924,11 @@ hmac.compare_digest(expected, header)</pre>
             const host = document.getElementById('st-steps');
             if (!host) return;
             const d = _seqTemplateDraft;
-            host.innerHTML = d.steps.map((s, i) => `
-                <div style="display:flex;gap:8px;align-items:center;padding:8px;border:1px solid #eee;border-radius:6px;margin-bottom:6px;background:#fafafa">
+            host.innerHTML = d.steps.map((s, i) => {
+                const isMsg = (s.step_type === 'email' || s.step_type === 'imessage');
+                return `
+                <div style="padding:8px;border:1px solid #eee;border-radius:6px;margin-bottom:6px;background:#fafafa">
+                  <div style="display:flex;gap:8px;align-items:center">
                     <span style="font-size:11px;color:#888;width:24px;text-align:center">#${i + 1}</span>
                     <span style="font-size:18px">${SEQ_CHANNEL_ICON[s.step_type] || ''}</span>
                     <label style="font-size:11px;color:#666">Day
@@ -15934,7 +15937,7 @@ hmac.compare_digest(expected, header)</pre>
                     <select onchange="updateSeqStep(${i},'step_type',this.value)" style="padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px">
                         ${SEQ_CHANNELS.map(c => `<option value="${c}" ${c === s.step_type ? 'selected' : ''}>${c}</option>`).join('')}
                     </select>
-                    <input value="${escapeHtml(s.label || '')}" placeholder="label (cold, follow_up_1…)" onchange="updateSeqStep(${i},'label',this.value)" style="flex:1;min-width:140px;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px">
+                    <input value="${escapeHtml(s.label || '')}" placeholder="label (cold, follow_up_1…)" onchange="updateSeqStep(${i},'label',this.value)" style="flex:1;min-width:120px;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px">
                     <label style="font-size:11px;color:#666;display:flex;align-items:center;gap:4px">
                         <input type="checkbox" ${s.auto ? 'checked' : ''} onchange="updateSeqStep(${i},'auto',this.checked)">
                         auto
@@ -15945,8 +15948,13 @@ hmac.compare_digest(expected, header)</pre>
                     <button class="btn btn-xs" onclick="moveSeqStep(${i},-1)" ${i === 0 ? 'disabled' : ''} title="Move up" style="background:transparent;color:#888;border:1px solid #ddd">↑</button>
                     <button class="btn btn-xs" onclick="moveSeqStep(${i},1)" ${i === d.steps.length - 1 ? 'disabled' : ''} title="Move down" style="background:transparent;color:#888;border:1px solid #ddd">↓</button>
                     <button class="btn btn-xs" onclick="deleteSeqStep(${i})" title="Delete" style="background:transparent;color:#c0392b;border:1px solid #f5b7b1">×</button>
+                  </div>
+                  ${isMsg ? `<div style="display:flex;align-items:center;gap:6px;margin:6px 0 0 32px">
+                    <span style="font-size:11px;color:#999">📝 Topic</span>
+                    <input value="${escapeHtml(s.topic || '')}" maxlength="200" placeholder="What should this ${s.step_type} be about? e.g. checking in on how their summer season is going" onchange="updateSeqStep(${i},'topic',this.value)" style="flex:1;padding:5px 8px;border:1px solid #e3d9c0;background:#fffdf6;border-radius:4px;font-size:12px">
+                  </div>` : ''}
                 </div>
-            `).join('');
+            `; }).join('');
         }
 
         function updateSeqStep(idx, field, value) {

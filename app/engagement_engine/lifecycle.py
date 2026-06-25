@@ -324,6 +324,7 @@ async def _pre_generate_drafts(
             for tstep in template:
                 if tstep["step_type"] != "email":
                     continue
+                step_topic = tstep.get("topic") or None
                 if tstep["label"] == "cold":
                     draft = await generate_cold_email(
                         business_name=company.name,
@@ -333,6 +334,7 @@ async def _pre_generate_drafts(
                         contact_name=contact.full_name,
                         location=company.city,
                         messaging_direction=direction,
+                        topic=step_topic,
                     )
                 else:
                     fu_num_map = {"follow_up_1": 1, "follow_up_2": 2, "breakup": 3}
@@ -347,6 +349,7 @@ async def _pre_generate_drafts(
                         contact_name=contact.full_name,
                         messaging_direction=direction,
                         audit_url=audit_url,
+                        topic=step_topic,
                     )
                 email_drafts[tstep["label"]] = draft
         except Exception as e:  # noqa: BLE001

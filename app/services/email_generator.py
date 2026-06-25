@@ -200,9 +200,13 @@ async def generate_cold_email(
     contact_name: Optional[str] = None,
     location: Optional[str] = None,
     messaging_direction: Optional[str] = None,
+    topic: Optional[str] = None,
 ) -> dict:
     """
     Generate a personalized cold email based on problems found.
+    `topic`, when set, is the specific thing THIS email should be about (e.g.
+    "check in on how their summer season is going") — it overrides the default
+    problems-pitch framing.
     Returns dict with 'subject' and 'body'.
     """
     severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -213,6 +217,15 @@ async def generate_cold_email(
     first_name = _extract_first_name(contact_name)
     greeting = f"Hi {first_name}" if first_name else "Hi"
 
+    topic_block = ""
+    if topic and topic.strip():
+        topic_block = (
+            f"\nTHIS EMAIL'S TOPIC — write this specific email about: {topic.strip()}\n"
+            "Make that the focus and the subject line. The website problems below are "
+            "just background context; do NOT lead with a problems pitch unless the topic "
+            "calls for it.\n"
+        )
+
     user_prompt = f"""Write a cold outreach email for this prospect:
 
 Business: {business_name}
@@ -220,8 +233,8 @@ Type: {business_type}
 Website: {website}
 Location: {location or "Unknown"}
 Contact first name: {first_name or "Unknown"}
-
-Problems we found on their website (pick the most compelling one to lead with):
+{topic_block}
+Problems we found on their website (background context; lead with the topic above if one is set):
 {problems_context}
 
 Start with "{greeting}" — remember, NO sign-off at the end. The signature is added automatically.
@@ -263,6 +276,7 @@ async def generate_follow_up(
     contact_name: Optional[str] = None,
     messaging_direction: Optional[str] = None,
     audit_url: Optional[str] = None,
+    topic: Optional[str] = None,
 ) -> dict:
     """Generate a follow-up email.
 
@@ -289,18 +303,26 @@ async def generate_follow_up(
             f"shared') WITHOUT the token — don't drop the link again."
         )
 
+    topic_block = ""
+    if topic and topic.strip():
+        topic_block = (
+            f"\nTHIS EMAIL'S TOPIC — write this specific email about: {topic.strip()}\n"
+            "Make that the focus and the subject line. The site problems below are just "
+            "background; follow the topic over a generic follow-up angle.\n"
+        )
+
     user_prompt = f"""Write follow-up #{follow_up_number} for this prospect who didn't respond to my first email.
 
 Business: {business_name}
 Type: {business_type}
 Previous email subject: {previous_email_subject}
 Contact first name: {first_name or "Unknown"}
-
-Problems from their site:
+{topic_block}
+Problems from their site (background context):
 {problems_context}
 {audit_clause}
 
-Rules for follow-up #{follow_up_number}:
+Rules for follow-up #{follow_up_number}{' (the TOPIC above overrides these angle rules — keep the length guidance)' if (topic and topic.strip()) else ''}:
 - If #1: Brief, reference a different angle/problem than the first email. Add value — maybe share a quick insight.
 - If #2: Very short (3-4 sentences max). More direct. Share a quick stat or result from a similar client.
 - If #3: "Breakup" email — 2-3 sentences. Say you won't bug them again but leave the door open.
