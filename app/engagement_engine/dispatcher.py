@@ -324,6 +324,44 @@ async def _process_one_action(
 
     channel_code = record.channel_code
 
+    # 2b. Send-time content generation for the DEFERRED path. Bulk
+    # apply-to-existing leaves email/imessage bodies as 'AUTO:'; write real
+    # content now from the action's topic + the engagement's agenda + the
+    # tenant's messaging_direction, then re-load the record so the guards +
+    # send see it. Never blocks: on failure the empty-body guard catches it.
+    if channel_code in ("email", "sms"):
+        _b = (record.body or "").strip()
+        if (not _b) or _b.upper().startswith("AUTO:"):
+            changed = False
+            try:
+                from app.engagement_engine.lifecycle import regenerate_action_if_auto
+                async with async_session() as gen_session:
+                    gen_session.info["tenant_id"] = record.tenant_id
+                    changed = await regenerate_action_if_auto(gen_session, action_id)
+                    if changed:
+                        await gen_session.commit()
+            except Exception as e:  # noqa: BLE001
+                log.warning("send-time regen failed for action %s: %s", action_id, e)
+            if changed:
+                async with async_session() as session:
+                    record = (await session.execute(text("""
+                        SELECT
+                            a.id, a.tenant_id, a.engagement_id, a.contact_id,
+                            a.channel_id, a.subject, a.body, a.task_description,
+                            a.recipient_email, a.recipient_phone, a.recipient_linkedin_url,
+                            a.scheduled_at, a.contact_timezone,
+                            ct.code AS channel_code,
+                            tac.tcpa_b2b_override,
+                            tac.default_timezone AS tenant_default_timezone
+                        FROM actions a
+                        JOIN channel_types ct ON ct.id = a.channel_id
+                        LEFT JOIN tenant_ai_config tac ON tac.tenant_id = a.tenant_id
+                        WHERE a.id = :id
+                    """), {"id": action_id})).first()
+                    if record is None:
+                        report.errors.append(f"action {action_id} disappeared after regen")
+                        return
+
     # 3. Look up the channel adapter
     adapter = get_channel(channel_code)
     if adapter is None:

@@ -1344,3 +1344,99 @@ async def wake_engagement_for_company(
             re_enrolled += 1
 
     return re_enrolled
+
+
+async def regenerate_action_if_auto(db: AsyncSession, action_id: int) -> bool:
+    """Send-time content generation for the DEFERRED path (bulk apply-to-
+    existing leaves email/imessage bodies as 'AUTO:'). Writes real content from
+    the action's stored `topic` + the engagement's `objective` + the tenant's
+    messaging_direction, so the agenda/topic drive the email no matter which
+    enrollment path created it. No-op when the body is already real. Caller
+    must have stamped db.info['tenant_id'] so messaging_direction + the
+    contact/company lookups resolve to the right tenant. Returns True if it
+    rewrote the action."""
+    import json as _json
+    from sqlalchemy import text as _text, select as _select
+    a = (await db.execute(_text("""
+        SELECT a.id, a.engagement_id, a.contact_id, a.subject, a.body, a.topic,
+               a.scheduled_at, ct.code AS channel_code, e.objective, e.company_id
+        FROM actions a
+        JOIN channel_types ct ON ct.id = a.channel_id
+        JOIN engagements e ON e.id = a.engagement_id
+        WHERE a.id = :id
+    """), {"id": action_id})).first()
+    if not a:
+        return False
+    body = (a.body or "").strip()
+    if body and not body.upper().startswith("AUTO:"):
+        return False  # already has real content
+    if a.channel_code not in ("email", "imessage", "sms"):
+        return False
+
+    from app.models import Contact, Company
+    contact = (await db.execute(_select(Contact).where(Contact.id == a.contact_id))).scalar_one_or_none()
+    company = (await db.execute(_select(Company).where(Company.id == a.company_id))).scalar_one_or_none()
+    if not contact or not company:
+        return False
+
+    try:
+        from app.runtime_config import get_messaging_direction
+        direction = await get_messaging_direction(db)
+    except Exception:
+        direction = None
+    if a.objective and a.objective.strip():
+        _base = (direction or "").strip()
+        direction = ((_base + "\n\n") if _base else "") + (
+            "THIS SEQUENCE'S AGENDA — every message in this sequence must serve "
+            f"this goal:\n{a.objective.strip()}"
+        )
+
+    try:
+        problems = _json.loads(company.problems_found) if company.problems_found else []
+    except (TypeError, ValueError):
+        problems = []
+    topic = a.topic or None
+
+    # Position among this engagement's email steps → cold vs follow-up #.
+    pos = (await db.execute(_text("""
+        SELECT COUNT(*) FROM actions
+        WHERE engagement_id = :e
+          AND channel_id IN (SELECT id FROM channel_types WHERE code='email')
+          AND scheduled_at < :s AND id != :id
+    """), {"e": a.engagement_id, "s": a.scheduled_at, "id": a.id})).scalar() or 0
+
+    subj, bod = a.subject, None
+    biz_type = company.business_type or company.industry or "business"
+    if a.channel_code == "email":
+        from app.services.email_generator import generate_cold_email, generate_follow_up
+        if pos == 0:
+            d = await generate_cold_email(
+                business_name=company.name, business_type=biz_type,
+                website=company.website or "", problems=problems,
+                contact_name=contact.full_name, location=company.city,
+                messaging_direction=direction, topic=topic)
+        else:
+            d = await generate_follow_up(
+                business_name=company.name, business_type=biz_type,
+                problems=problems, previous_email_subject="",
+                follow_up_number=min(int(pos), 3), contact_name=contact.full_name,
+                messaging_direction=direction, topic=topic)
+        subj, bod = d.get("subject"), d.get("body")
+    else:  # imessage / sms
+        from app.services.email_generator import generate_imessage
+        try:
+            recent = _json.loads(contact.recent_posts_json) if contact.recent_posts_json else []
+        except (TypeError, ValueError):
+            recent = []
+        d = await generate_imessage(
+            business_name=company.name or "your business", business_type=biz_type,
+            contact_name=contact.full_name, problems=problems, recent_posts=recent,
+            location=(company.city or "") + ((", " + company.state) if company.state else "") or None,
+            intent="follow_up", messaging_direction=direction)
+        subj, bod = (a.subject or "Message"), d.get("body")
+
+    if not (bod or "").strip():
+        return False
+    await db.execute(_text("UPDATE actions SET subject = :s, body = :b WHERE id = :id"),
+                     {"s": (subj or "")[:255], "b": bod, "id": a.id})
+    return True
