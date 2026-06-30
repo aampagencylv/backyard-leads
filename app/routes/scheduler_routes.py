@@ -1035,11 +1035,48 @@ async def confirm_booking(
     }
 
 
+def _build_booking_ics(b: "Booking", host: "User", *, summary: str, organizer_email: str) -> str:
+    """RFC-5545 VEVENT (METHOD:REQUEST) for the booking, so the prospect's
+    mail client offers a real 'Add to calendar' / RSVP regardless of whether
+    Google emailed its own native invite. Google auto-adds same-Workspace
+    guests to their calendars but external guests rely on an emailed invite —
+    which can be blocked by Workspace external-invitation settings or land in
+    spam. Attaching our own .ics makes the invite reliable for everyone."""
+    def _stamp(d: datetime) -> str:
+        d = d.replace(tzinfo=timezone.utc) if d.tzinfo is None else d.astimezone(timezone.utc)
+        return d.strftime("%Y%m%dT%H%M%SZ")
+    def _esc(s: str) -> str:
+        return (s or "").replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
+    uid = (b.google_event_id or f"booking-{b.id}") + "@leadprospector"
+    desc = f"Join: {b.google_meet_link}" if b.google_meet_link else ""
+    location = b.google_meet_link or "Online meeting"
+    lines = [
+        "BEGIN:VCALENDAR", "VERSION:2.0",
+        "PRODID:-//LeadProspector//Native Scheduler//EN",
+        "METHOD:REQUEST", "CALSCALE:GREGORIAN",
+        "BEGIN:VEVENT",
+        f"UID:{uid}",
+        f"DTSTAMP:{_stamp(datetime.now(timezone.utc))}",
+        f"DTSTART:{_stamp(b.starts_at)}",
+        f"DTEND:{_stamp(b.ends_at)}",
+        f"SUMMARY:{_esc(summary)}",
+        f"DESCRIPTION:{_esc(desc)}",
+        f"LOCATION:{_esc(location)}",
+        f"ORGANIZER;CN={_esc(host.first_name or 'Host')}:mailto:{organizer_email}",
+        f"ATTENDEE;CN={_esc(b.prospect_name or '')};ROLE=REQ-PARTICIPANT;RSVP=TRUE:mailto:{b.prospect_email}",
+        "STATUS:CONFIRMED", "SEQUENCE:0",
+        "END:VEVENT", "END:VCALENDAR",
+    ]
+    return "\r\n".join(lines) + "\r\n"
+
+
 async def _send_booking_confirmation_email(booking_id: int, *, host_name: str) -> None:
-    """Confirmation email to prospect via Resend. The Google invite
-    already landed in their inbox; this is a branded BMP confirmation.
-    Best-effort — silent failure is fine, the booking itself is locked
-    in by the Google event + DB row."""
+    """Confirmation email to the prospect via Resend, WITH an .ics calendar
+    invite attached so they can add the meeting to any calendar (Google's
+    own native invite often doesn't reach external/cold prospects). Best-
+    effort — silent failure is fine, the booking is locked in by the Google
+    event + DB row."""
+    import base64
     import httpx
     from app.database import async_session
     if not settings.resend_api_key:
@@ -1094,22 +1131,34 @@ async def _send_booking_confirmation_email(booking_id: int, *, host_name: str) -
                 time_line = f"<strong>{when_prospect}</strong>"
             html = (
                 f"<p>Hi {first},</p>"
-                f"<p>You're booked with {host_name} on {time_line}. "
-                "A Google Calendar invite is already in your inbox.</p>"
-                + (f'<p><a href="{link}">View the meeting on your calendar</a></p>' if link else "")
+                f"<p>You're booked with {host_name} on {time_line}.</p>"
+                "<p><strong>The calendar invite is attached</strong> — open it to add this "
+                "meeting to your calendar (Google, Outlook, Apple, etc.).</p>"
+                + (f'<p><a href="{link}">Or view it on the calendar here</a>.</p>' if link else "")
                 + f"<p>Talk soon,<br>{host_name}</p>"
             )
+            # Build the .ics invite. Summary mirrors the Google event style.
+            organizer_email = host.google_email or host.email
+            ics = _build_booking_ics(
+                b, host, summary=f"Meeting with {host_name}", organizer_email=organizer_email)
+            ics_b64 = base64.b64encode(ics.encode("utf-8")).decode("ascii")
+
             from app.services.html_to_text import html_to_plain_text
             payload = {
                 "from": from_addr,
                 "to": [b.prospect_email],
-                "reply_to": host.google_email or host.email,
+                "reply_to": organizer_email,
                 "subject": subject,
                 "html": html,
                 "text": html_to_plain_text(html),
                 "headers": {
                     "X-Entity-Ref-ID": f"booking-confirm-{booking_id}",
                 },
+                "attachments": [{
+                    "filename": "invite.ics",
+                    "content": ics_b64,
+                    "content_type": "text/calendar; method=REQUEST; charset=utf-8",
+                }],
                 "tags": [
                     {"name": "kind", "value": "booking_confirmation"},
                     {"name": "host_user_id", "value": str(host.id)},
