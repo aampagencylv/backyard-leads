@@ -813,34 +813,9 @@ async def _execute_batch(campaign_id: int, db: AsyncSession, user: User):
                              f"Hunter contact lookup failed for {company.name}: {str(_hue)[:80]}",
                              company_id=company.id)
 
-                # Fallback: if the paid providers found NO contact email, scrape
-                # the business's own website. Owner-run / non-US-corporate
-                # businesses (tour operators, single-location SMBs) routinely
-                # publish info@ / the owner's inbox on their site but never
-                # appear in Netrows/Hunter — without this they all die at the
-                # "No contact email" gate (the exact symptom on AAMP's USVI
-                # campaign). Only runs as a last resort, so it doesn't add
-                # latency when the providers already delivered.
-                has_email_contact = (await db.execute(
-                    select(func.count()).select_from(Contact).where(
-                        Contact.company_id == company.id,
-                        Contact.email.isnot(None), Contact.email != "",
-                    )
-                )).scalar()
-                if not has_email_contact:
-                    try:
-                        scraped = await scrape_site_emails(company.website)
-                        for se in scraped[:1]:  # best-ranked inbox only
-                            created = await _ensure_contact(
-                                db, company.id, se.name, se.email, None, company.phone, None)
-                            if created:
-                                _log(db, campaign.id, "enriched",
-                                     f"Contact from site scrape: {se.email} ({company.name})",
-                                     company_id=company.id)
-                    except Exception as _sce:
-                        _log(db, campaign.id, "error",
-                             f"Site email scrape failed for {company.name}: {str(_sce)[:80]}",
-                             company_id=company.id)
+                # (Website-scrape contact fallback moved BELOW, after the
+                # qualify gate, so it runs for ALREADY-ENRICHED companies too —
+                # this whole enrich block is skipped on re-scan.)
 
                 # Meter the enrichment
                 try:
@@ -865,6 +840,34 @@ async def _execute_batch(campaign_id: int, db: AsyncSession, user: User):
             batch_results["skipped_not_qualified"] += 1
             _log(db, campaign.id, "skipped", f"Not qualified: {company.name} ({len(problems)} problems, need {campaign.min_problems})", company_id=company.id)
             continue
+
+        # Backfill a contact via website scrape when the company has none yet.
+        # Runs for ALREADY-ENRICHED companies too (whose enrich block — incl.
+        # Netrows/Hunter — is skipped on re-scan), so small owner-run operators
+        # that publish info@ on their own site but aren't in Netrows/Hunter
+        # still qualify instead of dying at "No contact email" (the exact
+        # symptom on AAMP's USVI boat-operator scan). Free: one website fetch,
+        # only when contact_required and no email contact exists yet.
+        if campaign.contact_required and company.website:
+            _has_email = (await db.execute(
+                select(func.count()).select_from(Contact).where(
+                    Contact.company_id == company.id,
+                    Contact.email.isnot(None), Contact.email != "",
+                )
+            )).scalar()
+            if not _has_email:
+                try:
+                    scraped = await scrape_site_emails(company.website)
+                    for se in scraped[:1]:  # best-ranked inbox only
+                        if await _ensure_contact(db, company.id, se.name, se.email, None, company.phone, None):
+                            await db.commit()
+                            _log(db, campaign.id, "enriched",
+                                 f"Contact from site scrape: {se.email} ({company.name})",
+                                 company_id=company.id)
+                except Exception as _sce:
+                    _log(db, campaign.id, "error",
+                         f"Site email scrape failed for {company.name}: {str(_sce)[:80]}",
+                         company_id=company.id)
 
         # Find primary contact with email
         contacts_result = await db.execute(

@@ -11224,6 +11224,7 @@ hmac.compare_digest(expected, header)</pre>
                             <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
                                 ${TENANT_BUSINESS_TYPES.map(t => `<label style="font-size:12px;display:flex;align-items:center;gap:3px;background:#f5f5f5;padding:3px 8px;border-radius:4px;cursor:pointer"><input type="checkbox" value="${t}" class="camp-type-cb"> ${t}</label>`).join('')}
                             </div>
+                            <input type="text" id="camp-type-custom" placeholder="Or type your own, comma-separated — e.g. ghost tour, historic walking tour" style="width:100%;margin-top:6px;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px">
                         </div>
                         <div class="form-group">
                             <label>Locations (one per line)</label>
@@ -11272,6 +11273,12 @@ hmac.compare_digest(expected, header)</pre>
 
         async function submitCampaign(scheduleMode = false) {
             const types = Array.from(document.querySelectorAll('.camp-type-cb:checked')).map(cb => cb.value);
+            // Fold in any free-typed custom types (comma-separated), de-duped.
+            const _customTypes = (document.getElementById('camp-type-custom')?.value || '')
+                .split(',').map(s => s.trim()).filter(Boolean);
+            for (const ct of _customTypes) {
+                if (!types.some(t => t.toLowerCase() === ct.toLowerCase())) types.push(ct);
+            }
             const locText = document.getElementById('camp-locations').value;
             const locations = locText.split('\n').map(l => l.trim()).filter(Boolean);
             const memberIds = Array.from(document.querySelectorAll('.camp-member-cb:checked')).map(cb => parseInt(cb.value));
@@ -11416,6 +11423,14 @@ hmac.compare_digest(expected, header)</pre>
                         <div class="form-group"><label>Campaign Name</label><input type="text" id="edit-camp-name" value="${escapeHtml(c.name)}"></div>
 
                         <div class="form-group">
+                            <label>Tour / business types to search</label>
+                            <div id="edit-camp-types-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px"></div>
+                            <input type="text" id="edit-camp-type-input" placeholder="Type a type and press comma or Enter — e.g. ghost tour, historic walking tour" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px" onkeydown="editTypeInputKey(event)">
+                            <div style="font-size:11px;color:#888;margin:6px 0 4px">Quick add (click to toggle):</div>
+                            <div id="edit-camp-type-presets" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+                        </div>
+
+                        <div class="form-group">
                             <label>Locations (one per line)</label>
                             <textarea id="edit-camp-locations" rows="3" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px">${escapeHtml(locText)}</textarea>
                             <label style="display:flex;align-items:center;gap:6px;margin-top:6px;cursor:pointer;font-size:13px">
@@ -11448,6 +11463,45 @@ hmac.compare_digest(expected, header)</pre>
                     </div>
                 </div>
             `;
+            // Seed the verticals editor from the campaign's current types and render.
+            _editCampTypes = Array.isArray(c.business_types) ? c.business_types.slice() : [];
+            _editRenderTypeChips();
+        }
+
+        // --- Campaign verticals editor (chips + presets + free-text) ---
+        let _editCampTypes = [];
+        function _editRenderTypeChips() {
+            const box = document.getElementById('edit-camp-types-chips');
+            if (!box) return;
+            box.innerHTML = _editCampTypes.length
+                ? _editCampTypes.map((t, i) => `<span style="background:#1B5E20;color:#fff;padding:3px 10px;border-radius:12px;font-size:12px;display:inline-flex;align-items:center;gap:6px">${escapeHtml(t)}<span onclick="editRemoveTypeAt(${i})" title="Remove" style="cursor:pointer;font-weight:700;opacity:.85">&times;</span></span>`).join('')
+                : '<span style="font-size:12px;color:#c0392b">No types selected — add at least one below.</span>';
+            const pre = document.getElementById('edit-camp-type-presets');
+            if (pre) pre.innerHTML = (TENANT_BUSINESS_TYPES || []).map((t, i) => {
+                const on = _editCampTypes.some(x => x.toLowerCase() === t.toLowerCase());
+                return `<span onclick="editToggleTypeByPreset(${i})" style="cursor:pointer;font-size:12px;padding:3px 8px;border-radius:4px;border:1px solid ${on ? '#1B5E20' : '#ddd'};background:${on ? '#e8f5e9' : '#fff'}">${on ? '✓ ' : ''}${escapeHtml(t)}</span>`;
+            }).join('');
+        }
+        function editAddType(name) {
+            name = (name || '').trim();
+            if (!name) return;
+            if (!_editCampTypes.some(x => x.toLowerCase() === name.toLowerCase())) _editCampTypes.push(name);
+            _editRenderTypeChips();
+        }
+        function editRemoveTypeAt(i) { _editCampTypes.splice(i, 1); _editRenderTypeChips(); }
+        function editToggleTypeByPreset(i) {
+            const t = (TENANT_BUSINESS_TYPES || [])[i];
+            if (!t) return;
+            const idx = _editCampTypes.findIndex(x => x.toLowerCase() === t.toLowerCase());
+            if (idx >= 0) _editCampTypes.splice(idx, 1); else _editCampTypes.push(t);
+            _editRenderTypeChips();
+        }
+        function editTypeInputKey(e) {
+            if (e.key === ',' || e.key === 'Enter') {
+                e.preventDefault();
+                e.target.value.split(',').forEach(editAddType);
+                e.target.value = '';
+            }
         }
 
         async function submitEditCampaign(id) {
@@ -11456,11 +11510,16 @@ hmac.compare_digest(expected, header)</pre>
             const expandMetros = document.getElementById('edit-camp-expand-metros').checked;
 
             if (!locations.length) { toast('Locations cannot be empty', 'hot'); return; }
+            // Fold any half-typed vertical still in the input into the list.
+            const pendingType = (document.getElementById('edit-camp-type-input') || {}).value || '';
+            pendingType.split(',').forEach(editAddType);
+            if (!_editCampTypes.length) { toast('Add at least one tour/business type', 'hot'); return; }
 
             const data = await api('/api/campaigns/' + id, {
                 method: 'PATCH',
                 body: JSON.stringify({
                     name: document.getElementById('edit-camp-name').value,
+                    business_types: _editCampTypes,
                     locations: locations,
                     expand_metros: expandMetros,
                     max_prospects_per_day: parseInt(document.getElementById('edit-camp-max-day').value) || 10,
