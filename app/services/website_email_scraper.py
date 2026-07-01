@@ -140,12 +140,19 @@ def _score(email: str, site_root: str) -> int:
 
 
 async def scrape_site_emails(
-    website: str, *, max_results: int = 3, timeout: float = 10.0,
+    website: str, *, max_results: int = 3, timeout: float = 10.0, min_score: int = 40,
 ) -> list[ScrapedEmail]:
     """Fetch a few pages of `website` and return ranked, de-noised emails.
 
     Never raises — any network/parse failure yields fewer (or zero) results.
-    Bounded: at most len(_CANDIDATE_PATHS) small GETs, short timeout."""
+    Bounded: at most len(_CANDIDATE_PATHS) small GETs, short timeout.
+
+    min_score (default 40) drops low-confidence hits: an email that is neither
+    on the site's own domain, nor a role inbox, nor a free-mail provider scores
+    20 and is REJECTED — those are usually a vendor/agency/tracking address that
+    happens to appear on the page (e.g. our own t@aamp.agency leaking onto a
+    prospect's site), never the prospect's real inbox. Better no contact than a
+    wrong one that emails the wrong party."""
     if not website:
         return []
     url = website if website.startswith("http") else f"https://{website}"
@@ -200,6 +207,7 @@ async def scrape_site_emails(
             await _grab(client, _CANDIDATE_PATHS[0])
             await asyncio.gather(*(_grab(client, p) for p in _CANDIDATE_PATHS[1:]))
     except Exception:
-        return sorted(found.values(), key=lambda e: e.score, reverse=True)[:max_results]
+        pass
 
-    return sorted(found.values(), key=lambda e: e.score, reverse=True)[:max_results]
+    ranked = [e for e in found.values() if e.score >= min_score]
+    return sorted(ranked, key=lambda e: e.score, reverse=True)[:max_results]
