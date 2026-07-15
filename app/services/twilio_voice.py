@@ -270,6 +270,56 @@ def normalize_phone_e164(raw: str | None, default_country: str = "1") -> str:
     return f"+{s}"
 
 
+def extract_country_code_from_e164(e164: str | None) -> str | None:
+    """Extract the ISO country code from an E.164 phone number.
+    +14803383369 → "US"
+    +5215551234  → "MX"
+    +551140041234 → "BR"
+    Returns None if we can't determine the country.
+
+    Uses a basic lookup table for common country codes. International dialing
+    prefixes are country-code based, not always unique per country, but this
+    covers the most common cases.
+    """
+    if not e164 or not e164.startswith("+"):
+        return None
+
+    # Country code → ISO country code mapping (non-exhaustive but covers major countries)
+    COUNTRY_CODE_MAP = {
+        "1": "US",     # US / Canada / Caribbean (primary use)
+        "52": "MX",    # Mexico
+        "55": "BR",    # Brazil
+        "57": "CO",    # Colombia
+        "56": "CL",    # Chile
+        "54": "AR",    # Argentina
+        "51": "PE",    # Peru
+        "58": "VE",    # Venezuela
+        "34": "ES",    # Spain
+        "33": "FR",    # France
+        "44": "GB",    # UK
+        "49": "DE",    # Germany
+        "39": "IT",    # Italy
+        "31": "NL",    # Netherlands
+        "32": "BE",    # Belgium
+        "47": "NO",    # Norway
+        "46": "SE",    # Sweden
+        "61": "AU",    # Australia
+        "81": "JP",    # Japan
+        "86": "CN",    # China
+        "91": "IN",    # India
+    }
+
+    digits = e164[1:]  # Remove leading '+'
+    # Try longest prefixes first (country codes are 1-3 digits)
+    for prefix_len in [3, 2, 1]:
+        if len(digits) >= prefix_len:
+            prefix = digits[:prefix_len]
+            if prefix in COUNTRY_CODE_MAP:
+                return COUNTRY_CODE_MAP[prefix]
+
+    return None
+
+
 # ============================================================
 # Phase 2: Voice SDK access tokens + outbound TwiML
 # ============================================================

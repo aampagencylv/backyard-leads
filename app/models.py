@@ -371,6 +371,11 @@ class Contact(TenantMixin, Base):
     do_not_text = Column(Boolean, default=False, nullable=False)
     do_not_text_at = Column(DateTime(timezone=True), nullable=True)
 
+    # ISO country code inferred from phone number (e.g. "US", "MX", "BR").
+    # Set when phone is first normalized. Used for compliance checks (calling hours,
+    # recording consent, etc.). Nullable if no phone number.
+    phone_country_code = Column(String(2), nullable=True)
+
     # Phone-type cache from Twilio Lookup v2 — populated lazily on first send attempt.
     # Values: 'mobile' (iMessage/SMS works), 'landline' (refuse send), 'voip',
     # 'unknown' (lookup not yet attempted), 'error' (lookup failed; treat as unknown).
@@ -2066,10 +2071,45 @@ class TenantAIConfig(Base):
     dedupe_sms_per_day = Column(Integer, nullable=False, default=1)
     dedupe_linkedin_per_day = Column(Integer, nullable=False, default=1)
     tcpa_b2b_override = Column(Boolean, nullable=False, default=False)
+    # JSON list of ISO country codes this tenant can use for calling/SMS
+    # e.g. ["US", "MX", "BR"]. Empty = US only. Controls which numbers can be bought,
+    # and which countries are subject to compliance checks.
+    supported_calling_countries_json = Column(Text, nullable=True, default="[]")
     default_timezone = Column(String(50), nullable=False, default="America/New_York")
     current_month_spent_usd = Column(Numeric(10, 4), nullable=False, default=0)
     current_month_reset_at = Column(DateTime(timezone=True), nullable=False,
                                     default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+
+class CountryDialingConfig(Base):
+    """Global reference table: compliance rules + calling hours for each country.
+    Not tenant-scoped — shared across all tenants. Maps ISO country code to
+    calling rules (send window, recording consent required, caller ID verification,
+    etc.). Admins reference this when setting up international numbers."""
+    __tablename__ = "country_dialing_config"
+
+    id = Column(Integer, primary_key=True)
+    iso_country = Column(String(2), nullable=False, unique=True, index=True)  # "US", "MX", "BR", etc.
+    country_name = Column(String(100), nullable=False)  # "United States", "Mexico", "Brazil"
+
+    # Calling hours (local time, 24-hour format)
+    calling_window_start = Column(Integer, nullable=False, default=8)   # e.g. 8 = 8am
+    calling_window_end = Column(Integer, nullable=False, default=21)    # e.g. 21 = 9pm
+    default_timezone = Column(String(50), nullable=False, default="America/New_York")
+
+    # Compliance flags
+    caller_id_verification_required = Column(Boolean, nullable=False, default=False)
+    recording_consent_required = Column(Boolean, nullable=False, default=False)
+    requires_local_number_registration = Column(Boolean, nullable=False, default=False)
+
+    # Metadata / notes (e.g. "COFETEL registration needed for Mexico", "GDPR applies")
+    compliance_notes = Column(Text, nullable=True)
+
     created_at = Column(DateTime(timezone=True), nullable=False,
                         default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), nullable=False,

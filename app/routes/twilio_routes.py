@@ -46,6 +46,7 @@ from app.services.twilio_sms import (
     is_stop_keyword,
     is_start_keyword,
 )
+from app.services.international_dialing import check_call_allowed
 from app.config import settings
 
 router = APIRouter(prefix="/api/twilio", tags=["twilio"])
@@ -94,13 +95,31 @@ async def numbers_available(
     db: AsyncSession = Depends(get_tenant_db),
     user: User = Depends(get_current_user),
 ):
-    """Search Twilio's inventory for buyable numbers (typically by area code)."""
+    """Search Twilio's inventory for buyable numbers (typically by area code).
+
+    For international calls, iso_country limits results. Only shows numbers
+    in countries the tenant is allowed to use.
+    """
     _admin_only(user)
+
+    # Check if tenant is allowed to buy numbers in this country
+    from app.runtime_config import get_supported_calling_countries
+    supported = await get_supported_calling_countries(db)
+    if not supported:
+        supported = ["US"]  # Default to US only
+    if iso_country.upper() not in supported:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Calling {iso_country} is not enabled for your account. "
+                   f"Enabled countries: {', '.join(supported)}. "
+                   f"Contact your admin to enable additional countries."
+        )
+
     creds = await _creds_or_400(db)
     try:
         numbers = await search_available_numbers(
             creds, area_code=area_code, contains=contains,
-            iso_country=iso_country, limit=limit,
+            iso_country=iso_country.upper(), limit=limit,
         )
     except TwilioError as e:
         raise HTTPException(status_code=502, detail=str(e))
@@ -338,6 +357,8 @@ async def voice_twiml(request: Request):
     TwiML endpoint Twilio hits when the SDK initiates an outbound call.
     Receives From=client:bmp_user_X, To={number to dial}.
     Returns TwiML: <Dial callerId={rep's number} record>{To}</Dial>
+
+    International dialing: checks tenant compliance before allowing the call.
     """
     form = await request.form()
     from_identity_raw = form.get("From", "")  # e.g. "client:bmp_user_3"
@@ -350,14 +371,29 @@ async def voice_twiml(request: Request):
             media_type="application/xml",
         )
 
-    # Resolve the rep's caller ID by their identity
+    # Resolve the rep's caller ID by their identity + get tenant
     identity = from_identity_raw.replace("client:", "") if from_identity_raw else ""
     caller_id = None
-    if identity:
-        async with async_session() as db:
-            u = (await db.execute(select(User).where(User.twilio_identity == identity))).scalar_one_or_none()
-            if u and u.twilio_phone_number:
-                caller_id = normalize_phone_e164(u.twilio_phone_number)
+    user = None
+    async with async_session() as db:
+        user = (await db.execute(select(User).where(User.twilio_identity == identity))).scalar_one_or_none()
+        if user and user.twilio_phone_number:
+            caller_id = normalize_phone_e164(user.twilio_phone_number)
+
+        # Check international dialing compliance
+        if user and user.tenant_id:
+            compliance = await check_call_allowed(db, to_number, user.tenant_id)
+            if not compliance.allowed:
+                return Response(
+                    content=f"<Response><Say>{compliance.reason}</Say></Response>",
+                    media_type="application/xml",
+                )
+            # Log warnings to stderr if present
+            if compliance.warnings:
+                import logging
+                log = logging.getLogger("bmp.twilio")
+                for warn in compliance.warnings:
+                    log.warning(f"[international-call-warning] user={user.id} to={to_number}: {warn}")
 
     if not caller_id:
         return Response(
@@ -533,6 +569,17 @@ async def bridge_call(
     rep_personal = normalize_phone_e164(user.personal_phone_number)
     if not rep_caller or not rep_personal:
         raise HTTPException(status_code=400, detail="Your assigned Twilio number or personal phone is not in E.164 format. Update them in Settings.")
+
+    # Check international dialing compliance
+    compliance = await check_call_allowed(db, to_e164, user.tenant_id)
+    if not compliance.allowed:
+        raise HTTPException(status_code=403, detail=compliance.reason)
+    if compliance.warnings:
+        # Log warnings but don't block; caller is aware
+        import logging
+        log = logging.getLogger("bmp.twilio")
+        for warn in compliance.warnings:
+            log.warning(f"[international-call-warning] user={user.id} to={to_e164}: {warn}")
 
     # Build the bridge-twiml URL. URL-encode every value so the '+' in
     # E.164 numbers survives the round-trip (in query strings, raw '+'

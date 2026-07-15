@@ -1963,3 +1963,113 @@ async def tenant_engagement_cost(
         "generated_at": summary["generated_at"],
         "tenant":       match,
     }
+
+
+# ============================================================
+# International dialing configuration
+# ============================================================
+
+class SetSupportedCountriesRequest(BaseModel):
+    supported_calling_countries: list[str] = Field(
+        ...,
+        description='ISO country codes, e.g. ["US", "MX", "BR"]. Empty = US only.'
+    )
+
+
+@router.get("/tenants/{tenant_id}/calling-config")
+async def get_tenant_calling_config(
+    tenant_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_super_admin),
+):
+    """Get international calling config for a tenant."""
+    from app.runtime_config import get_supported_calling_countries
+    from app.models import TenantAIConfig
+
+    cfg = (await db.execute(
+        select(TenantAIConfig).where(TenantAIConfig.tenant_id == tenant_id)
+    )).scalar_one_or_none()
+
+    if not cfg:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    supported = await get_supported_calling_countries(db)
+    if not supported:
+        supported = ["US"]
+
+    return {
+        "tenant_id": tenant_id,
+        "supported_calling_countries": supported,
+    }
+
+
+@router.patch("/tenants/{tenant_id}/calling-config")
+async def set_tenant_calling_config(
+    tenant_id: int,
+    req: SetSupportedCountriesRequest,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(require_super_admin),
+):
+    """Set which countries this tenant can call."""
+    from app.runtime_config import set_supported_calling_countries
+    from app.models import TenantAIConfig
+
+    cfg = (await db.execute(
+        select(TenantAIConfig).where(TenantAIConfig.tenant_id == tenant_id)
+    )).scalar_one_or_none()
+
+    if not cfg:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    # Validate countries exist in the reference table
+    from app.models import CountryDialingConfig
+    valid_countries = (await db.execute(
+        select(CountryDialingConfig.iso_country)
+    )).scalars().all()
+
+    invalid = [c for c in req.supported_calling_countries if c.upper() not in valid_countries]
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown countries: {', '.join(invalid)}. Valid: {', '.join(valid_countries)}"
+        )
+
+    await set_supported_calling_countries(db, req.supported_calling_countries)
+    await record_audit(
+        db,
+        actor=actor,
+        action="tenant_calling_config_updated",
+        target_type="tenant",
+        target_id=tenant_id,
+        metadata={"supported_countries": req.supported_calling_countries},
+    )
+
+    return {
+        "tenant_id": tenant_id,
+        "supported_calling_countries": req.supported_calling_countries,
+    }
+
+
+@router.get("/country-dialing-config")
+async def list_country_dialing_config(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_super_admin),
+):
+    """List all country compliance configs (reference table)."""
+    from app.models import CountryDialingConfig
+
+    rows = (await db.execute(select(CountryDialingConfig).order_by(CountryDialingConfig.country_name))).scalars().all()
+    return [
+        {
+            "iso_country": r.iso_country,
+            "country_name": r.country_name,
+            "calling_window_start": r.calling_window_start,
+            "calling_window_end": r.calling_window_end,
+            "default_timezone": r.default_timezone,
+            "caller_id_verification_required": r.caller_id_verification_required,
+            "recording_consent_required": r.recording_consent_required,
+            "requires_local_number_registration": r.requires_local_number_registration,
+            "compliance_notes": r.compliance_notes,
+        }
+        for r in rows
+    ]

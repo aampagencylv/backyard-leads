@@ -354,3 +354,64 @@ def mask_key(value: str | None) -> str:
     if len(v) <= 8:
         return "*" * len(v)
     return f"{v[:8]}...{v[-4:]}"
+
+
+# ============================================================
+# International dialing config
+# ============================================================
+
+async def get_supported_calling_countries(db: AsyncSession) -> list[str]:
+    """Return the list of ISO country codes this tenant can use for calling.
+    Empty list means US only (default). E.g. ["US", "MX", "BR"]."""
+    from app.models import TenantAIConfig
+    rc = (await db.execute(select(TenantAIConfig).limit(1))).scalar_one_or_none()
+    if not rc:
+        return []
+    import json as _json
+    try:
+        data = _json.loads(rc.supported_calling_countries_json or "[]")
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+async def set_supported_calling_countries(
+    db: AsyncSession, countries: list[str]
+) -> None:
+    """Set which ISO country codes this tenant can use for calling.
+    Example: ["US", "MX", "BR"]"""
+    from app.models import TenantAIConfig
+    import json as _json
+    rc = (await db.execute(select(TenantAIConfig).limit(1))).scalar_one_or_none()
+    if not rc:
+        rc = TenantAIConfig()
+        db.add(rc)
+    # Validate — only accept 2-char ISO country codes
+    validated = [c.upper() for c in countries if isinstance(c, str) and len(c) == 2]
+    rc.supported_calling_countries_json = _json.dumps(validated)
+    rc.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(rc)
+
+
+async def get_country_dialing_config(db: AsyncSession, iso_country: str) -> Optional[dict]:
+    """Fetch compliance rules for a country. Returns dict with calling_window_start/end,
+    recording_consent_required, caller_id_verification_required, etc.
+    Returns None if country not found."""
+    from app.models import CountryDialingConfig
+    cfg = (await db.execute(
+        select(CountryDialingConfig).where(CountryDialingConfig.iso_country == iso_country.upper())
+    )).scalar_one_or_none()
+    if not cfg:
+        return None
+    return {
+        "iso_country": cfg.iso_country,
+        "country_name": cfg.country_name,
+        "calling_window_start": cfg.calling_window_start,
+        "calling_window_end": cfg.calling_window_end,
+        "default_timezone": cfg.default_timezone,
+        "caller_id_verification_required": cfg.caller_id_verification_required,
+        "recording_consent_required": cfg.recording_consent_required,
+        "requires_local_number_registration": cfg.requires_local_number_registration,
+        "compliance_notes": cfg.compliance_notes,
+    }
