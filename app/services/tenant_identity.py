@@ -132,18 +132,18 @@ async def get_tenant_identity(tenant_id: int) -> TenantIdentity:
                 # or spoof, so treat it as unset and let the caller skip.
                 if domain and (domain_status or "").lower() == "verified":
                     ident.send_domain = str(domain).strip()
-
-            # settings.send_domain is a single global domain that belongs to the
-            # platform tenant, which predates per-tenant Resend domains and so
-            # has no runtime_config row of its own. Only tenant 1 may fall back
-            # to it — for anyone else that would be sending from another
-            # company's domain, which is exactly what this module prevents.
-            if not ident.send_domain and int(tenant_id) == PLATFORM_TENANT_ID:
-                from app.config import settings
-                ident.send_domain = (settings.send_domain or "").strip()
                 ident.primary_color = _hex(primary, NEUTRAL_COLORS["primary_color"])
                 ident.secondary_color = _hex(secondary, NEUTRAL_COLORS["secondary_color"])
                 ident.accent_bg_color = _hex(accent, NEUTRAL_COLORS["accent_bg_color"])
+
+            # settings.send_domain is a single global domain that belongs to the
+            # platform tenant, which predates per-tenant Resend domains and so
+            # has no verified resend_domain_name of its own. Only tenant 1 may
+            # fall back to it — for anyone else that would be sending from
+            # another company's domain, which is what this module prevents.
+            if not ident.send_domain and int(tenant_id) == PLATFORM_TENANT_ID:
+                from app.config import settings
+                ident.send_domain = (settings.send_domain or "").strip()
 
             host = (await db.execute(text("""
                 SELECT domain FROM tenant_domains
