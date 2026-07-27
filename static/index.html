@@ -865,7 +865,7 @@
                 <div class="form-group">
                     <label>Email</label>
                     <input type="email" id="reg-email" placeholder="you@example.com">
-                    <small style="color:#888;font-size:11px">Must be a @backyardmarketingpros.com or @aamp.agency email</small>
+                    <small style="color:#888;font-size:11px">Accounts are created by your administrator.</small>
                 </div>
                 <div class="form-group"><label>Password</label><input type="password" id="reg-password" placeholder="Choose a password" onkeydown="if(event.key==='Enter')register()"></div>
                 <button class="btn btn-primary" onclick="register()">Create Account</button>
@@ -3222,6 +3222,24 @@ function verify(secret, rawBody, header) {
                             <button class="btn btn-primary btn-sm" onclick="showInviteUserModal()">+ Invite User</button>
                         </div>
                         <div id="team-members-list"></div>
+
+                        <div style="margin-top:20px;padding-top:16px;border-top:1px solid #eee">
+                            <label style="font-weight:600;font-size:13px">Restrict invites by email domain</label>
+                            <p style="font-size:12px;color:#888;margin:4px 0 8px">
+                                Optional. Leave empty to allow inviting any email address.
+                                Enter one or more domains (comma-separated, e.g.
+                                <code>yourcompany.com, yourcompany.co.uk</code>) to limit who
+                                admins can invite &mdash; useful for preventing typos and
+                                personal addresses.
+                            </p>
+                            <div style="display:flex;gap:8px;align-items:center;max-width:560px">
+                                <input type="text" id="invite-domains-input"
+                                       placeholder="Any domain allowed"
+                                       style="flex:1;padding:8px;border:1px solid #ddd;border-radius:6px">
+                                <button class="btn btn-secondary btn-sm" onclick="saveInviteDomains()">Save</button>
+                            </div>
+                            <div id="invite-domains-status" style="font-size:11px;color:#888;margin-top:6px"></div>
+                        </div>
                     </div>
                 </div>
 
@@ -4768,11 +4786,9 @@ function verify(secret, rawBody, header) {
         }
         async function register() {
             const email = document.getElementById('reg-email').value.trim();
-            const allowed = ['backyardmarketingpros.com', 'aamp.agency'];
-            if (!allowed.includes(email.split('@')[1])) {
-                showAuthError('Registration is restricted to @backyardmarketingpros.com and @aamp.agency emails.');
-                return;
-            }
+            // No client-side domain gate: self-service registration is
+            // disabled server-side (403), and invite-domain policy is
+            // per-tenant now. The server is the authority either way.
             const res = await fetch('/api/auth/register', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -13019,7 +13035,47 @@ hmac.compare_digest(expected, header)</pre>
             });
         }
 
+        // Invite-domain allowlist. Empty = any address may be invited, which
+        // is the default; a tenant opts in to the restriction for itself.
+        async function loadInviteDomains() {
+            const input = document.getElementById('invite-domains-input');
+            const status = document.getElementById('invite-domains-status');
+            if (!input) return;
+            try {
+                const cfg = await api('/api/runtime-config');
+                const list = (cfg && cfg.team && cfg.team.allowed_invite_domains) || [];
+                input.value = list.join(', ');
+                if (status) {
+                    status.textContent = list.length
+                        ? `Invites limited to ${list.length} domain${list.length > 1 ? 's' : ''}.`
+                        : 'No restriction \u2014 any valid email address can be invited.';
+                }
+            } catch (e) { /* non-fatal; the field just stays blank */ }
+        }
+
+        async function saveInviteDomains() {
+            const input = document.getElementById('invite-domains-input');
+            const status = document.getElementById('invite-domains-status');
+            if (!input) return;
+            const domains = input.value.split(',')
+                .map(d => d.trim().toLowerCase().replace(/^@/, ''))
+                .filter(Boolean);
+            try {
+                await api('/api/runtime-config', {
+                    method: 'PATCH',
+                    body: JSON.stringify({ allowed_invite_domains: domains }),
+                });
+                toast(domains.length
+                    ? 'Invite domains saved'
+                    : 'Restriction removed \u2014 any email can be invited');
+                await loadInviteDomains();
+            } catch (e) {
+                if (status) status.textContent = 'Could not save. Try again.';
+            }
+        }
+
         async function loadTeamMembers() {
+            loadInviteDomains();
             const users = await api('/api/auth/users');
             if (!users) return;
             const panel = document.getElementById('team-members-list');

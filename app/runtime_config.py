@@ -209,6 +209,59 @@ async def set_org_brand(
     return rc
 
 
+_EMAIL_RE = _re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
+_DOMAIN_RE = _re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$")
+
+
+def is_valid_email(value: str) -> bool:
+    """Shape check for an email address. Deliberately permissive — it exists
+    to reject typos and obvious junk, not to be an RFC 5322 parser."""
+    return bool(_EMAIL_RE.match((value or "").strip()))
+
+
+async def get_allowed_invite_domains(db: AsyncSession) -> list[str]:
+    """Domains an admin of THIS tenant may invite.
+
+    An empty list means NO restriction — any valid address is allowed. That's
+    the default, and it's deliberate: invites already require an admin role and
+    create the user inside the inviting tenant only. This list is a
+    typo/hygiene guard a tenant can opt into, not a security boundary.
+    """
+    rc = await _get_or_create(db)
+    raw = (getattr(rc, "allowed_invite_domains_json", None) or "").strip()
+    if not raw:
+        return []
+    try:
+        import json as _json
+        vals = _json.loads(raw)
+    except Exception:
+        return []
+    if not isinstance(vals, list):
+        return []
+    return [str(v).strip().lower().lstrip("@") for v in vals if str(v).strip()]
+
+
+async def set_allowed_invite_domains(db: AsyncSession, domains: list[str]) -> RuntimeConfig:
+    """Replace the invite allowlist. Pass [] to remove the restriction.
+
+    Entries are normalised (lowercased, a leading '@' stripped) and validated
+    as hostnames; anything that isn't one is dropped rather than stored, so a
+    malformed entry can't silently lock an admin out of inviting anyone.
+    """
+    import json as _json
+    cleaned: list[str] = []
+    for d in domains or []:
+        v = str(d).strip().lower().lstrip("@")
+        if v and _DOMAIN_RE.match(v) and v not in cleaned:
+            cleaned.append(v)
+    rc = await _get_or_create(db)
+    rc.allowed_invite_domains_json = _json.dumps(cleaned[:50])
+    rc.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(rc)
+    return rc
+
+
 async def set_audit_branding(
     db: AsyncSession, *,
     header_url: Optional[str] = None,

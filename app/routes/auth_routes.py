@@ -445,12 +445,31 @@ async def invite_user(
     Admin creates a new user account with a temporary password.
     The user can change their password after first login.
     """
-    allowed_domains = ["backyardmarketingpros.com", "aamp.agency"]
-    email_domain = req.email.strip().lower().split("@")[-1]
-    if email_domain not in allowed_domains:
-        raise HTTPException(status_code=400, detail="Email must be @backyardmarketingpros.com or @aamp.agency")
+    # Was a hardcoded global allowlist of the first two tenants' domains, which
+    # meant no other client could invite their own staff. The real controls are
+    # `require_admin` and tenant scoping (the new row is stamped with the
+    # inviting tenant, and users are unique per tenant, not globally).
+    #
+    # What remains is a shape check plus an OPTIONAL per-tenant allowlist a
+    # tenant can switch on for itself. Empty list = no restriction (default).
+    from app.runtime_config import get_allowed_invite_domains, is_valid_email
 
-    existing = await db.execute(select(User).where(User.email == req.email.lower()))
+    email_clean = req.email.strip().lower()
+    if not is_valid_email(email_clean):
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+
+    allowed_domains = await get_allowed_invite_domains(db)
+    if allowed_domains:
+        email_domain = email_clean.rsplit("@", 1)[-1]
+        if email_domain not in allowed_domains:
+            pretty = ", ".join("@" + d for d in allowed_domains)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Your organization only allows invites to: {pretty}. "
+                       f"An admin can change this in Settings → Team.",
+            )
+
+    existing = await db.execute(select(User).where(User.email == email_clean))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Email already registered")
 
@@ -475,7 +494,7 @@ async def invite_user(
             pass  # fall back to default
 
     new_user = User(
-        email=req.email.lower(),
+        email=email_clean,
         first_name=req.first_name.strip(),
         last_name=req.last_name.strip(),
         nickname=req.title or "",

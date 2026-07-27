@@ -675,6 +675,17 @@ class RuntimeConfig(TenantMixin, Base):
     # tenant's address. Surfaced in onboarding + Settings → Business Identity.
     compliance_address = Column(Text, nullable=True)
 
+    # Optional guardrail on Settings → Team invites: JSON list of email domains
+    # an admin may invite (e.g. ["acme.com", "acme.co.uk"]).
+    #
+    # EMPTY/NULL MEANS NO RESTRICTION — any valid address may be invited. That
+    # is the default on purpose: invites already require an admin role and land
+    # in the inviting tenant only, so the domain list is a typo/hygiene guard,
+    # not a security boundary. This replaced a hardcoded global allowlist of
+    # BMP + AAMP domains that made it impossible for a client to invite their
+    # own staff.
+    allowed_invite_domains_json = Column(Text, nullable=True, default="[]")
+
     # Per-tenant prospecting vertical — JSON list of business categories the
     # Find Leads search + Auto Pilot campaign picker target (e.g. BMP: home
     # services; AAMP: tour operators / things-to-do). NULL → frontend uses a

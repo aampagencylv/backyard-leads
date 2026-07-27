@@ -29,6 +29,7 @@ from app.runtime_config import (
     set_google_maps_api_key,
     set_audit_branding,
     set_org_brand,
+    set_allowed_invite_domains,
     get_org_brand,
     DEFAULT_MESSAGING_DIRECTION,
     mask_key,
@@ -70,6 +71,9 @@ class UpdateRuntimeConfigRequest(BaseModel):
     # iMessage send toggle. When False, sequence engine skips all iMessage
     # steps for this tenant instead of attempting + failing on Blooio.
     imessage_enabled: Optional[bool] = None
+    # Optional guardrail on Team invites. [] removes the restriction (default);
+    # a non-empty list limits which email domains an admin may invite.
+    allowed_invite_domains: Optional[list[str]] = None
 
 
 def _mask_field(field: Optional[str]) -> dict:
@@ -91,6 +95,16 @@ def _tenant_payload(rc, settings_obj) -> dict:
     their team's voice without escalating to platform-level access.
     """
     apollo_key = (rc.apollo_api_key or "").strip()
+    # Parsed inline rather than via get_allowed_invite_domains(db): this
+    # builder is sync and only receives the already-loaded rc row.
+    try:
+        import json as _json
+        _invite_domains = _json.loads(getattr(rc, "allowed_invite_domains_json", None) or "[]")
+        if not isinstance(_invite_domains, list):
+            _invite_domains = []
+        _invite_domains = [str(d).strip().lower() for d in _invite_domains if str(d).strip()]
+    except Exception:
+        _invite_domains = []
     return {
         # Neutral fallbacks only. This payload pre-fills the Settings → Brand
         # panel, so defaulting company_name/website_url to a real tenant's
@@ -102,6 +116,10 @@ def _tenant_payload(rc, settings_obj) -> dict:
             "logo_url":        getattr(rc, "brand_logo_url", None) or "",
             "company_name":    getattr(rc, "brand_company_name", None) or "",
             "website_url":     getattr(rc, "brand_website_url", None) or "",
+        },
+        "team": {
+            # [] => any valid address may be invited (the default).
+            "allowed_invite_domains": _invite_domains,
         },
         "apollo": {
             "set": bool(apollo_key),
@@ -358,6 +376,9 @@ async def update_runtime_config(
             company_name=req.brand_company_name,
             website_url=req.brand_website_url,
         )
+
+    if req.allowed_invite_domains is not None:
+        await set_allowed_invite_domains(db, req.allowed_invite_domains)
 
     _audit_fields = (
         req.audit_report_header_url, req.audit_report_logo_url,
