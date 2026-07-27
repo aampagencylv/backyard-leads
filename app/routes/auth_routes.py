@@ -488,7 +488,11 @@ async def invite_user(
         from app.services.tenant_identity import get_tenant_identity
 
         ident = await get_tenant_identity(new_user.tenant_id)
-        login_url = ident.base_url or (settings.public_url or "").rstrip("/")
+        # base_url is the tenant's own host (custom domain, else
+        # {slug}.leadprospector.ai). Never settings.public_url — login is
+        # scoped by host, so sending them to the platform tenant's host
+        # would 401 them against an account that lives in another tenant.
+        login_url = ident.base_url
         actor_name = " ".join(
             p for p in [(user.first_name or "").strip(), (user.last_name or "").strip()] if p
         ) or user.email

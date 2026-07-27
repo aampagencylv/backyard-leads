@@ -36,6 +36,10 @@ log = logging.getLogger("prospector.tenant_identity")
 # back to them; every other tenant configures its own or goes without.
 PLATFORM_TENANT_ID = 1
 
+# Every tenant is reachable at {slug}.leadprospector.ai even with no custom
+# domain on file. Kept in sync with tenancy.PLATFORM_DOMAIN_SUFFIX.
+PLATFORM_DOMAIN_SUFFIX = ".leadprospector.ai"
+
 # Neutral palette. Mirrors the column defaults on RuntimeConfig
 # (brand_primary_color / brand_secondary_color / brand_accent_bg_color) so a
 # tenant that never opens the brand panel looks deliberately unbranded rather
@@ -153,6 +157,19 @@ async def get_tenant_identity(tenant_id: int) -> TenantIdentity:
             """), {"t": int(tenant_id)})).scalar_one_or_none()
             if host:
                 ident.base_url = f"https://{str(host).strip().rstrip('/')}"
+            else:
+                # No custom domain yet. Every tenant is still reachable at
+                # {slug}.leadprospector.ai — the host resolver matches that
+                # suffix against tenants.slug without needing a tenant_domains
+                # row. Falling back to settings.public_url instead would send
+                # the tenant's users to the PLATFORM tenant's host, where the
+                # login lookup is scoped to that tenant and their account does
+                # not exist, so they'd just get a 401.
+                slug = (await db.execute(text(
+                    "SELECT slug FROM tenants WHERE id = :t LIMIT 1"
+                ), {"t": int(tenant_id)})).scalar_one_or_none()
+                if slug:
+                    ident.base_url = f"https://{str(slug).strip()}{PLATFORM_DOMAIN_SUFFIX}"
     except Exception:
         log.exception("tenant identity lookup failed (tenant=%s)", tenant_id)
     return ident
