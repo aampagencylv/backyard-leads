@@ -77,6 +77,32 @@ Calls are rejected with a TTS message if:
 - Outside calling window
 - Missing critical compliance setup
 
+## +1 is not one country (NANP)
+
+The North American Numbering Plan shares `+1` across the US, Canada and ~20
+Caribbean nations. **Twilio treats each as a separate destination with its own
+geographic permission**, and the Caribbean ones ship disabled — that range is
+the primary target for international revenue-share toll fraud.
+
+`extract_country_code_from_e164` therefore resolves `+1` by AREA CODE
+(`_NANP_AREA_CODES` in `app/services/twilio_voice.py`), not by country code:
+
+| Number | Country |
+|---|---|
+| `+1 242 555 1234` | `BS` Bahamas |
+| `+1 876 555 1234` | `JM` Jamaica |
+| `+1 787 555 1234` | `PR` Puerto Rico |
+| `+1 416 555 1234` | `CA` Canada |
+| `+1 212 555 1234` | `US` |
+
+Anything not in the table falls through to `US`.
+
+Adding a new NANP country needs THREE things, not one:
+1. its area code(s) in `_NANP_AREA_CODES`
+2. a `country_dialing_config` row (`check_call_allowed` refuses a country with
+   no row)
+3. `low_risk_numbers_enabled` on the Twilio account (see below)
+
 ## Compliance Notes by Country
 
 ### Mexico (+52)
@@ -99,6 +125,29 @@ Calls are rejected with a TTS message if:
 - No verification required (default)
 - TCPA calling window: 8am–9pm Eastern time
 - (If B2B override enabled: no time restriction)
+
+## Twilio geographic permissions (the second gate)
+
+The app's tenant allowlist is only the FIRST gate. Twilio independently blocks
+most international destinations per account, and its rejection happens at the
+carrier with an error the rep can't act on. Both gates must be open.
+
+Enable low-risk dialing (leave both high-risk tiers OFF — they are the
+toll-fraud exposure):
+
+```bash
+curl -u "$SID:$TOKEN" -X POST \
+  https://voice.twilio.com/v1/DialingPermissions/BulkCountryUpdates \
+  --data-urlencode 'UpdateRequest=[{"iso_code":"BS","low_risk_numbers_enabled":"true","high_risk_special_numbers_enabled":"false","high_risk_tollfraud_numbers_enabled":"false"}]'
+```
+
+Booleans must be JSON **strings** and all three flags present, or it 400s
+`unable to parse the updateRequest`.
+
+Subaccounts do NOT reliably inherit this: setting
+`DialingPermissionsInheritance` is not enough, apply BulkCountryUpdates to each
+tenant subaccount too. Verify with
+`GET /v1/DialingPermissions/Countries/{ISO}`.
 
 ## How to Extend: Adding New Countries
 
@@ -126,6 +175,12 @@ List all country compliance rules.
 Get current calling countries for a tenant.
 
 **PATCH /api/admin/tenants/{tenant_id}/calling-config**
+
+> `tenant_ai_config` is not a `TenantMixin`, so it has no ORM auto-filter and
+> every query must scope itself. These helpers take an explicit `tenant_id`;
+> before that they used `select(...).limit(1)` and this endpoint wrote tenant
+> 1's row no matter which tenant was in the URL. Don't reintroduce `.limit(1)`.
+
 ```json
 {
   "supported_calling_countries": ["US", "MX", "BR"]
