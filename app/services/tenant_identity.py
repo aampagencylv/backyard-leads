@@ -37,8 +37,9 @@ log = logging.getLogger("prospector.tenant_identity")
 PLATFORM_TENANT_ID = 1
 
 # Every tenant is reachable at {slug}.leadprospector.ai even with no custom
-# domain on file. Kept in sync with tenancy.PLATFORM_DOMAIN_SUFFIX.
-PLATFORM_DOMAIN_SUFFIX = ".leadprospector.ai"
+# domain on file. Imported, not redeclared — the host resolver in tenancy is
+# the authority, and a second copy would silently drift.
+from app.tenancy import PLATFORM_DOMAIN_SUFFIX  # noqa: E402
 
 # Neutral palette. Mirrors the column defaults on RuntimeConfig
 # (brand_primary_color / brand_secondary_color / brand_accent_bg_color) so a

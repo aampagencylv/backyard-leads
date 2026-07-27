@@ -8,7 +8,7 @@ from sqlalchemy import select, func
 from pydantic import BaseModel
 from app.config import settings
 from app.database import get_db
-from app.tenancy import get_tenant_db, get_current_tenant_id
+from app.tenancy import get_tenant_db, get_current_tenant_id, PLATFORM_DOMAIN_SUFFIX
 from app.models import User
 from app.services.audit_log import record_audit
 from app.auth import (
@@ -132,14 +132,27 @@ async def universal_login(
                     TenantDomain.is_verified == True,
                 ).limit(1)
             )).scalar_one_or_none()
-        host = primary.domain if primary else "app.leadprospector.ai"
-        redirect_url = f"https://{host}/"
         # Tenant name comes from the Tenant row; cheap lookup.
         from app.models import Tenant as _T
         tenant_row = (await db.execute(
             select(_T).where(_T.id == matched_user.tenant_id)
         )).scalar_one_or_none()
         tenant_name = tenant_row.name if tenant_row else ""
+
+        if primary is not None:
+            host = primary.domain
+        elif tenant_row is not None and (tenant_row.slug or "").strip():
+            # The slug step the comment above always promised. It matters:
+            # /api/brand is fetched WITHOUT auth, so the app skins itself
+            # from the HOST, not the JWT. Landing a domainless tenant on
+            # app.leadprospector.ai resolves to the platform tenant and shows
+            # them another company's logo and colors while they operate their
+            # own data. {slug}.leadprospector.ai resolves to the right tenant
+            # with no tenant_domains row needed.
+            host = f"{tenant_row.slug.strip()}{PLATFORM_DOMAIN_SUFFIX}"
+        else:
+            host = "app.leadprospector.ai"
+        redirect_url = f"https://{host}/"
 
     token = create_access_token({
         "sub": str(matched_user.id),
