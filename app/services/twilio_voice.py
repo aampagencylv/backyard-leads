@@ -354,6 +354,22 @@ def extract_country_code_from_e164(e164: str | None) -> str | None:
         "54": "AR",    # Argentina
         "51": "PE",    # Peru
         "58": "VE",    # Venezuela
+        "53": "CU",    # Cuba
+        "591": "BO",   # Bolivia
+        "593": "EC",   # Ecuador
+        "595": "PY",   # Paraguay
+        "598": "UY",   # Uruguay
+        # Central America. Seeded in country_dialing_config by
+        # migrate_nanp_country_configs — without these prefixes the compliance
+        # check fails with "could not determine country" instead of using them.
+        "501": "BZ",   # Belize
+        "502": "GT",   # Guatemala
+        "503": "SV",   # El Salvador
+        "504": "HN",   # Honduras
+        "505": "NI",   # Nicaragua
+        "506": "CR",   # Costa Rica
+        "507": "PA",   # Panama
+        "509": "HT",   # Haiti
         "34": "ES",    # Spain
         "33": "FR",    # France
         "44": "GB",    # UK

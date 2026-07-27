@@ -2004,7 +2004,9 @@ async def get_tenant_calling_config(
     if not cfg:
         raise HTTPException(status_code=404, detail="Tenant not found")
 
-    supported = await get_supported_calling_countries(db)
+    # Explicit tenant_id: this session belongs to the acting super_admin,
+    # not to the tenant named in the URL.
+    supported = await get_supported_calling_countries(db, tenant_id=tenant_id)
     if not supported:
         supported = ["US"]
 
@@ -2045,7 +2047,9 @@ async def set_tenant_calling_config(
             detail=f"Unknown countries: {', '.join(invalid)}. Valid: {', '.join(valid_countries)}"
         )
 
-    await set_supported_calling_countries(db, req.supported_calling_countries)
+    await set_supported_calling_countries(
+        db, req.supported_calling_countries, tenant_id=tenant_id
+    )
     await record_audit(
         db,
         actor=actor,

@@ -424,11 +424,38 @@ def mask_key(value: str | None) -> str:
 # International dialing config
 # ============================================================
 
-async def get_supported_calling_countries(db: AsyncSession) -> list[str]:
+def _resolve_tenant_id(db: AsyncSession, tenant_id: Optional[int] = None) -> int:
+    """Which tenant a tenant_ai_config query applies to.
+
+    TenantAIConfig is NOT a TenantMixin, so the ORM auto-filter does not apply
+    and every query must say `WHERE tenant_id` itself — `select(...).limit(1)`
+    silently returns whichever row is first (tenant 1) for every caller.
+
+    Prefer an explicit `tenant_id`: platform-admin routes act on a tenant named
+    in the URL, which is NOT the admin's own session tenant. Falling back to the
+    session there would read and write the wrong tenant's row.
+    """
+    if tenant_id:
+        return int(tenant_id)
+    tid = db.info.get("tenant_id")
+    if not tid:
+        raise RuntimeError(
+            "tenant_ai_config access needs an explicit tenant_id or a scoped "
+            "session (get_tenant_db / tenant_scope) — it has no ORM auto-filter"
+        )
+    return int(tid)
+
+
+async def get_supported_calling_countries(
+    db: AsyncSession, tenant_id: Optional[int] = None
+) -> list[str]:
     """Return the list of ISO country codes this tenant can use for calling.
     Empty list means US only (default). E.g. ["US", "MX", "BR"]."""
     from app.models import TenantAIConfig
-    rc = (await db.execute(select(TenantAIConfig).limit(1))).scalar_one_or_none()
+    tid = _resolve_tenant_id(db, tenant_id)
+    rc = (await db.execute(
+        select(TenantAIConfig).where(TenantAIConfig.tenant_id == tid)
+    )).scalar_one_or_none()
     if not rc:
         return []
     import json as _json
@@ -440,15 +467,20 @@ async def get_supported_calling_countries(db: AsyncSession) -> list[str]:
 
 
 async def set_supported_calling_countries(
-    db: AsyncSession, countries: list[str]
+    db: AsyncSession, countries: list[str], tenant_id: Optional[int] = None
 ) -> None:
     """Set which ISO country codes this tenant can use for calling.
     Example: ["US", "MX", "BR"]"""
     from app.models import TenantAIConfig
     import json as _json
-    rc = (await db.execute(select(TenantAIConfig).limit(1))).scalar_one_or_none()
+    tid = _resolve_tenant_id(db, tenant_id)
+    rc = (await db.execute(
+        select(TenantAIConfig).where(TenantAIConfig.tenant_id == tid)
+    )).scalar_one_or_none()
     if not rc:
-        rc = TenantAIConfig()
+        # tenant_id is the primary key and there's no auto-stamp hook for a
+        # non-TenantMixin model, so it must be set explicitly.
+        rc = TenantAIConfig(tenant_id=tid)
         db.add(rc)
     # Validate — only accept 2-char ISO country codes
     validated = [c.upper() for c in countries if isinstance(c, str) and len(c) == 2]
