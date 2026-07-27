@@ -1,10 +1,12 @@
 from __future__ import annotations
+import logging
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from pydantic import BaseModel
+from app.config import settings
 from app.database import get_db
 from app.tenancy import get_tenant_db, get_current_tenant_id
 from app.models import User
@@ -14,6 +16,8 @@ from app.auth import (
     get_current_user, require_admin,
     can_modify_user, role_assignable_by,
 )
+
+log = logging.getLogger("prospector.auth_routes")
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -470,55 +474,46 @@ async def invite_user(
     await db.commit()
     await db.refresh(new_user)
 
-    # Send welcome email with credentials via Resend
+    # Invites are PLATFORM mail, not tenant mail: LeadProspector is telling
+    # someone an account exists, so it sends from the LeadProspector domain
+    # and account. This also means a brand-new tenant can invite its staff
+    # before it has verified a sending domain of its own — gating invites on
+    # the tenant's domain would have made onboarding impossible.
+    #
+    # The login URL still points at the tenant's own host when it has one, so
+    # the recipient lands on the right (white-labelled) app.
     email_sent = False
     try:
-        from app.config import settings
+        from app.services.platform_mailer import send_platform_email
         from app.services.tenant_identity import get_tenant_identity
 
-        # Every identity in this email — logo, name, colors, login URL and
-        # sending domain — comes from the INVITING tenant. Skip the send
-        # rather than welcome someone to another company's brand.
         ident = await get_tenant_identity(new_user.tenant_id)
-        if settings.resend_api_key and ident.send_domain:
-            import httpx
-            from app.services.html_to_text import html_to_plain_text
+        login_url = ident.base_url or (settings.public_url or "").rstrip("/")
+        actor_name = " ".join(
+            p for p in [(user.first_name or "").strip(), (user.last_name or "").strip()] if p
+        ) or user.email
 
-            org = ident.display_name("Prospector")
-            login_url = ident.base_url or settings.public_url
-            logo = (
-                f'<img src="{ident.logo_url}" style="width:250px;margin-bottom:20px" alt="{org}">'
-                if ident.logo_url else
-                f'<div style="font-size:20px;font-weight:700;color:{ident.secondary_color};margin-bottom:20px">{org}</div>'
+        msg_id = await send_platform_email(
+            to=new_user.email,
+            template="user_invite",
+            vars={
+                "first_name": new_user.first_name or "there",
+                "actor_name": actor_name,
+                "tenant_name": ident.display_name("your team"),
+                "login_url": login_url,
+                "email": new_user.email,
+                "temp_password": temp_password,
+            },
+        )
+        email_sent = msg_id is not None
+        if not email_sent:
+            log.warning(
+                "invite email not delivered for user %s (tenant=%s) — platform mailer "
+                "returned no id; check PLATFORM_RESEND_API_KEY and domain verification",
+                new_user.id, new_user.tenant_id,
             )
-            welcome_html = f"""
-                    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:500px;margin:0 auto;padding:20px">
-                        {logo}
-                        <h2 style="color:{ident.secondary_color}">Welcome to Prospector, {new_user.first_name}!</h2>
-                        <p>Your account has been created. Here are your login credentials:</p>
-                        <div style="background:{ident.accent_bg_color};border-radius:8px;padding:16px;margin:16px 0">
-                            <p><strong>URL:</strong> <a href="{login_url}">{login_url}</a></p>
-                            <p><strong>Email:</strong> {new_user.email}</p>
-                            <p><strong>Temporary Password:</strong> {temp_password}</p>
-                        </div>
-                        <p style="color:#666;font-size:13px">Please change your password after your first login by going to Settings.</p>
-                        <p>— The {org} Team</p>
-                    </div>
-                    """
-            await httpx.AsyncClient(timeout=10).post(
-                "https://api.resend.com/emails",
-                headers={"Authorization": f"Bearer {settings.resend_api_key}", "Content-Type": "application/json"},
-                json={
-                    "from": f"{org} <noreply@{ident.send_domain}>",
-                    "to": [new_user.email],
-                    "subject": f"Welcome to {org} Prospector — Your Account is Ready",
-                    "html": welcome_html,
-                    "text": html_to_plain_text(welcome_html),
-                },
-            )
-            email_sent = True
     except Exception:
-        pass
+        log.exception("invite email failed for user %s", new_user.id)
 
     await record_audit(
         db, actor=user, action="user.invited",
