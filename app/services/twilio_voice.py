@@ -270,19 +270,79 @@ def normalize_phone_e164(raw: str | None, default_country: str = "1") -> str:
     return f"+{s}"
 
 
+# North American Numbering Plan: +1 is shared by the US, Canada and ~20
+# Caribbean nations, so the country code alone CANNOT identify the country.
+# The area code (next 3 digits) does.
+#
+# This matters operationally, not just cosmetically. Twilio treats each NANP
+# country as its own destination with its own geographic permission, and the
+# Caribbean ones are disabled by default (they are the primary target for
+# international revenue-share toll fraud). Mapping every +1 to "US" meant our
+# own pre-call compliance check happily approved a call to, say, the Bahamas
+# because the tenant had "US" enabled — and Twilio then rejected it at the
+# carrier with an error the rep couldn't act on.
+#
+# Only NON-US area codes are listed; anything unlisted falls through to "US".
+_NANP_AREA_CODES: dict[str, str] = {
+    # Caribbean + Atlantic
+    "242": "BS",  # Bahamas
+    "246": "BB",  # Barbados
+    "264": "AI",  # Anguilla
+    "268": "AG",  # Antigua and Barbuda
+    "284": "VG",  # British Virgin Islands
+    "340": "VI",  # U.S. Virgin Islands
+    "345": "KY",  # Cayman Islands
+    "441": "BM",  # Bermuda
+    "473": "GD",  # Grenada
+    "649": "TC",  # Turks and Caicos
+    "664": "MS",  # Montserrat
+    "721": "SX",  # Sint Maarten
+    "758": "LC",  # Saint Lucia
+    "767": "DM",  # Dominica
+    "784": "VC",  # Saint Vincent and the Grenadines
+    "787": "PR", "939": "PR",                      # Puerto Rico
+    "809": "DO", "829": "DO", "849": "DO",         # Dominican Republic
+    "868": "TT",  # Trinidad and Tobago
+    "869": "KN",  # Saint Kitts and Nevis
+    "876": "JM", "658": "JM",                      # Jamaica
+    # Pacific territories
+    "670": "MP",  # Northern Mariana Islands
+    "671": "GU",  # Guam
+    "684": "AS",  # American Samoa
+    # Canada
+    **{ac: "CA" for ac in (
+        "204", "226", "236", "249", "250", "263", "289", "306", "343", "354",
+        "365", "367", "368", "382", "387", "403", "416", "418", "428", "431",
+        "437", "438", "450", "468", "474", "506", "514", "519", "548", "579",
+        "581", "584", "587", "604", "613", "639", "647", "672", "683", "705",
+        "709", "742", "753", "778", "780", "782", "807", "819", "825", "867",
+        "873", "879", "902", "905",
+    )},
+}
+
+
 def extract_country_code_from_e164(e164: str | None) -> str | None:
     """Extract the ISO country code from an E.164 phone number.
-    +14803383369 → "US"
-    +5215551234  → "MX"
+    +14803383369  → "US"
+    +12425551234  → "BS"  (Bahamas — NANP, resolved by area code)
+    +14165551234  → "CA"
+    +5215551234   → "MX"
     +551140041234 → "BR"
     Returns None if we can't determine the country.
 
     Uses a basic lookup table for common country codes. International dialing
     prefixes are country-code based, not always unique per country, but this
-    covers the most common cases.
+    covers the most common cases. +1 is special-cased through
+    `_NANP_AREA_CODES` because it spans ~25 distinct countries.
     """
     if not e164 or not e164.startswith("+"):
         return None
+
+    digits_only = "".join(ch for ch in e164[1:] if ch.isdigit())
+    # +1 must be disambiguated by area code before the generic prefix scan,
+    # otherwise every NANP number collapses to "US".
+    if digits_only.startswith("1") and len(digits_only) >= 4:
+        return _NANP_AREA_CODES.get(digits_only[1:4], "US")
 
     # Country code → ISO country code mapping (non-exhaustive but covers major countries)
     COUNTRY_CODE_MAP = {
