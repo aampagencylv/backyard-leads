@@ -162,6 +162,7 @@ async def init_db():
         "scripts.migrate_sequence_objective",
         "scripts.migrate_engagement_objective_topic",
         "scripts.migrate_compliance_address",
+        "scripts.migrate_international_dialing",
     )
 
     # Decide which actually need to run.
