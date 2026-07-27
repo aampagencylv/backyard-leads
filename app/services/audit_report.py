@@ -559,6 +559,7 @@ def render_report_html(
     right_image_url: str = "", right_message: str = "",
     booking_url_override: str = "",
     company_name: str = "", website_url: str = "",
+    primary_color: str = "", secondary_color: str = "",
 ) -> str:
     """Render the audit report as a branded HTML page.
 
@@ -571,7 +572,19 @@ def render_report_html(
 
     booking_url_override: when set, replaces the default iClosed URL
     on the 'Schedule a Discovery Call' CTAs. Used to route to the
-    native scheduler (/book/{slug}) or a custom URL."""
+    native scheduler (/book/{slug}) or a custom URL.
+
+    primary_color / secondary_color come from the tenant's brand and drive
+    the header, headings and CTAs — a prospect must never see another
+    agency's palette on a report. Empty falls back to the NEUTRAL platform
+    palette, never to a real tenant's colors."""
+    from app.services.tenant_identity import NEUTRAL_COLORS, shade
+
+    brand_primary = (primary_color or "").strip() or NEUTRAL_COLORS["primary_color"]
+    brand_secondary = (secondary_color or "").strip() or NEUTRAL_COLORS["secondary_color"]
+    brand_secondary_dark = shade(brand_secondary, -0.45)
+    brand_primary_hover = shade(brand_primary, -0.18)
+
     header_img = (header_url or "").strip() or DEFAULT_HEADER_BANNER
     # No BMP fallback logo — show the tenant's logo or nothing (the <img>
     # onerror hides an empty src). Footer company/site come from the tenant.
@@ -707,7 +720,7 @@ def render_report_html(
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f7f5; color: #1a1a1a; }}
         .container {{ max-width: 800px; margin: 0 auto; padding: 20px; }}
-        .header {{ background: linear-gradient(135deg, #0D3B13 0%, #1B5E20 100%); color: white; padding: 40px; border-radius: 12px; margin-bottom: 24px; }}
+        .header {{ background: linear-gradient(135deg, {brand_secondary_dark} 0%, {brand_secondary} 100%); color: white; padding: 40px; border-radius: 12px; margin-bottom: 24px; }}
         .header img {{ width: 200px; margin-bottom: 20px; }}
         .header h1 {{ font-size: 28px; margin-bottom: 8px; }}
         .header p {{ color: rgba(255,255,255,0.8); font-size: 14px; }}
@@ -716,12 +729,12 @@ def render_report_html(
         .score-card .number {{ font-size: 48px; font-weight: 700; }}
         .score-card .label {{ font-size: 13px; color: #666; margin-top: 4px; }}
         .section {{ background: white; border-radius: 12px; padding: 24px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }}
-        .section h2 {{ font-size: 18px; color: #1B5E20; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 2px solid #1B5E2022; }}
+        .section h2 {{ font-size: 18px; color: {brand_secondary}; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 2px solid {brand_secondary}22; }}
         .section h3 {{ font-size: 15px; margin-bottom: 12px; }}
-        .cta-box {{ background: linear-gradient(135deg, #E65100, #EF6C00); color: white; border-radius: 12px; padding: 32px; text-align: center; margin: 24px 0; }}
+        .cta-box {{ background: linear-gradient(135deg, {brand_primary}, {brand_primary_hover}); color: white; border-radius: 12px; padding: 32px; text-align: center; margin: 24px 0; }}
         .cta-box h2 {{ font-size: 22px; margin-bottom: 8px; }}
         .cta-box p {{ margin-bottom: 16px; color: rgba(255,255,255,0.9); }}
-        .cta-box a {{ display: inline-block; background: white; color: #E65100; padding: 12px 32px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 15px; }}
+        .cta-box a {{ display: inline-block; background: white; color: {brand_primary}; padding: 12px 32px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 15px; }}
         .cta-box a:hover {{ background: #f5f5f5; }}
         .grade {{ display: inline-block; width: 60px; height: 60px; border-radius: 50%; font-size: 28px; font-weight: 700; line-height: 60px; text-align: center; color: white; }}
         .footer {{ text-align: center; padding: 24px; color: #888; font-size: 12px; }}
@@ -742,14 +755,14 @@ def render_report_html(
     {outer_open}
     {container_open}
         <div style="border-radius:12px;overflow:hidden;margin-bottom:24px;box-shadow:0 4px 16px rgba(0,0,0,0.1)">
-            <img src="{_esc(header_img)}" alt="Header" style="width:100%;display:block;background:#0D3B13" onerror="this.style.display='none'">
-            <div style="background:linear-gradient(135deg, #0D3B13 0%, #1B5E20 100%);color:white;padding:32px 40px;display:flex;justify-content:space-between;align-items:flex-start;gap:20px">
+            <img src="{_esc(header_img)}" alt="Header" style="width:100%;display:block;background:{brand_secondary_dark}" onerror="this.style.display='none'">
+            <div style="background:linear-gradient(135deg, {brand_secondary_dark} 0%, {brand_secondary} 100%);color:white;padding:32px 40px;display:flex;justify-content:space-between;align-items:flex-start;gap:20px">
                 <div style="flex:1;min-width:0">
                     <h1 style="font-size:28px;margin-bottom:8px">AI Findability Report</h1>
                     <p style="color:rgba(255,255,255,0.8);font-size:16px;margin-bottom:4px">{_esc(report.company_name)} &middot; {_esc(report.city)}{', ' + _esc(report.state) if report.state else ''}</p>
                     <p style="color:rgba(255,255,255,0.5);font-size:12px">Generated {report.generated_at}</p>
                 </div>
-                <a href="{_esc(booking_url)}" style="display:inline-block;background:#FF723F;color:white;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.2);flex-shrink:0;margin-top:4px">📅 Schedule A Discovery Call</a>
+                <a href="{_esc(booking_url)}" style="display:inline-block;background:{brand_primary};color:white;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.2);flex-shrink:0;margin-top:4px">📅 Schedule A Discovery Call</a>
             </div>
         </div>
 
@@ -809,11 +822,11 @@ def render_report_html(
             <h2>Why This Matters Now</h2>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:12px">
                 <div style="background:#f8f9fa;padding:16px;border-radius:8px;text-align:center">
-                    <div style="font-size:32px;font-weight:700;color:#1B5E20">45%</div>
+                    <div style="font-size:32px;font-weight:700;color:{brand_secondary}">45%</div>
                     <div style="font-size:12px;color:#666">of consumers now use AI for local recommendations</div>
                 </div>
                 <div style="background:#f8f9fa;padding:16px;border-radius:8px;text-align:center">
-                    <div style="font-size:32px;font-weight:700;color:#E65100">15.9%</div>
+                    <div style="font-size:32px;font-weight:700;color:{brand_primary}">15.9%</div>
                     <div style="font-size:12px;color:#666">ChatGPT conversion rate vs 1.76% for Google organic</div>
                 </div>
             </div>
@@ -833,8 +846,8 @@ def render_report_html(
 
         {'<!-- Search Visibility -->' + chr(10) + '<div class="section"><h2>Search Visibility</h2>' +
         f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:16px">' +
-        f'<div style="background:#f8f9fa;padding:16px;border-radius:8px;text-align:center"><div style="font-size:28px;font-weight:700;color:#1B5E20">{report.total_ranked_keywords}</div><div style="font-size:12px;color:#666">Keywords ranking on Google</div></div>' +
-        f'<div style="background:#f8f9fa;padding:16px;border-radius:8px;text-align:center"><div style="font-size:28px;font-weight:700;color:#E65100">{report.organic_traffic_estimate}</div><div style="font-size:12px;color:#666">Est. monthly organic visits</div></div>' +
+        f'<div style="background:#f8f9fa;padding:16px;border-radius:8px;text-align:center"><div style="font-size:28px;font-weight:700;color:{brand_secondary}">{report.total_ranked_keywords}</div><div style="font-size:12px;color:#666">Keywords ranking on Google</div></div>' +
+        f'<div style="background:#f8f9fa;padding:16px;border-radius:8px;text-align:center"><div style="font-size:28px;font-weight:700;color:{brand_primary}">{report.organic_traffic_estimate}</div><div style="font-size:12px;color:#666">Est. monthly organic visits</div></div>' +
         f'<div style="background:#f8f9fa;padding:16px;border-radius:8px;text-align:center"><div style="font-size:28px;font-weight:700">{report.referring_domains}</div><div style="font-size:12px;color:#666">Referring domains</div></div>' +
         '</div>' +
         _kw_section(report) +
@@ -891,7 +904,7 @@ def render_report_html(
                 We help {_esc(report.business_type or 'local')} businesses get discovered by
                 ChatGPT, Google AI, and Perplexity. Pick a time below — we'll walk through what we found and the fastest fixes.
             </p>
-            {f'<a href="{_esc(booking_url)}" style="display:inline-block;background:#E65100;color:white;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px">📅 Schedule A Discovery Call</a>' if booking_url else '<p style="font-size:14px;color:#888">Reply to the email that sent you this report and we&#39;ll set up a time.</p>'}
+            {f'<a href="{_esc(booking_url)}" style="display:inline-block;background:{brand_primary};color:white;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px">📅 Schedule A Discovery Call</a>' if booking_url else '<p style="font-size:14px;color:#888">Reply to the email that sent you this report and we&#39;ll set up a time.</p>'}
         </div>
 
         <div class="footer">

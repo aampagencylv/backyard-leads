@@ -1,7 +1,7 @@
 """Daily outbound digest — peace-of-mind operational visibility.
 
-Sends ONE email per day to steve@aamp.agency summarizing what the team
-sent in the previous 24 hours. Critical sections:
+Sends ONE email per day PER TENANT to that tenant's admins, summarizing what
+their team sent in the previous 24 hours. Critical sections:
 
   - Per-BDR send counts (total, sent, blocked, failed)
   - Any BLOCKED sends (a guard fired — what was it, who tried, what subject)
@@ -12,6 +12,11 @@ sent in the previous 24 hours. Critical sections:
 
 The digest itself is sent via Resend directly (bypassing send_email) so
 it doesn't appear in its own audit log.
+
+EVERY query here is raw SQL, which bypasses the ORM tenant auto-filter in
+app/tenancy.py. Each one therefore carries an explicit `tenant_id = :tid`
+predicate. Do not remove them — without them this digest aggregates every
+tenant's prospect addresses and subject lines into one email.
 """
 from __future__ import annotations
 import asyncio
@@ -25,15 +30,19 @@ from sqlalchemy import text
 
 from app.database import async_session
 from app.config import settings
+from app.services.tenant_identity import (
+    active_tenant_ids,
+    get_tenant_identity,
+    tenant_notification_emails,
+)
 
-log = logging.getLogger("bmp.outbound_digest")
-
-DIGEST_RECIPIENT = "steve@aamp.agency"
+log = logging.getLogger("prospector.outbound_digest")
 
 
-async def _query_summary(hours: int = 24) -> dict:
-    """Pull all the data we need for the digest in one DB session."""
+async def _query_summary(tenant_id: int, hours: int = 24) -> dict:
+    """Pull all the data we need for one tenant's digest in one DB session."""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    params = {"cutoff": cutoff, "tid": int(tenant_id)}
     async with async_session() as s:
         # Per-BDR totals
         per_bdr = await s.execute(text("""
@@ -45,11 +54,11 @@ async def _query_summary(hours: int = 24) -> dict:
                 COUNT(*) FILTER (WHERE oea.status = 'transient') AS transient,
                 COUNT(*) AS total
             FROM outbound_email_audit oea
-            LEFT JOIN users u ON u.id = oea.sender_user_id
-            WHERE oea.created_at >= :cutoff
+            LEFT JOIN users u ON u.id = oea.sender_user_id AND u.tenant_id = :tid
+            WHERE oea.created_at >= :cutoff AND oea.tenant_id = :tid
             GROUP BY sender
             ORDER BY total DESC
-        """), {"cutoff": cutoff})
+        """), params)
         per_bdr_rows = [dict(zip(("sender","sent","blocked","failed","transient","total"), r))
                         for r in per_bdr.fetchall()]
 
@@ -61,11 +70,12 @@ async def _query_summary(hours: int = 24) -> dict:
                 COALESCE(u.first_name || ' ' || u.last_name, 'engine') AS sender,
                 oea.caller_module, c.name AS company_name
             FROM outbound_email_audit oea
-            LEFT JOIN users u ON u.id = oea.sender_user_id
-            LEFT JOIN companies c ON c.id = oea.company_id
-            WHERE oea.created_at >= :cutoff AND oea.status = 'blocked'
+            LEFT JOIN users u ON u.id = oea.sender_user_id AND u.tenant_id = :tid
+            LEFT JOIN companies c ON c.id = oea.company_id AND c.tenant_id = :tid
+            WHERE oea.created_at >= :cutoff AND oea.tenant_id = :tid
+              AND oea.status = 'blocked'
             ORDER BY oea.created_at DESC LIMIT 50
-        """), {"cutoff": cutoff})
+        """), params)
         blocked_rows = [dict(zip(
             ("id","created_at","reason","subject","recipient","score","flags","sender","caller","company"), r))
             for r in blocked.fetchall()]
@@ -78,13 +88,14 @@ async def _query_summary(hours: int = 24) -> dict:
                 COALESCE(u.first_name || ' ' || u.last_name, 'engine') AS sender,
                 c.name AS company_name
             FROM outbound_email_audit oea
-            LEFT JOIN users u ON u.id = oea.sender_user_id
-            LEFT JOIN companies c ON c.id = oea.company_id
+            LEFT JOIN users u ON u.id = oea.sender_user_id AND u.tenant_id = :tid
+            LEFT JOIN companies c ON c.id = oea.company_id AND c.tenant_id = :tid
             WHERE oea.created_at >= :cutoff
+              AND oea.tenant_id = :tid
               AND oea.status = 'sent'
               AND oea.anomaly_score >= 30
             ORDER BY oea.anomaly_score DESC, oea.created_at DESC LIMIT 30
-        """), {"cutoff": cutoff})
+        """), params)
         sent_flagged_rows = [dict(zip(
             ("id","created_at","subject","recipient","score","flags","sender","company"), r))
             for r in sent_flagged.fetchall()]
@@ -95,11 +106,11 @@ async def _query_summary(hours: int = 24) -> dict:
                 SUBSTRING(recipient_email FROM '@(.+)') AS domain,
                 COUNT(*) AS n
             FROM outbound_email_audit
-            WHERE created_at >= :cutoff AND status = 'sent'
+            WHERE created_at >= :cutoff AND tenant_id = :tid AND status = 'sent'
             GROUP BY domain
             HAVING COUNT(*) >= 5
             ORDER BY n DESC LIMIT 10
-        """), {"cutoff": cutoff})
+        """), params)
         top_domain_rows = [dict(zip(("domain","n"), r)) for r in top_domains.fetchall()]
 
         # Failed sends (Resend errors) — operational signal
@@ -109,14 +120,16 @@ async def _query_summary(hours: int = 24) -> dict:
                 LEFT(oea.error_message, 200) AS error_summary,
                 COALESCE(u.first_name || ' ' || u.last_name, 'engine') AS sender
             FROM outbound_email_audit oea
-            LEFT JOIN users u ON u.id = oea.sender_user_id
-            WHERE oea.created_at >= :cutoff AND oea.status IN ('failed', 'transient')
+            LEFT JOIN users u ON u.id = oea.sender_user_id AND u.tenant_id = :tid
+            WHERE oea.created_at >= :cutoff AND oea.tenant_id = :tid
+              AND oea.status IN ('failed', 'transient')
             ORDER BY oea.created_at DESC LIMIT 15
-        """), {"cutoff": cutoff})
+        """), params)
         failed_rows = [dict(zip(("created_at","subject","recipient","error","sender"), r))
                        for r in failed.fetchall()]
 
     return {
+        "tenant_id": int(tenant_id),
         "cutoff": cutoff,
         "per_bdr": per_bdr_rows,
         "blocked": blocked_rows,
@@ -126,25 +139,27 @@ async def _query_summary(hours: int = 24) -> dict:
     }
 
 
-def _render_digest_html(data: dict) -> tuple[str, str]:
+def _render_digest_html(data: dict, ident=None) -> tuple[str, str]:
     """Build the (subject, html_body) tuple for the digest email."""
     cutoff = data["cutoff"]
+    org = (getattr(ident, "company_name", "") or "").strip()
     total_sent = sum(r["sent"] for r in data["per_bdr"])
     total_blocked = sum(r["blocked"] for r in data["per_bdr"])
     total_failed = sum(r["failed"] for r in data["per_bdr"])
 
     # Subject summarizes the state at a glance
+    tag = f"{org} outbound digest" if org else "Outbound digest"
     if total_blocked > 0:
-        subject = f"🛡 Outbound digest — {total_sent} sent, {total_blocked} BLOCKED ({cutoff.strftime('%b %d')})"
+        subject = f"🛡 {tag} — {total_sent} sent, {total_blocked} BLOCKED ({cutoff.strftime('%b %d')})"
     elif total_failed > 0:
-        subject = f"⚠ Outbound digest — {total_sent} sent, {total_failed} failed ({cutoff.strftime('%b %d')})"
+        subject = f"⚠ {tag} — {total_sent} sent, {total_failed} failed ({cutoff.strftime('%b %d')})"
     else:
-        subject = f"✓ Outbound digest — {total_sent} sent, all clean ({cutoff.strftime('%b %d')})"
+        subject = f"✓ {tag} — {total_sent} sent, all clean ({cutoff.strftime('%b %d')})"
 
     parts: list[str] = []
     parts.append(f"""
     <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#222;max-width:720px;margin:0 auto">
-      <h2 style="margin-top:24px">Outbound digest — last 24h</h2>
+      <h2 style="margin-top:24px">{('%s — outbound digest' % org) if org else 'Outbound digest'} — last 24h</h2>
       <div style="color:#666;font-size:13px;margin-bottom:24px">
         Window: since {cutoff.strftime('%Y-%m-%d %H:%M UTC')}<br>
         Total: <strong>{total_sent}</strong> sent · <strong style="color:#c0392b">{total_blocked}</strong> blocked · <strong style="color:#e67e22">{total_failed}</strong> failed
@@ -228,13 +243,14 @@ def _render_digest_html(data: dict) -> tuple[str, str]:
             parts.append(f"<div style='margin-bottom:6px'>{ts} {r['sender']} → {r['recipient']}: {r['error'] or '?'}</div>")
         parts.append("</div>")
 
+    footer_org = f"{org} · " if org else ""
     parts.append("<div style='margin-top:32px;padding-top:24px;border-top:1px solid #eee;color:#888;font-size:11px'>"
-                 "Auto-generated by Prospector outbound audit. The full data lives in the outbound_email_audit table.</div></div>")
+                 f"{footer_org}Auto-generated outbound audit. The full data lives in the outbound_email_audit table.</div></div>")
 
     return subject, "".join(parts)
 
 
-async def _already_sent_today(recipient: str) -> bool:
+async def _already_sent_today(tenant_id: int, recipient: str) -> bool:
     """Check the outbound_email_audit table for a digest already sent to
     this recipient in the last 18 hours. Persistent dedup across process
     restarts — replaces the in-memory last_sent_date in main.py which
@@ -248,28 +264,57 @@ async def _already_sent_today(recipient: str) -> bool:
             r = await s.execute(text("""
                 SELECT 1 FROM outbound_email_audit
                 WHERE caller_module LIKE '%outbound_digest%'
+                  AND tenant_id = :tid
                   AND recipient_email = :r
                   AND created_at >= :cutoff
                   AND status = 'sent'
                 LIMIT 1
-            """), {"r": recipient, "cutoff": cutoff})
+            """), {"tid": int(tenant_id), "r": recipient, "cutoff": cutoff})
             return r.fetchone() is not None
     except Exception as e:
         log.warning(f"digest dedup check failed (non-fatal, allowing send): {e}")
         return False
 
 
-async def send_digest(*, hours: int = 24, recipient: str = DIGEST_RECIPIENT, force: bool = False) -> dict:
-    """Build + send the daily digest via Resend directly. Returns
+async def send_digest(
+    tenant_id: int,
+    *,
+    hours: int = 24,
+    recipient: Optional[str] = None,
+    force: bool = False,
+) -> dict:
+    """Build + send one tenant's daily digest via Resend directly. Returns
     {sent, subject, totals} on success.
+
+    `recipient` defaults to the tenant's own admins — this report contains
+    that tenant's prospect addresses and subject lines, so it must never go
+    to another tenant's inbox.
 
     Pass force=True to bypass the 18h dedup window (useful for ad-hoc
     weekly retrospectives via the manual admin endpoint)."""
-    if not force and await _already_sent_today(recipient):
-        log.info(f"digest skipped: already sent to {recipient} in the last 18h")
+    ident = await get_tenant_identity(tenant_id)
+
+    recipients = [recipient] if recipient else await tenant_notification_emails(tenant_id)
+    if not recipients:
+        log.info(f"digest skipped (tenant={tenant_id}): no admin recipients on file")
+        return {"sent": False, "skipped": "no_recipients"}
+
+    # The digest is internal mail about the tenant's own sending, but it still
+    # has to leave from a domain that tenant owns. No shared-domain fallback.
+    if not ident.send_domain:
+        log.info(
+            f"digest skipped (tenant={tenant_id}): no verified sending domain "
+            f"(missing: {', '.join(ident.missing())})"
+        )
+        return {"sent": False, "skipped": "no_verified_send_domain"}
+
+    to_addr = recipients[0]
+    if not force and await _already_sent_today(tenant_id, to_addr):
+        log.info(f"digest skipped (tenant={tenant_id}): already sent to {to_addr} in the last 18h")
         return {"sent": False, "skipped": "deduped"}
-    data = await _query_summary(hours=hours)
-    subject, html = _render_digest_html(data)
+
+    data = await _query_summary(tenant_id, hours=hours)
+    subject, html = _render_digest_html(data, ident)
 
     # Send via Resend directly — bypassing send_email() so the digest
     # itself doesn't appear in its own audit log + isn't subject to
@@ -278,9 +323,10 @@ async def send_digest(*, hours: int = 24, recipient: str = DIGEST_RECIPIENT, for
         log.error("RESEND_API_KEY not set — can't send digest")
         return {"sent": False, "error": "no resend key"}
 
+    from_label = f"{ident.company_name} Outbound Audit" if ident.company_name else "Outbound Audit"
     payload = {
-        "from": f"Prospector Audit <audit@{settings.send_domain}>",
-        "to": [recipient],
+        "from": f"{from_label} <audit@{ident.send_domain}>",
+        "to": recipients,
         "subject": subject,
         "html": html,
         "headers": {"X-Internal-Digest": "outbound-audit"},
@@ -297,7 +343,7 @@ async def send_digest(*, hours: int = 24, recipient: str = DIGEST_RECIPIENT, for
                 json=payload,
             )
         if r.status_code in (200, 201):
-            log.info(f"digest sent to {recipient}: {subject}")
+            log.info(f"digest sent (tenant={tenant_id}) to {', '.join(recipients)}: {subject}")
             resend_id = r.json().get("id")
             # Write an audit row tagged caller_module='outbound_digest' so
             # _already_sent_today() above can dedup on the next loop tick.
@@ -310,22 +356,23 @@ async def send_digest(*, hours: int = 24, recipient: str = DIGEST_RECIPIENT, for
                     # Stamp tenant_id explicitly. outbound_email_audit.tenant_id
                     # is nullable with NO server-default, so omitting it writes
                     # NULL — which leaves the row un-scoped (invisible to every
-                    # tenant-filtered read). This digest is a platform-ops record,
-                    # so it belongs to the platform tenant (1).
+                    # tenant-filtered read) and would also break the per-tenant
+                    # dedup lookup in _already_sent_today().
                     await s.execute(text("""
                         INSERT INTO outbound_email_audit (
                             tenant_id, sender_user_id, company_id, contact_id, email_id,
                             step_type, subject, body_preview, recipient_email,
                             status, anomaly_score, resend_id, caller_module
                         ) VALUES (
-                            1, NULL, NULL, NULL, NULL,
+                            :tid, NULL, NULL, NULL, NULL,
                             'internal', :subject, :preview, :recipient,
                             'sent', 0, :resend_id, 'outbound_digest'
                         )
                     """), {
+                        "tid": int(tenant_id),
                         "subject": subject[:500],
                         "preview": "[outbound audit digest]"[:300],
-                        "recipient": recipient,
+                        "recipient": to_addr,
                         "resend_id": resend_id,
                     })
                     await s.commit()
@@ -344,5 +391,21 @@ async def send_digest(*, hours: int = 24, recipient: str = DIGEST_RECIPIENT, for
         return {"sent": False, "error": str(e)}
 
 
+async def send_all_digests(*, hours: int = 24, force: bool = False) -> dict:
+    """Fan out one digest per active tenant. Each tenant's report is built
+    from that tenant's rows only and goes to that tenant's own admins.
+
+    One tenant failing never blocks the others."""
+    results: dict[int, dict] = {}
+    for tid in await active_tenant_ids():
+        try:
+            results[tid] = await send_digest(tid, hours=hours, force=force)
+        except Exception as e:
+            log.exception(f"digest failed (tenant={tid}): {e}")
+            results[tid] = {"sent": False, "error": str(e)}
+    sent = sum(1 for r in results.values() if r.get("sent"))
+    return {"tenants": len(results), "sent": sent, "results": results}
+
+
 if __name__ == "__main__":
-    print(asyncio.run(send_digest()))
+    print(asyncio.run(send_all_digests()))

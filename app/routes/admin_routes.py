@@ -1619,22 +1619,33 @@ async def caddy_ask(domain: str, db: AsyncSession = Depends(get_db)):
 @router.post("/outbound-digest/send")
 async def trigger_outbound_digest(
     hours: int = 24,
+    tenant_id: Optional[int] = None,
     recipient: Optional[str] = None,
     force: bool = True,
     _: User = Depends(require_super_admin),
 ):
     """Manually fire the outbound audit digest right now.
 
-    Defaults: last 24 hours, to steve@aamp.agency. Pass `?hours=168`
-    to get a weekly retrospective; pass `?recipient=...` to redirect.
+    Defaults: last 24 hours, every active tenant, each to its own admins.
+    Pass `?tenant_id=` to fire for a single tenant, `?hours=168` for a
+    weekly retrospective, `?recipient=` to redirect a single tenant's copy.
     The digest also auto-fires daily via the background loop in main.py.
 
     `force=True` (default for manual triggers) bypasses the 18h dedup
     check so super_admin can re-fire on demand.
+
+    `recipient` requires `tenant_id` — redirecting the whole fan-out to one
+    mailbox would hand every tenant's prospect data to a single recipient.
     """
-    from app.services.outbound_digest import send_digest, DIGEST_RECIPIENT
-    result = await send_digest(hours=hours, recipient=recipient or DIGEST_RECIPIENT, force=force)
-    return result
+    from app.services.outbound_digest import send_digest, send_all_digests
+    if recipient and tenant_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="recipient requires an explicit tenant_id — a cross-tenant redirect would leak prospect data",
+        )
+    if tenant_id is not None:
+        return await send_digest(tenant_id, hours=hours, recipient=recipient, force=force)
+    return await send_all_digests(hours=hours, force=force)
 
 
 # ============================================================

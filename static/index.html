@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>Prospector | Backyard Marketing Pros</title>
+    <title>Prospector</title>
 
     <!-- PWA: web app manifest + theme color -->
     <link rel="manifest" href="/manifest.webmanifest">
@@ -788,6 +788,8 @@
           // Title
           const name = (brand.company_name || "").trim();
           if (name) document.title = name + " · Prospector + CRM";
+          // Global for code that needs the tenant name outside this scope.
+          window._lpBrandName = name;
 
           // Logos — fully data-driven per tenant (white-label correctness).
           // The <img> starts hidden so no tenant ever flashes another
@@ -812,7 +814,7 @@
               const isSidebar = id === "sidebar-logo-img";
               span.style.cssText = isSidebar
                 ? "font-size:17px;font-weight:800;color:#fff;letter-spacing:-0.3px"
-                : "font-size:22px;font-weight:800;color:var(--bmp-green,#1B5E20);letter-spacing:-0.3px";
+                : "font-size:22px;font-weight:800;color:var(--bmp-green,#1F2937);letter-spacing:-0.3px";
               wrap.appendChild(span);
             }
           }
@@ -823,7 +825,7 @@
           // --bmp-* for backwards compat; the *values* are per-tenant.
           _lpApplyBrandVars(brand);
         } catch (e) {
-          // Brand fetch failure is non-fatal — the hardcoded BMP values stay.
+          // Brand fetch failure is non-fatal — the neutral defaults stay.
         }
       })();
     </script>
@@ -1561,7 +1563,7 @@
                         <p>Open <a href="#" onclick="showPage('settings');return false" style="color:var(--bmp-green)">Settings → 🔑 API Keys & Webhooks → + New Key</a>. Save the plaintext (<code>pk_live_...</code>) — it's shown once, then SHA-256-hashed at rest.</p>
 
                         <h3 style="margin-top:18px;font-size:15px">2. Push a company in</h3>
-                        <pre class="dev-code">curl -X POST https://prospector.backyardmarketingpros.com/api/v1/companies \
+                        <pre class="dev-code">curl -X POST https://YOUR-PROSPECTOR-HOST/api/v1/companies \
   -H "X-API-Key: pk_live_YOUR_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -1611,7 +1613,7 @@
                 <div class="dev-content hidden" id="dev-tab-companies">
                     <div class="search-box" style="max-width:880px">
                         <h2 style="margin-top:0">Companies API</h2>
-                        <p style="color:#666">Base path: <code>https://prospector.backyardmarketingpros.com/api/v1/companies</code></p>
+                        <p style="color:#666">Base path: <code>https://YOUR-PROSPECTOR-HOST/api/v1/companies</code></p>
 
                         <h3 style="font-size:15px;margin-top:18px">List companies</h3>
                         <pre class="dev-code">GET /api/v1/companies?limit=50&offset=0&status=active&search=pools</pre>
@@ -2221,7 +2223,7 @@ function verify(secret, rawBody, header) {
                                         <input id="sched-logo-url" oninput="_refreshBrandPreviewFromInputs()" onchange="saveSchedulingConfig()" placeholder="…or paste an https://… URL" style="flex:1;min-width:200px;padding:7px;border:1px solid #ddd;border-radius:4px;font-size:13px">
                                         <button type="button" class="btn btn-secondary btn-sm" onclick="clearLogoUrl()" title="Remove logo">✕</button>
                                     </div>
-                                    <div id="sched-logo-status" style="font-size:11px;color:#888;margin-top:4px">PNG / JPG / WebP / SVG / GIF · 2&nbsp;MB max · stored on prospector.backyardmarketingpros.com</div>
+                                    <div id="sched-logo-status" style="font-size:11px;color:#888;margin-top:4px">PNG / JPG / WebP / SVG / GIF · 2&nbsp;MB max · stored on this Prospector instance</div>
                                 </div>
                                 <div style="font-size:11px;color:#888;margin-bottom:8px">Logo URL must be HTTPS — http images get blocked by browsers on the secure booking page.</div>
 
@@ -2276,7 +2278,7 @@ function verify(secret, rawBody, header) {
                 <!-- Branding (header + footer) — same controls as before, just relocated here -->
                 <div class="search-box" style="max-width:880px">
                     <h3 style="margin:0 0 6px;font-size:15px">🎨 Header banner + footer logo</h3>
-                    <p style="font-size:12px;color:#888;margin:0 0 14px">Header sits across the top of the report; footer logo at the bottom. Both default to BMP's images if you leave them blank.</p>
+                    <p style="font-size:12px;color:#888;margin:0 0 14px">Header sits across the top of the report; footer logo at the bottom. Leave blank to fall back to your organization's logo.</p>
                     <div class="form-group" style="margin-bottom:14px">
                         <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Header banner</label>
                         <p style="font-size:11px;color:#888;margin:0 0 6px">Wide image — 1200×360 works well.</p>
@@ -2488,7 +2490,7 @@ function verify(secret, rawBody, header) {
                 <div class="search-box" style="margin-top:14px;max-width:760px">
                     <h3 style="margin:0 0 6px">📌 Snippet</h3>
                     <p style="font-size:12px;color:#888;margin:0 0 10px">Add this single line to the bottom of every page on your tracked site. Identification happens automatically — no per-visitor config.</p>
-                    <pre id="visitors-snippet-box" style="background:#1f2326;color:#e6e6e6;padding:10px 12px;border-radius:6px;font-size:11px;overflow-x:auto;margin:0">&lt;script src="https://prospector.backyardmarketingpros.com/track.js" async&gt;&lt;/script&gt;</pre>
+                    <pre id="visitors-snippet-box" style="background:#1f2326;color:#e6e6e6;padding:10px 12px;border-radius:6px;font-size:11px;overflow-x:auto;margin:0"></pre>
                 </div>
             </div>
 
@@ -2517,7 +2519,7 @@ function verify(secret, rawBody, header) {
                     <div class="form-group">
                         <label>Scheduling Link <span style="font-weight:400;color:#888;font-size:11px">(leave blank to use the BMP team iClosed link)</span></label>
                         <input type="text" id="settings-scheduling-url" placeholder="Leave blank for default BMP iClosed link, or paste your own">
-                        <button type="button" class="btn btn-sm" style="margin-top:6px;font-size:12px;padding:4px 10px" onclick="document.getElementById('settings-scheduling-url').value='https://app.iclosed.io/e/backyardmarketingpros/discovery-call'">Use team iClosed link</button>
+                        
                     </div>
                     <div class="form-group">
                         <label>Timezone</label>
@@ -2670,12 +2672,12 @@ function verify(secret, rawBody, header) {
 
                     <div class="form-group">
                         <label>Company display name</label>
-                        <input id="brand-company-name" oninput="renderBrandPreview()" onchange="saveOrgBrand()" maxlength="120" placeholder="Backyard Marketing Pros">
+                        <input id="brand-company-name" oninput="renderBrandPreview()" onchange="saveOrgBrand()" maxlength="120" placeholder="Your company name">
                     </div>
 
                     <div class="form-group">
                         <label>Marketing website URL</label>
-                        <input id="brand-website-url" oninput="renderBrandPreview()" onchange="saveOrgBrand()" maxlength="500" placeholder="https://backyardmarketingpros.com">
+                        <input id="brand-website-url" oninput="renderBrandPreview()" onchange="saveOrgBrand()" maxlength="500" placeholder="https://yourdomain.com">
                         <div style="font-size:11px;color:#888;margin-top:4px">Used in email signatures (W: link) and the signature logo's click target.</div>
                     </div>
 
@@ -2685,7 +2687,7 @@ function verify(secret, rawBody, header) {
                     </div>
 
                     <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
-                        <button class="btn btn-secondary btn-xs" onclick="resetOrgBrand()">Reset to BMP defaults</button>
+                        <button class="btn btn-secondary btn-xs" onclick="resetOrgBrand()">Reset to defaults</button>
                         <span id="brand-save-status" style="font-size:11px;color:#888"></span>
                     </div>
                 </div>
@@ -2984,7 +2986,7 @@ function verify(secret, rawBody, header) {
 
                     <div style="margin-top:24px;padding-top:16px;border-top:1px solid #eee">
                         <h4 style="font-size:14px;margin-bottom:6px">Blooio <span id="blooio-key-status" style="font-size:11px;font-weight:400;color:#888"></span></h4>
-                        <p style="font-size:12px;color:#888;margin-bottom:8px">iMessage messaging via Blooio. Sends from BMP's dedicated number to any iPhone. Higher response rates than SMS for B2B cold outreach. <a href="https://docs.blooio.com/" target="_blank" rel="noreferrer">Blooio docs</a></p>
+                        <p style="font-size:12px;color:#888;margin-bottom:8px">iMessage messaging via Blooio. Sends from a dedicated number to any iPhone. Higher response rates than SMS for B2B cold outreach. <a href="https://docs.blooio.com/" target="_blank" rel="noreferrer">Blooio docs</a></p>
                         <div class="form-group">
                             <div style="display:flex;gap:6px">
                                 <input type="password" id="settings-blooio-key" placeholder="Bearer token from console.blooio.com" autocomplete="off" style="flex:1">
@@ -3007,7 +3009,7 @@ function verify(secret, rawBody, header) {
                     <!-- Resend (inbound webhook secret — for token-based reply catching) -->
                     <div style="margin-top:24px;padding-top:16px;border-top:1px solid #eee">
                         <h4 style="font-size:14px;margin-bottom:6px">Resend Inbound <span id="resend-webhook-status" style="font-size:11px;font-weight:400;color:#888"></span></h4>
-                        <p style="font-size:12px;color:#888;margin-bottom:8px">Signing secret that HMAC-verifies replies coming back from Resend Inbound at <code>r-&lt;token&gt;@go.backyardmarketingpros.com</code>. Generate a new one in <a href="https://resend.com/webhooks" target="_blank" rel="noreferrer">Resend → Webhooks</a> when rotating. Saves to the database (preferred) and overrides the env value.</p>
+                        <p style="font-size:12px;color:#888;margin-bottom:8px">Signing secret that HMAC-verifies replies coming back from Resend Inbound at <code>r-&lt;token&gt;@&lt;your sending domain&gt;</code>. Generate a new one in <a href="https://resend.com/webhooks" target="_blank" rel="noreferrer">Resend → Webhooks</a> when rotating. Saves to the database (preferred) and overrides the env value.</p>
                         <div class="form-group">
                             <div style="display:flex;gap:6px">
                                 <input type="password" id="settings-resend-webhook-secret" placeholder="whsec_..." autocomplete="off" style="flex:1">
@@ -3118,8 +3120,8 @@ function verify(secret, rawBody, header) {
                 <!-- Website Visitor Tracking (Phase 2 snippet to embed on bymp.com) -->
                 <div class="search-box" style="max-width:600px;margin-top:16px">
                     <h3 style="margin:0 0 6px">Website Visitor Tracking <span style="font-size:11px;font-weight:400;color:var(--bmp-green)">· active</span></h3>
-                    <p style="font-size:12px;color:#888;margin-bottom:8px">Email links auto-wrap through <code>/t/{token}</code> and log clicks to the timeline (already on, no setup). To track <strong>full page views</strong> across the website after a click-through, paste this script into <code>backyardmarketingpros.com</code> just before <code>&lt;/body&gt;</code>:</p>
-                    <pre id="wvt-snippet-box" style="background:#1f2326;color:#e6e6e6;padding:10px 12px;border-radius:6px;font-size:11px;overflow-x:auto;margin:0">&lt;script src=&quot;https://prospector.backyardmarketingpros.com/track.js&quot; async&gt;&lt;/script&gt;</pre>
+                    <p style="font-size:12px;color:#888;margin-bottom:8px">Email links auto-wrap through <code>/t/{token}</code> and log clicks to the timeline (already on, no setup). To track <strong>full page views</strong> across the website after a click-through, paste this script into your website just before <code>&lt;/body&gt;</code>:</p>
+                    <pre id="wvt-snippet-box" style="background:#1f2326;color:#e6e6e6;padding:10px 12px;border-radius:6px;font-size:11px;overflow-x:auto;margin:0"></pre>
                     <div style="display:flex;gap:6px;margin-top:6px">
                         <button class="btn btn-secondary btn-sm" onclick="copyWvtSnippet()">📋 Copy snippet</button>
                         <a href="/track.js" target="_blank" rel="noreferrer" class="btn btn-secondary btn-sm" style="text-decoration:none">View track.js</a>
@@ -3416,6 +3418,16 @@ function verify(secret, rawBody, header) {
         } catch (e) { /* non-fatal */ }
         let token = localStorage.getItem('token');
         let currentUser = null;
+
+        // Tracking snippets always reference the host the admin is actually
+        // on, so a white-label tenant never pastes another instance's URL.
+        document.addEventListener('DOMContentLoaded', () => {
+            const snippet = `<script src="${window.location.origin}/track.js" async><\/script>`;
+            for (const id of ['visitors-snippet-box', 'wvt-snippet-box']) {
+                const el = document.getElementById(id);
+                if (el) el.textContent = snippet;
+            }
+        });
         if (token) checkAuth();
 
         // ============ PWA service worker ============
@@ -10000,7 +10012,7 @@ function verify(secret, rawBody, header) {
                         <button class="btn btn-secondary btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('new-key-display').textContent);toast('Copied')">📋 Copy to clipboard</button>
                         <p style="font-size:12px;color:#666;margin:14px 0 8px"><strong>Usage:</strong></p>
                         <pre style="background:#1f2326;color:#e6e6e6;padding:10px 12px;border-radius:6px;font-size:11px;overflow-x:auto;margin:0">curl -H "X-API-Key: ${escapeHtml(data.plaintext_key.slice(0, 24))}..." \\\\
-  https://prospector.backyardmarketingpros.com/api/v1/companies</pre>
+  https://YOUR-PROSPECTOR-HOST/api/v1/companies</pre>
                         <div class="modal-actions" style="display:flex;justify-content:flex-end;margin-top:14px">
                             <button class="btn btn-primary" onclick="document.getElementById('modal-root').innerHTML='';loadApiKeys()">I've saved it — Done</button>
                         </div>
@@ -13133,7 +13145,7 @@ hmac.compare_digest(expected, header)</pre>
                             <div class="form-group"><label>First Name</label><input type="text" id="invite-first"></div>
                             <div class="form-group"><label>Last Name</label><input type="text" id="invite-last"></div>
                         </div>
-                        <div class="form-group"><label>Email</label><input type="email" id="invite-email" placeholder="name@backyardmarketingpros.com"></div>
+                        <div class="form-group"><label>Email</label><input type="email" id="invite-email" placeholder="name@yourdomain.com"></div>
                         <div class="form-group"><label>Title</label><input type="text" id="invite-title" placeholder="Business Development Rep"></div>
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
                             <div class="form-group">
@@ -13378,8 +13390,8 @@ hmac.compare_digest(expected, header)</pre>
             setBrandField('brand-accent-color',  b.accent_bg_color || '#FFF8F0');
             setBrandField('brand-accent-hex',    b.accent_bg_color || '#FFF8F0');
             setBrandField('brand-logo-url',      b.logo_url || '');
-            setBrandField('brand-company-name',  b.company_name || 'Backyard Marketing Pros');
-            setBrandField('brand-website-url',   b.website_url || 'https://backyardmarketingpros.com');
+            setBrandField('brand-company-name',  b.company_name || '');
+            setBrandField('brand-website-url',   b.website_url || '');
             renderBrandPreview();
 
             // Channel toggles (tenant-tier)
@@ -13533,7 +13545,7 @@ hmac.compare_digest(expected, header)</pre>
             }
             if (blCurrent) {
                 blCurrent.textContent = bl.set
-                    ? `Active. iMessage will be sent from BMP's dedicated Blooio number.`
+                    ? `Active. iMessage will be sent from the configured Blooio number.`
                     : `No key. The Message button will be disabled until you add one.`;
             }
             const blSigStatus = document.getElementById('blooio-signing-secret-status');
@@ -13823,7 +13835,7 @@ hmac.compare_digest(expected, header)</pre>
         function copyWvtSnippet() {
             const text = document.getElementById('wvt-snippet-box').textContent.trim();
             navigator.clipboard.writeText(text).then(
-                () => toast('Snippet copied — paste before </body> on backyardmarketingpros.com'),
+                () => toast('Snippet copied — paste it before </body> on your website'),
                 () => toast('Copy failed — manually select and copy from the box')
             );
         }
@@ -14732,7 +14744,7 @@ hmac.compare_digest(expected, header)</pre>
             const root = document.getElementById('modal-root');
             const initials = ((c.first_name||'')[0]||'') + ((c.last_name||'')[0]||'');
             const suggestions = [
-                {label: 'Quick intro after email', body: `Hi ${c.first_name || 'there'} — Steve from Backyard Marketing Pros, just sent you a note about ${c.company_name || 'your business'}. Free to chat for 5 min this week?`},
+                {label: 'Quick intro after email', body: `Hi ${c.first_name || 'there'} — ${(currentUser && currentUser.first_name) || 'I'} from ${(window._lpBrandName || 'our team')}, just sent you a note about ${c.company_name || 'your business'}. Free to chat for 5 min this week?`},
                 {label: 'Follow-up bump', body: `Hey ${c.first_name || 'there'}, did the email I sent get buried? Happy to resend or jump on a quick call.`},
                 {label: 'Calendar nudge', body: `Hey ${c.first_name || 'there'}, when's a good time to talk this week? I have ${ {Mon:'Mon',Tue:'Tue',Wed:'Wed',Thu:'Thu',Fri:'Fri'}[new Date().toLocaleDateString('en-US',{weekday:'short'})] || 'this week'} open.`},
             ];
@@ -14761,7 +14773,7 @@ hmac.compare_digest(expected, header)</pre>
                         <div id="sms-count" style="font-size:11px;color:#888;text-align:right;margin-top:4px">0 chars</div>
 
                         <div style="font-size:11px;color:#888;background:#eef6ff;border-radius:6px;padding:8px 10px;margin:8px 0">
-                            ⓘ Sent as iMessage from BMP's dedicated Blooio number. Falls back to RCS / SMS automatically
+                            ⓘ Sent as iMessage from the configured Blooio number. Falls back to RCS / SMS automatically
                             if the recipient isn't on iMessage. STOP replies auto-opt the contact out and pause the
                             email sequence.
                         </div>
@@ -15392,8 +15404,8 @@ hmac.compare_digest(expected, header)</pre>
                 secondary: get('brand-secondary-hex') || get('brand-secondary-color') || '#1B5E20',
                 accent:    get('brand-accent-hex')    || get('brand-accent-color')    || '#FFF8F0',
                 logo:      get('brand-logo-url'),
-                company:   get('brand-company-name') || 'Backyard Marketing Pros',
-                website:   get('brand-website-url') || 'https://backyardmarketingpros.com',
+                company:   get('brand-company-name') || '',
+                website:   get('brand-website-url') || '',
             };
         }
 
@@ -15490,17 +15502,17 @@ hmac.compare_digest(expected, header)</pre>
         }
 
         function resetOrgBrand() {
-            if (!confirm('Reset brand to BMP defaults? Colors revert, logo is cleared.')) return;
+            if (!confirm('Reset brand to defaults? Colors revert to the neutral palette; logo, name and website are cleared.')) return;
             const set = (id, v) => { const el = document.getElementById(id); if (el != null) el.value = v; };
-            set('brand-primary-color', '#E65100');
-            set('brand-primary-hex',   '#E65100');
-            set('brand-secondary-color', '#1B5E20');
-            set('brand-secondary-hex',   '#1B5E20');
-            set('brand-accent-color',  '#FFF8F0');
-            set('brand-accent-hex',    '#FFF8F0');
+            set('brand-primary-color', '#2563EB');
+            set('brand-primary-hex',   '#2563EB');
+            set('brand-secondary-color', '#1F2937');
+            set('brand-secondary-hex',   '#1F2937');
+            set('brand-accent-color',  '#F8FAFC');
+            set('brand-accent-hex',    '#F8FAFC');
             set('brand-logo-url',      '');
-            set('brand-company-name',  'Backyard Marketing Pros');
-            set('brand-website-url',   'https://backyardmarketingpros.com');
+            set('brand-company-name',  '');
+            set('brand-website-url',   '');
             renderBrandPreview();
             saveOrgBrand();
         }
@@ -16258,7 +16270,7 @@ hmac.compare_digest(expected, header)</pre>
             const hasSides = hasLeft || hasRight;
 
             const headerSafe = header || '/static/report-banner.jpg';
-            const logoSafe = logo || 'https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz-1024x269.png';
+            const logoSafe = logo || '';
 
             const sidePanel = (img, msg) => {
                 if (!(img || msg)) return '';

@@ -47,6 +47,10 @@ async def _resolve_audit_assets(db, rc) -> dict:
         # Footer identity — the tenant's own company name + site (no BMP).
         "company_name":    brand.get("company_name", ""),
         "website_url":     brand.get("website_url", ""),
+        # Palette — drives the report header, headings and CTAs so a prospect
+        # never sees another agency's colors on their report.
+        "primary_color":   brand.get("primary_color", ""),
+        "secondary_color": brand.get("secondary_color", ""),
     }
 
 
@@ -62,11 +66,19 @@ async def _resolve_audit_booking_url(db, rc, public_url: str = "") -> str:
     """
     scheduler_type = (getattr(rc, "audit_scheduler_type", None) or "iclosed").lower()
     if scheduler_type == "iclosed":
-        # The global iClosed URL is BMP's. Return it explicitly so it's only
-        # ever used when a tenant deliberately picks 'iclosed' — never as a
-        # silent cross-tenant fallback for a tenant whose native/custom
-        # booking just isn't set up yet.
-        return (settings.iclosed_booking_url or "").strip()
+        # settings.iclosed_booking_url is a single global link owned by the
+        # platform tenant. 'iclosed' is also the DEFAULT scheduler_type, so
+        # returning it unconditionally sent every new tenant's prospects to
+        # book a call on the platform tenant's calendar. Only tenant 1 may
+        # use it; everyone else gets their own link or none at all (the
+        # report falls back to "reply to this email" when empty).
+        # TODO(phase 2): per-tenant booking URL column, then drop this branch.
+        own = (getattr(rc, "audit_custom_url", "") or "").strip()
+        if own:
+            return own
+        if int(getattr(rc, "tenant_id", 0) or 0) == 1:
+            return (settings.iclosed_booking_url or "").strip()
+        return ""
     if scheduler_type == "custom":
         return (getattr(rc, "audit_custom_url", "") or "").strip()
     if scheduler_type == "native":
@@ -212,9 +224,12 @@ async def refresh_all_reports(
     from app.runtime_config import _get_or_create as _get_rc
     rc = await _get_rc(db)
     public_url = settings.audit_public_url.rstrip("/")
+    # No literal fallback — an unset booking URL renders the "reply to this
+    # email" CTA instead of sending prospects to another tenant's calendar.
     booking_url = await _resolve_audit_booking_url(db, rc, public_url)
-    if not booking_url:
-        booking_url = settings.iclosed_booking_url or "https://app.iclosed.io/e/backyardmarketingpros/discovery-call"
+    from app.runtime_config import get_org_brand as _gob_refresh
+    _rb = await _gob_refresh(db)
+    _r_primary = _rb.get("primary_color", "")
 
     reports = (await db.execute(select(AuditReportModel))).scalars().all()
     updated = 0
@@ -228,7 +243,7 @@ async def refresh_all_reports(
         from html import escape as _esc
 
         # Inject header CTA — right before the closing </div> of the header
-        header_cta = f'<a href="{_esc(booking_url)}" target="_blank" style="display:inline-block;background:#FF723F;color:white;padding:10px 22px;border-radius:6px;text-decoration:none;font-weight:600;font-size:14px;margin-top:8px">📅 Schedule A Discovery Call</a>'
+        header_cta = f'<a href="{_esc(booking_url)}" target="_blank" style="display:inline-block;background:{_r_primary};color:white;padding:10px 22px;border-radius:6px;text-decoration:none;font-weight:600;font-size:14px;margin-top:8px">📅 Schedule A Discovery Call</a>'
         # Insert after the first <h1> tag's parent div
         if "</h1>" in html:
             html = html.replace("</h1>", f"</h1>{header_cta}", 1)
@@ -238,7 +253,7 @@ async def refresh_all_reports(
         <div style="background:linear-gradient(135deg,#1a5c2e,#2d8a4e);color:white;padding:40px;text-align:center;margin-top:30px;border-radius:12px">
             <h2 style="margin:0 0 10px;font-size:22px">Ready to get found by AI?</h2>
             <p style="margin:0 0 16px;font-size:15px;opacity:0.9">Let us show you exactly how to fix these issues and start showing up in AI search results.</p>
-            <a href="{_esc(booking_url)}" target="_blank" style="display:inline-block;background:#E65100;color:white;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:700;font-size:16px">📅 Schedule A Discovery Call</a>
+            <a href="{_esc(booking_url)}" target="_blank" style="display:inline-block;background:{_r_primary};color:white;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:700;font-size:16px">📅 Schedule A Discovery Call</a>
         </div>'''
         if "</body>" in html:
             html = html.replace("</body>", f"{footer_cta}\n</body>")
@@ -361,26 +376,34 @@ async def view_competitor_report(
         )).scalar_one_or_none()
         company_name = company.name if company else "Your Business"
         from app.runtime_config import get_org_brand as _gob
-        _logo = (await _gob(db)).get("logo_url", "")
-        return HTMLResponse(_render_generating_page(token, company_name, _logo))
+        _b = await _gob(db)
+        return HTMLResponse(_render_generating_page(
+            token, company_name, _b.get("logo_url", ""),
+            _b.get("primary_color", ""), _b.get("secondary_color", ""),
+        ))
 
     # Not booked — bounce them back to the gate
     public_url = settings.audit_public_url.rstrip("/")
     compare_url = f"{public_url}/report/{token}/compare"
+    from app.runtime_config import get_org_brand as _gob2
+    _bounce_primary = (await _gob2(db)).get("primary_color", "")
     return HTMLResponse(
         f"<html><body><div style='font-family:sans-serif;text-align:center;padding:60px'>"
         f"<h2>Schedule your call to view this report</h2>"
         f"<p style='color:#666;font-size:14px;margin:12px 0 20px'>The competitive comparison unlocks once you book your discovery call.</p>"
-        f"<a href='{_esc(compare_url)}' style='display:inline-block;background:#E65100;color:white;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600'>Schedule Now</a>"
+        f"<a href='{_esc(compare_url)}' style='display:inline-block;background:{_bounce_primary};color:white;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600'>Schedule Now</a>"
         f"</div></body></html>"
     )
 
 
-def _render_generating_page(token: str, company_name: str, logo_url: str = "") -> str:
+def _render_generating_page(token: str, company_name: str, logo_url: str = "",
+                           primary_color: str = "", secondary_color: str = "") -> str:
     """Branded 'still generating' page that polls /booking-status every 4s
     and reloads the moment competitor_html is ready. Auto-email also fires
     on completion, so even if the user closes this tab, they get the link
     in their inbox."""
+    from app.services.tenant_identity import NEUTRAL_COLORS
+    accent = (secondary_color or "").strip() or NEUTRAL_COLORS["secondary_color"]
     return f"""<!DOCTYPE html>
 <html><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -390,11 +413,11 @@ def _render_generating_page(token: str, company_name: str, logo_url: str = "") -
     body {{ font-family: -apple-system, sans-serif; background: #f5f7f5; color: #1a1a1a; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }}
     .card {{ background: white; border-radius: 12px; padding: 48px 40px; max-width: 520px; width: 100%; text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,0.08); }}
     .card img {{ width: 200px; margin-bottom: 24px; }}
-    .spinner {{ display: inline-block; width: 56px; height: 56px; border: 5px solid #eaf3ea; border-top-color: #1B5E20; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 24px; }}
-    .card h1 {{ color: #1B5E20; font-size: 22px; margin-bottom: 12px; }}
+    .spinner {{ display: inline-block; width: 56px; height: 56px; border: 5px solid #eaf3ea; border-top-color: {accent}; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 24px; }}
+    .card h1 {{ color: {accent}; font-size: 22px; margin-bottom: 12px; }}
     .card p {{ color: #555; font-size: 14px; line-height: 1.6; margin-bottom: 8px; }}
     .countdown {{ display: inline-block; margin-top: 16px; padding: 8px 16px; background: #f5f7f5; border-radius: 6px; font-size: 13px; color: #555; font-variant-numeric: tabular-nums; }}
-    .countdown b {{ color: #1B5E20; }}
+    .countdown b {{ color: {accent}; }}
     .footer {{ margin-top: 24px; font-size: 12px; color: #888; }}
     @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
 </style>
@@ -499,9 +522,19 @@ async def request_competitor_comparison(
     competitors_url = f"{public_url}/report/{token}/competitors"
 
     company_name = company.name if company else "Your Business"
-    booking_url = settings.iclosed_booking_url
+    # Route through the resolver like every other call site — reading the
+    # global iClosed link directly put this tenant's prospects into the
+    # platform tenant's calendar.
+    from app.runtime_config import _get_or_create as _get_rc_gate
+    _gate_rc = await _get_rc_gate(db)
+    booking_url = await _resolve_audit_booking_url(db, _gate_rc, public_url)
     from app.runtime_config import get_org_brand as _gob
-    _gate_logo = (await _gob(db)).get("logo_url", "")
+    _gate_brand = await _gob(db)
+    from app.services.tenant_identity import shade as _shade
+    _gate_logo = _gate_brand.get("logo_url", "")
+    _gate_primary = _gate_brand.get("primary_color", "")
+    _gate_secondary = _gate_brand.get("secondary_color", "")
+    _gate_secondary_dark = _shade(_gate_secondary, -0.45)
 
     # Gated page: blurred preview + iClosed widget. The iClosed webhook
     # is the source of truth for "booked"; we poll /booking-status every
@@ -515,22 +548,22 @@ async def request_competitor_comparison(
     * {{ margin: 0; padding: 0; box-sizing: border-box; }}
     body {{ font-family: -apple-system, sans-serif; background: #f5f7f5; color: #1a1a1a; }}
     .container {{ max-width: 820px; margin: 0 auto; padding: 20px; }}
-    .header {{ background: linear-gradient(135deg, #0D3B13, #1B5E20); color: white; border-radius: 12px; padding: 32px; text-align: center; margin-bottom: 24px; }}
+    .header {{ background: linear-gradient(135deg, {_gate_secondary_dark}, {_gate_secondary}); color: white; border-radius: 12px; padding: 32px; text-align: center; margin-bottom: 24px; }}
     .header img {{ width: 200px; margin-bottom: 12px; }}
     .blurred {{ filter: blur(8px); pointer-events: none; user-select: none; opacity: 0.6; padding: 20px; background: white; border-radius: 12px; margin-bottom: 24px; }}
     .blurred table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
     .blurred td, .blurred th {{ padding: 8px; border-bottom: 1px solid #eee; }}
     .gate {{ background: white; border-radius: 12px; padding: 0; box-shadow: 0 4px 24px rgba(0,0,0,0.08); overflow: hidden; }}
     .gate-header {{ padding: 24px 24px 16px 24px; }}
-    .gate-header h2 {{ color: #1B5E20; margin-bottom: 4px; text-align: center; }}
+    .gate-header h2 {{ color: {_gate_secondary}; margin-bottom: 4px; text-align: center; }}
     .gate-header p.lede {{ color: #666; font-size: 14px; text-align: center; margin: 0; }}
     .iclosed-frame {{ width: 100%; height: 1300px; border: 0; display: block; background: transparent; }}
     .status-row {{ padding: 14px 24px 20px; text-align: center; font-size: 13px; color: #666; border-top: 1px solid #f0f0f0; }}
-    .status-row .pulse {{ display: inline-block; width: 8px; height: 8px; background: #FF723F; border-radius: 50%; margin-right: 6px; animation: pulse 1.5s ease-in-out infinite; vertical-align: middle; }}
+    .status-row .pulse {{ display: inline-block; width: 8px; height: 8px; background: {_gate_primary}; border-radius: 50%; margin-right: 6px; animation: pulse 1.5s ease-in-out infinite; vertical-align: middle; }}
     .escape-link {{ display: block; margin-top: 8px; font-size: 12px; color: #888; text-decoration: underline; cursor: pointer; }}
     .escape-link:hover {{ color: #555; }}
     .success {{ display: none; text-align: center; padding: 40px 20px; background: white; border-radius: 12px; }}
-    .success h2 {{ color: #1B5E20; margin-bottom: 12px; }}
+    .success h2 {{ color: {_gate_secondary}; margin-bottom: 12px; }}
     @keyframes pulse {{ 0%,100% {{ opacity: 1; }} 50% {{ opacity: 0.3; }} }}
     @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
 </style>
@@ -580,7 +613,7 @@ async def request_competitor_comparison(
     <div class="success" id="gate-success">
         <h2>You're booked! 🎉</h2>
         <p style="color:#555">Unlocking your competitive comparison...</p>
-        <div style="margin:16px auto;width:40px;height:40px;border:4px solid #ddd;border-top-color:#1B5E20;border-radius:50%;animation:spin 1s linear infinite"></div>
+        <div style="margin:16px auto;width:40px;height:40px;border:4px solid #ddd;border-top-color:{_gate_secondary};border-radius:50%;animation:spin 1s linear infinite"></div>
     </div>
 </div>
 
@@ -1108,6 +1141,8 @@ async def _email_competitor_report(db, *, report, company, to_email: str) -> Non
     public_url = settings.audit_public_url.rstrip("/")
     report_url = f"{public_url}/report/{report.token}/competitors"
     company_name = company.name or "your business"
+    from app.runtime_config import get_org_brand as _gob_email
+    _email_primary = (await _gob_email(db)).get("primary_color", "")
 
     subject = f"Your Competitive Comparison for {company_name} is ready"
     body = (
@@ -1116,7 +1151,7 @@ async def _email_competitor_report(db, *, report, company, to_email: str) -> Non
         f"We audited the top businesses in your market and put it side-by-side "
         f"with your AI findability, content, and local SEO scores so you can see "
         f"exactly where the gaps are.\n\n"
-        f'<a href="{report_url}" style="display:inline-block;background:#E65100;color:white;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;margin:8px 0">View My Comparison Report</a>\n\n'
+        f'<a href="{report_url}" style="display:inline-block;background:{_email_primary};color:white;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;margin:8px 0">View My Comparison Report</a>\n\n'
         f"Take a look before our call so we can dig into the biggest opportunities together.\n\n"
         f"— {sender_user.first_name}"
     )

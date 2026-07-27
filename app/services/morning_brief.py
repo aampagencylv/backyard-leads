@@ -381,12 +381,25 @@ def _delta_arrow(now: int, prior: int) -> str:
     if prior == 0:
         return "—" if now == 0 else "🆕"
     pct = round(((now - prior) / max(prior, 1)) * 100)
-    if pct >= 10:  return f'<span style="color:#1B5E20">▲ {pct}%</span>'
+    if pct >= 10:  return f'<span style="color:#15803D">▲ {pct}%</span>'
     if pct <= -10: return f'<span style="color:#c0392b">▼ {abs(pct)}%</span>'
     return f'<span style="color:#888">→ {pct:+d}%</span>'
 
 
-def render_brief_html(brief: BriefData, public_url: str) -> str:
+def render_brief_html(brief: BriefData, public_url: str, ident=None) -> str:
+    """Render the brief. `ident` is the sending tenant's TenantIdentity — its
+    colors and name drive the chrome so a tenant's staff never receive a
+    report wearing another tenant's brand. Neutral palette when absent."""
+    from app.services.tenant_identity import NEUTRAL_COLORS, shade
+
+    primary = getattr(ident, "primary_color", None) or NEUTRAL_COLORS["primary_color"]
+    secondary = getattr(ident, "secondary_color", None) or NEUTRAL_COLORS["secondary_color"]
+    secondary_dark = shade(secondary, -0.45)
+    primary_bg = shade(primary, 0.92)
+    org_name = (getattr(ident, "company_name", "") or "").strip()
+    org_address = (getattr(ident, "compliance_address", "") or "").strip()
+    footer_line = " · ".join(x for x in (org_name, org_address) if x)
+
     name = brief.user.get("first_name") or "there"
     o = brief.overnight
     hot = brief.today_priorities.get("hot_leads", [])
@@ -397,7 +410,7 @@ def render_brief_html(brief: BriefData, public_url: str) -> str:
 
     def _hot_row(c):
         tier_color = {"burning": "#b71c1c", "hot": "#bf360c", "warm": "#7a5c00", "cool": "#0d47a1"}.get(c["lead_score_tier"], "#666")
-        return f'<tr><td style="padding:6px 8px"><a href="{public_url}/?company_id={c["id"]}" style="color:#1B5E20;text-decoration:none">{_esc(c["name"])}</a></td><td style="padding:6px 8px;text-align:right;color:{tier_color};font-weight:600">{c["lead_score"]} {c["lead_score_tier"]}</td></tr>'
+        return f'<tr><td style="padding:6px 8px"><a href="{public_url}/?company_id={c["id"]}" style="color:{secondary};text-decoration:none">{_esc(c["name"])}</a></td><td style="padding:6px 8px;text-align:right;color:{tier_color};font-weight:600">{c["lead_score"]} {c["lead_score_tier"]}</td></tr>'
 
     def _task_row(t):
         return f'<li style="margin-bottom:4px">{_esc(t["description"])} <span style="color:#888;font-size:11px">· {_esc(t["company_name"])}</span></li>'
@@ -411,8 +424,8 @@ def render_brief_html(brief: BriefData, public_url: str) -> str:
         return f'<li style="margin-bottom:6px"><strong>{_esc(r["company_name"])}</strong> <span style="color:{sent_color};font-size:11px;font-weight:600;text-transform:uppercase">{sent.replace("_", " ")}</span><br><span style="color:#666;font-size:12px">{_esc(r.get("reply_sentiment_summary") or r.get("preview", ""))[:160]}</span></li>'
 
     insight_block = (
-        f'<div style="background:#fff5f0;border-left:3px solid #FF723F;padding:14px 16px;border-radius:6px;margin:18px 0">'
-        f'<div style="font-size:11px;color:#E65100;text-transform:uppercase;letter-spacing:0.4px;font-weight:700;margin-bottom:6px">⚡ One thing to know</div>'
+        f'<div style="background:{primary_bg};border-left:3px solid {primary};padding:14px 16px;border-radius:6px;margin:18px 0">'
+        f'<div style="font-size:11px;color:{primary};text-transform:uppercase;letter-spacing:0.4px;font-weight:700;margin-bottom:6px">⚡ One thing to know</div>'
         f'<div style="font-size:14px;color:#333;line-height:1.5">{_esc(brief.ai_insight)}</div></div>'
     ) if brief.ai_insight else ""
 
@@ -421,7 +434,7 @@ def render_brief_html(brief: BriefData, public_url: str) -> str:
 <div style="max-width:640px;margin:0 auto;padding:20px;background:#f5f7f5">
 
   <!-- Header -->
-  <div style="background:linear-gradient(135deg,#0D3B13,#1B5E20);color:white;border-radius:12px;padding:24px;margin-bottom:16px">
+  <div style="background:linear-gradient(135deg,{secondary_dark},{secondary});color:white;border-radius:12px;padding:24px;margin-bottom:16px">
     <div style="font-size:11px;color:rgba(255,255,255,0.7);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">☀️ Morning Brief</div>
     <h1 style="margin:0;font-size:22px">Good morning, {_esc(name)}</h1>
     <p style="color:rgba(255,255,255,0.8);font-size:13px;margin-top:6px">Here's what happened overnight + what to do today.</p>
@@ -431,10 +444,10 @@ def render_brief_html(brief: BriefData, public_url: str) -> str:
 
   <!-- Overnight stats -->
   <div style="background:white;border-radius:12px;padding:18px;margin-bottom:14px;box-shadow:0 1px 4px rgba(0,0,0,0.04)">
-    <h2 style="font-size:14px;color:#1B5E20;margin:0 0 10px;padding-bottom:6px;border-bottom:1px solid #f0f0f0">While you slept</h2>
+    <h2 style="font-size:14px;color:{secondary};margin:0 0 10px;padding-bottom:6px;border-bottom:1px solid #f0f0f0">While you slept</h2>
     <div style="display:flex;flex-wrap:wrap;gap:10px">
       <div style="flex:1;min-width:120px;background:#f8f9fa;padding:10px;border-radius:6px;text-align:center">
-        <div style="font-size:22px;font-weight:700;color:#1b5e20">{o.get("contacts_enrolled_overnight", 0)}</div>
+        <div style="font-size:22px;font-weight:700;color:{secondary}">{o.get("contacts_enrolled_overnight", 0)}</div>
         <div style="font-size:10px;color:#888;text-transform:uppercase">Contacts enrolled</div>
       </div>
       <div style="flex:1;min-width:120px;background:#f8f9fa;padding:10px;border-radius:6px;text-align:center">
@@ -442,7 +455,7 @@ def render_brief_html(brief: BriefData, public_url: str) -> str:
         <div style="font-size:10px;color:#888;text-transform:uppercase">Emails sent</div>
       </div>
       <div style="flex:1;min-width:120px;background:#f8f9fa;padding:10px;border-radius:6px;text-align:center">
-        <div style="font-size:22px;font-weight:700;color:#FF723F">{o.get("replies_overnight", 0)}</div>
+        <div style="font-size:22px;font-weight:700;color:{primary}">{o.get("replies_overnight", 0)}</div>
         <div style="font-size:10px;color:#888;text-transform:uppercase">Replies</div>
       </div>
       <div style="flex:1;min-width:120px;background:#f8f9fa;padding:10px;border-radius:6px;text-align:center">
@@ -454,7 +467,7 @@ def render_brief_html(brief: BriefData, public_url: str) -> str:
 
   <!-- Today's priorities -->
   <div style="background:white;border-radius:12px;padding:18px;margin-bottom:14px;box-shadow:0 1px 4px rgba(0,0,0,0.04)">
-    <h2 style="font-size:14px;color:#1B5E20;margin:0 0 10px;padding-bottom:6px;border-bottom:1px solid #f0f0f0">Today's plan</h2>
+    <h2 style="font-size:14px;color:{secondary};margin:0 0 10px;padding-bottom:6px;border-bottom:1px solid #f0f0f0">Today's plan</h2>
     {f'<div style="font-size:12px;color:#888;font-style:italic">No tasks due today and no hot leads — quiet morning ahead.</div>' if not tasks and not hot and not stuck else ''}
     {f'<div style="margin-bottom:12px"><strong style="font-size:12px">Tasks due today ({len(tasks)})</strong><ul style="font-size:13px;color:#444;padding-left:20px;margin:6px 0 0">' + "".join(_task_row(t) for t in tasks) + '</ul></div>' if tasks else ''}
     {f'<div style="margin-bottom:12px"><strong style="font-size:12px">Top hot leads</strong><table style="width:100%;font-size:13px;border-collapse:collapse;margin-top:6px">' + "".join(_hot_row(c) for c in hot) + '</table></div>' if hot else ''}
@@ -463,7 +476,7 @@ def render_brief_html(brief: BriefData, public_url: str) -> str:
 
   {f'''<!-- Replies awaiting action -->
   <div style="background:white;border-radius:12px;padding:18px;margin-bottom:14px;box-shadow:0 1px 4px rgba(0,0,0,0.04)">
-    <h2 style="font-size:14px;color:#1B5E20;margin:0 0 10px;padding-bottom:6px;border-bottom:1px solid #f0f0f0">Replies awaiting your action ({len(replies)})</h2>
+    <h2 style="font-size:14px;color:{secondary};margin:0 0 10px;padding-bottom:6px;border-bottom:1px solid #f0f0f0">Replies awaiting your action ({len(replies)})</h2>
     <ul style="padding-left:20px;margin:0;list-style:none">
       {"".join(_reply_row(r) for r in replies)}
     </ul>
@@ -471,7 +484,7 @@ def render_brief_html(brief: BriefData, public_url: str) -> str:
 
   <!-- Weekly stats -->
   <div style="background:white;border-radius:12px;padding:18px;margin-bottom:14px;box-shadow:0 1px 4px rgba(0,0,0,0.04)">
-    <h2 style="font-size:14px;color:#1B5E20;margin:0 0 10px;padding-bottom:6px;border-bottom:1px solid #f0f0f0">This week vs. last</h2>
+    <h2 style="font-size:14px;color:{secondary};margin:0 0 10px;padding-bottom:6px;border-bottom:1px solid #f0f0f0">This week vs. last</h2>
     <table style="width:100%;font-size:13px;border-collapse:collapse">
       <tr style="border-bottom:1px solid #f5f5f5"><td style="padding:6px 8px">Emails sent</td><td style="padding:6px 8px;text-align:right">{s.get("sends_this_week", 0)} / {s.get("sends_prior_week", 0)} {_delta_arrow(s.get("sends_this_week", 0), s.get("sends_prior_week", 0))}</td></tr>
       <tr><td style="padding:6px 8px">Replies received</td><td style="padding:6px 8px;text-align:right">{s.get("replies_this_week", 0)} / {s.get("replies_prior_week", 0)} {_delta_arrow(s.get("replies_this_week", 0), s.get("replies_prior_week", 0))}</td></tr>
@@ -482,7 +495,7 @@ def render_brief_html(brief: BriefData, public_url: str) -> str:
   <div style="text-align:center;color:#888;font-size:11px;margin-top:18px">
     <a href="{public_url}/?page=settings" style="color:#888;text-decoration:underline">Manage brief settings</a>
     &nbsp;·&nbsp; <a href="{public_url}" style="color:#888;text-decoration:underline">Open Prospector</a>
-    <p style="margin:8px 0 0;color:#aaa">Backyard Marketing Pros · Las Vegas, NV</p>
+    {f'<p style="margin:8px 0 0;color:#aaa">{_esc(footer_line)}</p>' if footer_line else ''}
   </div>
 
 </div>
@@ -536,9 +549,22 @@ async def send_brief(db: AsyncSession, user: User) -> bool:
     if not settings.resend_api_key or not user.email:
         log.warning(f"send_brief skipped for user {user.id}: missing api_key or email")
         return False
-    public_url = settings.public_url.rstrip("/")
+
+    # Tenant identity drives the From line, links and chrome. Without a
+    # verified sending domain we skip rather than send this tenant's staff a
+    # report From another tenant's domain.
+    from app.services.tenant_identity import get_tenant_identity
+    ident = await get_tenant_identity(user.tenant_id)
+    if not ident.send_domain:
+        log.info(
+            f"send_brief skipped for user {user.id} (tenant={user.tenant_id}): "
+            f"no verified sending domain (missing: {', '.join(ident.missing())})"
+        )
+        return False
+
+    public_url = (ident.base_url or settings.public_url).rstrip("/")
     brief = await build_brief(db, user)
-    html = render_brief_html(brief, public_url)
+    html = render_brief_html(brief, public_url, ident)
     text_alt = _html_to_text(html)
 
     subject = _brief_subject(brief)
@@ -550,7 +576,13 @@ async def send_brief(db: AsyncSession, user: User) -> bool:
         fn = user.full_name.strip().split()[0].lower()
     fn = fn or "team"
     from_local = fn.replace(" ", "")
-    from_address = f"{user.first_name or 'BMP'} from BMP <{from_local}@{settings.send_domain}>"
+    sender_person = (user.first_name or "").strip()
+    org = ident.display_name()
+    if sender_person and org:
+        from_label = f"{sender_person} from {org}"
+    else:
+        from_label = sender_person or org or "Morning Brief"
+    from_address = f"{from_label} <{from_local}@{ident.send_domain}>"
 
     # List-Unsubscribe — surfaces native Gmail/Outlook unsubscribe button
     # AND tells filters this is well-behaved automated mail. Points at a

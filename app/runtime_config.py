@@ -135,6 +135,14 @@ _HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$") if False else None  # placeholder; re
 import re as _re
 _HEX_RE = _re.compile(r"^#[0-9a-fA-F]{6}$")
 
+# Neutral brand palette — the fallback for any tenant that hasn't chosen
+# colors. Mirrors the RuntimeConfig column defaults. Deliberately NOT any
+# tenant's real brand: a shared fallback that looks like one customer is
+# how BMP's orange/green ended up on every other tenant's surfaces.
+NEUTRAL_PRIMARY = "#2563EB"
+NEUTRAL_SECONDARY = "#1F2937"
+NEUTRAL_ACCENT_BG = "#F8FAFC"
+
 
 async def get_org_brand(db: AsyncSession) -> dict:
     """Single source of truth for org branding. Every surface that
@@ -146,9 +154,12 @@ async def get_org_brand(db: AsyncSession) -> dict:
         v = (v or "").strip()
         return v if _HEX_RE.match(v) else fb
     return {
-        "primary_color":   _hex(getattr(rc, "brand_primary_color", None), "#E65100"),
-        "secondary_color": _hex(getattr(rc, "brand_secondary_color", None), "#1B5E20"),
-        "accent_bg_color": _hex(getattr(rc, "brand_accent_bg_color", None), "#FFF8F0"),
+        # Colors fall back to the NEUTRAL palette (matching the column
+        # defaults), never to another tenant's brand. A tenant that hasn't
+        # picked colors looks deliberately unbranded, not like BMP.
+        "primary_color":   _hex(getattr(rc, "brand_primary_color", None), NEUTRAL_PRIMARY),
+        "secondary_color": _hex(getattr(rc, "brand_secondary_color", None), NEUTRAL_SECONDARY),
+        "accent_bg_color": _hex(getattr(rc, "brand_accent_bg_color", None), NEUTRAL_ACCENT_BG),
         "logo_url":        (getattr(rc, "brand_logo_url", None) or "").strip(),
         # NEUTRAL fallbacks — never another tenant's identity. A tenant that
         # hasn't set these gets empty strings; callers must handle empty
@@ -174,11 +185,11 @@ async def set_org_brand(
         v = (v or "").strip()
         return v if _HEX_RE.match(v) else fb
     if primary_color is not None:
-        rc.brand_primary_color = _hex(primary_color, rc.brand_primary_color or "#E65100")
+        rc.brand_primary_color = _hex(primary_color, rc.brand_primary_color or NEUTRAL_PRIMARY)
     if secondary_color is not None:
-        rc.brand_secondary_color = _hex(secondary_color, rc.brand_secondary_color or "#1B5E20")
+        rc.brand_secondary_color = _hex(secondary_color, rc.brand_secondary_color or NEUTRAL_SECONDARY)
     if accent_bg_color is not None:
-        rc.brand_accent_bg_color = _hex(accent_bg_color, rc.brand_accent_bg_color or "#FFF8F0")
+        rc.brand_accent_bg_color = _hex(accent_bg_color, rc.brand_accent_bg_color or NEUTRAL_ACCENT_BG)
     if logo_url is not None:
         rc.brand_logo_url = logo_url.strip()[:500] or None
     if company_name is not None:

@@ -436,8 +436,11 @@ async def _daily_digest_loop():
     in the same UTC day in the rare case of multiple restarts after the
     fire hour — acceptable.
 
-    Fire hour is 13:00 UTC ≈ 7am MT / 6am PT — early enough that Steve
-    sees yesterday's summary with morning coffee.
+    Fire hour is 13:00 UTC ≈ 7am MT / 6am PT — early enough that each
+    tenant's admins see yesterday's summary with morning coffee.
+
+    Fans out one digest per active tenant; each is built from that tenant's
+    rows only and goes to that tenant's own admins.
     """
     FIRE_HOUR_UTC = 13
     last_sent_date: Optional[str] = None
@@ -446,9 +449,9 @@ async def _daily_digest_loop():
             now = datetime.now(timezone.utc)
             today = now.strftime("%Y-%m-%d")
             if now.hour >= FIRE_HOUR_UTC and last_sent_date != today:
-                from app.services.outbound_digest import send_digest
+                from app.services.outbound_digest import send_all_digests
                 try:
-                    result = await send_digest()
+                    result = await send_all_digests()
                     log.info(f"outbound digest fired: {result}")
                     last_sent_date = today
                 except Exception as e:

@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BMP Dialer</title>
+    <title>Dialer</title>
     <script src="/static/twilio.min.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        :root { --bmp-green: #1B5E20; --bmp-orange: #FF723F; }
+        :root { --bmp-green: #1F2937; --bmp-green-dark: #111827; --bmp-orange: #2563EB; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #0D3B13 0%, #1B5E20 100%);
+            background: linear-gradient(135deg, var(--bmp-green-dark) 0%, var(--bmp-green) 100%);
             min-height: 100vh;
             display: flex;
             flex-direction: column;
@@ -178,7 +178,7 @@
     </style>
 </head>
 <body>
-    <div class="brand">Backyard Marketing Pros</div>
+    <div class="brand" id="dialer-brand"></div>
     <div class="dialer-app">
         <div id="status" class="status connecting">Connecting...</div>
 
@@ -343,5 +343,36 @@
 
         init();
     </script>
+<script>
+// Per-tenant brand. This page is served on the tenant's own host, so
+// /api/brand resolves to the right tenant by Host header.
+(async function bootstrapDialerBrand() {
+    try {
+        const r = await fetch('/api/brand', { credentials: 'omit' });
+        if (!r.ok) return;
+        const b = await r.json();
+        if (!b) return;
+        const shade = (hex, pct) => {
+            if (!/^#[0-9a-fA-F]{6}$/.test(hex || '')) return hex;
+            const t = pct > 0 ? 255 : 0, a = Math.min(Math.abs(pct), 1);
+            const c = [1, 3, 5].map(i => {
+                const v = parseInt(hex.substr(i, 2), 16);
+                return Math.round(v + (t - v) * a);
+            });
+            return '#' + c.map(v => v.toString(16).padStart(2, '0')).join('');
+        };
+        const root = document.documentElement.style;
+        if (b.secondary_color) {
+            root.setProperty('--bmp-green', b.secondary_color);
+            root.setProperty('--bmp-green-dark', shade(b.secondary_color, -0.45));
+        }
+        if (b.primary_color) root.setProperty('--bmp-orange', b.primary_color);
+        const name = (b.company_name || '').trim();
+        const el = document.getElementById('dialer-brand');
+        if (el && name) el.textContent = name;
+        document.title = name ? name + ' Dialer' : 'Dialer';
+    } catch (e) { /* neutral defaults stay */ }
+})();
+</script>
 </body>
 </html>

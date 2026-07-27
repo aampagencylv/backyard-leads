@@ -882,7 +882,12 @@ async def confirm_booking(
     if (c.meeting_description or "").strip():
         desc_parts.append((c.meeting_description or "").strip())
     desc_parts.append("")  # blank line
-    desc_parts.append("Booked through Backyard Marketing Pros' scheduler.")
+    # Prospect-visible in the calendar invite — name the tenant that owns the
+    # scheduler, or stay generic. Never another tenant's name.
+    from app.runtime_config import get_org_brand as _get_org_brand
+    _brand = await _get_org_brand(db)
+    _org = (_brand.get("company_name") or "").strip()
+    desc_parts.append(f"Booked through {_org}'s scheduler." if _org else "Booked through our scheduler.")
     desc_parts.append(
         f"Prospect: {body.name} <{body.email}>"
         + (f" · {body.phone}" if body.phone else "")
@@ -1091,9 +1096,24 @@ async def _send_booking_confirmation_email(booking_id: int, *, host_name: str) -
             host = (await db.execute(select(User).where(User.id == b.host_user_id))).scalar_one_or_none()
             if not host:
                 return
+            # Prospect-facing mail: the From line and domain must belong to
+            # the host's own tenant, never a shared default.
+            from app.services.tenant_identity import get_tenant_identity
+            ident = await get_tenant_identity(host.tenant_id)
+            if not ident.send_domain:
+                log.info(
+                    f"booking confirmation skipped (booking={booking_id}, "
+                    f"tenant={host.tenant_id}): no verified sending domain"
+                )
+                return
             local_part = (host.first_name or "bookings").lower()
-            display_name = f"{host.first_name or 'BMP Bookings'} from BMP"
-            from_addr = f"{display_name} <{local_part}@{settings.send_domain}>"
+            org = ident.display_name()
+            host_name = (host.first_name or "").strip()
+            if host_name and org:
+                display_name = f"{host_name} from {org}"
+            else:
+                display_name = host_name or org or "Bookings"
+            from_addr = f"{display_name} <{local_part}@{ident.send_domain}>"
             from zoneinfo import ZoneInfo
             # Format time in the prospect's timezone (or UTC fallback)
             p_tz_name = b.prospect_timezone or "UTC"

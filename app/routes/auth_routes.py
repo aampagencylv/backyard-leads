@@ -474,30 +474,44 @@ async def invite_user(
     email_sent = False
     try:
         from app.config import settings
-        if settings.resend_api_key:
+        from app.services.tenant_identity import get_tenant_identity
+
+        # Every identity in this email — logo, name, colors, login URL and
+        # sending domain — comes from the INVITING tenant. Skip the send
+        # rather than welcome someone to another company's brand.
+        ident = await get_tenant_identity(new_user.tenant_id)
+        if settings.resend_api_key and ident.send_domain:
             import httpx
             from app.services.html_to_text import html_to_plain_text
+
+            org = ident.display_name("Prospector")
+            login_url = ident.base_url or settings.public_url
+            logo = (
+                f'<img src="{ident.logo_url}" style="width:250px;margin-bottom:20px" alt="{org}">'
+                if ident.logo_url else
+                f'<div style="font-size:20px;font-weight:700;color:{ident.secondary_color};margin-bottom:20px">{org}</div>'
+            )
             welcome_html = f"""
                     <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:500px;margin:0 auto;padding:20px">
-                        <img src="https://backyardmarketingpros.com/wp-content/uploads/2024/08/BMP_Logo_Color_Horiz-1024x269.png" style="width:250px;margin-bottom:20px" alt="BMP">
-                        <h2 style="color:#1B5E20">Welcome to Prospector, {new_user.first_name}!</h2>
+                        {logo}
+                        <h2 style="color:{ident.secondary_color}">Welcome to Prospector, {new_user.first_name}!</h2>
                         <p>Your account has been created. Here are your login credentials:</p>
-                        <div style="background:#f5f7f5;border-radius:8px;padding:16px;margin:16px 0">
-                            <p><strong>URL:</strong> <a href="{settings.public_url}">{settings.public_url}</a></p>
+                        <div style="background:{ident.accent_bg_color};border-radius:8px;padding:16px;margin:16px 0">
+                            <p><strong>URL:</strong> <a href="{login_url}">{login_url}</a></p>
                             <p><strong>Email:</strong> {new_user.email}</p>
                             <p><strong>Temporary Password:</strong> {temp_password}</p>
                         </div>
                         <p style="color:#666;font-size:13px">Please change your password after your first login by going to Settings.</p>
-                        <p>— The BMP Team</p>
+                        <p>— The {org} Team</p>
                     </div>
                     """
             await httpx.AsyncClient(timeout=10).post(
                 "https://api.resend.com/emails",
                 headers={"Authorization": f"Bearer {settings.resend_api_key}", "Content-Type": "application/json"},
                 json={
-                    "from": f"Backyard Marketing Pros <noreply@{settings.send_domain}>",
+                    "from": f"{org} <noreply@{ident.send_domain}>",
                     "to": [new_user.email],
-                    "subject": "Welcome to BMP Prospector — Your Account is Ready",
+                    "subject": f"Welcome to {org} Prospector — Your Account is Ready",
                     "html": welcome_html,
                     "text": html_to_plain_text(welcome_html),
                 },

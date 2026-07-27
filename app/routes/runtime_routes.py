@@ -15,6 +15,9 @@ from app.services.audit_log import record_audit
 from fastapi import Request
 from app.runtime_config import (
     _get_or_create,
+    NEUTRAL_PRIMARY,
+    NEUTRAL_SECONDARY,
+    NEUTRAL_ACCENT_BG,
     set_netrows_api_key,
     set_twilio_credentials,
     set_deepgram_api_key,
@@ -89,13 +92,16 @@ def _tenant_payload(rc, settings_obj) -> dict:
     """
     apollo_key = (rc.apollo_api_key or "").strip()
     return {
+        # Neutral fallbacks only. This payload pre-fills the Settings → Brand
+        # panel, so defaulting company_name/website_url to a real tenant's
+        # identity showed every other tenant BMP's name in their own settings.
         "brand": {
-            "primary_color":   getattr(rc, "brand_primary_color", None) or "#E65100",
-            "secondary_color": getattr(rc, "brand_secondary_color", None) or "#1B5E20",
-            "accent_bg_color": getattr(rc, "brand_accent_bg_color", None) or "#FFF8F0",
+            "primary_color":   getattr(rc, "brand_primary_color", None) or NEUTRAL_PRIMARY,
+            "secondary_color": getattr(rc, "brand_secondary_color", None) or NEUTRAL_SECONDARY,
+            "accent_bg_color": getattr(rc, "brand_accent_bg_color", None) or NEUTRAL_ACCENT_BG,
             "logo_url":        getattr(rc, "brand_logo_url", None) or "",
-            "company_name":    getattr(rc, "brand_company_name", None) or "Backyard Marketing Pros",
-            "website_url":     getattr(rc, "brand_website_url", None) or "https://backyardmarketingpros.com",
+            "company_name":    getattr(rc, "brand_company_name", None) or "",
+            "website_url":     getattr(rc, "brand_website_url", None) or "",
         },
         "apollo": {
             "set": bool(apollo_key),
