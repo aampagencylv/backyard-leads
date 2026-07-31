@@ -58,8 +58,13 @@ async def check_call_allowed(
             reason=f"Could not determine country from phone number {to_e164}"
         )
 
-    # Check if tenant is allowed to call this country
-    supported_countries = await get_supported_calling_countries(db)
+    # Check if tenant is allowed to call this country.
+    # Pass tenant_id EXPLICITLY: the Twilio voice webhook is unauthenticated
+    # and runs on a bare async_session(), so there is no session tenant scope
+    # to infer from — it resolves the user (and their tenant) from the SDK
+    # identity instead. tenant_ai_config has no ORM auto-filter, so omitting
+    # this either reads tenant 1's list or raises.
+    supported_countries = await get_supported_calling_countries(db, tenant_id)
     # Default to US if not configured
     if not supported_countries:
         supported_countries = ["US"]
