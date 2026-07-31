@@ -24,10 +24,17 @@ class CallComplianceCheck:
     allowed: bool
     reason: str = ""
     warnings: list[str] = None
+    # Short spoken form of `reason`. `reason` is written for operators and can
+    # be long (it lists every enabled country); read aloud by Twilio's TTS that
+    # is a minute of country codes in the rep's ear. Callers that speak the
+    # refusal should use this.
+    spoken_reason: str = ""
 
     def __post_init__(self):
         if self.warnings is None:
             self.warnings = []
+        if not self.spoken_reason:
+            self.spoken_reason = self.reason
 
 
 async def check_call_allowed(
@@ -73,7 +80,9 @@ async def check_call_allowed(
         return CallComplianceCheck(
             allowed=False,
             reason=f"Calling {country} is not enabled for your account. "
-                   f"Enabled countries: {', '.join(supported_countries)}"
+                   f"Enabled countries: {', '.join(supported_countries)}",
+            spoken_reason=f"Calling {country} is not enabled for your account. "
+                          f"Please contact your administrator.",
         )
 
     # Get compliance rules for the destination country

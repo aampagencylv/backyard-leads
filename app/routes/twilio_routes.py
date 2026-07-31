@@ -52,6 +52,21 @@ from app.config import settings
 router = APIRouter(prefix="/api/twilio", tags=["twilio"])
 
 
+def _esc_xml(text: str) -> str:
+    """Escape text interpolated into a hand-built TwiML string.
+
+    An unescaped '&' or '<' makes the document malformed, and Twilio answers
+    malformed TwiML with "An application error has occurred" — the same
+    symptom as a 500 but harder to trace, because the request itself logs 200.
+    """
+    return (
+        (text or "")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
 async def _tenant_brand_name(tenant_id: Optional[int]) -> str:
     """The sending tenant's outreach company name (for voicemail greetings).
     Never hardcodes BMP — returns '' when unknown/unset so the greeting
@@ -367,7 +382,7 @@ async def voice_twiml(request: Request):
     to_number = normalize_phone_e164(to_raw)
     if not to_number:
         return Response(
-            content=f"<Response><Say>Invalid destination number: {to_raw}</Say></Response>",
+            content=f"<Response><Say>Invalid destination number: {_esc_xml(to_raw)}</Say></Response>",
             media_type="application/xml",
         )
 
@@ -384,8 +399,10 @@ async def voice_twiml(request: Request):
         if user and user.tenant_id:
             compliance = await check_call_allowed(db, to_number, user.tenant_id)
             if not compliance.allowed:
+                # spoken_reason, not reason: `reason` lists every enabled
+                # country, which TTS reads aloud one code at a time.
                 return Response(
-                    content=f"<Response><Say>{compliance.reason}</Say></Response>",
+                    content=f"<Response><Say>{_esc_xml(compliance.spoken_reason)}</Say></Response>",
                     media_type="application/xml",
                 )
             # Log warnings to stderr if present
@@ -401,7 +418,15 @@ async def voice_twiml(request: Request):
             media_type="application/xml",
         )
 
-    recording_callback = f"{settings.public_url.rstrip('/')}/api/twilio/voice/recording"
+    # Tenant's own host, falling back to the platform default. Hardcoding
+    # settings.public_url pointed every tenant's recording callbacks at the
+    # platform tenant's hostname.
+    _base = settings.public_url
+    if user and user.tenant_id:
+        from app.services.tenant_identity import get_tenant_identity
+        _ident = await get_tenant_identity(user.tenant_id)
+        _base = _ident.base_url or settings.public_url
+    recording_callback = f"{_base.rstrip('/')}/api/twilio/voice/recording"
     twiml = build_outbound_twiml(
         to_number=to_number,
         caller_id=caller_id,
