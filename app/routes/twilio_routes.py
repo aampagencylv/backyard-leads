@@ -397,20 +397,27 @@ async def voice_twiml(request: Request):
 
         # Check international dialing compliance
         if user and user.tenant_id:
+            import logging
+            _tlog = logging.getLogger("bmp.twilio")
             compliance = await check_call_allowed(db, to_number, user.tenant_id)
             if not compliance.allowed:
+                # LOG the refusal. Without this a blocked call is invisible:
+                # the request returns 200 (a spoken <Say> is a valid response),
+                # so the logs look healthy while the rep hears a rejection.
+                # That gap turned a one-line config problem into a multi-day
+                # "the dialer is broken" investigation.
+                _tlog.warning(
+                    "[international-call-blocked] user=%s tenant=%s to=%s reason=%s",
+                    user.id, user.tenant_id, to_number, compliance.reason,
+                )
                 # spoken_reason, not reason: `reason` lists every enabled
                 # country, which TTS reads aloud one code at a time.
                 return Response(
                     content=f"<Response><Say>{_esc_xml(compliance.spoken_reason)}</Say></Response>",
                     media_type="application/xml",
                 )
-            # Log warnings to stderr if present
-            if compliance.warnings:
-                import logging
-                log = logging.getLogger("bmp.twilio")
-                for warn in compliance.warnings:
-                    log.warning(f"[international-call-warning] user={user.id} to={to_number}: {warn}")
+            for warn in compliance.warnings:
+                _tlog.warning(f"[international-call-warning] user={user.id} to={to_number}: {warn}")
 
     if not caller_id:
         return Response(

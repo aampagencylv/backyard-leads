@@ -330,13 +330,25 @@ def extract_country_code_from_e164(e164: str | None) -> str | None:
     +551140041234 → "BR"
     Returns None if we can't determine the country.
 
-    Uses a basic lookup table for common country codes. International dialing
-    prefixes are country-code based, not always unique per country, but this
-    covers the most common cases. +1 is special-cased through
-    `_NANP_AREA_CODES` because it spans ~25 distinct countries.
+    Primary path is `phonenumbers` (Google's libphonenumber), which knows all
+    245 dialling regions including every NANP area code — a hand-maintained
+    prefix table cannot stay correct as area codes are added, and reps dial
+    anywhere. The tables below remain as an offline fallback so the dialer
+    degrades to "common countries still work" rather than failing shut if the
+    dependency is ever missing.
     """
     if not e164 or not e164.startswith("+"):
         return None
+
+    try:
+        import phonenumbers
+        parsed = phonenumbers.parse(e164, None)
+        region = phonenumbers.region_code_for_number(parsed)
+        # "ZZ" is libphonenumber's unknown-region sentinel.
+        if region and region != "ZZ":
+            return region
+    except Exception:
+        pass  # fall through to the static tables
 
     digits_only = "".join(ch for ch in e164[1:] if ch.isdigit())
     # +1 must be disambiguated by area code before the generic prefix scan,

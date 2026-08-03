@@ -8,6 +8,7 @@ Before initiating an outbound call to a contact, check:
 Used by voice/twiml endpoint before allowing a call.
 """
 from __future__ import annotations
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
@@ -17,6 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.twilio_voice import extract_country_code_from_e164
 from app.runtime_config import get_country_dialing_config, get_supported_calling_countries
+
+log = logging.getLogger("prospector.international_dialing")
 
 
 @dataclass
@@ -72,11 +75,20 @@ async def check_call_allowed(
     # identity instead. tenant_ai_config has no ORM auto-filter, so omitting
     # this either reads tenant 1's list or raises.
     supported_countries = await get_supported_calling_countries(db, tenant_id)
-    # Default to US if not configured
-    if not supported_countries:
-        supported_countries = ["US"]
 
-    if country not in supported_countries:
+    # EMPTY LIST MEANS DIAL ANYWHERE — this is the default for every tenant.
+    # It used to mean "US only", which quietly made every new tenant a
+    # domestic-only account and produced failures that looked like carrier
+    # problems. Reps dial wherever their market is; a tenant that genuinely
+    # wants to fence its reps in can still set an explicit list.
+    #
+    # This is not the safety boundary. Twilio's per-account geographic
+    # permissions are (high-risk/toll-fraud tiers stay off there), and the
+    # calling-window + consent checks below still apply per destination.
+    if not supported_countries:
+        supported_countries = []
+
+    if supported_countries and country not in supported_countries:
         return CallComplianceCheck(
             allowed=False,
             reason=f"Calling {country} is not enabled for your account. "
@@ -85,12 +97,25 @@ async def check_call_allowed(
                           f"Please contact your administrator.",
         )
 
-    # Get compliance rules for the destination country
+    # Get compliance rules for the destination country.
+    # A missing row means OUR reference table is incomplete, which is not the
+    # rep's problem and must not block a legitimate call — that failure mode
+    # (detect the country correctly, then refuse it for lack of a row) is
+    # exactly what made earlier international failures so hard to read. Allow
+    # it, skip the window check we can't evaluate, and flag it for follow-up.
     cfg = await get_country_dialing_config(db, country)
     if not cfg:
+        log.warning(
+            "no country_dialing_config row for %s — allowing call to %s and "
+            "skipping the calling-window check; seed this country",
+            country, to_e164,
+        )
         return CallComplianceCheck(
-            allowed=False,
-            reason=f"No compliance rules found for {country}. Contact support."
+            allowed=True,
+            warnings=[
+                f"No calling rules configured for {country} — local calling hours "
+                f"and recording-consent rules were not checked."
+            ],
         )
 
     # Check calling window
